@@ -930,9 +930,15 @@ def _pentest_artifact_activity_payload(**overrides: object) -> dict[str, object]
     return {"request": request}
 
 class _FakePentestArtifactService:
-    def __init__(self, artifacts: dict[str, bytes]) -> None:
+    def __init__(
+        self,
+        artifacts: dict[str, bytes],
+        *,
+        events: list[str] | None = None,
+    ) -> None:
         self.artifacts = artifacts
         self.reads: list[tuple[str, str]] = []
+        self.events = events
 
     async def read(
         self,
@@ -942,6 +948,8 @@ class _FakePentestArtifactService:
         allow_restricted_raw: bool = False,
     ) -> tuple[object, bytes]:
         self.reads.append((artifact_id, principal))
+        if self.events is not None:
+            self.events.append("scope_read")
         if artifact_id not in self.artifacts:
             raise TemporalArtifactNotFoundError(artifact_id)
         return SimpleNamespace(artifact_id=artifact_id), self.artifacts[artifact_id]
@@ -1020,7 +1028,24 @@ class _RecordingPentestRegistry:
         )
 
 class _FakePentestProviderLeaseManager:
+    def __init__(
+        self,
+        *,
+        events: list[str] | None = None,
+        acquire_error: Exception | None = None,
+    ) -> None:
+        self.events = events
+        self.acquire_error = acquire_error
+        self.acquires: list[dict[str, object]] = []
+        self.releases: list[dict[str, object]] = []
+        self.cooldowns: list[dict[str, object]] = []
+
     async def acquire(self, payload: dict[str, object]) -> dict[str, object]:
+        if self.events is not None:
+            self.events.append("lease_acquire")
+        self.acquires.append(dict(payload))
+        if self.acquire_error is not None:
+            raise self.acquire_error
         owner_id = str(payload["owner_id"])
         return {
             "lease_id": owner_id,
@@ -1032,9 +1057,15 @@ class _FakePentestProviderLeaseManager:
         }
 
     async def release(self, payload: dict[str, object]) -> None:
+        if self.events is not None:
+            self.events.append("lease_release")
+        self.releases.append(dict(payload))
         return None
 
     async def report_cooldown(self, payload: dict[str, object]) -> None:
+        if self.events is not None:
+            self.events.append("cooldown_report")
+        self.cooldowns.append(dict(payload))
         return None
 
 async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_default():
@@ -1411,10 +1442,11 @@ async def test_security_pentest_execute_filters_provider_runtime_state():
     assert result["provider_lease"]["profile_id"] == "pentestgpt_openrouter_default"
 
 async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
+    lease_manager = _FakePentestProviderLeaseManager()
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
-        pentest_provider_lease_manager=_FakePentestProviderLeaseManager(),
+        pentest_provider_lease_manager=lease_manager,
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -1432,8 +1464,165 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
         "retry_allowed": False,
     }
     assert result["provider_lease"]["release_required"] is False
+    assert lease_manager.cooldowns == [
+        {
+            "runtime_id": "pentestgpt",
+            "profile_id": "pentestgpt_openrouter_default",
+            "owner_id": "pentest:run-123:step-pentest:1",
+            "cooldown_seconds": 300,
+            "reason": "provider_429",
+            "metadata": {
+                "tool": "security.pentest.run",
+                "runtime_id": "pentestgpt",
+            },
+        }
+    ]
+    assert len(lease_manager.releases) == 1
+    assert lease_manager.releases[0]["terminal_reason"] == "provider_cooldown"
     assert "OPENROUTER_API_KEY" not in str(result["provider_cooldown"])
     assert "token" not in str(result).lower()
+
+async def test_security_pentest_execute_acquires_lease_after_scope_before_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    events: list[str] = []
+    lease_manager = _FakePentestProviderLeaseManager(events=events)
+    artifact_service = _FakePentestArtifactService(
+        {"art_scope_valid": _scope_artifact_bytes()},
+        events=events,
+    )
+
+    async def _fake_resolver(ref: object, *, field_name: str) -> str:
+        events.append("secret_resolve")
+        assert field_name == "pentest.ANTHROPIC_API_KEY"
+        return "sk-resolved-provider-value"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_runtime.resolve_managed_api_key_reference",
+        _fake_resolver,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=artifact_service,
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    result = await activities.security_pentest_execute(
+        _pentest_artifact_activity_payload(
+            execution_profile_ref="pentestgpt_anthropic_api_team",
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert events.index("scope_read") < events.index("lease_acquire")
+    assert events.index("lease_acquire") < events.index("secret_resolve")
+    assert len(lease_manager.acquires) == 1
+    acquire = lease_manager.acquires[0]
+    assert acquire["owner_id"] == "pentest:run-123:step-pentest:1"
+    assert acquire["runtime_id"] == "pentestgpt"
+    assert acquire["profile_id"] == "pentestgpt_anthropic_api_team"
+    metadata = acquire["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["tool"] == "security.pentest.run"
+    assert metadata["target_hash"].startswith("sha256:")
+    assert "https://lab.example.test" not in str(metadata)
+    assert "sk-resolved-provider-value" not in str(result)
+
+async def test_security_pentest_execute_does_not_acquire_lease_for_invalid_scope():
+    lease_manager = _FakePentestProviderLeaseManager()
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_FakePentestArtifactService(
+            {
+                "art_scope_valid": _scope_artifact_bytes(
+                    allowed_operations=["reconnaissance_only"],
+                )
+            }
+        ),
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    result = await activities.security_pentest_execute(
+        _pentest_artifact_activity_payload(operation_mode="validate_hypothesis")
+    )
+
+    assert result["status"] == "validation_failed"
+    assert lease_manager.acquires == []
+    assert lease_manager.releases == []
+    assert lease_manager.cooldowns == []
+
+@pytest.mark.parametrize(
+    ("launcher_status", "terminal_reason"),
+    [
+        ("succeeded", "success"),
+        ("failed", "failure"),
+        ("timed_out", "timeout"),
+        ("canceled", "cancellation"),
+    ],
+)
+async def test_security_pentest_execute_releases_lease_once_on_terminal_workload_paths(
+    launcher_status: str,
+    terminal_reason: str,
+):
+    lease_manager = _FakePentestProviderLeaseManager()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(status=launcher_status),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert len(lease_manager.acquires) == 1
+    assert len(lease_manager.releases) == 1
+    assert lease_manager.releases[0]["terminal_reason"] == terminal_reason
+    assert result["terminal_cleanup"]["provider_lease_released"] is True
+
+async def test_security_pentest_execute_releases_lease_once_on_publication_failure():
+    lease_manager = _FakePentestProviderLeaseManager()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(publication_errors=["publish failed"])
+    )
+
+    assert result["status"] == "failed"
+    assert len(lease_manager.acquires) == 1
+    assert len(lease_manager.releases) == 1
+    assert lease_manager.releases[0]["terminal_reason"] == "artifact_publication_failure"
+    assert result["terminal_cleanup"]["provider_lease_released"] is True
+
+async def test_security_pentest_execute_classifies_acquire_failure_as_provider_capacity():
+    lease_manager = _FakePentestProviderLeaseManager(
+        acquire_error=RuntimeError("slot unavailable")
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(execution_profile_ref=None)
+    )
+
+    assert result["status"] == "provider_capacity_failed"
+    assert result["failure_classification"]["failure_kind"] == "provider_error"
+    assert result["diagnostics"]["provider_capacity"] == {
+        "failure_category": "provider_capacity",
+        "reason": "slot unavailable",
+        "release_attempted": False,
+        "profile_id": "pentestgpt_anthropic_api_team",
+    }
+    assert lease_manager.releases == []
 
 async def test_security_pentest_execute_includes_instruction_materialization_metadata():
     activities = TemporalAgentRuntimeActivities(

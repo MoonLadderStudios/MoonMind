@@ -5531,10 +5531,7 @@ class TemporalAgentRuntimeActivities:
                     reason=str(exc),
                     diagnostics={
                         "provider_capacity": build_pentest_provider_capacity_diagnostic(
-                            profile_id=str(
-                                request_payload.get("execution_profile_ref") or ""
-                            )
-                            or None,
+                            profile_id=provider_profile.profile_id,
                             reason=str(exc),
                         )
                     },
