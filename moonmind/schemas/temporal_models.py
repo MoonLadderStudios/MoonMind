@@ -590,10 +590,8 @@ def build_step_execution_idempotency_key(
     normalized_operation = str(operation or "").strip()
     if not normalized_operation:
         raise ValueError("operation must be a non-empty string")
-    return (
-        f"{identity.workflow_id}:{identity.run_id}:"
-        f"{identity.logical_step_id}:{identity.execution_ordinal}:{normalized_operation}"
-    )
+    return f"{build_step_execution_id(identity)}:{normalized_operation}"
+
 
 class PullRequestRefModel(BaseModel):
     """Compact pull request identity carried through merge automation history."""

@@ -691,7 +691,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         "wf-run-1:run-1:delegate-agent:execution:1"
     )
     assert writes[0]["metadata_json"]["idempotencyKey"] == (
-        "wf-run-1:run-1:delegate-agent:1:manifest"
+        "wf-run-1:run-1:delegate-agent:execution:1:manifest"
     )
     assert writes[0]["payload"]["reason"] == "initial_execution"
     assert writes[0]["payload"]["context"]["contextBundleRef"].startswith(
