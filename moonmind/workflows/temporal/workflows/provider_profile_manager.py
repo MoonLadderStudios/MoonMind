@@ -477,7 +477,8 @@ class MoonMindProviderProfileManagerWorkflow:
                     timeout=timedelta(seconds=60),
                 )
             except TimeoutError:
-                pass
+                # Periodic wake-up: re-check capacity, cooldowns, and shutdown.
+                continue
 
         raise exceptions.ApplicationError(
             "provider profile manager is shutting down", non_retryable=True
