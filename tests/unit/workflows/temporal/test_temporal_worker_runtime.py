@@ -1878,6 +1878,48 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
 
 
 @pytest.mark.asyncio
+async def test_child_preset_expansion_prefers_workflow_payload_over_legacy_task(
+    tmp_path,
+):
+    legacy_task = {
+        "title": "Legacy task should not be used",
+        "instructions": "Leave this legacy task alone.",
+        "steps": [{"id": "legacy-step", "instructions": "Already authored."}],
+    }
+
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_preset_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "workflow",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                    "task": legacy_task,
+                    "workflow": {
+                        "title": "Run Jira Orchestrate for MM-821",
+                        "instructions": "Use the existing Jira Orchestrate workflow.",
+                        "inputs": {
+                            "jira_issue_key": "MM-821",
+                            "source_design_path": "",
+                            "constraints": "Prefer workflow payload.",
+                        },
+                        "taskTemplate": {
+                            "slug": "jira-orchestrate",
+                            "version": "1.0.0",
+                        },
+                    },
+                },
+            )
+
+    assert expanded_parameters["task"] == legacy_task
+    task = expanded_parameters["workflow"]
+    assert expanded_parameters["stepCount"] == 26
+    assert task["steps"][0]["skill"]["id"] == "jira-issue-updater"
+    assert "MM-821" in task["steps"][0]["instructions"]
+
+
+@pytest.mark.asyncio
 async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
     tmp_path,
 ):

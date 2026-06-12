@@ -211,13 +211,13 @@ async def _expand_preset_for_child_run(
     """
 
     parameters = dict(initial_parameters or {})
-    payload_key = "task"
-    task_payload = _coerce_mapping(parameters.get("task"))
-    if not task_payload:
-        workflow_payload = _coerce_mapping(parameters.get("workflow"))
-        if workflow_payload:
-            payload_key = "workflow"
-            task_payload = workflow_payload
+    workflow_payload = _coerce_mapping(parameters.get("workflow"))
+    if workflow_payload:
+        payload_key = "workflow"
+        task_payload = workflow_payload
+    else:
+        payload_key = "task"
+        task_payload = _coerce_mapping(parameters.get("task"))
     if not task_payload:
         return parameters
     raw_steps = task_payload.get("steps")
