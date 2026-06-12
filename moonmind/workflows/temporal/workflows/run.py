@@ -6948,6 +6948,18 @@ class MoonMindRunWorkflow:
             raw_base = publish_payload.get("baseBranch")
         return self._coerce_text(raw_base)
 
+    def _normalize_native_pr_base_branch(self, value: Any) -> str | None:
+        branch = self._coerce_text(value)
+        if not branch:
+            return None
+        if branch.startswith("refs/remotes/origin/"):
+            return branch.removeprefix("refs/remotes/origin/")
+        if branch.startswith("refs/heads/"):
+            return branch.removeprefix("refs/heads/")
+        if branch.startswith("origin/"):
+            return branch.removeprefix("origin/")
+        return branch
+
     def _resolve_native_pr_branches(
         self,
         *,
@@ -7012,7 +7024,8 @@ class MoonMindRunWorkflow:
             (
                 candidate
                 for candidate in (
-                    self._coerce_text(value) for value in base_candidates
+                    self._normalize_native_pr_base_branch(value)
+                    for value in base_candidates
                 )
                 if candidate
             ),

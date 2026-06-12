@@ -2310,7 +2310,34 @@ def test_native_pr_branch_resolution_prefers_publish_context_branch(
     )
 
     assert head_branch == "804-workflow-detail-tabs"
-    assert base_branch == "origin/main"
+    assert base_branch == "main"
+
+
+def test_native_pr_branch_resolution_normalizes_base_ref_candidates(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+
+    _, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "feature/expected"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "refs/remotes/origin/release/1.2"},
+    )
+
+    assert base_branch == "release/1.2"
+
+    _, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "feature/expected"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "refs/heads/main"},
+    )
+
+    assert base_branch == "main"
 
 
 def test_publish_repair_feedback_names_branch_and_managed_publish_contract(
