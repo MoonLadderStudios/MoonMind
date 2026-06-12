@@ -26,6 +26,7 @@ from api_service.api.routers.executions import (
     _build_original_workflow_input_snapshot_payload,
     _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
+    _effective_user_roles,
     _hydrate_related_run_metadata,
     _merge_workflow_preserving_artifact_instructions,
     _recovery_not_available_reason,
@@ -4313,7 +4314,55 @@ def test_create_task_shaped_execution_rejects_pentest_privileged_overrides(
     message = response.json()["detail"]["message"]
     assert "privileged" in message
     assert "secret-value" not in message
+
+def test_create_task_shaped_execution_rejects_pentest_provider_runtime_state_override(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, user = client
+    user.roles = ["security_operator"]
+    monkeypatch.setattr(settings.pentest, "enabled", True)
+
+    response = test_client.post(
+        "/api/executions",
+        json=_pentest_workflow_payload(
+            tool_inputs={
+                "provider_runtime_state": {
+                    "pentestgpt_anthropic_api_team": {"available_slots": 100}
+                }
+            }
+        ),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    assert "provider_runtime_state" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
+
+def test_pentest_role_resolution_reads_object_values_and_request_claims() -> None:
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            claims={
+                "realm_access": {"roles": ["security_operator"]},
+                "resource_access": {
+                    "moonmind": {"roles": ["workflow_submitter"]},
+                },
+            }
+        ),
+        scope={},
+    )
+    user = SimpleNamespace(
+        is_superuser=False,
+        roles=[SimpleNamespace(name="viewer")],
+        groups=[SimpleNamespace(role="auditor")],
+    )
+
+    assert _effective_user_roles(user, request=request) == {
+        "auditor",
+        "security_operator",
+        "viewer",
+        "workflow_submitter",
+    }
 
 def test_pentest_safe_preset_exposes_only_ordinary_inputs() -> None:
     import yaml

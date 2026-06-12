@@ -5453,6 +5453,7 @@ _PENTEST_PRIVILEGED_INPUT_FIELDS = frozenset(
         "provider_secret",
         "provider_secret_ref",
         "provider_secret_id",
+        "provider_runtime_state",
         "secret",
         "secrets",
         "env",
@@ -5529,9 +5530,45 @@ def _submission_contains_pentest_tool(
 def _normalize_user_role_name(value: Any) -> str:
     if isinstance(value, Mapping):
         value = value.get("name") or value.get("role") or value.get("id")
+    elif value is not None and not isinstance(value, str):
+        value = (
+            getattr(value, "name", None)
+            or getattr(value, "role", None)
+            or getattr(value, "id", None)
+            or value
+        )
     return str(value or "").strip().lower()
 
-def _effective_user_roles(user: Any) -> set[str]:
+def _role_values_from_claims(claims: Any) -> list[Any]:
+    if not isinstance(claims, Mapping):
+        return []
+
+    values: list[Any] = []
+    for key in ("roles", "role_names", "groups", "role"):
+        value = claims.get(key)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            values.extend(value)
+        elif value is not None:
+            values.append(value)
+
+    realm_access = claims.get("realm_access")
+    if isinstance(realm_access, Mapping):
+        realm_roles = realm_access.get("roles")
+        if isinstance(realm_roles, (list, tuple, set, frozenset)):
+            values.extend(realm_roles)
+
+    resource_access = claims.get("resource_access")
+    if isinstance(resource_access, Mapping):
+        for resource_claims in resource_access.values():
+            if not isinstance(resource_claims, Mapping):
+                continue
+            resource_roles = resource_claims.get("roles")
+            if isinstance(resource_roles, (list, tuple, set, frozenset)):
+                values.extend(resource_roles)
+
+    return values
+
+def _effective_user_roles(user: Any, request: Any | None = None) -> set[str]:
     roles: set[str] = set()
     for attr_name in ("roles", "role_names", "groups"):
         raw = getattr(user, attr_name, None)
@@ -5549,6 +5586,32 @@ def _effective_user_roles(user: Any) -> set[str]:
     role = _normalize_user_role_name(getattr(user, "role", None))
     if role:
         roles.add(role)
+    for claim_attr in ("claims", "oidc_claims", "token_claims"):
+        roles.update(
+            role
+            for value in _role_values_from_claims(getattr(user, claim_attr, None))
+            for role in (_normalize_user_role_name(value),)
+            if role
+        )
+    if request is not None:
+        request_state = getattr(request, "state", None)
+        for claim_attr in ("claims", "oidc_claims", "token_claims"):
+            roles.update(
+                role
+                for value in _role_values_from_claims(
+                    getattr(request_state, claim_attr, None)
+                )
+                for role in (_normalize_user_role_name(value),)
+                if role
+            )
+        scope = getattr(request, "scope", None)
+        if isinstance(scope, Mapping):
+            roles.update(
+                role
+                for value in _role_values_from_claims(scope.get("claims"))
+                for role in (_normalize_user_role_name(value),)
+                if role
+            )
     if bool(getattr(user, "is_superuser", False)):
         roles.add("admin")
     return roles
@@ -5559,6 +5622,7 @@ def _validate_pentest_submission_boundary(
     normalized_tool: Mapping[str, Any] | None,
     normalized_steps: list[dict[str, Any]],
     user: Any,
+    request: Any | None = None,
 ) -> None:
     if not _submission_contains_pentest_tool(
         task_payload=task_payload,
@@ -5572,7 +5636,7 @@ def _validate_pentest_submission_boundary(
             "security.pentest.run submission is disabled by MOONMIND_PENTEST_ENABLED."
         )
 
-    user_roles = _effective_user_roles(user)
+    user_roles = _effective_user_roles(user, request=request)
     if user_roles.isdisjoint(_PENTEST_ALLOWED_ROLES):
         raise _invalid_workflow_request(
             "security.pentest.run submission requires an admin or security_operator role."
@@ -6523,6 +6587,7 @@ async def _create_execution_from_workflow_request(
         normalized_tool=normalized_tool,
         normalized_steps=normalized_steps,
         user=user,
+        request=(principal_context or {}).get("request"),
     )
     publish_payload = _resolve_workflow_publish_payload(
         payload=payload,
