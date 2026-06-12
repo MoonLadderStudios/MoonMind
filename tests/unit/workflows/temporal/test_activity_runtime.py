@@ -47,7 +47,6 @@ from moonmind.workflows.temporal.activity_catalog import (
     SANDBOX_FLEET,
     build_default_activity_catalog,
 )
-import moonmind.workflows.temporal.activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_runtime import (
     SandboxCommandResult,
     TemporalActivityRuntimeError,
@@ -58,6 +57,7 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalProposalActivities,
     TemporalSandboxActivities,
     TemporalSkillActivities,
+    TemporalPentestProviderLeaseManager,
     _default_registry_skill_payload,
     _default_skill_registry_payload,
     build_activity_bindings,
@@ -1091,10 +1091,74 @@ class _FakePentestLeaseManager:
 @pytest.fixture(autouse=True)
 def _use_fake_pentest_lease_manager(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        activity_runtime_module,
-        "TemporalPentestProviderLeaseManager",
+        (
+            "moonmind.workflows.temporal.activity_runtime."
+            "TemporalPentestProviderLeaseManager"
+        ),
         _FakePentestLeaseManager,
     )
+
+async def test_temporal_pentest_provider_lease_manager_acquires_slot_with_update():
+    class _ClientAdapter:
+        def __init__(self) -> None:
+            self.updates: list[tuple[str, str, dict[str, object]]] = []
+            self.signals: list[tuple[str, str, dict[str, object]]] = []
+
+        async def update_workflow(
+            self, workflow_id: str, update_name: str, arg: dict[str, object]
+        ) -> dict[str, object]:
+            self.updates.append((workflow_id, update_name, arg))
+            return {
+                "profile_id": "pentestgpt_anthropic_api_team",
+                "lease_id": "owner-1",
+            }
+
+        async def signal_workflow(
+            self, workflow_id: str, signal_name: str, arg: dict[str, object]
+        ) -> None:
+            self.signals.append((workflow_id, signal_name, arg))
+
+    client = _ClientAdapter()
+    manager = TemporalPentestProviderLeaseManager(client)
+
+    lease_id = await manager.acquire(
+        runtime_id="pentestgpt",
+        profile_id="pentestgpt_anthropic_api_team",
+        owner="owner-1",
+        metadata={"target_hash": "hash-1"},
+    )
+
+    assert lease_id == "owner-1"
+    assert client.signals == []
+    assert client.updates == [
+        (
+            "provider-profile-manager:pentestgpt",
+            "AcquireSlot",
+            {
+                "requester_workflow_id": "owner-1",
+                "runtime_id": "pentestgpt",
+                "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                "metadata": {"target_hash": "hash-1"},
+            },
+        )
+    ]
+
+async def test_temporal_pentest_provider_lease_manager_fails_closed_without_updates():
+    class _ClientAdapter:
+        async def signal_workflow(
+            self, workflow_id: str, signal_name: str, arg: dict[str, object]
+        ) -> None:
+            raise AssertionError("acquire must not use asynchronous request_slot signals")
+
+    manager = TemporalPentestProviderLeaseManager(_ClientAdapter())
+
+    with pytest.raises(RuntimeError, match="workflow updates"):
+        await manager.acquire(
+            runtime_id="pentestgpt",
+            profile_id="pentestgpt_anthropic_api_team",
+            owner="owner-1",
+            metadata={},
+        )
 
 async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_default():
     launcher = _FakePentestLauncher()

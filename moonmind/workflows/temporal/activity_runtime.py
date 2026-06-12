@@ -255,9 +255,12 @@ class TemporalPentestProviderLeaseManager:
         owner: str,
         metadata: Mapping[str, Any],
     ) -> str:
-        await self._client_adapter.signal_workflow(
+        update_workflow = getattr(self._client_adapter, "update_workflow", None)
+        if update_workflow is None:
+            raise RuntimeError("Temporal client adapter does not support workflow updates")
+        await update_workflow(
             _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
-            "request_slot",
+            "AcquireSlot",
             {
                 "requester_workflow_id": owner,
                 "runtime_id": runtime_id,

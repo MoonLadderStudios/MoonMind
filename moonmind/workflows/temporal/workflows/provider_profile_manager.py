@@ -92,6 +92,16 @@ class SlotRequestPayload(TypedDict):
     execution_profile_ref: str | None
     lease_group_id: str | None
 
+class SlotAcquirePayload(TypedDict, total=False):
+    """Update payload: synchronously reserve a provider slot for an activity caller."""
+
+    requester_workflow_id: str
+    runtime_id: str
+    execution_profile_ref: str | None
+    profile_selector: dict[str, Any] | None
+    lease_group_id: str | None
+    metadata: dict[str, Any]
+
 class SlotReleasePayload(TypedDict):
     """Signal payload: an AgentRun releases its profile slot."""
 
@@ -399,6 +409,79 @@ class MoonMindProviderProfileManagerWorkflow:
         """Gracefully shut down the manager."""
         self._shutdown_requested = True
         self._has_new_events = True
+
+    @workflow.update(name="AcquireSlot")
+    async def acquire_slot(self, payload: SlotAcquirePayload) -> dict[str, Any]:
+        """Reserve and return a slot without requiring a callback signal.
+
+        Activity-owned workloads cannot receive ``slot_assigned``. This update
+        keeps those callers on the same manager-owned capacity ledger while
+        preserving the existing signal protocol for AgentRun workflows.
+        """
+
+        requester_id = self._normalize_optional_string(
+            payload.get("requester_workflow_id")
+        )
+        if requester_id is None:
+            raise exceptions.ApplicationError(
+                "requester_workflow_id is required", non_retryable=True
+            )
+        runtime_id = self._normalize_optional_string(payload.get("runtime_id"))
+        if runtime_id is None:
+            raise exceptions.ApplicationError(
+                "runtime_id is required", non_retryable=True
+            )
+
+        selector = self._normalize_selector(payload.get("profile_selector"))
+        execution_profile_ref = self._normalize_optional_string(
+            payload.get("execution_profile_ref")
+        )
+        lease_group_id = self._normalize_optional_string(payload.get("lease_group_id"))
+
+        while not self._shutdown_requested:
+            existing_profile_id = self._profile_id_for_lease(requester_id)
+            if existing_profile_id is not None:
+                return {
+                    "profile_id": existing_profile_id,
+                    "lease_id": requester_id,
+                    "already_held": True,
+                }
+
+            now = workflow.now()
+            self._clear_expired_handoff_reservations(now)
+            self._clear_expired_cooldowns()
+            profile = self._find_available_profile(
+                selector=selector,
+                execution_profile_ref=execution_profile_ref,
+                lease_group_id=lease_group_id,
+            )
+            if profile and profile.reserve(requester_id, now):
+                if workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
+                    await self._sync_leases_to_db()
+                self._has_new_events = True
+                return {
+                    "profile_id": profile.profile_id,
+                    "lease_id": requester_id,
+                    "already_held": False,
+                }
+
+            try:
+                await workflow.wait_condition(
+                    lambda: self._shutdown_requested
+                    or self._profile_id_for_lease(requester_id) is not None
+                    or self._has_available_profile(
+                        selector=selector,
+                        execution_profile_ref=execution_profile_ref,
+                        lease_group_id=lease_group_id,
+                    ),
+                    timeout=timedelta(seconds=60),
+                )
+            except TimeoutError:
+                pass
+
+        raise exceptions.ApplicationError(
+            "provider profile manager is shutting down", non_retryable=True
+        )
 
     # -- Queries ---------------------------------------------------------------
 
@@ -723,6 +806,28 @@ class MoonMindProviderProfileManagerWorkflow:
             if reserved_group_id != lease_group_id:
                 reserved_slots += 1
         return reserved_slots
+
+    def _profile_id_for_lease(self, requester_workflow_id: str) -> str | None:
+        for profile in self._profiles.values():
+            if requester_workflow_id in profile.current_leases:
+                return profile.profile_id
+        return None
+
+    def _has_available_profile(
+        self,
+        *,
+        selector: Optional[dict[str, Any]],
+        execution_profile_ref: str | None,
+        lease_group_id: str | None,
+    ) -> bool:
+        return (
+            self._find_available_profile(
+                selector=selector,
+                execution_profile_ref=execution_profile_ref,
+                lease_group_id=lease_group_id,
+            )
+            is not None
+        )
 
     @staticmethod
     def _profile_matches_request(
