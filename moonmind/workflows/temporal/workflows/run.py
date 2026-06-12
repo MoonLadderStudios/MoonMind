@@ -310,6 +310,7 @@ RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
+RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
@@ -4633,41 +4634,42 @@ class MoonMindRunWorkflow:
                     if self._cancel_requested:
                         return
 
-                    await self._record_step_execution_manifest(
-                        node_id,
-                        phase="start",
-                        updated_at=workflow.now(),
-                        summary=self._summary,
-                        reason=attempt_reason,
-                        input_refs=(
-                            node_inputs.get("inputRefs")
-                            if isinstance(node_inputs.get("inputRefs"), list)
-                            else []
-                        ),
-                        execution={
-                            "kind": tool_type,
-                            "toolName": tool_name,
-                            "idempotencyKey": step_execution_operation_idempotency_key(
-                                workflow_id=workflow.info().workflow_id,
-                                run_id=workflow.info().run_id,
-                                logical_step_id=node_id,
-                                execution_ordinal=current_step_execution,
-                                operation="execute",
+                    if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
+                        await self._record_step_execution_manifest(
+                            node_id,
+                            phase="start",
+                            updated_at=workflow.now(),
+                            summary=self._summary,
+                            reason=attempt_reason,
+                            input_refs=(
+                                node_inputs.get("inputRefs")
+                                if isinstance(node_inputs.get("inputRefs"), list)
+                                else []
                             ),
-                        },
-                        budget=self._review_gate_budget_metadata(
-                            max_review_attempts=max_review_attempts,
-                            review_retry_count=review_retry_count,
-                            max_consecutive_no_progress_attempts=(
-                                max_consecutive_no_progress_attempts
-                            ),
-                            consecutive_no_progress_attempts=(
-                                consecutive_no_progress_attempts
-                            ),
+                            execution={
+                                "kind": tool_type,
+                                "toolName": tool_name,
+                                "idempotencyKey": step_execution_operation_idempotency_key(
+                                    workflow_id=workflow.info().workflow_id,
+                                    run_id=workflow.info().run_id,
+                                    logical_step_id=node_id,
+                                    execution_ordinal=current_step_execution,
+                                    operation="execute",
+                                ),
+                            },
+                            budget=self._review_gate_budget_metadata(
+                                max_review_attempts=max_review_attempts,
+                                review_retry_count=review_retry_count,
+                                max_consecutive_no_progress_attempts=(
+                                    max_consecutive_no_progress_attempts
+                                ),
+                                consecutive_no_progress_attempts=(
+                                    consecutive_no_progress_attempts
+                                ),
+                            )
+                            if review_gate_active
+                            else None,
                         )
-                        if review_gate_active
-                        else None,
-                    )
                     if self._is_step_execution_launch_blocked(
                         node_id,
                         attempt=current_step_execution,

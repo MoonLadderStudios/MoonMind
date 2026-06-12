@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -107,7 +108,23 @@ def test_run_exposes_one_canonical_step_execution_manifest_record_surface() -> N
     }
 
     assert workflow_attrs == {"_record_step_execution_manifest"}
-    assert not hasattr(run_module, "RUN_STEP_EXECUTION_MANIFEST_PATCH")
+    assert run_module.RUN_STEP_EXECUTION_MANIFEST_PATCH == (
+        "run-step-attempt-manifest-v1"
+    )
+
+
+def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
+    source = inspect.getsource(MoonMindRunWorkflow.run)
+
+    guard = "if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):"
+    start_manifest_call = (
+        "await self._record_step_execution_manifest(\n"
+        "                            node_id,\n"
+        '                            phase="start",'
+    )
+
+    assert source.index(guard) < source.index(start_manifest_call)
+
 
 def _registry_payload() -> dict[str, Any]:
     return {
