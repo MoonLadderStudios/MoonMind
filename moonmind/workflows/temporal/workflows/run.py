@@ -821,79 +821,12 @@ class MoonMindRunWorkflow:
         updated_at: datetime,
         reason: str,
     ) -> str | None:
-        attempt = self._step_execution_for(logical_step_id)
-        if attempt is None or attempt < 1:
-            return None
-        identity = StepExecutionIdentityModel(
-            workflowId=workflow.info().workflow_id,
-            runId=workflow.info().run_id,
-            logicalStepId=logical_step_id,
-            executionOrdinal=attempt,
-        )
-        step_execution_id = build_step_execution_id(identity)
-        idempotency_key = build_step_execution_idempotency_key(identity, "manifest")
-        source_execution_ordinal = self._step_execution_source_identity(
+        return await self._record_step_execution_manifest_started(
             logical_step_id,
-            attempt=attempt,
-        )
-        lineage = self._step_execution_lineage(
-            logical_step_id,
-            reason=reason,
-            source_execution_ordinal=source_execution_ordinal,
-        )
-        workspace = self._step_execution_workspace(
-            logical_step_id,
-            attempt=identity.execution_ordinal,
-            source_execution_ordinal=source_execution_ordinal,
-        )
-        launch_blocked = self._workspace_policy_launch_blocked(workspace)
-        manifest = StepExecutionManifestModel(
-            schemaVersion="v1",
-            stepExecutionId=step_execution_id,
-            workflowId=identity.workflow_id,
-            runId=identity.run_id,
-            logicalStepId=identity.logical_step_id,
-            executionOrdinal=identity.execution_ordinal,
-            executionScope="run",
-            lineage=lineage,
-            reason=reason,
-            status="blocked" if launch_blocked else "running",
-            terminalDisposition="blocked" if launch_blocked else None,
-            startedAt=updated_at,
-            updatedAt=updated_at,
-            input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
-            context={},
-            workspace=workspace,
-            execution=self._step_execution_compact_execution_refs(logical_step_id),
-            outputs={
-                "summary": "Workspace policy rejected before launch."
-            }
-            if launch_blocked
-            else {},
-            checks=[],
-            sideEffects={},
-            dependencyEffects={"invalidatedLogicalStepIds": []},
-            budget={},
-        )
-        manifest_ref = await self._write_step_execution_manifest(
-            logical_step_id,
-            attempt=attempt,
-            manifest=manifest,
-            step_execution_id=step_execution_id,
-            idempotency_key=idempotency_key,
             updated_at=updated_at,
+            reason=reason,
+            input_refs=self._prepared_artifact_refs,
         )
-        if launch_blocked:
-            self._record_workspace_policy_launch_block(
-                logical_step_id,
-                attempt=attempt,
-                updated_at=updated_at,
-                reason=str(
-                    workspace.get("rejectionReason")
-                    or "missing_required_checkpoint_evidence"
-                ),
-            )
-        return manifest_ref
 
     async def _record_step_execution_manifest_terminal(
         self,
@@ -925,6 +858,10 @@ class MoonMindRunWorkflow:
             reason=reason,
             source_execution_ordinal=source_execution_ordinal,
         )
+        git_effect = self._step_execution_git_effect(
+            logical_step_id,
+            terminal_disposition=terminal_disposition,
+        )
         manifest = StepExecutionManifestModel(
             schemaVersion="v1",
             stepExecutionId=step_execution_id,
@@ -939,18 +876,24 @@ class MoonMindRunWorkflow:
             terminalDisposition=terminal_disposition,
             startedAt=self._step_execution_started_at(logical_step_id),
             updatedAt=updated_at,
-            input={"preparedArtifactRefs": list(self._prepared_artifact_refs)},
-            context={},
+            input={
+                "preparedInputRefs": self._combined_step_execution_input_refs(
+                    self._prepared_artifact_refs,
+                )
+            },
+            context=self._step_execution_manifest_context_projection(
+                logical_step_id,
+                attempt=identity.execution_ordinal,
+                reason=reason,
+                execution=self._step_execution_compact_execution_refs(logical_step_id),
+            ),
             workspace={
                 **self._step_execution_workspace(
                     logical_step_id,
                     attempt=identity.execution_ordinal,
                     source_execution_ordinal=source_execution_ordinal,
                 ),
-                "gitEffect": self._step_execution_git_effect(
-                    logical_step_id,
-                    terminal_disposition=terminal_disposition,
-                ),
+                "gitEffect": git_effect,
             },
             execution=self._step_execution_compact_execution_refs(logical_step_id),
             outputs=self._step_execution_compact_output_refs(logical_step_id),
@@ -958,7 +901,10 @@ class MoonMindRunWorkflow:
                 (self._step_ledger_row_for(logical_step_id) or {}).get("checks")
                 or []
             ),
-            sideEffects=self._step_execution_side_effects(logical_step_id),
+            sideEffects=self._step_execution_side_effects(
+                logical_step_id,
+                git_effect=git_effect,
+            ),
             dependencyEffects=self._step_dependency_effects.get(
                 logical_step_id,
                 {"invalidatedLogicalStepIds": []},
@@ -1039,6 +985,12 @@ class MoonMindRunWorkflow:
                 logical_step_id,
                 updated_at=updated_at,
                 refs=refs,
+            )
+            mark_step_execution_manifest_evidence(
+                self._step_ledger_rows,
+                logical_step_id,
+                updated_at=updated_at,
+                step_execution_manifest_ref=manifest_ref,
             )
             self._sync_progress_snapshot(updated_at=updated_at)
             return manifest_ref
@@ -1629,12 +1581,80 @@ class MoonMindRunWorkflow:
                 outputs[target_key] = value.strip()
         return outputs
 
-    def _step_execution_side_effects(self, logical_step_id: str) -> dict[str, Any]:
+    def _step_execution_side_effects(
+        self,
+        logical_step_id: str,
+        *,
+        git_effect: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         records = [
             dict(record)
             for record in self._step_side_effect_records.get(logical_step_id, ())
         ]
-        return {"records": records} if records else {}
+        summary = self._step_execution_side_effect_summary(
+            records,
+            git_effect=git_effect,
+        )
+        if records:
+            return {"records": records, "summary": summary}
+        return {"summary": summary} if summary else {}
+
+    def _step_execution_side_effect_summary(
+        self,
+        records: Sequence[Mapping[str, Any]],
+        *,
+        git_effect: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        categories = {
+            "git": 0,
+            "external": 0,
+            "artifact": 0,
+            "publication": 0,
+            "compensation": 0,
+            "memory": 0,
+            "retrieval": 0,
+            "record": 0,
+        }
+        by_class: dict[str, int] = {}
+        by_disposition: dict[str, int] = {}
+        by_kind: dict[str, int] = {}
+        if git_effect:
+            disposition = str(git_effect.get("disposition") or "").strip()
+            if disposition:
+                categories["git"] = 1
+                by_disposition[disposition] = by_disposition.get(disposition, 0) + 1
+        for record in records:
+            effect_class = str(record.get("class") or "unknown").strip() or "unknown"
+            disposition = (
+                str(record.get("disposition") or "unknown").strip() or "unknown"
+            )
+            kind = str(record.get("kind") or "normal").strip() or "normal"
+            by_class[effect_class] = by_class.get(effect_class, 0) + 1
+            by_disposition[disposition] = by_disposition.get(disposition, 0) + 1
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+            categories["record"] += 1
+            if kind == "compensation":
+                categories["compensation"] += 1
+            if (
+                effect_class.startswith("external_")
+                or effect_class == "provider_account"
+            ):
+                categories["external"] += 1
+            elif effect_class == "artifact_write":
+                categories["artifact"] += 1
+            elif effect_class == "publication":
+                categories["publication"] += 1
+            elif effect_class == "memory_update":
+                categories["memory"] += 1
+            elif effect_class == "retrieval_index_update":
+                categories["retrieval"] += 1
+        return {
+            "totalRecords": len(records),
+            "categories": categories,
+            "byClass": by_class,
+            "byDisposition": by_disposition,
+            "byKind": by_kind,
+        }
 
     def _recovery_workspace_checkpoint_ref(
         self,
@@ -2214,6 +2234,7 @@ class MoonMindRunWorkflow:
             side_effects_payload["reattemptCompensation"] = compensation_plan
             side_effect_records = list(compensation_plan.get("compensations", ()))
         launch_blocked = self._workspace_policy_launch_blocked(workspace)
+        prepared_input_refs = self._combined_step_execution_input_refs(input_refs)
         manifest_payload = build_step_execution_manifest_payload(
             workflow_id=workflow.info().workflow_id,
             run_id=workflow.info().run_id,
@@ -2228,7 +2249,13 @@ class MoonMindRunWorkflow:
                 else summary
             ),
             lineage=lineage,
-            input_refs=input_refs,
+            input_refs=prepared_input_refs,
+            context=self._step_execution_manifest_context_projection(
+                logical_step_id,
+                attempt=attempt,
+                reason=reason,
+                execution=execution,
+            ),
             workspace=workspace,
             execution={
                 **self._step_execution_compact_execution_refs(logical_step_id),
@@ -2240,53 +2267,27 @@ class MoonMindRunWorkflow:
         )
         if launch_blocked:
             manifest_payload["terminalDisposition"] = "blocked"
-        try:
-            manifest_ref = await self._write_json_artifact(
-                name=f"reports/step_execution_{logical_step_id}_attempt_{attempt}.json",
-                payload=manifest_payload,
-            )
-        except ValueError as exc:
-            if (
-                "artifact.create returned no artifact_id" not in str(exc)
-                and "too many values to unpack" not in str(exc)
-            ):
-                raise
-            logging.getLogger(__name__).warning(
-                "Step Execution manifest artifact could not be created for %s "
-                "attempt %d: %s",
-                logical_step_id,
-                attempt,
-                exc,
-            )
-            return None
-        except AssertionError as exc:
-            logging.getLogger(__name__).warning(
-                "Step Execution manifest artifact creation was rejected by the "
-                "activity test double for %s attempt %d: %s",
-                logical_step_id,
-                attempt,
-                exc,
-            )
-            return None
-        except Exception as exc:
-            if "Not in workflow event loop" not in str(exc):
-                raise
-            logging.getLogger(__name__).warning(
-                "Step Execution manifest artifact creation skipped outside workflow "
-                "event loop for %s attempt %d",
-                logical_step_id,
-                attempt,
-            )
-            return None
-        try:
-            mark_step_execution_manifest_evidence(
-                self._step_ledger_rows,
-                logical_step_id,
-                updated_at=updated_at,
-                step_execution_manifest_ref=manifest_ref,
-            )
-        except KeyError:
-            return manifest_ref
+        manifest_model_payload = dict(manifest_payload)
+        manifest_model_payload.pop("contentType", None)
+        identity = StepExecutionIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            executionOrdinal=attempt,
+        )
+        manifest_ref = await self._write_step_execution_manifest(
+            logical_step_id,
+            attempt=attempt,
+            manifest=StepExecutionManifestModel.model_validate(
+                manifest_model_payload
+            ),
+            step_execution_id=build_step_execution_id(identity),
+            idempotency_key=build_step_execution_idempotency_key(
+                identity,
+                "manifest",
+            ),
+            updated_at=updated_at,
+        )
         if launch_blocked:
             self._record_workspace_policy_launch_block(
                 logical_step_id,
@@ -2299,6 +2300,50 @@ class MoonMindRunWorkflow:
             )
         self._sync_progress_snapshot(updated_at=updated_at)
         return manifest_ref
+
+    def _combined_step_execution_input_refs(
+        self,
+        input_refs: Sequence[str],
+    ) -> list[str]:
+        refs: list[str] = []
+        for ref in (*input_refs, *self._prepared_artifact_refs):
+            candidate = str(ref or "").strip()
+            if candidate and candidate not in refs:
+                refs.append(candidate)
+        return refs
+
+    def _step_execution_manifest_context_projection(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        reason: str,
+        execution: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        runtime_selection: dict[str, Any] = {}
+        if isinstance(execution, Mapping):
+            for source_key, target_key in (
+                ("runtimeId", "runtimeId"),
+                ("toolName", "runtimeId"),
+                ("model", "model"),
+                ("effort", "effort"),
+                ("executionProfileRef", "executionProfileRef"),
+            ):
+                value = execution.get(source_key)
+                if value is not None and target_key not in runtime_selection:
+                    runtime_selection[target_key] = value
+        projection = build_execution_context_bundle(
+            workflow_id=workflow.info().workflow_id,
+            run_id=workflow.info().run_id,
+            logical_step_id=logical_step_id,
+            execution_ordinal=attempt,
+            reason=reason,
+            runtime_selection=runtime_selection,
+        ).to_manifest_projection()
+        context = projection.get("context")
+        if isinstance(context, Mapping):
+            return dict(context)
+        return {}
 
     def _mark_step_waiting(
         self,

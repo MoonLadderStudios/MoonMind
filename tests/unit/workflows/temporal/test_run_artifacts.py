@@ -2471,6 +2471,7 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
             diagnosticsRef="art_empty_turn",
             metadata={
                 "profileId": "codex_default",
+                "stateCheckpointRef": f"art_checkpoint_{child_attempts}",
                 "turnStatus": "failed",
                 "turnMetadata": {
                     "failureCause": "app_server_protocol_empty_turn",
