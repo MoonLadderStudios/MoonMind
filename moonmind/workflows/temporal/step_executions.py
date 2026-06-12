@@ -11,10 +11,11 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from moonmind.schemas.step_execution_models import (
-    StepExecutionReason,
-    StepExecutionStatus,
     StepExecutionIdentityModel,
     StepExecutionManifestModel,
+    StepExecutionReason,
+    StepExecutionStatus,
+    StepExecutionTerminalDisposition,
 )
 from moonmind.schemas.temporal_models import (
     StepExecutionManifestModel as BoundaryStepExecutionManifestModel,
@@ -476,6 +477,7 @@ def build_step_execution_manifest_payload(
     execution_ordinal: int,
     reason: StepExecutionReason,
     status: StepExecutionStatus,
+    terminal_disposition: StepExecutionTerminalDisposition | None = None,
     updated_at: datetime,
     started_at: datetime | None = None,
     summary: str | None = None,
@@ -513,6 +515,7 @@ def build_step_execution_manifest_payload(
         lineage=dict(lineage) if lineage is not None else None,
         reason=reason,
         status=status,
+        terminalDisposition=terminal_disposition,
         startedAt=started_at or updated_at,
         updatedAt=updated_at,
         input=input_payload,

@@ -374,7 +374,7 @@ def test_step_execution_idempotency_key_uses_attempt_identity_and_operation() ->
 
     key = build_step_execution_idempotency_key(identity, "manifest")
 
-    assert key == "workflow-1:run-1:implement-story:2:manifest"
+    assert key == "workflow-1:run-1:implement-story:execution:2:manifest"
     assert build_step_execution_idempotency_key(identity, "gate:unit") != key
     changed_attempt = identity.model_copy(update={"execution_ordinal": 3})
     assert build_step_execution_idempotency_key(changed_attempt, "manifest") != key
@@ -385,7 +385,7 @@ def test_step_execution_boundary_result_is_compact_and_typed() -> None:
         {
             "identity": _identity(),
             "manifestArtifactRef": "artifact-step-execution-2",
-            "idempotencyKey": "workflow-1:run-1:implement-story:2:manifest",
+            "idempotencyKey": "workflow-1:run-1:implement-story:execution:2:manifest",
             "summary": "Step execution manifest created.",
         }
     )

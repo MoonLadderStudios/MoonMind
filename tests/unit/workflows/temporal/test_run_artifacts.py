@@ -20,7 +20,12 @@ def _step_execution_artifact_create_result(
     artifact_ids: count,
 ) -> tuple[dict[str, str], dict[str, str]] | None:
     normalized = _normalize_payload(payload)
-    if not str(normalized.get("name") or "").startswith("reports/step_executions/"):
+    if (
+        normalized.get("content_type")
+        != "application/vnd.moonmind.step-execution+json;version=1"
+        or (normalized.get("metadata_json") or {}).get("artifact_kind")
+        != "step_execution_manifest"
+    ):
         return None
     return (
         {"artifact_id": f"art_step_execution_{next(artifact_ids)}"},
@@ -158,7 +163,7 @@ async def test_run_planning_stage_extracts_plan_ref_from_activity_result(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda patch_id: False)
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
 
     resolved = await workflow._run_planning_stage(
@@ -285,6 +290,12 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
     assert captured[3][0] == "artifact.read"
     assert captured[3][1]["artifact_ref"] == "art_plan_1"
     assert captured[4][0] == "artifact.create"
+    assert captured[4][1]["content_type"] == (
+        "application/vnd.moonmind.step-execution+json;version=1"
+    )
+    assert captured[4][1]["metadata_json"]["artifact_kind"] == (
+        "step_execution_manifest"
+    )
     assert not any(
         payload.get("artifact_ref") == "artifact://registry/1"
         for activity_type, payload in captured
@@ -2471,6 +2482,7 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
             diagnosticsRef="art_empty_turn",
             metadata={
                 "profileId": "codex_default",
+                "stateCheckpointRef": f"art_checkpoint_{child_attempts}",
                 "turnStatus": "failed",
                 "turnMetadata": {
                     "failureCause": "app_server_protocol_empty_turn",

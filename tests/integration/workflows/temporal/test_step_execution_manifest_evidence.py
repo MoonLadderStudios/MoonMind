@@ -71,8 +71,9 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
     )
 
     workflow._mark_step_running("implement", updated_at=now, summary="Initial")
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "implement",
+        phase="start",
         updated_at=now,
         reason="initial_execution",
     )
@@ -83,8 +84,9 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
         summary="Failed gate",
     )
     workflow._mark_step_running("implement", updated_at=now, summary="Retry")
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "implement",
+        phase="start",
         updated_at=now,
         reason="quality_gate_failed",
     )
@@ -163,8 +165,9 @@ async def test_recovery_step_execution_manifest_carries_lineage_without_large_pa
     )
 
     workflow._mark_step_running("implement", updated_at=now, summary="Resume")
-    await workflow._record_step_execution_manifest_start(
+    await workflow._record_step_execution_manifest(
         "implement",
+        phase="start",
         updated_at=now,
         reason="recover_from_failed_step",
     )
@@ -180,3 +183,126 @@ async def test_recovery_step_execution_manifest_carries_lineage_without_large_pa
     )
     assert manifest["workspace"]["evidenceAccepted"] is True
     assert "payload" not in manifest
+
+
+async def test_terminal_manifest_aggregates_required_side_effect_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-execution-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "publish", "title": "Publish"}],
+        dependency_map={"publish": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("publish", updated_at=now, summary="Publishing")
+    await workflow._record_step_execution_manifest(
+        "publish",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    workflow._record_step_result_evidence(
+        "publish",
+        execution_result={
+            "status": "COMPLETED",
+            "outputs": {
+                "outputSummaryRef": "artifact://summary/publish",
+                "stdoutArtifactRef": "artifact://stdout/publish",
+            },
+        },
+        updated_at=now,
+    )
+    for record in (
+        {
+            "effect_class": "external_idempotent",
+            "operation": "jira.comment",
+            "target": "MM-821",
+            "idempotency_key": "wf-boundary:publish:external",
+        },
+        {
+            "effect_class": "artifact_write",
+            "operation": "artifact.write",
+            "target": "artifact://manifest",
+        },
+        {
+            "effect_class": "publication",
+            "operation": "github.comment",
+            "target": "PR-1",
+            "idempotency_key": "wf-boundary:publish:publication",
+        },
+        {
+            "effect_class": "external_non_idempotent",
+            "effect_kind": "compensation",
+            "operation": "compensate:jira.transition",
+            "target": "MM-821",
+            "idempotency_key": "wf-boundary:publish:compensation",
+        },
+        {
+            "effect_class": "memory_update",
+            "operation": "memory.write",
+            "target": "memory://run",
+        },
+        {
+            "effect_class": "retrieval_index_update",
+            "operation": "retrieval.index",
+            "target": "retrieval://run",
+        },
+    ):
+        workflow._record_step_side_effect(
+            "publish",
+            workflow_state_accepted=True,
+            **record,
+        )
+    workflow._mark_step_terminal(
+        "publish",
+        status="succeeded",
+        updated_at=now,
+        summary="Published",
+    )
+
+    await workflow._record_step_execution_manifest(
+        "publish",
+        phase="terminal",
+        updated_at=now,
+        reason="initial_execution",
+        status="succeeded",
+        terminal_disposition="accepted",
+    )
+
+    terminal = writes[-1]["payload"]
+    assert terminal["terminalDisposition"] == "accepted"
+    assert terminal["outputs"]["summaryRef"] == "artifact://summary/publish"
+    assert terminal["workspace"]["gitEffect"]["disposition"] == "accepted"
+    assert terminal["sideEffects"]["summary"]["categories"] == {
+        "git": 1,
+        "external": 2,
+        "artifact": 1,
+        "publication": 1,
+        "compensation": 1,
+        "memory": 1,
+        "retrieval": 1,
+        "record": 6,
+    }
+    assert len(terminal["sideEffects"]["records"]) == 6
