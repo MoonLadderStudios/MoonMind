@@ -2335,17 +2335,26 @@ async def main_async() -> None:
         runtime_resources, activities = await _build_runtime_activities(topology)
 
     try:
-        worker = Worker(
-            client,
-            task_queue=topology.task_queues[0],
-            workflows=workflows,
-            activities=activities,
-            workflow_runner=UnsandboxedWorkflowRunner(),
+        worker_kwargs = {
+            "workflows": workflows,
+            "activities": activities,
+            "workflow_runner": UnsandboxedWorkflowRunner(),
             **_worker_concurrency_kwargs(topology),
-        )
+        }
+        workers = [
+            Worker(
+                client,
+                task_queue=task_queue,
+                **worker_kwargs,
+            )
+            for task_queue in topology.task_queues
+        ]
 
-        logger.info("Worker started, polling task queues...")
-        await worker.run()
+        logger.info(
+            "Worker started, polling task queues: %s",
+            ", ".join(topology.task_queues),
+        )
+        await asyncio.gather(*(worker.run() for worker in workers))
     finally:
         if runtime_resources is not None:
             await runtime_resources.aclose()

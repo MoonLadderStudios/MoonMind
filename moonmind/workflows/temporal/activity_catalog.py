@@ -43,6 +43,24 @@ def get_workflow_task_queue(
         temporal_settings or settings.temporal
     ).task_queue
 
+def get_workflow_poll_task_queues(
+    temporal_settings: TemporalSettings | None = None,
+) -> tuple[str, ...]:
+    """Resolve workflow queues the workflow fleet must poll.
+
+    New workflow starts use the hard-switch start contract queue.  In-flight
+    histories may still contain pre-patch child-workflow commands recorded on
+    TEMPORAL_WORKFLOW_TASK_QUEUE, so the workflow fleet must keep polling that
+    queue until those histories have drained.
+    """
+
+    cfg = temporal_settings or settings.temporal
+    start_queue = get_workflow_task_queue(cfg)
+    replay_queue = str(cfg.workflow_task_queue).strip()
+    if replay_queue and replay_queue != start_queue:
+        return (start_queue, replay_queue)
+    return (start_queue,)
+
 class TemporalActivityCatalogError(ValueError):
     """Raised when Temporal activity routing metadata is invalid."""
 
@@ -305,6 +323,7 @@ def build_default_activity_catalog(
 
     cfg = temporal_settings or settings.temporal
     workflow_task_queue = get_workflow_task_queue(cfg)
+    workflow_poll_task_queues = get_workflow_poll_task_queues(cfg)
     
     # See docs/Temporal/ErrorTaxonomy.md
     NON_RETRYABLE_ERRORS = ("INVALID_INPUT", "ProfileResolutionError", "UnsupportedStatus")
@@ -1119,7 +1138,7 @@ def build_default_activity_catalog(
     fleets = (
         TemporalWorkerFleet(
             fleet=WORKFLOW_FLEET,
-            task_queues=(workflow_task_queue,),
+            task_queues=workflow_poll_task_queues,
             capabilities=("workflow",),
             privileges=("temporal",),
             scaling_notes="Workflow code only; no side effects.",
@@ -1292,6 +1311,7 @@ __all__ = [
     "WORKFLOW_TASK_QUEUE",
     "build_default_activity_catalog",
     "get_workflow_task_queue",
+    "get_workflow_poll_task_queues",
     "manifest_ingest_activity_routes",
     "skill_policy_as_route",
 ]

@@ -3167,24 +3167,29 @@ async def test_main_async_workflow_fleet(
     mock_healthcheck.return_value = mock_healthcheck_server
     mock_topology = MagicMock()
     mock_topology.fleet = WORKFLOW_FLEET
-    mock_topology.task_queues = ["mm.workflow"]
+    mock_topology.task_queues = ["mm.workflow.user.v2", "mm.workflow"]
     mock_topology.concurrency_limit = 7
     mock_describe.return_value = mock_topology
 
     mock_client = MagicMock()
     mock_connect.return_value = mock_client
 
-    mock_worker = MagicMock()
-    mock_worker_cls.return_value = mock_worker
-    mock_worker.run = AsyncMock()
+    mock_worker_v2 = MagicMock()
+    mock_worker_v2.run = AsyncMock()
+    mock_worker_replay = MagicMock()
+    mock_worker_replay.run = AsyncMock()
+    mock_worker_cls.side_effect = [mock_worker_v2, mock_worker_replay]
 
     # Run
     await main_async()
 
     # Verify Worker creation uses the mock workflows
-    mock_worker_cls.assert_called_once()
-    kwargs = mock_worker_cls.call_args.kwargs
-    assert kwargs["task_queue"] == "mm.workflow"
+    assert mock_worker_cls.call_count == 2
+    assert [call.kwargs["task_queue"] for call in mock_worker_cls.call_args_list] == [
+        "mm.workflow.user.v2",
+        "mm.workflow",
+    ]
+    kwargs = mock_worker_cls.call_args_list[0].kwargs
     from moonmind.workflows.temporal.workflows.agent_session import (
         MoonMindAgentSessionWorkflow,
     )
@@ -3219,7 +3224,8 @@ async def test_main_async_workflow_fleet(
     assert "max_concurrent_activities" not in kwargs
 
     # Verify worker run is called
-    mock_worker.run.assert_awaited_once()
+    mock_worker_v2.run.assert_awaited_once()
+    mock_worker_replay.run.assert_awaited_once()
 
 @pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime.start_healthcheck_server")

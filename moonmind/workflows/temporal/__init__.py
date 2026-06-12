@@ -23,6 +23,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     TemporalActivityTimeouts,
     TemporalWorkerFleet,
     build_default_activity_catalog,
+    get_workflow_poll_task_queues,
     skill_policy_as_route,
 )
 from moonmind.workflows.temporal.activity_runtime import (
@@ -225,6 +226,7 @@ __all__ = [
     "build_activity_execution_context",
     "build_activity_invocation_envelope",
     "build_default_activity_catalog",
+    "get_workflow_poll_task_queues",
     "build_compact_activity_result",
     "build_worker_activity_bindings",
     "build_worker_topology",
