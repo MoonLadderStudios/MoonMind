@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from moonmind.schemas.temporal_models import (
     STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+    StepCheckpointCreateResult,
     StepExecutionCheckpointBoundary,
     StepExecutionCheckpointModel,
     StepExecutionIdentityModel,
@@ -94,6 +95,29 @@ def build_step_checkpoint_payload(
         createdAt=created_at,
     )
     return checkpoint.model_dump(by_alias=True, mode="json")
+
+
+def build_step_checkpoint_create_result(
+    *,
+    checkpoint_ref: str,
+    checkpoint_id: str,
+    workspace_kind: WorkspaceCheckpointKind,
+    idempotency_key: str,
+    diagnostic_refs: list[str] | tuple[str, ...] = (),
+    summary: str | None = None,
+) -> dict[str, Any]:
+    """Build the compact workflow-visible result for a checkpoint artifact write."""
+
+    result = StepCheckpointCreateResult(
+        checkpointRef=checkpoint_ref,
+        checkpointId=checkpoint_id,
+        contentType=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        workspaceKind=workspace_kind,
+        summary=summary or f"{workspace_kind} checkpoint written",
+        diagnosticRefs=list(diagnostic_refs),
+        idempotencyKey=idempotency_key,
+    )
+    return result.model_dump(by_alias=True, mode="json")
 
 
 def checkpoint_kinds_for_workspace_policy(

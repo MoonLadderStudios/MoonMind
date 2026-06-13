@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
@@ -475,6 +475,32 @@ const TargetDiagnosticsSchema = z
   })
   .passthrough();
 
+const EvidenceRefStatusSchema = z
+  .object({
+    category: z.string(),
+    status: z.string(),
+    artifactRef: z.string().nullable().optional(),
+    boundary: z.string().nullable().optional(),
+    reasonCode: z.string().nullable().optional(),
+    label: z.string().nullable().optional(),
+    summary: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const RecoveryEligibilitySchema = z
+  .object({
+    eligible: z.boolean(),
+    defaultAction: z.enum(['resume_from_checkpoint', 'full_retry', 'environment_fix', 'none']),
+    disabledReasonCode: z.string().nullable().optional(),
+    requiredBoundary: z.string().nullable().optional(),
+    checkpointRef: z.string().nullable().optional(),
+    sourceWorkflowId: z.string().nullable().optional(),
+    sourceRunId: z.string().nullable().optional(),
+    operatorGuidance: z.enum(['resume', 'full_retry', 'fix_environment', 'needs_human']),
+    evidence: z.array(EvidenceRefStatusSchema).default([]),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string().optional(),
@@ -600,6 +626,7 @@ const ExecutionDetailSchema = z
       .default([])
       .optional(),
     targetDiagnostics: TargetDiagnosticsSchema.nullable().optional(),
+    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
     interventionAudit: z
       .array(
         z
@@ -1040,6 +1067,14 @@ const StepLedgerSnapshotSchema = z.object({
   runScope: z.string().default('latest'),
   steps: z.array(StepLedgerRowSchema).default([]),
 });
+
+const StepExecutionDetailSchema = z
+  .object({
+    logicalStepId: z.string(),
+    executionOrdinal: z.number(),
+    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
+  })
+  .passthrough();
 
 const RunSummaryArtifactSchema = z
   .object({
@@ -3192,18 +3227,8 @@ function LiveLogsPanel({
 }
 
 function InterventionPanel({
-  actions,
-  busy,
   audit,
-  onPause,
-  onResume,
-  onApprove,
-  onCancel,
-  onReject,
-  onSendMessage,
 }: {
-  actions: NonNullable<z.infer<typeof ExecutionDetailSchema>['actions']>;
-  busy: boolean;
   audit: Array<{
     action: string;
     transport: string;
@@ -3211,103 +3236,15 @@ function InterventionPanel({
     detail?: string | null | undefined;
     createdAt: string;
   }>;
-  onPause: () => void;
-  onResume: () => void;
-  onApprove: () => void;
-  onCancel: () => void;
-  onReject: () => void;
-  onSendMessage: (message: string) => void;
 }) {
-  const [operatorMessage, setOperatorMessage] = useState('');
-  const hasControls = Boolean(
-    actions.canPause ||
-      actions.canResume ||
-      actions.canApprove ||
-      actions.canCancel ||
-      actions.canReject ||
-      actions.canSendMessage,
-  );
-
-  const submitMessage = () => {
-    const message = operatorMessage.trim();
-    if (!message) return;
-    onSendMessage(message);
-    setOperatorMessage('');
-  };
-
   return (
     <section className="stack">
       <div>
         <h3>Intervention</h3>
         <p className="small">
-          Controls use Temporal or provider-native APIs and do not require a live log connection.
+          Intervention history is shown here. Current workflow operations are available from the workflow actions menu.
         </p>
       </div>
-
-      {hasControls ? (
-        <div className="actions">
-          {actions.canPause ? (
-            <button type="button" disabled={busy} className="secondary" onClick={onPause}>
-              Pause
-            </button>
-          ) : null}
-          {actions.canResume ? (
-            <button type="button" disabled={busy} className="queue-action" onClick={onResume}>
-              Resume
-            </button>
-          ) : null}
-          {actions.canApprove ? (
-            <button type="button" disabled={busy} className="queue-action" onClick={onApprove}>
-              Approve
-            </button>
-          ) : null}
-          {actions.canReject ? (
-            <button
-              type="button"
-              disabled={busy}
-              className="queue-action queue-action-danger"
-              onClick={onReject}
-            >
-              Reject
-            </button>
-          ) : null}
-          {actions.canCancel ? (
-            <button
-              type="button"
-              disabled={busy}
-              className="queue-action queue-action-danger"
-              onClick={onCancel}
-            >
-              Cancel
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <p className="small">No intervention controls are available for the current task state.</p>
-      )}
-
-      {actions.canSendMessage ? (
-        <div className="stack">
-          <label htmlFor="operator-message">Operator message</label>
-          <textarea
-            id="operator-message"
-            value={operatorMessage}
-            onChange={(event) => setOperatorMessage(event.target.value)}
-            rows={3}
-            placeholder="Send an explicit operator message without using the log viewer."
-          />
-          <div className="actions">
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !operatorMessage.trim()}
-              onClick={submitMessage}
-            >
-              Send Message
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       <div className="stack">
         <h4>Intervention History</h4>
@@ -3329,6 +3266,214 @@ function InterventionPanel({
         )}
       </div>
     </section>
+  );
+}
+
+type WorkflowActionMenuItem = {
+  id: string;
+  label: string;
+  href?: string;
+  danger?: boolean;
+  disabledReason?: string | null;
+  onSelect?: () => void;
+};
+
+function WorkflowActionsMenu({
+  items,
+}: {
+  items: WorkflowActionMenuItem[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | HTMLAnchorElement | null>>([]);
+  const availableIndexes = useMemo(
+    () => items
+      .map((item, index) => (item.disabledReason ? -1 : index))
+      .filter((index) => index >= 0),
+    [items],
+  );
+
+  const closeMenu = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+  const focusItem = (index: number) => {
+    const nextIndex = items[index] ? index : availableIndexes[0] ?? 0;
+    setActiveIndex(nextIndex);
+  };
+  const selectItem = (item: WorkflowActionMenuItem) => {
+    if (item.disabledReason) return;
+    item.onSelect?.();
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const preferredIndex = availableIndexes.includes(activeIndex)
+      ? activeIndex
+      : availableIndexes[0] ?? 0;
+    setActiveIndex(preferredIndex);
+  }, [activeIndex, availableIndexes, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const activeItem = itemRefs.current[activeIndex];
+    if (activeItem && document.activeElement !== activeItem) {
+      activeItem.focus();
+    }
+  }, [activeIndex, open]);
+
+  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setOpen(true);
+      focusItem(availableIndexes[0] ?? 0);
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setOpen(true);
+      focusItem(availableIndexes[0] ?? 0);
+    }
+  };
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMenu();
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (availableIndexes.length === 0) return;
+      const currentAvailableIndex = Math.max(0, availableIndexes.indexOf(activeIndex));
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      const next =
+        availableIndexes[
+          (currentAvailableIndex + direction + availableIndexes.length) % availableIndexes.length
+        ] ?? availableIndexes[0] ?? 0;
+      focusItem(next);
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      itemRefs.current[activeIndex]?.click();
+    }
+  };
+
+  return (
+    <div
+      className="td-workflow-actions-menu"
+      ref={rootRef}
+      onBlur={(event) => {
+        if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setOpen(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        ref={triggerRef}
+        className="secondary td-workflow-actions-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => {
+          const nextOpen = !open;
+          setOpen(nextOpen);
+          if (nextOpen) {
+            const firstAvailable = availableIndexes[0] ?? 0;
+            setActiveIndex(firstAvailable);
+          }
+        }}
+        onKeyDown={onTriggerKeyDown}
+      >
+        Workflow actions
+      </button>
+      {open ? (
+        <div
+          className="td-workflow-actions-popover"
+          role="menu"
+          aria-label="Workflow actions"
+          onKeyDown={onMenuKeyDown}
+        >
+          {items.length === 0 ? (
+            <p className="td-workflow-actions-empty">No workflow actions are currently available.</p>
+          ) : (
+            items.map((item, index) => {
+              const disabledReasonId = item.disabledReason
+                ? `workflow-action-${item.id}-disabled-reason`
+                : undefined;
+              const commonProps = {
+                role: 'menuitem',
+                tabIndex: index === activeIndex ? 0 : -1,
+                'aria-label': item.label,
+                'aria-disabled': item.disabledReason ? true : undefined,
+                'aria-describedby': disabledReasonId,
+                className: [
+                  'td-workflow-actions-item',
+                  item.danger ? 'td-workflow-actions-item-danger' : '',
+                  item.disabledReason ? 'td-workflow-actions-item-disabled' : '',
+                ].filter(Boolean).join(' '),
+                ref: (node: HTMLButtonElement | HTMLAnchorElement | null) => {
+                  itemRefs.current[index] = node;
+                },
+                onFocus: () => setActiveIndex(index),
+              };
+              const content = (
+                <>
+                  <span>{item.label}</span>
+                  {item.disabledReason ? (
+                    <span
+                      id={disabledReasonId}
+                      className="td-workflow-actions-disabled-reason"
+                    >
+                      {item.label} unavailable: {item.disabledReason}
+                    </span>
+                  ) : null}
+                </>
+              );
+              if (item.href && !item.disabledReason) {
+                return (
+                  <a
+                    key={item.id}
+                    {...commonProps}
+                    href={item.href}
+                    onClick={() => {
+                      item.onSelect?.();
+                      setOpen(false);
+                    }}
+                  >
+                    {content}
+                  </a>
+                );
+              }
+              return (
+                <button
+                  key={item.id}
+                  {...commonProps}
+                  type="button"
+                  onClick={() => selectItem(item)}
+                >
+                  {content}
+                </button>
+              );
+            })
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -3607,6 +3752,102 @@ function TargetDiagnosticsPanel({
               </ul>
             </div>
           ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function RecoveryEvidencePanel({
+  recovery,
+  resume,
+  diagnostics,
+  onResumeFromFailedStep,
+  onRerun,
+  busy,
+  taskEditingOn,
+}: {
+  recovery: z.infer<typeof RecoveryEligibilitySchema> | null | undefined;
+  resume: ExecutionDetail['resume'];
+  diagnostics: z.infer<typeof TargetDiagnosticsSchema> | null | undefined;
+  onResumeFromFailedStep: () => void;
+  onRerun: () => void;
+  busy: boolean;
+  taskEditingOn: boolean;
+}) {
+  const diagnosticsRecovery = diagnostics?.recovery ?? null;
+  if (!recovery && !diagnosticsRecovery && !resume?.checkpointRef) return null;
+  const checkpointRef = recovery?.checkpointRef || resume?.checkpointRef || diagnostics?.recovery?.checkpointRef || null;
+  const requiredBoundary = recovery?.requiredBoundary || 'before_execution';
+  const disabledReason = recovery?.disabledReasonCode || resume?.disabledReason || null;
+  const sourceWorkflowId = recovery?.sourceWorkflowId || diagnostics?.recovery?.sourceWorkflowId || null;
+  const sourceRunId = recovery?.sourceRunId || resume?.sourceRunId || diagnostics?.recovery?.sourceRunId || null;
+  const diagnosticsEvidence = recovery?.evidence?.filter((item) =>
+    ['environment', 'provider_lease', 'preflight', 'sidecar', 'ghcr', 'diagnostics'].includes(item.category),
+  ) || [];
+  const preservedSteps = diagnosticsRecovery?.preservedSteps || [];
+
+  return (
+    <section className="detail-section">
+      <h3>Recovery evidence</h3>
+      {recovery?.operatorGuidance === 'fix_environment' ? (
+        <p className="small">
+          Fix the runtime environment before retrying. Check the diagnostic refs below for sidecar, registry,
+          preflight, or provider lease failures.
+        </p>
+      ) : recovery?.eligible ? (
+        <p className="small">
+          Resume from checkpoint is the default recovery action for boundary {formatStatusLabel(requiredBoundary)}.
+        </p>
+      ) : disabledReason ? (
+        <p className="small">Resume from checkpoint unavailable: {formatStatusLabel(disabledReason)}</p>
+      ) : null}
+
+      <div className="action-row">
+        {taskEditingOn && recovery?.eligible ? (
+          <button type="button" className="queue-action" disabled={busy} onClick={onResumeFromFailedStep}>
+            Resume from checkpoint
+          </button>
+        ) : null}
+        {taskEditingOn ? (
+          <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
+            Full retry
+          </button>
+        ) : null}
+      </div>
+
+      <ul className="step-detail-list">
+        {checkpointRef ? (
+          <li><strong>Checkpoint:</strong> <code className="text-xs break-all">{checkpointRef}</code></li>
+        ) : null}
+        {requiredBoundary ? (
+          <li><strong>Required boundary:</strong> {formatStatusLabel(requiredBoundary)}</li>
+        ) : null}
+        {sourceWorkflowId ? (
+          <li><strong>Source workflow:</strong> <code className="text-xs break-all">{sourceWorkflowId}</code></li>
+        ) : null}
+        {sourceRunId ? (
+          <li><strong>Source run:</strong> <code className="text-xs break-all">{sourceRunId}</code></li>
+        ) : null}
+        {diagnosticsEvidence.map((item, index) => (
+          <li key={`${item.category}-${item.artifactRef || item.reasonCode || index}`}>
+            <strong>{formatStatusLabel(item.category)}:</strong>{' '}
+            {item.artifactRef ? <code className="text-xs break-all">{item.artifactRef}</code> : formatStatusLabel(item.status)}
+            {item.reasonCode ? <span className="small"> {formatStatusLabel(item.reasonCode)}</span> : null}
+          </li>
+        ))}
+      </ul>
+      {preservedSteps.length > 0 ? (
+        <div>
+          <h4>Preserved provenance</h4>
+          <ul className="step-detail-list">
+            {preservedSteps.map((step) => (
+              <li key={`${step.logicalStepId}-${step.sourceExecutionOrdinal || ''}`}>
+                Preserved step: {step.title || step.logicalStepId}
+                {step.sourceWorkflowId ? <span className="small"> from <code>{step.sourceWorkflowId}</code></span> : null}
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
     </section>
@@ -4249,78 +4490,6 @@ function ArtifactBrowserPanel({
   );
 }
 
-function StepDagOverview({
-  snapshot,
-}: {
-  snapshot: z.infer<typeof StepLedgerSnapshotSchema>;
-}) {
-  const stepIds = new Set(snapshot.steps.map((step) => step.logicalStepId));
-  const dependencyEdges = snapshot.steps.flatMap((step) =>
-    step.dependsOn.map((sourceId) => ({
-      sourceId,
-      targetId: step.logicalStepId,
-      isKnownSource: stepIds.has(sourceId),
-    })),
-  );
-  const rootEdges = snapshot.steps
-    .filter((step) => step.dependsOn.length === 0)
-    .map((step) => ({
-      sourceId: 'start',
-      targetId: step.logicalStepId,
-      isKnownSource: true,
-    }));
-  const displayEdges = [...rootEdges, ...dependencyEdges];
-
-  return (
-    <section className="step-dag-panel" aria-label="Step DAG visualization">
-      <h4>Step DAG</h4>
-      <div className="step-dag-canvas">
-        {snapshot.steps.length > 0 ? (
-          <div className="step-dag-grid" role="list" aria-label="Step dependency nodes">
-            {snapshot.steps.map((step) => (
-              <article key={step.logicalStepId} className="step-dag-node" role="listitem">
-                <div className="step-dag-node-header">
-                  <strong>{step.title}</strong>
-                  <span {...executionStatusPillProps(step.status)}>
-                    {formatStatusLabel(step.status)}
-                  </span>
-                </div>
-                <div className="small">
-                  <code>{step.logicalStepId}</code>
-                </div>
-                <div className="small">
-                  Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="small step-dag-empty">No steps in the ledger yet.</p>
-        )}
-        {displayEdges.length > 0 ? (
-          <div className="step-dag-edges" aria-label="Step dependency edges">
-            {displayEdges.map((edge) => (
-              <div
-                key={`${edge.sourceId}->${edge.targetId}`}
-                className={
-                  edge.isKnownSource
-                    ? 'step-dag-edge-label'
-                    : 'step-dag-edge-label step-dag-edge-label-missing'
-                }
-                aria-label={`${edge.sourceId} to ${edge.targetId}`}
-              >
-                <code>{edge.sourceId}</code>
-                <span aria-hidden="true">-&gt;</span>
-                <code>{edge.targetId}</code>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
 function InterventionMonitorPanel({
   execution,
 }: {
@@ -4710,6 +4879,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return {
         logicalStepId: row.logicalStepId,
         title: row.title,
+        executionOrdinal: row.executionOrdinal,
         eligible,
         reason,
         isFailedStep,
@@ -4721,6 +4891,42 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     selectedRecoveryOptions.find((option) => option.isFailedStep) ||
     selectedRecoveryOptions.find((option) => option.eligible) ||
     null;
+
+  const stepRecoveryQuery = useQuery({
+    queryKey: [
+      'workflow-detail-step-execution',
+      workflowId,
+      selectedRecoveryStep?.logicalStepId,
+      selectedRecoveryStep?.executionOrdinal,
+      sourceTemporal,
+    ],
+    queryFn: async () => {
+      if (!workflowId || !selectedRecoveryStep?.logicalStepId || !selectedRecoveryStep.executionOrdinal) {
+        throw new Error('Step execution recovery evidence requires a selected step.');
+      }
+      const suffix = sourceTemporal ? '?source=temporal' : '';
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(
+          selectedRecoveryStep.logicalStepId,
+        )}/step-executions/${encodeURIComponent(String(selectedRecoveryStep.executionOrdinal))}${suffix}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) {
+        const statusText = response.statusText.trim();
+        const detail = statusText ? ` ${statusText}` : '';
+        throw new Error(`Step execution: ${response.status}${detail}`);
+      }
+      return StepExecutionDetailSchema.parse(await response.json());
+    },
+    enabled: Boolean(
+      workflowId &&
+        selectedRecoveryStep?.logicalStepId &&
+        selectedRecoveryStep.executionOrdinal > 0,
+    ),
+    refetchInterval: liveUpdates && !isTerminalExecution ? detailPoll : false,
+  });
+  const recoveryEligibility =
+    execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
 
   const artifactsQuery = useQuery({
     queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId],
@@ -5124,20 +5330,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     : '';
   const compareHref =
     workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : '';
-  const onTaskEditingNavigation = (
-    event: MouseEvent<HTMLAnchorElement>,
-    telemetryEvent: 'detail_edit_click' | 'detail_compare_click',
-  ) => {
-    if (busy) {
-      event.preventDefault();
-      return;
-    }
-    recordTemporalTaskEditingClientEvent({
-      event: telemetryEvent,
-      mode: 'detail',
-      workflowId,
-    });
-  };
   const onRerun = () => {
     setActionError(null);
     if (busy || !workflowId) return;
@@ -5209,6 +5401,211 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
+  const actionDisabledReason = (key: string): string | null => {
+    const reason = actions?.disabledReasons?.[key];
+    return reason ? formatStatusLabel(reason) : null;
+  };
+  const workflowActionMenuItems = (() => {
+    if (!actionsOn || !actions) return [];
+    const items: WorkflowActionMenuItem[] = [];
+    const pendingActionReason = busy ? 'action pending' : null;
+    const addButton = ({
+      id,
+      label,
+      available,
+      disabledReason,
+      danger,
+      onSelect,
+    }: {
+      id: string;
+      label: string;
+      available: boolean;
+      disabledReason?: string | null;
+      danger?: boolean;
+      onSelect: () => void;
+    }) => {
+      const effectiveDisabledReason = available ? pendingActionReason : disabledReason ?? null;
+      if (available) {
+        items.push({
+          id,
+          label,
+          ...(danger ? { danger: true } : {}),
+          onSelect,
+          ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+        });
+      } else if (effectiveDisabledReason) {
+        items.push({
+          id,
+          label,
+          ...(danger ? { danger: true } : {}),
+          disabledReason: effectiveDisabledReason,
+        });
+      }
+    };
+    const addLink = ({
+      id,
+      label,
+      href,
+      available,
+      disabledReason,
+      onSelect,
+    }: {
+      id: string;
+      label: string;
+      href: string;
+      available: boolean;
+      disabledReason?: string | null;
+      onSelect: () => void;
+    }) => {
+      const effectiveDisabledReason = available ? pendingActionReason : disabledReason ?? null;
+      if (available && href) {
+        items.push({
+          id,
+          label,
+          href,
+          onSelect,
+          ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+        });
+      } else if (effectiveDisabledReason) {
+        items.push({
+          id,
+          label,
+          disabledReason: effectiveDisabledReason,
+        });
+      }
+    };
+
+    addButton({
+      id: 'rename',
+      label: 'Rename',
+      available: Boolean(actions.canSetTitle),
+      disabledReason: actionDisabledReason('canSetTitle'),
+      onSelect: onRename,
+    });
+    if (taskEditingOn) {
+      addLink({
+        id: 'edit-task',
+        label: 'Edit task',
+        href: editHref,
+        available: Boolean(canShowEditWorkflow && editHref),
+        disabledReason: editTaskUnavailableReason ? formatStatusLabel(editTaskUnavailableReason) : null,
+        onSelect: () => {
+          if (busy) return;
+          recordTemporalTaskEditingClientEvent({
+            event: 'detail_edit_click',
+            mode: 'detail',
+            workflowId,
+          });
+        },
+      });
+      addLink({
+        id: 'compare-run',
+        label: 'Compare run',
+        href: compareHref,
+        available: Boolean(compareHref),
+        disabledReason: actionDisabledReason('canEditForRerun'),
+        onSelect: () => {
+          if (busy) return;
+          recordTemporalTaskEditingClientEvent({
+            event: 'detail_compare_click',
+            mode: 'detail',
+            workflowId,
+          });
+        },
+      });
+      addButton({
+        id: 'rerun',
+        label: 'Rerun',
+        available: Boolean(actions.canRerun),
+        disabledReason: rerunUnavailableReason ? formatStatusLabel(rerunUnavailableReason) : null,
+        onSelect: onRerun,
+      });
+      addButton({
+        id: 'resume-from-failed-step',
+        label: 'Resume from failed step',
+        available: Boolean(actions.canResumeFromFailedStep),
+        disabledReason: actionDisabledReason('canResumeFromFailedStep'),
+        onSelect: onResumeFromFailedStep,
+      });
+      if (actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0) {
+        addButton({
+          id: 'recover-from-selected-step',
+          label: 'Recover from selected step',
+          available: Boolean(selectedRecoveryStep?.eligible),
+          disabledReason: selectedRecoveryStep?.reason
+            ? formatStatusLabel(selectedRecoveryStep.reason)
+            : 'selected step is not eligible',
+          onSelect: onRecoverFromSelectedStep,
+        });
+      }
+    }
+    addButton({
+      id: 'pause',
+      label: 'Pause',
+      available: Boolean(actions.canPause),
+      disabledReason: actionDisabledReason('canPause'),
+      onSelect: onPause,
+    });
+    addButton({
+      id: 'resume',
+      label: 'Resume',
+      available: Boolean(actions.canResume),
+      disabledReason: actionDisabledReason('canResume'),
+      onSelect: onResume,
+    });
+    addButton({
+      id: 'approve',
+      label: 'Approve',
+      available: Boolean(actions.canApprove),
+      disabledReason: actionDisabledReason('canApprove'),
+      onSelect: onApprove,
+    });
+    addButton({
+      id: 'reject',
+      label: 'Reject',
+      available: Boolean(actions.canReject),
+      disabledReason: actionDisabledReason('canReject'),
+      danger: true,
+      onSelect: onReject,
+    });
+    addButton({
+      id: 'cancel',
+      label: 'Cancel',
+      available: Boolean(actions.canCancel),
+      disabledReason: actionDisabledReason('canCancel'),
+      danger: true,
+      onSelect: onCancel,
+    });
+    addButton({
+      id: 'send-message',
+      label: 'Send Message',
+      available: Boolean(actions.canSendMessage),
+      disabledReason: actionDisabledReason('canSendMessage'),
+      onSelect: () => {
+        const message = window.prompt('Operator message', '');
+        if (message?.trim()) onSendMessage(message.trim());
+      },
+    });
+    addButton({
+      id: 'bypass-dependency-wait',
+      label: 'Bypass Dependency Wait',
+      available: Boolean(actions.canBypassDependencies),
+      disabledReason: actionDisabledReason('canBypassDependencies'),
+      danger: true,
+      onSelect: onBypassDependencies,
+    });
+    addButton({
+      id: 'create-remediation-task',
+      label: 'Create remediation task',
+      available: canCreateRemediation,
+      disabledReason: null,
+      onSelect: () => {
+        setActionError(null);
+        createRemediationMutation.mutate();
+      },
+    });
+    return items;
+  })();
   const toggleStep = (logicalStepId: string) => {
     setExpandedSteps((prev) => ({
       ...prev,
@@ -5252,6 +5649,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           current={detailSubroute}
           search={search}
         />
+      ) : null}
+
+      {actionsOn && actions ? (
+        <section className="td-workflow-actions-surface" aria-label="Workflow action controls">
+          <WorkflowActionsMenu items={workflowActionMenuItems} />
+        </section>
       ) : null}
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
@@ -5630,7 +6033,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
                 <>
-                  <StepDagOverview snapshot={stepsQuery.data} />
                   <div className="step-tl-list">
                     {stepsQuery.data.steps.map((row, idx) => (
                       <StepLedgerRowCard
@@ -5698,18 +6100,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               {execution.blockedOnDependencies ? (
                 <div className="notice">
                   <strong>Blocked on prerequisites.</strong> This run keeps waiting until every prerequisite reaches <code>completed</code>. Failed, canceled, terminated, or timed-out prerequisites do not fail this run automatically — rerun the prerequisite, cancel this run, or bypass the dependency.
-                  {actionsOn && actions?.canBypassDependencies ? (
-                    <div className="actions" style={{ marginTop: '0.75rem' }}>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="queue-action queue-action-danger"
-                        onClick={onBypassDependencies}
-                      >
-                        Bypass Dependency Wait
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
               <div className="stack">
@@ -5828,107 +6218,49 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           {actionsOn && actions && hasTaskActions ? (
             <section className="stack td-actions-region">
               <div>
-                <h3>Workflow Actions</h3>
-                <p className="small">Workflow editing actions stay separate from intervention controls.</p>
+                <h3>Workflow Action Context</h3>
+                <p className="small">Workflow action settings and related context are shown here; current operations are available from the workflow actions menu.</p>
               </div>
-              <div className="actions">
-                {canCreateRemediation ? (
-                  <div className="stack td-remediation-create-preview">
-                    <h4>Remediation create preview</h4>
-                    <div className="grid-2">
-                      <label>
-                        Remediation mode
-                        <select
-                          value={remediationMode}
-                          onChange={(event) => setRemediationMode(event.target.value)}
-                        >
-                          <option value="snapshot_then_follow">Snapshot then follow</option>
-                          <option value="snapshot">Snapshot only</option>
-                          <option value="live_follow">Live follow</option>
-                        </select>
-                      </label>
-                      <label>
-                        Remediation authority
-                        <select
-                          value={remediationAuthority}
-                          onChange={(event) => setRemediationAuthority(event.target.value)}
-                        >
-                          <option value="approval_gated">Approval-gated admin remediation</option>
-                          <option value="observe_only">Troubleshooting only</option>
-                          <option value="admin_auto">Admin remediation</option>
-                        </select>
-                      </label>
-                      <label>
-                        Remediation action policy
-                        <input
-                          value={remediationActionPolicy}
-                          onChange={(event) => setRemediationActionPolicy(event.target.value)}
-                        />
-                      </label>
-                      <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
-                    </div>
-                    <p className="small">
-                      Evidence preview: step ledger, diagnostics, and 2000 log lines.
-                    </p>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => {
-                        setActionError(null);
-                        createRemediationMutation.mutate();
-                      }}
-                    >
-                      Create remediation task
-                    </button>
+              {canCreateRemediation ? (
+                <div className="stack td-remediation-create-preview">
+                  <h4>Remediation create preview</h4>
+                  <div className="grid-2">
+                    <label>
+                      Remediation mode
+                      <select
+                        value={remediationMode}
+                        onChange={(event) => setRemediationMode(event.target.value)}
+                      >
+                        <option value="snapshot_then_follow">Snapshot then follow</option>
+                        <option value="snapshot">Snapshot only</option>
+                        <option value="live_follow">Live follow</option>
+                      </select>
+                    </label>
+                    <label>
+                      Remediation authority
+                      <select
+                        value={remediationAuthority}
+                        onChange={(event) => setRemediationAuthority(event.target.value)}
+                      >
+                        <option value="approval_gated">Approval-gated admin remediation</option>
+                        <option value="observe_only">Troubleshooting only</option>
+                        <option value="admin_auto">Admin remediation</option>
+                      </select>
+                    </label>
+                    <label>
+                      Remediation action policy
+                      <input
+                        value={remediationActionPolicy}
+                        onChange={(event) => setRemediationActionPolicy(event.target.value)}
+                      />
+                    </label>
+                    <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
                   </div>
-                ) : null}
-                {actions.canSetTitle ? (
-                  <button type="button" disabled={busy} className="secondary" onClick={onRename}>
-                    Rename
-                  </button>
-                ) : null}
-                {taskEditingOn && canShowEditWorkflow && editHref ? (
-                  <a
-                    className="button secondary"
-                    href={editHref}
-                    aria-disabled={busy}
-                    onClick={(event) => onTaskEditingNavigation(event, 'detail_edit_click')}
-                  >
-                    Edit task
-                  </a>
-                ) : null}
-                {taskEditingOn && compareHref ? (
-                  <a
-                    className="button secondary"
-                    href={compareHref}
-                    aria-disabled={busy}
-                    onClick={(event) => onTaskEditingNavigation(event, 'detail_compare_click')}
-                  >
-                    Compare run
-                  </a>
-                ) : null}
-                {taskEditingOn && actions.canRerun ? (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={onRerun}
-                  >
-                    Rerun
-                  </button>
-                ) : null}
-                {taskEditingOn && actions.canResumeFromFailedStep ? (
-                  <button
-                    type="button"
-                    className="queue-action"
-                    disabled={busy}
-                    onClick={onResumeFromFailedStep}
-                  >
-                    Resume from failed step
-                  </button>
-                ) : null}
-              </div>
+                  <p className="small">
+                    Evidence preview: step ledger, diagnostics, and 2000 log lines.
+                  </p>
+                </div>
+              ) : null}
               {taskEditingOn && actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0 ? (
                 <div className="stack">
                   <label className="field-label" htmlFor="selected-recovery-step">
@@ -5952,14 +6284,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                       </option>
                     ))}
                   </select>
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy || !selectedRecoveryStep?.eligible}
-                    onClick={onRecoverFromSelectedStep}
-                  >
-                    Recover from selected step
-                  </button>
                 </div>
               ) : null}
               {editTaskUnavailableReason ? (
@@ -5995,19 +6319,20 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           {actionsOn && actions && hasInterventionSection ? (
             <InterventionPanel
-              actions={actions}
-              busy={busy}
               audit={execution.interventionAudit || []}
-              onPause={onPause}
-              onResume={onResume}
-              onApprove={onApprove}
-              onCancel={onCancel}
-              onReject={onReject}
-              onSendMessage={onSendMessage}
             />
           ) : null}
 
           <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
+          <RecoveryEvidencePanel
+            recovery={recoveryEligibility}
+            resume={execution.resume}
+            diagnostics={execution.targetDiagnostics}
+            onResumeFromFailedStep={onResumeFromFailedStep}
+            onRerun={onRerun}
+            busy={busy}
+            taskEditingOn={taskEditingOn}
+          />
 
           {resolvedAgentRunId ? (
             <SessionContinuityPanel

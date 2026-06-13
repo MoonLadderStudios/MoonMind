@@ -98,6 +98,277 @@ StepExecutionTerminalDisposition = Literal[
     "failed_unrecoverable",
     "failed_with_remaining_work",
 ]
+
+EvidenceCategory = Literal[
+    "checkpoint",
+    "context",
+    "retrieval",
+    "memory",
+    "gate",
+    "side_effect",
+    "environment",
+    "provider_lease",
+    "preflight",
+    "sidecar",
+    "ghcr",
+    "diagnostics",
+]
+EvidenceStatus = Literal[
+    "available",
+    "missing",
+    "invalid",
+    "unauthorized",
+    "expired",
+    "legacy",
+    "incompatible",
+    "skipped",
+    "unavailable",
+]
+RecoveryDefaultAction = Literal[
+    "resume_from_checkpoint",
+    "full_retry",
+    "environment_fix",
+    "none",
+]
+RecoveryOperatorGuidance = Literal[
+    "resume",
+    "full_retry",
+    "fix_environment",
+    "needs_human",
+]
+EnvironmentDiagnosticKind = Literal[
+    "environment",
+    "sidecar",
+    "ghcr",
+    "preflight",
+    "provider_lease",
+    "system_error",
+]
+
+_FORBIDDEN_RECOVERY_EVIDENCE_TOKENS = (
+    "diff --git",
+    "raw log",
+    "raw stdout",
+    "raw stderr",
+    "provider payload",
+    "token=",
+    "password=",
+    "checkpoint archive content",
+    "raw verification report",
+)
+
+
+def _reject_forbidden_recovery_evidence_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    lowered = value.lower()
+    if any(token in lowered for token in _FORBIDDEN_RECOVERY_EVIDENCE_TOKENS):
+        raise ValueError("summary must be bounded, redacted, and ref-only")
+    return value
+
+
+class EvidenceRefStatusModel(BaseModel):
+    """Compact ref availability state for one Step Execution evidence category."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    category: EvidenceCategory
+    status: EvidenceStatus
+    artifact_ref: str | None = Field(None, alias="artifactRef", max_length=500)
+    boundary: str | None = Field(None, max_length=100)
+    reason_code: str | None = Field(None, alias="reasonCode", max_length=120)
+    label: str | None = Field(None, max_length=200)
+    summary: str | None = Field(None, max_length=500)
+
+    @field_validator("artifact_ref", "boundary", "reason_code", "label", "summary", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("summary")
+    @classmethod
+    def _reject_raw_summary(cls, value: str | None) -> str | None:
+        return _reject_forbidden_recovery_evidence_text(value)
+
+    @model_validator(mode="after")
+    def _validate_available_ref(self) -> "EvidenceRefStatusModel":
+        if self.status == "available" and not self.artifact_ref:
+            raise ValueError("available evidence requires artifactRef")
+        if self.category == "checkpoint" and self.status == "available" and not self.boundary:
+            raise ValueError("checkpoint evidence requires boundary")
+        if self.status != "available" and not self.reason_code and self.status not in {"skipped"}:
+            raise ValueError("unavailable evidence requires reasonCode")
+        return self
+
+
+class GateSummaryStatusModel(BaseModel):
+    """Bounded gate verdict summary for Step Execution detail surfaces."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    verdict: str | None = Field(None, max_length=120)
+    summary: str | None = Field(None, max_length=500)
+    artifact_ref: str | None = Field(None, alias="artifactRef", max_length=500)
+
+    @field_validator("verdict", "summary", "artifact_ref", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("summary")
+    @classmethod
+    def _reject_raw_summary(cls, value: str | None) -> str | None:
+        return _reject_forbidden_recovery_evidence_text(value)
+
+
+class SideEffectSummaryModel(BaseModel):
+    """Ref-only side-effect outcome summary."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: EvidenceStatus = "skipped"
+    artifact_refs: dict[str, str] = Field(default_factory=dict, alias="artifactRefs")
+    summary: str | None = Field(None, max_length=500)
+
+    @field_validator("summary")
+    @classmethod
+    def _reject_raw_summary(cls, value: str | None) -> str | None:
+        return _reject_forbidden_recovery_evidence_text(value)
+
+
+class EnvironmentDiagnosticReferenceModel(BaseModel):
+    """Compact environment/system diagnostic ref for recovery decisions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: EnvironmentDiagnosticKind
+    status: EvidenceStatus
+    diagnostics_ref: str | None = Field(None, alias="diagnosticsRef", max_length=500)
+    reason_code: str = Field(..., alias="reasonCode", min_length=1, max_length=120)
+    summary: str = Field(..., min_length=1, max_length=500)
+
+    @field_validator("diagnostics_ref", "reason_code", "summary", mode="before")
+    @classmethod
+    def _strip_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("summary")
+    @classmethod
+    def _reject_raw_summary(cls, value: str) -> str:
+        return _reject_forbidden_recovery_evidence_text(value) or value
+
+    @model_validator(mode="after")
+    def _available_requires_ref(self) -> "EnvironmentDiagnosticReferenceModel":
+        if self.status == "available" and not self.diagnostics_ref:
+            raise ValueError("available diagnostics require diagnosticsRef")
+        return self
+
+
+class PreservedStepProvenanceDetailModel(BaseModel):
+    """Ref-backed provenance for steps preserved during recovery."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    title: str | None = Field(None, max_length=200)
+    source_workflow_id: str | None = Field(None, alias="sourceWorkflowId", max_length=200)
+    source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)
+    source_execution_ordinal: int | None = Field(
+        None, alias="sourceExecutionOrdinal", ge=1
+    )
+    state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
+    output_refs: dict[str, str] = Field(default_factory=dict, alias="outputRefs")
+
+
+class RecoveryEligibilityDiagnosticModel(BaseModel):
+    """Typed fail-closed checkpoint Resume decision for API and UI surfaces."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    eligible: bool
+    default_action: RecoveryDefaultAction = Field(..., alias="defaultAction")
+    disabled_reason_code: str | None = Field(
+        None, alias="disabledReasonCode", max_length=120
+    )
+    required_boundary: str | None = Field(None, alias="requiredBoundary", max_length=100)
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef", max_length=500)
+    source_workflow_id: str | None = Field(None, alias="sourceWorkflowId", max_length=200)
+    source_run_id: str | None = Field(None, alias="sourceRunId", max_length=200)
+    operator_guidance: RecoveryOperatorGuidance = Field(..., alias="operatorGuidance")
+    evidence: list[EvidenceRefStatusModel] = Field(default_factory=list)
+
+    @field_validator(
+        "disabled_reason_code",
+        "required_boundary",
+        "checkpoint_ref",
+        "source_workflow_id",
+        "source_run_id",
+        mode="before",
+    )
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @model_validator(mode="after")
+    def _validate_decision(self) -> "RecoveryEligibilityDiagnosticModel":
+        if self.eligible:
+            if self.default_action != "resume_from_checkpoint":
+                raise ValueError("eligible checkpoint recovery requires resume_from_checkpoint")
+            if not self.checkpoint_ref:
+                raise ValueError("eligible checkpoint recovery requires checkpointRef")
+            if self.operator_guidance != "resume":
+                raise ValueError("eligible checkpoint recovery requires resume guidance")
+            if self.disabled_reason_code is not None:
+                raise ValueError("eligible checkpoint recovery cannot include disabledReasonCode")
+        else:
+            if not self.disabled_reason_code:
+                raise ValueError("ineligible checkpoint recovery requires disabledReasonCode")
+            if self.default_action == "resume_from_checkpoint":
+                raise ValueError("ineligible checkpoint recovery cannot default to resume")
+        if self.default_action == "environment_fix" and self.operator_guidance != "fix_environment":
+            raise ValueError("environment recovery requires fix_environment guidance")
+        return self
+
+
+class StepEvidenceSummaryModel(BaseModel):
+    """Grouped compact Step Execution evidence surface."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1)
+    execution_ordinal: int | None = Field(None, alias="executionOrdinal", ge=1)
+    checkpoint_refs_by_boundary: dict[str, EvidenceRefStatusModel] = Field(
+        default_factory=dict, alias="checkpointRefsByBoundary"
+    )
+    context_bundle_ref: EvidenceRefStatusModel | None = Field(
+        None, alias="contextBundleRef"
+    )
+    retrieval_manifest_ref: EvidenceRefStatusModel | None = Field(
+        None, alias="retrievalManifestRef"
+    )
+    memory_manifest_ref: EvidenceRefStatusModel | None = Field(
+        None, alias="memoryManifestRef"
+    )
+    gate_summary: GateSummaryStatusModel | None = Field(None, alias="gateSummary")
+    terminal_disposition: str | None = Field(None, alias="terminalDisposition")
+    side_effect_summary: SideEffectSummaryModel | None = Field(
+        None, alias="sideEffectSummary"
+    )
+    diagnostic_refs: list[EnvironmentDiagnosticReferenceModel] = Field(
+        default_factory=list, alias="diagnosticRefs"
+    )
 StepExecutionSemanticOperation = Literal["retry", "reexecute", "recover"]
 StepExecutionCheckpointBoundary = Literal[
     "after_prepare",
@@ -134,7 +405,25 @@ StepCheckpointValidationFailureCode = Literal[
     "checkpoint_kind_incompatible",
     "policy_incompatible",
     "invalid_checkpoint",
+    "unsupported_checkpoint_kind",
+    "unsafe_checkpoint",
+    "workspace_incompatible",
 ]
+WorkspaceCheckpointCaptureStatus = Literal[
+    "captured",
+    "unsupported",
+    "unsafe",
+    "invalid",
+    "skipped",
+]
+WorkspacePolicyApplyStatus = Literal[
+    "applied",
+    "prepared",
+    "rejected",
+    "unsupported",
+    "unsafe",
+]
+PullAuthMode = Literal["authenticated", "anonymous", "unavailable"]
 _STEP_EXECUTION_INLINE_EVIDENCE_KEYS = {
     "content",
     "credential",
@@ -186,6 +475,32 @@ def _reject_inline_checkpoint_evidence(value: Any, path: str) -> None:
         for index, nested in enumerate(value):
             _reject_inline_checkpoint_evidence(nested, f"{path}[{index}]")
 
+
+_SECRET_TEXT_MARKERS = (
+    "ghcr_pull_user",
+    "ghcr_pull_token",
+    "authorization:",
+    "bearer ",
+    "password=",
+    "token=",
+    "secret-token",
+    "secret-user",
+)
+
+
+def _reject_raw_secret_text(value: Any, path: str) -> None:
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if any(marker in lowered for marker in _SECRET_TEXT_MARKERS):
+            raise ValueError(f"{path} must contain refs or summaries, not raw credentials")
+    elif isinstance(value, dict):
+        for key, nested in value.items():
+            _reject_raw_secret_text(str(key), f"{path}.{key}.__key__")
+            _reject_raw_secret_text(nested, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _reject_raw_secret_text(nested, f"{path}[{index}]")
+
 def normalize_dependency_ids(raw_value: Any) -> list[str]:
     """Normalize a list of dependency IDs, stripping whitespace and removing duplicates/non-strings."""
     if not isinstance(raw_value, list):
@@ -229,6 +544,17 @@ class StepExecutionLineageModel(BaseModel):
     lineage_execution_ordinal: int | None = Field(
         None, alias="lineageExecutionOrdinal", ge=1
     )
+    preserved_steps: list[PreservedStepProvenanceDetailModel] = Field(
+        default_factory=list, alias="preservedSteps"
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize_without_empty_preserved_steps(self, handler):
+        data = handler(self)
+        if not self.preserved_steps:
+            data.pop("preservedSteps", None)
+            data.pop("preserved_steps", None)
+        return data
 
 
 class StepExecutionSummaryRefModel(BaseModel):
@@ -268,17 +594,46 @@ class StepExecutionManifestModel(BaseModel):
     )
     started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
-    input: dict[str, Any] = Field(default_factory=dict, alias="input")
-    context: dict[str, Any] = Field(default_factory=dict, alias="context")
-    workspace: dict[str, Any] = Field(default_factory=dict, alias="workspace")
-    execution: dict[str, Any] = Field(default_factory=dict, alias="execution")
-    outputs: dict[str, Any] = Field(default_factory=dict, alias="outputs")
+    input: dict[str, Any] | None = Field(default_factory=dict, alias="input")
+    context: dict[str, Any] | None = Field(default_factory=dict, alias="context")
+    workspace: dict[str, Any] | None = Field(default_factory=dict, alias="workspace")
+    execution: dict[str, Any] | None = Field(default_factory=dict, alias="execution")
+    outputs: dict[str, Any] | None = Field(default_factory=dict, alias="outputs")
     checks: list[dict[str, Any]] = Field(default_factory=list, alias="checks")
-    side_effects: dict[str, Any] = Field(default_factory=dict, alias="sideEffects")
-    dependency_effects: dict[str, Any] = Field(
+    side_effects: dict[str, Any] | None = Field(
+        default_factory=dict, alias="sideEffects"
+    )
+    dependency_effects: dict[str, Any] | None = Field(
         default_factory=dict, alias="dependencyEffects"
     )
-    budget: dict[str, Any] = Field(default_factory=dict, alias="budget")
+    recovery_source: dict[str, Any] | None = Field(
+        default_factory=dict, alias="recoverySource"
+    )
+    budget: dict[str, Any] | None = Field(default_factory=dict, alias="budget")
+
+    @field_validator(
+        "input",
+        "context",
+        "workspace",
+        "execution",
+        "outputs",
+        "side_effects",
+        "dependency_effects",
+        "budget",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_nullable_mapping(cls, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        return value
+
+    @field_validator("checks", mode="before")
+    @classmethod
+    def _coerce_nullable_checks(cls, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        return value
 
     @model_validator(mode="after")
     def _validate_compact_evidence(self) -> "StepExecutionManifestModel":
@@ -291,6 +646,7 @@ class StepExecutionManifestModel(BaseModel):
             "checks": self.checks,
             "sideEffects": self.side_effects,
             "dependencyEffects": self.dependency_effects,
+            "recoverySource": self.recovery_source,
             "budget": self.budget,
         }
         for section_name, section_value in sections.items():
@@ -566,6 +922,286 @@ class StepCheckpointValidationRequestModel(BaseModel):
         return validate_compact_temporal_mapping(
             value, field_name="expectedWorkspace"
         )
+
+
+class PullAuthDiagnosticsModel(BaseModel):
+    """Secret-safe sidecar pull-auth diagnostics for checkpoint evidence."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    mode: PullAuthMode = Field(..., alias="mode")
+    diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
+
+    @model_validator(mode="after")
+    def _validate_secret_safe(self) -> "PullAuthDiagnosticsModel":
+        _reject_raw_secret_text(self.model_dump(by_alias=True), "pullAuth")
+        return self
+
+
+class WorkspaceCheckpointCaptureInput(BaseModel):
+    """Activity input for checkpointing workspace evidence."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    identity: StepExecutionIdentityModel = Field(..., alias="identity")
+    boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
+    kind: WorkspaceCheckpointKind = Field(..., alias="kind")
+    workspace_root_ref: str | None = Field(None, alias="workspaceRootRef")
+    workspace_path: str | None = Field(None, alias="workspacePath")
+    artifact_namespace: str = Field(..., alias="artifactNamespace", min_length=1)
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+    base_commit: str | None = Field(None, alias="baseCommit")
+    include_untracked: bool = Field(False, alias="includeUntracked")
+    include_ignored_files: bool = Field(False, alias="includeIgnoredFiles")
+    pull_auth_context_ref: str | None = Field(None, alias="pullAuthContextRef")
+    provider_lease_context_ref: str | None = Field(None, alias="providerLeaseContextRef")
+    skill_projection_policy: dict[str, Any] = Field(
+        default_factory=dict, alias="skillProjectionPolicy"
+    )
+
+    @field_validator(
+        "workspace_root_ref",
+        "workspace_path",
+        "base_commit",
+        "pull_auth_context_ref",
+        "provider_lease_context_ref",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("skill_projection_policy", mode="before")
+    @classmethod
+    def _validate_policy(cls, value: Any) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value or {}, field_name="skillProjectionPolicy"
+        )
+
+    @model_validator(mode="after")
+    def _validate_input(self) -> "WorkspaceCheckpointCaptureInput":
+        if self.workspace_root_ref is None and self.workspace_path is None:
+            raise ValueError("workspace capture requires workspaceRootRef or workspacePath")
+        if self.kind == "git_patch" and self.base_commit is None:
+            raise ValueError("git_patch checkpoint capture requires baseCommit")
+        _reject_raw_secret_text(self.model_dump(by_alias=True), "captureInput")
+        return self
+
+
+class WorkspaceCheckpointCaptureResult(BaseModel):
+    """Compact activity result for captured workspace evidence."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    status: WorkspaceCheckpointCaptureStatus = Field(..., alias="status")
+    workspace: WorkspaceCheckpointEvidenceModel | None = Field(None, alias="workspace")
+    summary: str | None = Field(None, alias="summary", max_length=1000)
+    diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
+    cleanup_refs: list[str] = Field(default_factory=list, alias="cleanupRefs")
+    pull_auth: PullAuthDiagnosticsModel = Field(
+        default_factory=lambda: PullAuthDiagnosticsModel(mode="unavailable"),
+        alias="pullAuth",
+    )
+    provider_lease_refs: list[str] = Field(
+        default_factory=list, alias="providerLeaseRefs"
+    )
+    failure_code: StepCheckpointValidationFailureCode | None = Field(
+        None, alias="failureCode"
+    )
+
+    @model_validator(mode="after")
+    def _validate_result(self) -> "WorkspaceCheckpointCaptureResult":
+        payload = self.model_dump(by_alias=True, mode="json")
+        _reject_inline_checkpoint_evidence(payload, "captureResult")
+        _reject_raw_secret_text(payload, "captureResult")
+        if self.status == "captured" and self.workspace is None:
+            raise ValueError("captured checkpoint result requires workspace")
+        if self.status != "captured" and self.failure_code is None:
+            raise ValueError("non-captured checkpoint result requires failureCode")
+        return self
+
+
+class StepCheckpointCreateInput(BaseModel):
+    """Activity input for writing a canonical Step Execution checkpoint artifact."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    identity: StepExecutionIdentityModel = Field(..., alias="identity")
+    boundary: StepExecutionCheckpointBoundary = Field(..., alias="boundary")
+    task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef", min_length=1)
+    workspace: WorkspaceCheckpointEvidenceModel = Field(..., alias="workspace")
+    created_at: datetime = Field(..., alias="createdAt")
+    plan_ref: str | None = Field(None, alias="planRef")
+    plan_digest: str | None = Field(None, alias="planDigest")
+    prepared_input_refs: list[str] = Field(default_factory=list, alias="preparedInputRefs")
+    step_outputs: dict[str, Any] = Field(default_factory=dict, alias="stepOutputs")
+    diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @field_validator("plan_ref", "plan_digest", mode="before")
+    @classmethod
+    def _normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("prepared_input_refs", "diagnostic_refs")
+    @classmethod
+    def _normalize_refs(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @field_validator("step_outputs", mode="before")
+    @classmethod
+    def _validate_outputs(cls, value: Any) -> dict[str, Any]:
+        output = validate_compact_temporal_mapping(value or {}, field_name="stepOutputs")
+        _reject_inline_checkpoint_evidence(output, "stepOutputs")
+        return output
+
+    @model_validator(mode="after")
+    def _validate_input(self) -> "StepCheckpointCreateInput":
+        if self.plan_ref is None and self.plan_digest is None:
+            raise ValueError("checkpoint creation requires planRef or planDigest")
+        _reject_raw_secret_text(self.model_dump(by_alias=True, mode="json"), "createInput")
+        return self
+
+
+class StepCheckpointCreateResult(BaseModel):
+    """Compact result for a canonical checkpoint artifact write."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    checkpoint_ref: str = Field(..., alias="checkpointRef", min_length=1)
+    checkpoint_id: str = Field(..., alias="checkpointId", min_length=1)
+    content_type: Literal[STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE] = Field(
+        STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        alias="contentType",
+    )
+    workspace_kind: WorkspaceCheckpointKind = Field(..., alias="workspaceKind")
+    summary: str | None = Field(None, alias="summary", max_length=1000)
+    diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_result(self) -> "StepCheckpointCreateResult":
+        _reject_raw_secret_text(self.model_dump(by_alias=True), "createResult")
+        return self
+
+
+class StepCheckpointValidateInput(BaseModel):
+    """Activity input for validating checkpoint evidence."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    checkpoint: Any = Field(..., alias="checkpoint")
+    expected_source: StepExecutionIdentityModel = Field(..., alias="expectedSource")
+    expected_task_input_snapshot_ref: str = Field(
+        ..., alias="expectedTaskInputSnapshotRef", min_length=1
+    )
+    expected_plan_ref: str | None = Field(None, alias="expectedPlanRef")
+    expected_plan_digest: str | None = Field(None, alias="expectedPlanDigest")
+    workspace_policy: WorkspacePolicy | None = Field(None, alias="workspacePolicy")
+    required_artifact_refs: list[str] = Field(
+        default_factory=list, alias="requiredArtifactRefs"
+    )
+    unauthorized_artifact_refs: list[str] = Field(
+        default_factory=list, alias="unauthorizedArtifactRefs"
+    )
+    corrupted_artifact_refs: list[str] = Field(
+        default_factory=list, alias="corruptedArtifactRefs"
+    )
+    expected_workspace: dict[str, Any] = Field(
+        default_factory=dict, alias="expectedWorkspace"
+    )
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef")
+    unsupported_artifact_refs: list[str] = Field(
+        default_factory=list, alias="unsupportedArtifactRefs"
+    )
+    unsafe_artifact_refs: list[str] = Field(default_factory=list, alias="unsafeArtifactRefs")
+    workspace_incompatible_refs: list[str] = Field(
+        default_factory=list, alias="workspaceIncompatibleRefs"
+    )
+
+    @field_validator(
+        "unsupported_artifact_refs",
+        "unsafe_artifact_refs",
+        "workspace_incompatible_refs",
+        "required_artifact_refs",
+        "unauthorized_artifact_refs",
+        "corrupted_artifact_refs",
+    )
+    @classmethod
+    def _normalize_extra_refs(cls, value: list[str]) -> list[str]:
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @field_validator("expected_workspace", mode="before")
+    @classmethod
+    def _validate_expected_workspace(cls, value: Any) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value or {}, field_name="expectedWorkspace"
+        )
+
+
+class StepCheckpointValidateResult(StepCheckpointValidationResultModel):
+    """Activity validation result with optional diagnostic refs."""
+
+    diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
+
+
+class WorkspacePolicyApplyInput(BaseModel):
+    """Activity input for preparing or applying checkpoint workspace policy."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    identity: StepExecutionIdentityModel = Field(..., alias="identity")
+    workspace_policy: WorkspacePolicy = Field(..., alias="workspacePolicy")
+    checkpoint_ref: str = Field(..., alias="checkpointRef", min_length=1)
+    checkpoint: dict[str, Any] = Field(default_factory=dict, alias="checkpoint")
+    target_workspace_ref: str | None = Field(None, alias="targetWorkspaceRef")
+    expected_plan_ref: str | None = Field(None, alias="expectedPlanRef")
+    expected_plan_digest: str | None = Field(None, alias="expectedPlanDigest")
+    required_artifact_refs: list[str] = Field(default_factory=list, alias="requiredArtifactRefs")
+    provider_lease_context_ref: str | None = Field(None, alias="providerLeaseContextRef")
+    idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
+
+    @field_validator("checkpoint", mode="before")
+    @classmethod
+    def _validate_checkpoint(cls, value: Any) -> dict[str, Any]:
+        checkpoint = validate_compact_temporal_mapping(value or {}, field_name="checkpoint")
+        _reject_inline_checkpoint_evidence(checkpoint, "checkpoint")
+        return checkpoint
+
+    @model_validator(mode="after")
+    def _validate_input(self) -> "WorkspacePolicyApplyInput":
+        _reject_raw_secret_text(self.model_dump(by_alias=True), "policyInput")
+        return self
+
+
+class WorkspacePolicyApplyResult(BaseModel):
+    """Compact result for policy preparation or application."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    status: WorkspacePolicyApplyStatus = Field(..., alias="status")
+    workspace_ref: str | None = Field(None, alias="workspaceRef")
+    applied_checkpoint_ref: str | None = Field(None, alias="appliedCheckpointRef")
+    diagnostic_refs: list[str] = Field(default_factory=list, alias="diagnosticRefs")
+    cleanup_refs: list[str] = Field(default_factory=list, alias="cleanupRefs")
+    provider_lease_refs: list[str] = Field(default_factory=list, alias="providerLeaseRefs")
+    summary: str | None = Field(None, alias="summary", max_length=1000)
+    failure_code: StepCheckpointValidationFailureCode | None = Field(
+        None, alias="failureCode"
+    )
+
+    @model_validator(mode="after")
+    def _validate_result(self) -> "WorkspacePolicyApplyResult":
+        _reject_raw_secret_text(self.model_dump(by_alias=True), "policyResult")
+        if self.status in {"rejected", "unsupported", "unsafe"} and self.failure_code is None:
+            raise ValueError("non-applied policy result requires failureCode")
+        return self
 
 
 class StepExecutionSemanticOperationModel(BaseModel):
@@ -1840,6 +2476,12 @@ class StepExecutionProjectionModel(BaseModel):
     quality_gate_verdict: str | None = Field(None, alias="qualityGateVerdict")
     manifest_refs: dict[str, Any] = Field(default_factory=dict, alias="manifestRefs")
     output_refs: dict[str, Any] = Field(default_factory=dict, alias="outputRefs")
+    evidence_summary: StepEvidenceSummaryModel | None = Field(
+        None, alias="stepEvidence"
+    )
+    recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
+        None, alias="recoveryEligibility"
+    )
 
 
 class StepExecutionDetailModel(StepExecutionProjectionModel):
@@ -1857,6 +2499,9 @@ class StepExecutionDetailModel(StepExecutionProjectionModel):
     )
     dependency_effect_refs: dict[str, Any] = Field(
         default_factory=dict, alias="dependencyEffectRefs"
+    )
+    preserved_step_provenance: list[PreservedStepProvenanceDetailModel] = Field(
+        default_factory=list, alias="preservedStepProvenance"
     )
 
 

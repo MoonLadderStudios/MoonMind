@@ -186,6 +186,34 @@ Broad Temporal workflow retries are not a substitute for Step Executions when wo
 16. Runtime adapters may execute work, but MoonMind owns Step Execution identity, checkpoint policy, durable evidence refs, and final advancement decisions.
 17. New Step Execution and checkpoint contracts that affect Temporal payloads must preserve in-flight compatibility or use an explicit versioned cutover plan.
 
+### 5.1 Conformance gate for MM-822+ changes
+
+Every remaining MM-822+ Step Execution PR must use the conformance harness as the permanent validation gate before merge readiness is claimed. The PR checklist must record that the conformance suite was run with both commands:
+
+```bash
+python -m moonmind.workflows.temporal.step_execution_conformance
+pytest tests/unit/workflows/temporal/test_step_executions.py tests/unit/workflows/temporal/test_step_checkpoints.py tests/integration/workflows/temporal/test_step_execution_manifest_evidence.py -q
+```
+
+If the PR does not require fixture changes, the checklist must instead include an explicit note explaining why no fixture update was needed.
+
+Later Step Execution phases may be mentioned here only as fixture extension triggers for the conformance gate. They are not Phase 1 implementation scope. A later phase must extend or explicitly review conformance fixtures when it introduces or changes:
+
+1. checkpoint capture artifact;
+2. checkpoint-backed Resume;
+3. typed gate result;
+4. context bundle or retrieval manifest;
+5. provider-profile lease side effect;
+6. Docker or skill-projection blocked environment.
+
+The conformance gate must keep fail-closed degraded-input coverage for old manifest rows, old checkpoint rows, old gate verdict strings, legacy `stateCheckpointRef`-only rows, future or unknown gate verdicts, and future or unknown checkpoint policy values. Degraded or invalid data must produce a typed fail-closed validation result rather than crashing replay or silently passing.
+
+Compact manifest, checkpoint, gate, API, checklist, and projection surfaces must remain artifact-backed or ref-only with bounded summaries. They must not inline raw stdout, raw stderr, raw diffs, raw logs, provider payloads, credentials, or credential-like values.
+
+Manifest writer consolidation is completed by PR #2454 through `_record_step_execution_manifest(...)` and `STEP_EXECUTION_MANIFEST_CONTENT_TYPE`. Phase 1 must not revive stale WP1 manifest writer consolidation work from `docs/tmp/StepExecutionsCheckpointingGapPlan.md`.
+
+Later checkpoint substrate, checkpoint-backed Resume, workspace policy, terminal side-effect, typed gate, context, memory, UI, autonomous-loop, and final-doc phases remain out of scope for this Phase 1 gate except as the fixture extension triggers listed above.
+
 ---
 
 ## 6. Identity, Lineage, and Idempotency

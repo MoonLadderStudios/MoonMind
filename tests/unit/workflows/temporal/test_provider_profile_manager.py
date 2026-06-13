@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH,
     HandoffReservation,
     PendingRequest,
+    PRIORITY_PENDING_REQUESTS_PATCH,
     SLOT_HANDOFF_RESERVATION_PATCH,
     VERIFY_PENDING_REQUESTS_PATCH,
     WORKFLOW_NAME,
@@ -1103,6 +1104,53 @@ class TestProviderProfileManagerHelpers:
             "run-2:agent:step-1"
         ]
         assert "run-1" not in wf._handoff_reservations
+
+    @pytest.mark.asyncio
+    async def test_drain_queue_assigns_higher_priority_before_older_normal_request(
+        self,
+    ):
+        wf = self._make_workflow()
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+        )
+        wf._pending_requests = [
+            PendingRequest(
+                requester_workflow_id="normal-run:agent:step-1",
+                runtime_id="codex_cli",
+                priority=0,
+            ),
+            PendingRequest(
+                requester_workflow_id="resolver-run:agent:step-1",
+                runtime_id="codex_cli",
+                priority=10,
+            ),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+        now = datetime(2026, 4, 15, tzinfo=timezone.utc)
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = now
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == PRIORITY_PENDING_REQUESTS_PATCH
+            )
+            await wf._drain_queue()
+
+        assert assigned == [("resolver-run:agent:step-1", "p1")]
+        assert wf._profiles["p1"].current_leases == ["resolver-run:agent:step-1"]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "normal-run:agent:step-1"
+        ]
 
     @pytest.mark.asyncio
     async def test_verify_pending_requesters_prunes_terminal_workflows(self):

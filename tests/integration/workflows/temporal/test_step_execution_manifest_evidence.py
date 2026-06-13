@@ -177,6 +177,9 @@ async def test_recovery_step_execution_manifest_carries_lineage_without_large_pa
     assert manifest["lineage"]["sourceRunId"] == "run-source"
     assert manifest["lineage"]["sourceExecutionOrdinal"] == 2
     assert manifest["lineage"]["lineageExecutionOrdinal"] == 3
+    assert manifest["recoverySource"]["sourceWorkflowId"] == "wf-source"
+    assert manifest["recoverySource"]["sourceRunId"] == "run-source"
+    assert manifest["recoverySource"]["preservedSteps"] == []
     assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
     assert manifest["workspace"]["checkpointRef"] == (
         "artifact://workspace/before-implement"
@@ -306,3 +309,242 @@ async def test_terminal_manifest_aggregates_required_side_effect_groups(
         "record": 6,
     }
     assert len(terminal["sideEffects"]["records"]) == 6
+
+
+async def test_terminal_manifest_projects_structured_memory_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return f"artifact-execution-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "title": "Implement"}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    await workflow._record_step_execution_manifest(
+        "implement",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    source = {
+        "workflowId": "wf-boundary",
+        "runId": "run-boundary",
+        "logicalStepId": "implement",
+        "executionOrdinal": 1,
+    }
+    workflow._record_step_side_effect(
+        "implement",
+        effect_class="memory_update",
+        operation="memory.accept_run_context",
+        target="memory://run",
+        workflow_state_accepted=True,
+        memory_effect={
+            "state": "accepted_for_run_context",
+            "target": "memory://run",
+            "reason": "policy_approved_for_later_attempts",
+            "proposalRef": "artifact://memory/proposal-1",
+            "decisionRef": "artifact://memory/decision-1",
+            "applicationResultRef": "artifact://memory/application-1",
+            "source": source,
+        },
+    )
+    workflow._mark_step_terminal(
+        "implement",
+        status="succeeded",
+        updated_at=now,
+        summary="Implemented",
+    )
+
+    await workflow._record_step_execution_manifest(
+        "implement",
+        phase="terminal",
+        updated_at=now,
+        reason="initial_execution",
+        status="succeeded",
+        terminal_disposition="accepted",
+    )
+
+    memory = writes[-1]["payload"]["sideEffects"]["memory"]
+    assert memory == [
+        {
+            "state": "accepted_for_run_context",
+            "target": "memory://run",
+            "reason": "policy_approved_for_later_attempts",
+            "proposalRef": "artifact://memory/proposal-1",
+            "decisionRef": "artifact://memory/decision-1",
+            "applicationResultRef": "artifact://memory/application-1",
+            "source": source,
+            "privilegedAction": None,
+        }
+    ]
+
+
+async def test_failed_step_memory_candidate_remains_proposed_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return f"artifact-execution-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "title": "Implement"}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("implement", updated_at=now, summary="Implementing")
+    await workflow._record_step_execution_manifest(
+        "implement",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    workflow._record_step_side_effect(
+        "implement",
+        effect_class="memory_update",
+        operation="memory.propose",
+        target="repo://AGENTS.md",
+        workflow_state_accepted=False,
+        memory_effect={
+            "state": "proposed",
+            "target": "repo://AGENTS.md",
+            "reason": "terminal_disposition_not_accepted",
+            "proposalRef": "artifact://memory/proposal-failed",
+            "decisionRef": "artifact://memory/decision-blocked",
+            "applicationResultRef": None,
+            "source": {
+                "workflowId": "wf-boundary",
+                "runId": "run-boundary",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            },
+        },
+    )
+    workflow._mark_step_terminal(
+        "implement",
+        status="failed",
+        updated_at=now,
+        summary="Failed",
+    )
+
+    await workflow._record_step_execution_manifest(
+        "implement",
+        phase="terminal",
+        updated_at=now,
+        reason="initial_execution",
+        status="failed",
+        terminal_disposition="retryable",
+    )
+
+    memory = writes[-1]["payload"]["sideEffects"]["memory"][0]
+    assert memory["state"] == "proposed"
+    assert memory["target"] == "repo://AGENTS.md"
+    assert "privilegedAction" not in memory or memory["privilegedAction"] is None
+
+
+async def test_repo_memory_write_projects_privileged_candidate_when_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return f"artifact-execution-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "publish", "title": "Publish"}],
+        dependency_map={"publish": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("publish", updated_at=now, summary="Publishing")
+    await workflow._record_step_execution_manifest(
+        "publish",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    workflow._record_step_side_effect(
+        "publish",
+        effect_class="memory_update",
+        operation="memory.apply_repo",
+        target="repo://AGENTS.md",
+        workflow_state_accepted=True,
+        memory_effect={
+            "state": "applied_to_repo",
+            "target": "repo://AGENTS.md",
+            "reason": "accepted_disposition_and_publication_gate_passed",
+            "proposalRef": "artifact://memory/proposal-1",
+            "decisionRef": "artifact://memory/decision-1",
+            "applicationResultRef": "artifact://memory/application-1",
+            "source": {
+                "workflowId": "wf-boundary",
+                "runId": "run-boundary",
+                "logicalStepId": "publish",
+                "executionOrdinal": 1,
+            },
+            "privilegedAction": {
+                "actor": "workflow://wf-boundary",
+                "action": "memory.apply_repo",
+                "target": "repo://AGENTS.md",
+                "reason": "approved_repo_application",
+                "decision": "approve_repo_application",
+                "evidenceRefs": ["artifact://memory/decision-1"],
+            },
+        },
+    )
+    workflow._mark_step_terminal(
+        "publish",
+        status="succeeded",
+        updated_at=now,
+        summary="Published",
+    )
+
+    await workflow._record_step_execution_manifest(
+        "publish",
+        phase="terminal",
+        updated_at=now,
+        reason="initial_execution",
+        status="succeeded",
+        terminal_disposition="accepted",
+    )
+
+    memory = writes[-1]["payload"]["sideEffects"]["memory"][0]
+    assert memory["state"] == "applied_to_repo"
+    assert memory["privilegedAction"]["action"] == "memory.apply_repo"

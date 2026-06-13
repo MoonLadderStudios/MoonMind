@@ -4072,12 +4072,60 @@ export interface components {
              */
             status: "QUEUED";
         };
+        /**
+         * EnvironmentDiagnosticReferenceModel
+         * @description Compact environment/system diagnostic ref for recovery decisions.
+         */
+        EnvironmentDiagnosticReferenceModel: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "environment" | "sidecar" | "ghcr" | "preflight" | "provider_lease" | "system_error";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "missing" | "invalid" | "unauthorized" | "expired" | "legacy" | "incompatible" | "skipped" | "unavailable";
+            /** Diagnosticsref */
+            diagnosticsRef?: string | null;
+            /** Reasoncode */
+            reasonCode: string;
+            /** Summary */
+            summary: string;
+        };
         /** ErrorModel */
         ErrorModel: {
             /** Detail */
             detail: string | {
                 [key: string]: string;
             };
+        };
+        /**
+         * EvidenceRefStatusModel
+         * @description Compact ref availability state for one Step Execution evidence category.
+         */
+        EvidenceRefStatusModel: {
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "checkpoint" | "context" | "retrieval" | "memory" | "gate" | "side_effect" | "environment" | "provider_lease" | "preflight" | "sidecar" | "ghcr" | "diagnostics";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "missing" | "invalid" | "unauthorized" | "expired" | "legacy" | "incompatible" | "skipped" | "unavailable";
+            /** Artifactref */
+            artifactRef?: string | null;
+            /** Boundary */
+            boundary?: string | null;
+            /** Reasoncode */
+            reasonCode?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Summary */
+            summary?: string | null;
         };
         /**
          * ExecutionActionCapabilityModel
@@ -5112,6 +5160,18 @@ export interface components {
             failedRecoveryPhase?: ("checkpoint_validation" | "workspace_restoration" | "preserved_output_injection" | "failed_step_execution") | null;
         };
         /**
+         * GateSummaryStatusModel
+         * @description Bounded gate verdict summary for Step Execution detail surfaces.
+         */
+        GateSummaryStatusModel: {
+            /** Verdict */
+            verdict?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Artifactref */
+            artifactRef?: string | null;
+        };
+        /**
          * GitHubCredentialStatus
          * @description Result of GitHub credential validation.
          * @enum {string}
@@ -5956,6 +6016,28 @@ export interface components {
             completedWaitCycles: number;
         };
         /**
+         * PreservedStepProvenanceDetailModel
+         * @description Ref-backed provenance for steps preserved during recovery.
+         */
+        PreservedStepProvenanceDetailModel: {
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Title */
+            title?: string | null;
+            /** Sourceworkflowid */
+            sourceWorkflowId?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal?: number | null;
+            /** Statecheckpointref */
+            stateCheckpointRef?: string | null;
+            /** Outputrefs */
+            outputRefs?: {
+                [key: string]: string;
+            };
+        };
+        /**
          * PreservedStepProvenanceModel
          * @description Source execution provenance for a preserved step row.
          */
@@ -6712,6 +6794,36 @@ export interface components {
             recoveryCheckpointRef: string;
         };
         /**
+         * RecoveryEligibilityDiagnosticModel
+         * @description Typed fail-closed checkpoint Resume decision for API and UI surfaces.
+         */
+        RecoveryEligibilityDiagnosticModel: {
+            /** Eligible */
+            eligible: boolean;
+            /**
+             * Defaultaction
+             * @enum {string}
+             */
+            defaultAction: "resume_from_checkpoint" | "full_retry" | "environment_fix" | "none";
+            /** Disabledreasoncode */
+            disabledReasonCode?: string | null;
+            /** Requiredboundary */
+            requiredBoundary?: string | null;
+            /** Checkpointref */
+            checkpointRef?: string | null;
+            /** Sourceworkflowid */
+            sourceWorkflowId?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+            /**
+             * Operatorguidance
+             * @enum {string}
+             */
+            operatorGuidance: "resume" | "full_retry" | "fix_environment" | "needs_human";
+            /** Evidence */
+            evidence?: components["schemas"]["EvidenceRefStatusModel"][];
+        };
+        /**
          * RecurringWorkflowDefinitionListResponse
          * @description List response for recurring definitions.
          */
@@ -7333,6 +7445,24 @@ export interface components {
             confirmation?: string | null;
         };
         /**
+         * SideEffectSummaryModel
+         * @description Ref-only side-effect outcome summary.
+         */
+        SideEffectSummaryModel: {
+            /**
+             * Status
+             * @default skipped
+             * @enum {string}
+             */
+            status: "available" | "missing" | "invalid" | "unauthorized" | "expired" | "legacy" | "incompatible" | "skipped" | "unavailable";
+            /** Artifactrefs */
+            artifactRefs?: {
+                [key: string]: string;
+            };
+            /** Summary */
+            summary?: string | null;
+        };
+        /**
          * SignalExecutionRequest
          * @description Request payload for asynchronous workflow signals.
          */
@@ -7375,6 +7505,29 @@ export interface components {
             warnings?: {
                 [key: string]: string;
             }[];
+        };
+        /**
+         * StepEvidenceSummaryModel
+         * @description Grouped compact Step Execution evidence surface.
+         */
+        StepEvidenceSummaryModel: {
+            /** Logicalstepid */
+            logicalStepId: string;
+            /** Executionordinal */
+            executionOrdinal?: number | null;
+            /** Checkpointrefsbyboundary */
+            checkpointRefsByBoundary?: {
+                [key: string]: components["schemas"]["EvidenceRefStatusModel"];
+            };
+            contextBundleRef?: components["schemas"]["EvidenceRefStatusModel"] | null;
+            retrievalManifestRef?: components["schemas"]["EvidenceRefStatusModel"] | null;
+            memoryManifestRef?: components["schemas"]["EvidenceRefStatusModel"] | null;
+            gateSummary?: components["schemas"]["GateSummaryStatusModel"] | null;
+            /** Terminaldisposition */
+            terminalDisposition?: string | null;
+            sideEffectSummary?: components["schemas"]["SideEffectSummaryModel"] | null;
+            /** Diagnosticrefs */
+            diagnosticRefs?: components["schemas"]["EnvironmentDiagnosticReferenceModel"][];
         };
         /**
          * StepExecutionDetailModel
@@ -7432,6 +7585,8 @@ export interface components {
             outputRefs?: {
                 [key: string]: unknown;
             };
+            stepEvidence?: components["schemas"]["StepEvidenceSummaryModel"] | null;
+            recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
             /** Inputrefs */
             inputRefs?: {
                 [key: string]: unknown;
@@ -7460,6 +7615,8 @@ export interface components {
             dependencyEffectRefs?: {
                 [key: string]: unknown;
             };
+            /** Preservedstepprovenance */
+            preservedStepProvenance?: components["schemas"]["PreservedStepProvenanceDetailModel"][];
         };
         /**
          * StepExecutionLineageModel
@@ -7478,6 +7635,8 @@ export interface components {
             relationship?: string | null;
             /** Lineageexecutionordinal */
             lineageExecutionOrdinal?: number | null;
+            /** Preservedsteps */
+            preservedSteps?: components["schemas"]["PreservedStepProvenanceDetailModel"][];
         };
         /**
          * StepExecutionListModel
@@ -7555,6 +7714,8 @@ export interface components {
             outputRefs?: {
                 [key: string]: unknown;
             };
+            stepEvidence?: components["schemas"]["StepEvidenceSummaryModel"] | null;
+            recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
         };
         /**
          * StepLedgerArtifactsModel
