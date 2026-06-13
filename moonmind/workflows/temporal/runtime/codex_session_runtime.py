@@ -1954,19 +1954,20 @@ class CodexManagedSessionRuntime:
                 grace_remaining = _EMPTY_ROLLOUT_READ_GRACE_SECONDS - (
                     now - empty_rollout_first_seen_at
                 )
-                if remaining <= 0 or grace_remaining <= 0:
+                if remaining <= 0:
+                    raise RuntimeError(
+                        "timed out waiting for codex app-server turn completion "
+                        f"after {self._turn_completion_timeout_seconds} seconds"
+                    ) from exc
+                if grace_remaining <= 0:
                     raise
-                try:
-                    client.wait_for_notification(
-                        None,
-                        timeout_seconds=min(
-                            _EMPTY_ROLLOUT_READ_RETRY_SECONDS,
-                            remaining,
-                            grace_remaining,
-                        ),
+                time.sleep(
+                    min(
+                        _EMPTY_ROLLOUT_READ_RETRY_SECONDS,
+                        remaining,
+                        grace_remaining,
                     )
-                except TimeoutError:
-                    pass
+                )
                 continue
             self._publish_rollout_live_updates(
                 state=state,
