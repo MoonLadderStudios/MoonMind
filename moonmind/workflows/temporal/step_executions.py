@@ -602,6 +602,7 @@ def build_step_execution_manifest_payload(
     side_effects: Mapping[str, Any] | None = None,
     side_effect_records: Sequence[Mapping[str, Any]] = (),
     dependency_effects: Mapping[str, Any] | None = None,
+    recovery_source: Mapping[str, Any] | None = None,
     budget: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     bounded_outputs = dict(outputs or {})
@@ -636,6 +637,7 @@ def build_step_execution_manifest_payload(
         checks=[dict(check) for check in checks],
         sideEffects=side_effect_payload,
         dependencyEffects=dict(dependency_effects or {}),
+        recoverySource=dict(recovery_source or {}),
         budget=dict(budget or {}),
     )
     return manifest.model_dump(by_alias=True, mode="json")

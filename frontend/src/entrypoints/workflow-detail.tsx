@@ -475,6 +475,32 @@ const TargetDiagnosticsSchema = z
   })
   .passthrough();
 
+const EvidenceRefStatusSchema = z
+  .object({
+    category: z.string(),
+    status: z.string(),
+    artifactRef: z.string().nullable().optional(),
+    boundary: z.string().nullable().optional(),
+    reasonCode: z.string().nullable().optional(),
+    label: z.string().nullable().optional(),
+    summary: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const RecoveryEligibilitySchema = z
+  .object({
+    eligible: z.boolean(),
+    defaultAction: z.enum(['resume_from_checkpoint', 'full_retry', 'environment_fix', 'none']),
+    disabledReasonCode: z.string().nullable().optional(),
+    requiredBoundary: z.string().nullable().optional(),
+    checkpointRef: z.string().nullable().optional(),
+    sourceWorkflowId: z.string().nullable().optional(),
+    sourceRunId: z.string().nullable().optional(),
+    operatorGuidance: z.enum(['resume', 'full_retry', 'fix_environment', 'needs_human']),
+    evidence: z.array(EvidenceRefStatusSchema).default([]),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string().optional(),
@@ -600,6 +626,7 @@ const ExecutionDetailSchema = z
       .default([])
       .optional(),
     targetDiagnostics: TargetDiagnosticsSchema.nullable().optional(),
+    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
     interventionAudit: z
       .array(
         z
@@ -1040,6 +1067,14 @@ const StepLedgerSnapshotSchema = z.object({
   runScope: z.string().default('latest'),
   steps: z.array(StepLedgerRowSchema).default([]),
 });
+
+const StepExecutionDetailSchema = z
+  .object({
+    logicalStepId: z.string(),
+    executionOrdinal: z.number(),
+    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
+  })
+  .passthrough();
 
 const RunSummaryArtifactSchema = z
   .object({
@@ -3723,6 +3758,102 @@ function TargetDiagnosticsPanel({
   );
 }
 
+function RecoveryEvidencePanel({
+  recovery,
+  resume,
+  diagnostics,
+  onResumeFromFailedStep,
+  onRerun,
+  busy,
+  taskEditingOn,
+}: {
+  recovery: z.infer<typeof RecoveryEligibilitySchema> | null | undefined;
+  resume: ExecutionDetail['resume'];
+  diagnostics: z.infer<typeof TargetDiagnosticsSchema> | null | undefined;
+  onResumeFromFailedStep: () => void;
+  onRerun: () => void;
+  busy: boolean;
+  taskEditingOn: boolean;
+}) {
+  const diagnosticsRecovery = diagnostics?.recovery ?? null;
+  if (!recovery && !diagnosticsRecovery && !resume?.checkpointRef) return null;
+  const checkpointRef = recovery?.checkpointRef || resume?.checkpointRef || diagnostics?.recovery?.checkpointRef || null;
+  const requiredBoundary = recovery?.requiredBoundary || 'before_execution';
+  const disabledReason = recovery?.disabledReasonCode || resume?.disabledReason || null;
+  const sourceWorkflowId = recovery?.sourceWorkflowId || diagnostics?.recovery?.sourceWorkflowId || null;
+  const sourceRunId = recovery?.sourceRunId || resume?.sourceRunId || diagnostics?.recovery?.sourceRunId || null;
+  const diagnosticsEvidence = recovery?.evidence?.filter((item) =>
+    ['environment', 'provider_lease', 'preflight', 'sidecar', 'ghcr', 'diagnostics'].includes(item.category),
+  ) || [];
+  const preservedSteps = diagnosticsRecovery?.preservedSteps || [];
+
+  return (
+    <section className="detail-section">
+      <h3>Recovery evidence</h3>
+      {recovery?.operatorGuidance === 'fix_environment' ? (
+        <p className="small">
+          Fix the runtime environment before retrying. Check the diagnostic refs below for sidecar, registry,
+          preflight, or provider lease failures.
+        </p>
+      ) : recovery?.eligible ? (
+        <p className="small">
+          Resume from checkpoint is the default recovery action for boundary {formatStatusLabel(requiredBoundary)}.
+        </p>
+      ) : disabledReason ? (
+        <p className="small">Resume from checkpoint unavailable: {formatStatusLabel(disabledReason)}</p>
+      ) : null}
+
+      <div className="action-row">
+        {taskEditingOn && recovery?.eligible ? (
+          <button type="button" className="queue-action" disabled={busy} onClick={onResumeFromFailedStep}>
+            Resume from checkpoint
+          </button>
+        ) : null}
+        {taskEditingOn ? (
+          <button type="button" className="secondary" disabled={busy} onClick={onRerun}>
+            Full retry
+          </button>
+        ) : null}
+      </div>
+
+      <ul className="step-detail-list">
+        {checkpointRef ? (
+          <li><strong>Checkpoint:</strong> <code className="text-xs break-all">{checkpointRef}</code></li>
+        ) : null}
+        {requiredBoundary ? (
+          <li><strong>Required boundary:</strong> {formatStatusLabel(requiredBoundary)}</li>
+        ) : null}
+        {sourceWorkflowId ? (
+          <li><strong>Source workflow:</strong> <code className="text-xs break-all">{sourceWorkflowId}</code></li>
+        ) : null}
+        {sourceRunId ? (
+          <li><strong>Source run:</strong> <code className="text-xs break-all">{sourceRunId}</code></li>
+        ) : null}
+        {diagnosticsEvidence.map((item, index) => (
+          <li key={`${item.category}-${item.artifactRef || item.reasonCode || index}`}>
+            <strong>{formatStatusLabel(item.category)}:</strong>{' '}
+            {item.artifactRef ? <code className="text-xs break-all">{item.artifactRef}</code> : formatStatusLabel(item.status)}
+            {item.reasonCode ? <span className="small"> {formatStatusLabel(item.reasonCode)}</span> : null}
+          </li>
+        ))}
+      </ul>
+      {preservedSteps.length > 0 ? (
+        <div>
+          <h4>Preserved provenance</h4>
+          <ul className="step-detail-list">
+            {preservedSteps.map((step) => (
+              <li key={`${step.logicalStepId}-${step.sourceExecutionOrdinal || ''}`}>
+                Preserved step: {step.title || step.logicalStepId}
+                {step.sourceWorkflowId ? <span className="small"> from <code>{step.sourceWorkflowId}</code></span> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function SessionContinuityPanel({
   apiBase,
   agentRunId,
@@ -4748,6 +4879,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return {
         logicalStepId: row.logicalStepId,
         title: row.title,
+        executionOrdinal: row.executionOrdinal,
         eligible,
         reason,
         isFailedStep,
@@ -4759,6 +4891,42 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     selectedRecoveryOptions.find((option) => option.isFailedStep) ||
     selectedRecoveryOptions.find((option) => option.eligible) ||
     null;
+
+  const stepRecoveryQuery = useQuery({
+    queryKey: [
+      'workflow-detail-step-execution',
+      workflowId,
+      selectedRecoveryStep?.logicalStepId,
+      selectedRecoveryStep?.executionOrdinal,
+      sourceTemporal,
+    ],
+    queryFn: async () => {
+      if (!workflowId || !selectedRecoveryStep?.logicalStepId || !selectedRecoveryStep.executionOrdinal) {
+        throw new Error('Step execution recovery evidence requires a selected step.');
+      }
+      const suffix = sourceTemporal ? '?source=temporal' : '';
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(
+          selectedRecoveryStep.logicalStepId,
+        )}/step-executions/${encodeURIComponent(String(selectedRecoveryStep.executionOrdinal))}${suffix}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) {
+        const statusText = response.statusText.trim();
+        const detail = statusText ? ` ${statusText}` : '';
+        throw new Error(`Step execution: ${response.status}${detail}`);
+      }
+      return StepExecutionDetailSchema.parse(await response.json());
+    },
+    enabled: Boolean(
+      workflowId &&
+        selectedRecoveryStep?.logicalStepId &&
+        selectedRecoveryStep.executionOrdinal > 0,
+    ),
+    refetchInterval: liveUpdates && !isTerminalExecution ? detailPoll : false,
+  });
+  const recoveryEligibility =
+    execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
 
   const artifactsQuery = useQuery({
     queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId],
@@ -6156,6 +6324,15 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           ) : null}
 
           <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
+          <RecoveryEvidencePanel
+            recovery={recoveryEligibility}
+            resume={execution.resume}
+            diagnostics={execution.targetDiagnostics}
+            onResumeFromFailedStep={onResumeFromFailedStep}
+            onRerun={onRerun}
+            busy={busy}
+            taskEditingOn={taskEditingOn}
+          />
 
           {resolvedAgentRunId ? (
             <SessionContinuityPanel
