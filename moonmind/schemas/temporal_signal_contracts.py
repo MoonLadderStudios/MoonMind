@@ -60,6 +60,8 @@ class RequestSlotSignal(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     requester_workflow_id: str = Field(..., alias="requesterWorkflowId")
+    runtime_id: str | None = Field(None, alias="runtimeId")
+    priority: int = Field(0, alias="priority")
 
 class ReleaseSlotSignal(BaseModel):
     """Payload for release_slot signals.

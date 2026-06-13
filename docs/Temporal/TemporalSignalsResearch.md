@@ -160,6 +160,7 @@ Below are recommended canonical contracts. Where MoonMind already has a shape, i
 class SlotRequest(SignalEnvelope):
     requester_workflow_id: str
     runtime_id: str
+    priority: int = 0
     profile_selector: dict | None = None
 
 class SlotRelease(SignalEnvelope):
@@ -433,4 +434,3 @@ If/when scanning the repo locally (all branches, full history), prioritize these
 - Test suites under `/tests/unit` and `/tests/integration/orchestrator` (docker-compose points to these). citeturn58view0turn60view1
 
 Unspecified items (need local scan): exact branch coverage, PR/issue motivations for current signal naming, and any deprecated signal names that may exist only in older branches or commits.
-

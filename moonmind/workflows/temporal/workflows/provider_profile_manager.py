@@ -46,6 +46,9 @@ DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH = (
 BILLING_AWARE_PROFILE_SELECTION_PATCH = (
     "provider-profile-manager-billing-aware-selection-v1"
 )
+PRIORITY_PENDING_REQUESTS_PATCH = (
+    "provider-profile-manager-priority-pending-requests-v1"
+)
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -73,7 +76,7 @@ class ProviderProfileManagerInput(TypedDict, total=False):
     leases: dict[str, list[str]]
     cooldowns: dict[str, str]
     lease_granted_at: dict[str, dict[str, str]]
-    pending_requests: list[dict[str, str]]
+    pending_requests: list[dict[str, Any]]
     handoff_reservations: dict[str, dict[str, str]]
 
 class ProviderProfileManagerOutput(TypedDict):
@@ -89,6 +92,7 @@ class SlotRequestPayload(TypedDict):
 
     requester_workflow_id: str
     runtime_id: str
+    priority: int
     execution_profile_ref: str | None
     lease_group_id: str | None
 
@@ -234,6 +238,7 @@ class PendingRequest:
 
     requester_workflow_id: str
     runtime_id: str
+    priority: int = 0
     execution_profile_ref: str | None = None
     profile_selector: Optional[dict[str, Any]] = None
     lease_group_id: str | None = None
@@ -306,11 +311,13 @@ class MoonMindProviderProfileManagerWorkflow:
         """An AgentRun requests a profile slot for this runtime family."""
         self._event_count += 1
         self._has_new_events = True
+        priority = self._normalize_request_priority(payload.get("priority"))
         if not workflow.patched(SLOT_HANDOFF_RESERVATION_PATCH):
             self._pending_requests.append(
                 PendingRequest(
                     requester_workflow_id=payload["requester_workflow_id"],
                     runtime_id=payload.get("runtime_id", self._runtime_id or ""),
+                    priority=priority,
                     execution_profile_ref=payload.get("execution_profile_ref"),
                     profile_selector=payload.get("profile_selector"),
                 )
@@ -319,6 +326,7 @@ class MoonMindProviderProfileManagerWorkflow:
         request = PendingRequest(
             requester_workflow_id=payload["requester_workflow_id"],
             runtime_id=payload.get("runtime_id", self._runtime_id or ""),
+            priority=priority,
             execution_profile_ref=payload.get("execution_profile_ref"),
             profile_selector=payload.get("profile_selector"),
             lease_group_id=self._normalize_optional_string(
@@ -498,6 +506,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 {
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
+                    "priority": r.priority,
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                     "lease_group_id": r.lease_group_id,
@@ -632,6 +641,7 @@ class MoonMindProviderProfileManagerWorkflow:
             PendingRequest(
                 requester_workflow_id=req.get("requester_workflow_id", ""),
                 runtime_id=req.get("runtime_id", ""),
+                priority=self._normalize_request_priority(req.get("priority")),
                 execution_profile_ref=req.get("execution_profile_ref"),
                 profile_selector=req.get("profile_selector"),
                 lease_group_id=self._normalize_optional_string(
@@ -776,6 +786,13 @@ class MoonMindProviderProfileManagerWorkflow:
         return normalized or None
 
     @staticmethod
+    def _normalize_request_priority(value: object) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
     def _coerce_handoff_ttl_seconds(value: object) -> int:
         try:
             seconds = int(value or 0)
@@ -866,12 +883,18 @@ class MoonMindProviderProfileManagerWorkflow:
         return True
 
     async def _drain_queue(self) -> None:
-        """Try to assign slots to pending requests in FIFO order."""
+        """Try to assign slots to pending requests in priority order."""
         now = workflow.now()
         self._clear_expired_handoff_reservations(now)
         remaining: list[PendingRequest] = []
         leases_changed = False
-        for req in self._pending_requests:
+        pending_requests = self._pending_requests
+        if workflow.patched(PRIORITY_PENDING_REQUESTS_PATCH):
+            pending_requests = sorted(
+                self._pending_requests,
+                key=lambda request: -request.priority,
+            )
+        for req in pending_requests:
             # Check if this requester already has a lease (e.g. from a retried workflow task)
             existing_profile_id = None
             for p in self._profiles.values():
@@ -1283,6 +1306,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 {
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
+                    "priority": r.priority,
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                     "lease_group_id": r.lease_group_id,

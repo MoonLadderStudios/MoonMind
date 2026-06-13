@@ -657,7 +657,7 @@ The manager is the source of truth for:
 
 | Signal            | Direction          | Payload                                                                                                                         |
 | ----------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `request_slot`    | AgentRun → Manager | `{requester_workflow_id, runtime_id, requested_profile_id?, provider_id?, tags_any?, tags_all?, runtime_materialization_mode?}` |
+| `request_slot`    | AgentRun → Manager | `{requester_workflow_id, runtime_id, priority?, requested_profile_id?, provider_id?, tags_any?, tags_all?, runtime_materialization_mode?}` |
 | `release_slot`    | AgentRun → Manager | `{requester_workflow_id, profile_id}`                                                                                           |
 | `report_cooldown` | AgentRun → Manager | `{profile_id, cooldown_seconds}`                                                                                                |
 | `sync_profiles`   | System → Manager   | `{profiles: [...]}`                                                                                                             |
