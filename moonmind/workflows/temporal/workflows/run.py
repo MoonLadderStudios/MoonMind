@@ -6953,11 +6953,11 @@ class MoonMindRunWorkflow:
         if not branch:
             return None
         if branch.startswith("refs/remotes/origin/"):
-            return branch.removeprefix("refs/remotes/origin/")
-        if branch.startswith("refs/heads/"):
-            return branch.removeprefix("refs/heads/")
+            branch = branch.removeprefix("refs/remotes/origin/")
+        elif branch.startswith("refs/heads/"):
+            branch = branch.removeprefix("refs/heads/")
         if branch.startswith("origin/"):
-            return branch.removeprefix("origin/")
+            branch = branch.removeprefix("origin/")
         return branch
 
     def _resolve_native_pr_branches(

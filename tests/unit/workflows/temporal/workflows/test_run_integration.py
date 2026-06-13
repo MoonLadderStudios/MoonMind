@@ -2339,6 +2339,16 @@ def test_native_pr_branch_resolution_normalizes_base_ref_candidates(
 
     assert base_branch == "main"
 
+    _, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "feature/expected"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "refs/heads/origin/main"},
+    )
+
+    assert base_branch == "main"
+
 
 def test_publish_repair_feedback_names_branch_and_managed_publish_contract(
     mock_run_workflow: MoonMindRunWorkflow,
