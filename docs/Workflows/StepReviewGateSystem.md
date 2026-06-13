@@ -77,12 +77,12 @@ DEFAULT_SKIP_TOOL_TYPES = ("repo.publish", "codex.execute")
 
 Add to `PlanPolicy`:
 
-```diff
- @dataclass(frozen=True, slots=True)
- class PlanPolicy:
-     failure_mode: str = "FAIL_FAST"
-     max_concurrency: int = 1
-+    approval_policy: ApprovalPolicyPolicy | None = None  # None = not specified in plan
+```python
+@dataclass(frozen=True, slots=True)
+class PlanPolicy:
+    failure_mode: str = "FAIL_FAST"
+    max_concurrency: int = 1
+    approval_policy: ApprovalPolicyPolicy | None = None  # None = not specified in plan
 ```
 
 ### 4.2 Plan JSON Schema Extension
