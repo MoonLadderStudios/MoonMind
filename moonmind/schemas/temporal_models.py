@@ -594,17 +594,22 @@ class StepExecutionManifestModel(BaseModel):
     )
     started_at: datetime | None = Field(None, alias="startedAt")
     updated_at: datetime | None = Field(None, alias="updatedAt")
-    input: dict[str, Any] = Field(default_factory=dict, alias="input")
-    context: dict[str, Any] = Field(default_factory=dict, alias="context")
-    workspace: dict[str, Any] = Field(default_factory=dict, alias="workspace")
-    execution: dict[str, Any] = Field(default_factory=dict, alias="execution")
-    outputs: dict[str, Any] = Field(default_factory=dict, alias="outputs")
+    input: dict[str, Any] | None = Field(default_factory=dict, alias="input")
+    context: dict[str, Any] | None = Field(default_factory=dict, alias="context")
+    workspace: dict[str, Any] | None = Field(default_factory=dict, alias="workspace")
+    execution: dict[str, Any] | None = Field(default_factory=dict, alias="execution")
+    outputs: dict[str, Any] | None = Field(default_factory=dict, alias="outputs")
     checks: list[dict[str, Any]] = Field(default_factory=list, alias="checks")
-    side_effects: dict[str, Any] = Field(default_factory=dict, alias="sideEffects")
-    dependency_effects: dict[str, Any] = Field(
+    side_effects: dict[str, Any] | None = Field(
+        default_factory=dict, alias="sideEffects"
+    )
+    dependency_effects: dict[str, Any] | None = Field(
         default_factory=dict, alias="dependencyEffects"
     )
-    budget: dict[str, Any] = Field(default_factory=dict, alias="budget")
+    recovery_source: dict[str, Any] | None = Field(
+        default_factory=dict, alias="recoverySource"
+    )
+    budget: dict[str, Any] | None = Field(default_factory=dict, alias="budget")
 
     @field_validator(
         "input",
@@ -641,6 +646,7 @@ class StepExecutionManifestModel(BaseModel):
             "checks": self.checks,
             "sideEffects": self.side_effects,
             "dependencyEffects": self.dependency_effects,
+            "recoverySource": self.recovery_source,
             "budget": self.budget,
         }
         for section_name, section_value in sections.items():

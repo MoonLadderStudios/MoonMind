@@ -271,36 +271,42 @@ def test_step_execution_detail_payload_tolerates_nullable_manifest_sections() ->
     )
 
 
-def test_step_execution_detail_payload_validates_preserved_step_provenance() -> None:
+def test_step_execution_detail_payload_reads_preserved_steps_from_recovery_source() -> None:
     payload = _step_execution_detail_payload(
         _phase_11_manifest(
-            lineage={
+            recoverySource={
                 "sourceWorkflowId": "wf-source",
                 "sourceRunId": "run-source",
-                "sourceLogicalStepId": "implement",
-                "sourceExecutionOrdinal": 1,
                 "preservedSteps": [
                     {
                         "logicalStepId": "plan",
                         "title": "Plan",
-                        "sourceWorkflowId": "wf-source",
-                        "sourceRunId": "run-source",
                         "sourceExecutionOrdinal": 1,
                         "stateCheckpointRef": "artifact://checkpoint/plan-state",
-                        "outputRefs": {"summaryRef": "artifact://outputs/plan-summary"},
+                        "outputRefs": {"summaryRef": "artifact://output/plan-summary"},
                     }
                 ],
-            }
+            },
         ),
         manifest_artifact_ref="artifact://manifest/implement-2",
     )
+
+    preserved = payload["preservedStepProvenance"]
     detail = StepExecutionDetailModel.model_validate(payload)
 
+    assert preserved == [
+        {
+            "logicalStepId": "plan",
+            "title": "Plan",
+            "sourceWorkflowId": "wf-source",
+            "sourceRunId": "run-source",
+            "sourceExecutionOrdinal": 1,
+            "stateCheckpointRef": "artifact://checkpoint/plan-state",
+            "outputRefs": {"summaryRef": "artifact://output/plan-summary"},
+        }
+    ]
     assert detail.preserved_step_provenance[0].logical_step_id == "plan"
     assert detail.preserved_step_provenance[0].source_workflow_id == "wf-source"
-    assert detail.preserved_step_provenance[0].output_refs == {
-        "summaryRef": "artifact://outputs/plan-summary"
-    }
 
 
 def test_step_execution_detail_payload_exposes_environment_fix_guidance() -> None:

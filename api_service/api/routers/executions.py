@@ -4156,7 +4156,9 @@ def _gate_summary(checks: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"verdict": verdict, "summary": summary, "artifactRef": artifact_ref}
 
 
-def _side_effect_summary(side_effects: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _side_effect_summary(
+    side_effects: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
     if not side_effects:
         return None
     refs = _bounded_ref_projection(side_effects)
@@ -4208,9 +4210,9 @@ def _environment_diagnostic_refs(
     diagnostics: list[dict[str, Any]] = []
     for kind, camel_key, reason in specs:
         artifact_ref = _first_text(
-            _field_value(workspace, camel_key),
-            _field_value(execution, camel_key),
-            _field_value(outputs, camel_key),
+            _field_value(workspace, camel_key) if workspace else None,
+            _field_value(execution, camel_key) if execution else None,
+            _field_value(outputs, camel_key) if outputs else None,
         )
         if not artifact_ref:
             continue
@@ -4285,8 +4287,16 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
         manifest.execution,
         manifest.outputs,
     )
-    source_workflow_id = _first_text(_field_value(manifest.lineage, "sourceWorkflowId"))
-    source_run_id = _first_text(_field_value(manifest.lineage, "sourceRunId"))
+    source_workflow_id = (
+        _first_text(_field_value(manifest.lineage, "sourceWorkflowId"))
+        if manifest.lineage
+        else None
+    )
+    source_run_id = (
+        _first_text(_field_value(manifest.lineage, "sourceRunId"))
+        if manifest.lineage
+        else None
+    )
     if diagnostics and _is_environment_blocked_manifest(manifest):
         return {
             "eligible": False,
@@ -4354,9 +4364,8 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
 def _preserved_step_provenance_payload(
     manifest: StepExecutionManifestModel,
 ) -> list[dict[str, Any]]:
-    if not manifest.lineage:
-        return []
-    raw_steps = _field_value(manifest.lineage, "preservedSteps")
+    recovery_source = manifest.recovery_source or {}
+    raw_steps = _field_value(recovery_source, "preservedSteps")
     if not isinstance(raw_steps, list):
         return []
     preserved: list[dict[str, Any]] = []
@@ -4380,11 +4389,17 @@ def _preserved_step_provenance_payload(
                 "title": _safe_display_text(_first_text(_field_value(source, "title"))),
                 "sourceWorkflowId": _first_text(
                     _field_value(source, "sourceWorkflowId"),
-                    _field_value(manifest.lineage, "sourceWorkflowId"),
+                    _field_value(recovery_source, "sourceWorkflowId"),
+                    _field_value(manifest.lineage, "sourceWorkflowId")
+                    if manifest.lineage
+                    else None,
                 ),
                 "sourceRunId": _first_text(
                     _field_value(source, "sourceRunId"),
-                    _field_value(manifest.lineage, "sourceRunId"),
+                    _field_value(recovery_source, "sourceRunId"),
+                    _field_value(manifest.lineage, "sourceRunId")
+                    if manifest.lineage
+                    else None,
                 ),
                 "sourceExecutionOrdinal": _field_value(source, "sourceExecutionOrdinal"),
                 "stateCheckpointRef": _first_text(_field_value(source, "stateCheckpointRef")),

@@ -349,6 +349,10 @@ class StepExecutionManifestModel(BaseModel):
         default_factory=dict,
         alias="dependencyEffects",
     )
+    recovery_source: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="recoverySource",
+    )
     budget: dict[str, Any] = Field(default_factory=dict, alias="budget")
 
     @field_validator("workflow_id", "run_id", "logical_step_id", mode="before")

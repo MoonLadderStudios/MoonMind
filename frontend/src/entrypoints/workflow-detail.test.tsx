@@ -3452,7 +3452,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('artifact://diagnostics/input-manifest')).toBeTruthy();
     expect(screen.getByText('Resumed from mm:source')).toBeTruthy();
     expect(screen.getByText('Prepare context')).toBeTruthy();
-    expect(screen.getByText('artifact://resume/checkpoint')).toBeTruthy();
+    expect(screen.getAllByText('artifact://resume/checkpoint').length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: 'Recovery evidence' })).toBeTruthy();
+    expect(screen.getByText('Preserved provenance')).toBeTruthy();
 
     fireEvent.click(screen.getByText('Diagnostics'));
     await waitFor(() => {
