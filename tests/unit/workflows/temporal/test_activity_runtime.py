@@ -1991,12 +1991,13 @@ async def test_security_pentest_execute_rejects_registered_runner_image_drift(
     assert launcher.requests == []
 
 async def test_security_pentest_execute_validates_safe_profile_against_registry(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     launcher = _FakePentestLauncher()
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
-        workspace_root="/work/agent_jobs",
+        workspace_root=tmp_path,
     )
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
@@ -2015,10 +2016,10 @@ async def test_security_pentest_execute_validates_safe_profile_against_registry(
     monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", False)
 
     payload = _pentest_activity_payload()
-    payload["request"]["repo_dir"] = "/work/agent_jobs/run-123/repo"
-    payload["request"][
-        "artifacts_dir"
-    ] = "/work/agent_jobs/run-123/artifacts/pentest"
+    payload["request"]["repo_dir"] = str(tmp_path / "run-123" / "repo")
+    payload["request"]["artifacts_dir"] = str(
+        tmp_path / "run-123" / "artifacts" / "pentest"
+    )
 
     result = await activities._security_pentest_execute_trusted_internal(payload)
 
