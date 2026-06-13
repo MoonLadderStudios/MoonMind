@@ -10,6 +10,7 @@ fallback and causes ExternalWorkflowExecutionNotFound crashes.
 import ast
 import inspect
 import textwrap
+from types import SimpleNamespace
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
@@ -469,3 +470,55 @@ class TestEnsureManagerAutoStart:
             "_ensure_manager_and_signal must include signal_payload['execution_profile_ref'] "
             "so the ProviderProfileManager can honor exact profile selections."
         )
+
+    def test_manager_signal_payload_carries_priority(self):
+        """Slot requests must include queue priority when the AgentRun has one."""
+        source = textwrap.dedent(
+            inspect.getsource(MoonMindAgentRun._ensure_manager_and_signal)
+        )
+        tree = ast.parse(source)
+
+        found_guard = False
+        found_payload_write = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not (
+                isinstance(test, ast.Compare)
+                and isinstance(test.left, ast.Name)
+                and test.left.id == "request_priority"
+            ):
+                continue
+            found_guard = True
+            for child in node.body:
+                if not isinstance(child, ast.Assign):
+                    continue
+                for target in child.targets:
+                    if not isinstance(target, ast.Subscript):
+                        continue
+                    if not (
+                        isinstance(target.value, ast.Name)
+                        and target.value.id == "signal_payload"
+                    ):
+                        continue
+                    slice_node = target.slice
+                    if (
+                        isinstance(slice_node, ast.Constant)
+                        and slice_node.value == "priority"
+                    ):
+                        found_payload_write = True
+
+        assert found_guard
+        assert found_payload_write
+
+    def test_request_priority_handles_missing_or_invalid_parameters(self):
+        assert MoonMindAgentRun._request_priority(
+            SimpleNamespace(parameters=None)  # type: ignore[arg-type]
+        ) == 0
+        assert MoonMindAgentRun._request_priority(
+            SimpleNamespace(parameters=[])  # type: ignore[arg-type]
+        ) == 0
+        assert MoonMindAgentRun._request_priority(
+            SimpleNamespace(parameters={"priority": "bad"})  # type: ignore[arg-type]
+        ) == 0
