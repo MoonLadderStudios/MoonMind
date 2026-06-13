@@ -5,10 +5,15 @@ from pydantic import ValidationError
 
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
+    CompiledBoundedStoryLoop,
     LoopAttempt,
     LoopBudget,
+    LoopStopDecision,
     LoopStopState,
+    PreflightDecision,
     PublicationAction,
+    PublicationDecision,
+    ProviderLeaseDecision,
     TypedGateResult,
     compile_bounded_story_loop,
     evaluate_attempt_continuation,
@@ -155,6 +160,96 @@ def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() ->
                 "remainingWork": "raw logs and stdout must not be inline",
             }
         )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "model": CompiledBoundedStoryLoop,
+            "data": {
+                "selectedItemRef": "raw selected item payload",
+                "selectedItemDigest": "sha256:item-1",
+                "nodes": [
+                    {
+                        "kind": "implementation",
+                        "selectedItemDigest": "sha256:item-1",
+                    }
+                ],
+            },
+        },
+        {
+            "model": LoopStopDecision,
+            "data": {
+                "state": "failed_with_remaining_work",
+                "reason": "verification_requested_remediation",
+                "remainingWorkRef": "diff --git a/file b/file",
+            },
+        },
+        {
+            "model": LoopStopDecision,
+            "data": {
+                "state": "blocked",
+                "reason": "verification_blocked",
+                "diagnosticsRef": "raw stderr from provider",
+            },
+        },
+        {
+            "model": PublicationDecision,
+            "data": {
+                "allowed": False,
+                "reason": "typed_gate_not_accepted",
+                "action": "pr",
+                "gateResultRef": "provider payload with token=value",
+            },
+        },
+        {
+            "model": PublicationDecision,
+            "data": {
+                "allowed": True,
+                "reason": "accepted_latest_step_execution",
+                "action": "pr",
+                "sideEffectRefs": ["artifact://accepted", "raw stdout"],
+            },
+        },
+        {
+            "model": PreflightDecision,
+            "data": {
+                "allowed": False,
+                "state": "blocked",
+                "reason": "runtime_preflight_failed",
+                "diagnosticsRef": "diagnostics in prose",
+                "consumesAttemptBudget": False,
+            },
+        },
+        {
+            "model": ProviderLeaseDecision,
+            "data": {
+                "allowed": True,
+                "queued": False,
+                "reason": "provider_lease_granted",
+                "leaseRef": "lease details inline",
+            },
+        },
+        {
+            "model": ProviderLeaseDecision,
+            "data": {
+                "allowed": False,
+                "queued": False,
+                "reason": "provider_lease_denied",
+                "diagnosticsRef": "private key leaked inline",
+            },
+        },
+    ],
+)
+def test_boundary_decision_refs_reject_inline_payloads(
+    payload: dict[str, object],
+) -> None:
+    model = payload["model"]
+    data = payload["data"]
+
+    with pytest.raises(ValidationError):
+        model.model_validate(data)
 
 
 @pytest.mark.parametrize(

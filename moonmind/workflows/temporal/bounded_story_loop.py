@@ -5,7 +5,13 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 ArtifactRef = str
@@ -126,6 +132,11 @@ class CompiledBoundedStoryLoop(_ContractModel):
     selected_item_digest: str = Field(alias="selectedItemDigest")
     nodes: tuple[LoopNode, ...]
 
+    @field_validator("selected_item_ref")
+    @classmethod
+    def _compiled_ref_is_ref(cls, value: str) -> str:
+        return _require_ref(value, field_name="selectedItemRef")
+
 
 class TypedGateResult(_ContractModel):
     verdict: Literal[
@@ -240,6 +251,13 @@ class LoopStopDecision(_ContractModel):
         default=None, alias="nextAttemptKind"
     )
 
+    @field_validator("remaining_work_ref", "diagnostics_ref")
+    @classmethod
+    def _stop_refs_are_refs(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_ref(value, field_name="stop decision ref")
+
 
 class PublicationDecision(_ContractModel):
     allowed: bool
@@ -249,7 +267,21 @@ class PublicationDecision(_ContractModel):
         default=None, alias="latestProducingStepExecutionId"
     )
     gate_result_ref: ArtifactRef | None = Field(default=None, alias="gateResultRef")
-    side_effect_refs: list[ArtifactRef] = Field(default_factory=list, alias="sideEffectRefs")
+    side_effect_refs: list[ArtifactRef] = Field(
+        default_factory=list, alias="sideEffectRefs"
+    )
+
+    @field_validator("gate_result_ref")
+    @classmethod
+    def _gate_result_ref_is_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_ref(value, field_name="gateResultRef")
+
+    @field_validator("side_effect_refs")
+    @classmethod
+    def _side_effect_refs_are_refs(cls, value: list[str]) -> list[str]:
+        return [_require_ref(ref, field_name="sideEffectRefs") for ref in value]
 
 
 class PreflightDecision(_ContractModel):
@@ -259,6 +291,13 @@ class PreflightDecision(_ContractModel):
     diagnostics_ref: ArtifactRef | None = Field(default=None, alias="diagnosticsRef")
     consumes_attempt_budget: bool = Field(alias="consumesAttemptBudget")
 
+    @field_validator("diagnostics_ref")
+    @classmethod
+    def _preflight_ref_is_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_ref(value, field_name="diagnosticsRef")
+
 
 class ProviderLeaseDecision(_ContractModel):
     allowed: bool
@@ -266,6 +305,13 @@ class ProviderLeaseDecision(_ContractModel):
     reason: str
     lease_ref: ArtifactRef | None = Field(default=None, alias="leaseRef")
     diagnostics_ref: ArtifactRef | None = Field(default=None, alias="diagnosticsRef")
+
+    @field_validator("lease_ref", "diagnostics_ref")
+    @classmethod
+    def _lease_refs_are_refs(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_ref(value, field_name="provider lease ref")
 
 
 def compile_bounded_story_loop(
