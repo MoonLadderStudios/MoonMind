@@ -14,6 +14,7 @@ from moonmind.schemas.agent_skill_models import (
     RuntimeSkillMaterialization,
 )
 from moonmind.workflows.skills.workspace_links import (
+    SkillWorkspaceLinks,
     SkillWorkspaceError,
     ensure_shared_skill_links,
     is_moonmind_owned_projection,
@@ -32,6 +33,7 @@ class AgentSkillMaterializer:
         source_preservation_root: str | None = None,
         projection_owner_uid: int | None = None,
         projection_owner_gid: int | None = None,
+        project_adapter_aliases: bool = True,
     ) -> None:
         if not workspace_root:
             raise ValueError("workspace_root must be provided")
@@ -45,6 +47,7 @@ class AgentSkillMaterializer:
         )
         self.projection_owner_uid = projection_owner_uid
         self.projection_owner_gid = projection_owner_gid
+        self.project_adapter_aliases = project_adapter_aliases
 
     async def materialize(
         self,
@@ -145,32 +148,47 @@ class AgentSkillMaterializer:
                     f"Failed to activate prepared skills_active directory: {ex}"
                 ) from ex
 
-            try:
-                require_agents_link = not self._is_repo_authored_skills_dir(alias_dir)
-                require_gemini_link = self._runtime_needs_gemini_projection(runtime_id)
-                links = ensure_shared_skill_links(
-                    run_root=self.workspace_root,
-                    skills_active_path=active_dir,
-                    require_agents_link=require_agents_link,
-                    require_gemini_link=require_gemini_link,
-                    owned_roots=(active_dir.parent, active_dir),
-                    owner_uid=self.projection_owner_uid,
-                    owner_gid=self.projection_owner_gid,
-                )
-                alias_available = links.agents_skills_available
-                if alias_available:
-                    visible_path = links.agents_skills_path
-                else:
-                    visible_path = active_dir
-                    alias_skipped_reason = (
-                        "repo_authored_skills_present"
-                        if self._is_repo_authored_skills_dir(alias_dir)
-                        else links.agents_skills_error or "canonical_alias_unavailable"
+            if self.project_adapter_aliases:
+                try:
+                    require_agents_link = not self._is_repo_authored_skills_dir(alias_dir)
+                    require_gemini_link = self._runtime_needs_gemini_projection(runtime_id)
+                    links = ensure_shared_skill_links(
+                        run_root=self.workspace_root,
+                        skills_active_path=active_dir,
+                        require_agents_link=require_agents_link,
+                        require_gemini_link=require_gemini_link,
+                        owned_roots=(active_dir.parent, active_dir),
+                        owner_uid=self.projection_owner_uid,
+                        owner_gid=self.projection_owner_gid,
                     )
-            except (OSError, SkillWorkspaceError) as ex:
-                raise RuntimeError(
-                    self._projection_error_message(alias_dir, cause=str(ex))
-                ) from ex
+                    alias_available = links.agents_skills_available
+                    if alias_available:
+                        visible_path = links.agents_skills_path
+                    else:
+                        visible_path = active_dir
+                        alias_skipped_reason = (
+                            "repo_authored_skills_present"
+                            if self._is_repo_authored_skills_dir(alias_dir)
+                            else links.agents_skills_error or "canonical_alias_unavailable"
+                        )
+                except (OSError, SkillWorkspaceError) as ex:
+                    raise RuntimeError(
+                        self._projection_error_message(alias_dir, cause=str(ex))
+                    ) from ex
+            else:
+                alias_skipped_reason = "adapter_alias_projection_disabled"
+                visible_path = active_dir
+                links = SkillWorkspaceLinks(
+                    skills_active_path=active_dir,
+                    agents_skills_path=alias_dir,
+                    gemini_skills_path=self.workspace_root / ".gemini" / "skills",
+                    agents_skills_available=False,
+                    agents_skills_status="skipped",
+                    agents_skills_error=alias_skipped_reason,
+                    gemini_skills_available=False,
+                    gemini_skills_status="skipped",
+                    gemini_skills_error=alias_skipped_reason,
+                )
 
             manifest_content["visible_path"] = str(visible_path)
             try:

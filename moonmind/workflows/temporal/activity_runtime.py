@@ -140,6 +140,7 @@ from moonmind.schemas.managed_session_models import (
     TerminateCodexManagedSessionRequest,
 )
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 
 from moonmind.workflows.skills.skill_dispatcher import execute_skill_activity
@@ -6985,6 +6986,16 @@ class TemporalAgentRuntimeActivities:
             skill_source_preservation_root = (
                 run_root / "runtime" / "skill_sources" / "repo_agents_skills"
             )
+            project_adapter_aliases = not self._requires_projectionless_skill_delivery(
+                selected_skill
+            )
+            if not project_adapter_aliases:
+                active_root = run_root / "runtime" / "skills_active"
+                cleanup_moonmind_skill_projections(
+                    run_root=workspace,
+                    skills_active_path=active_root,
+                    owned_roots=(active_root,),
+                )
             materializer = AgentSkillMaterializer(
                 workspace_root=str(workspace),
                 artifact_service=self._artifact_service,
@@ -6992,6 +7003,7 @@ class TemporalAgentRuntimeActivities:
                 source_preservation_root=str(skill_source_preservation_root),
                 projection_owner_uid=_MANAGED_AGENT_UID,
                 projection_owner_gid=_MANAGED_AGENT_GID,
+                project_adapter_aliases=project_adapter_aliases,
             )
             materialization = await materializer.materialize(
                 resolved_skillset=resolved_skillset,
@@ -7023,6 +7035,10 @@ class TemporalAgentRuntimeActivities:
             ) from exc
 
         return metadata
+
+    @staticmethod
+    def _requires_projectionless_skill_delivery(selected_skill: str) -> bool:
+        return str(selected_skill or "").strip().lower() == "moonspec-verify"
 
     @staticmethod
     def _validate_selected_skill_projection(

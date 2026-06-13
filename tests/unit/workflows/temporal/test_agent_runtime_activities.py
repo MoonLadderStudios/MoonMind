@@ -4081,15 +4081,18 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_verifier_ski
 
     assert result.startswith("Active MoonMind skill snapshot:")
     assert "Run final verification." in result
-    assert ".agents/skills/moonspec-verify/SKILL.md" in result
-    assert agents_projection.is_symlink()
-    assert agents_projection.resolve() == (
-        job_root / "runtime" / "skills_active" / "skillset-verify"
-    ).resolve()
-    assert gemini_projection.resolve() == stale_root.resolve()
-    assert (agents_projection / "moonspec-verify" / "SKILL.md").read_bytes() == skill_body
-    manifest = json.loads((agents_projection / "_manifest.json").read_text(encoding="utf-8"))
+    backing_path = job_root / "runtime" / "skills_active" / "skillset-verify"
+    skill_doc = backing_path / "moonspec-verify" / "SKILL.md"
+    assert str(skill_doc) in result
+    assert ".agents/skills/moonspec-verify/SKILL.md" not in result
+    assert not agents_projection.exists()
+    assert not agents_projection.is_symlink()
+    assert not gemini_projection.exists()
+    assert not gemini_projection.is_symlink()
+    assert skill_doc.read_bytes() == skill_body
+    manifest = json.loads((backing_path / "_manifest.json").read_text(encoding="utf-8"))
     assert manifest["snapshot_id"] == "skillset-verify"
+    assert manifest["visible_path"] == str(backing_path)
     assert manifest["skills"][0]["name"] == "moonspec-verify"
 
 
