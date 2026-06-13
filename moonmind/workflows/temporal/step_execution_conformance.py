@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.step_checkpoints import (
 )
 from moonmind.workflows.temporal.step_executions import (
     build_step_execution_manifest_payload,
+    memory_side_effect_summary,
     validate_step_execution_manifest_payload,
 )
 
@@ -194,16 +195,17 @@ def _classify_checkpoint_payload(
     fixture_id: str,
     payload: Mapping[str, Any],
     *,
+    traceability: Iterable[str],
     category: str = "golden",
     expected: str = "valid",
-    traceability: Iterable[str],
+    workspace_policy: str = "apply_previous_execution_diff_to_clean_baseline",
 ) -> dict[str, Any]:
     result = validate_step_checkpoint_payload(
         dict(payload),
         expected_source=_identity(),
         expected_task_input_snapshot_ref="artifact://input",
         expected_plan_digest="sha256:plan",
-        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        workspace_policy=workspace_policy,
         checkpoint_ref=f"artifact://{fixture_id}",
     )
     decision = "valid" if result.valid else "invalid"
@@ -430,6 +432,108 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
         },
     )
     degraded_checkpoint = _valid_checkpoint_payload(boundary="after_future_gate")
+    source = _identity().model_dump(by_alias=True)
+    memory_failed = _valid_manifest_payload(
+        status="failed",
+        terminalDisposition="retryable",
+        sideEffects={
+            "memory": [
+                memory_side_effect_summary(
+                    state="proposed",
+                    target="repo://AGENTS.md",
+                    reason="terminal_disposition_not_accepted",
+                    proposal_ref="artifact://memory/proposal-failed",
+                    decision_ref="artifact://memory/decision-blocked",
+                    source=source,
+                )
+            ]
+        },
+    )
+    memory_run_context = _valid_manifest_payload(
+        terminalDisposition="accepted",
+        sideEffects={
+            "memory": [
+                memory_side_effect_summary(
+                    state="accepted_for_run_context",
+                    target="memory://run",
+                    reason="policy_approved_for_later_attempts",
+                    proposal_ref="artifact://memory/proposal-1",
+                    decision_ref="artifact://memory/decision-1",
+                    application_result_ref="artifact://memory/application-1",
+                    source=source,
+                )
+            ]
+        },
+    )
+    memory_blocked_repo = _valid_manifest_payload(
+        status="failed",
+        terminalDisposition="retryable",
+        sideEffects={
+            "memory": [
+                memory_side_effect_summary(
+                    state="proposed",
+                    target="repo://AGENTS.md",
+                    reason="terminal_disposition_not_accepted",
+                    proposal_ref="artifact://memory/proposal-2",
+                    decision_ref="artifact://memory/decision-2",
+                    source=source,
+                )
+            ]
+        },
+    )
+    memory_superseded = _valid_manifest_payload(
+        terminalDisposition="accepted",
+        sideEffects={
+            "memory": [
+                memory_side_effect_summary(
+                    state="superseded",
+                    target="memory://run",
+                    reason="superseded",
+                    proposal_ref="artifact://memory/proposal-old",
+                    decision_ref="artifact://memory/decision-supersede",
+                    source=source,
+                ),
+                memory_side_effect_summary(
+                    state="accepted_for_run_context",
+                    target="memory://run",
+                    reason="replacement_available",
+                    proposal_ref="artifact://memory/proposal-new",
+                    decision_ref="artifact://memory/decision-new",
+                    application_result_ref="artifact://memory/application-new",
+                    source=source,
+                ),
+            ]
+        },
+    )
+    memory_identity = _valid_manifest_payload(
+        terminalDisposition="accepted",
+        sideEffects={
+            "memory": [
+                memory_side_effect_summary(
+                    state="proposed",
+                    target="memory://run",
+                    reason="candidate_codebase_pattern",
+                    proposal_ref="artifact://memory/proposal-identity",
+                    source=source,
+                )
+            ]
+        },
+    )
+    memory_unsafe = _valid_manifest_payload(
+        terminalDisposition="accepted",
+        sideEffects={
+            "memory": [
+                memory_side_effect_summary(
+                    state="rejected",
+                    target="memory://run",
+                    reason="unsafe_content_rejected",
+                    proposal_ref="artifact://memory/proposal-unsafe",
+                    decision_ref="artifact://memory/decision-unsafe",
+                    source=source,
+                )
+            ]
+        },
+    )
     catalog = [
         {
             "fixtureId": "successful-execution",
@@ -456,6 +560,81 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
                 category="golden",
                 expected="valid",
                 traceability=("FR-003", "SC-003", "DESIGN-REQ-006"),
+            ),
+        },
+        {
+            "fixtureId": "memory-failed-proposed",
+            "decision": _classify_manifest_payload(
+                "memory-failed-proposed",
+                memory_failed,
+                category="golden",
+                expected="valid",
+                traceability=(
+                    "FR-011",
+                    "SC-002",
+                    "DESIGN-REQ-007",
+                ),
+            ),
+        },
+        {
+            "fixtureId": "memory-accepted-run-context",
+            "decision": _classify_manifest_payload(
+                "memory-accepted-run-context",
+                memory_run_context,
+                category="golden",
+                expected="valid",
+                traceability=(
+                    "FR-005",
+                    "FR-006",
+                    "FR-007",
+                    "DESIGN-REQ-007",
+                ),
+            ),
+        },
+        {
+            "fixtureId": "memory-blocked-repo-write",
+            "decision": _classify_manifest_payload(
+                "memory-blocked-repo-write",
+                memory_blocked_repo,
+                category="golden",
+                expected="valid",
+                traceability=(
+                    "FR-008",
+                    "FR-009",
+                    "FR-013",
+                    "FR-014",
+                    "DESIGN-REQ-007",
+                ),
+            ),
+        },
+        {
+            "fixtureId": "memory-superseded",
+            "decision": _classify_manifest_payload(
+                "memory-superseded",
+                memory_superseded,
+                category="golden",
+                expected="valid",
+                traceability=("FR-003", "FR-012", "SC-004", "DESIGN-REQ-007"),
+            ),
+        },
+        {
+            "fixtureId": "memory-source-identity",
+            "decision": _classify_manifest_payload(
+                "memory-source-identity",
+                memory_identity,
+                category="golden",
+                expected="valid",
+                traceability=("FR-004", "SC-001", "DESIGN-REQ-007"),
+            ),
+        },
+        {
+            "fixtureId": "memory-unsafe-content",
+            "decision": _classify_manifest_payload(
+                "memory-unsafe-content",
+                memory_unsafe,
+                category="golden",
+                expected="valid",
+                traceability=("FR-015", "SC-006", "DESIGN-REQ-007"),
             ),
         },
         {
@@ -571,6 +750,14 @@ def replay_degraded_fixture_decisions() -> list[dict[str, Any]]:
             old_checkpoint,
             category="degraded_input",
             expected="invalid",
+            traceability=("FR-005", "SC-004", "DESIGN-REQ-024"),
+        ),
+        _classify_checkpoint_payload(
+            "future-checkpoint-policy",
+            _valid_checkpoint_payload(),
+            category="degraded_input",
+            expected="invalid",
+            workspace_policy="future_checkpoint_policy",
             traceability=("FR-005", "SC-004", "DESIGN-REQ-024"),
         ),
         classify_gate_verdict(

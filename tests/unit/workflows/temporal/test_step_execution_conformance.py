@@ -15,6 +15,11 @@ from moonmind.workflows.temporal.step_execution_conformance import (
     golden_fixture_catalog,
     run_step_execution_conformance,
 )
+from moonmind.workflows.temporal.step_executions import (
+    memory_side_effect_summary,
+    memory_write_gate_decision,
+    side_effect_record,
+)
 
 
 FORBIDDEN_OUTPUT_TOKENS = (
@@ -60,6 +65,12 @@ def test_golden_fixture_catalog_is_complete_and_deterministic() -> None:
     assert [fixture["fixtureId"] for fixture in catalog] == [
         "successful-execution",
         "failed-reattempt",
+        "memory-failed-proposed",
+        "memory-accepted-run-context",
+        "memory-blocked-repo-write",
+        "memory-superseded",
+        "memory-source-identity",
+        "memory-unsafe-content",
         "gate-failure",
         "recovery-with-preserved-steps",
         "degraded-checkpoint-payload",
@@ -115,6 +126,9 @@ def test_degraded_inputs_return_typed_decisions_without_exceptions() -> None:
     assert decisions["old-manifest-row"]["expected"] == "invalid"
     assert decisions["old-checkpoint-row"]["decision"] == "invalid"
     assert decisions["old-checkpoint-row"]["expected"] == "invalid"
+    assert decisions["future-checkpoint-policy"]["decision"] == "invalid"
+    assert decisions["future-checkpoint-policy"]["expected"] == "invalid"
+    assert "workspacePolicy" in decisions["future-checkpoint-policy"]["message"]
     assert decisions["blank-gate-verdict"]["decision"] == "degraded"
     assert decisions["blank-gate-verdict"]["expected"] == "degraded"
     assert decisions["unknown-gate-verdict"]["decision"] == "degraded"
@@ -244,3 +258,69 @@ def test_run_step_execution_conformance_returns_one_aggregate_result() -> None:
     assert result["overallResult"] == "passed"
     assert result["failedFixtureIds"] == []
     assert set(result["familyResults"]) == set(REQUIRED_CONFORMANCE_FAMILIES)
+
+
+def test_memory_side_effects_gate_failed_attempts_and_repo_writes() -> None:
+    failed = memory_write_gate_decision(
+        target="memory://run",
+        terminal_disposition="retryable",
+        publication_gate_passed=False,
+        policy_decision="blocked",
+    )
+    run_local = memory_write_gate_decision(
+        target="memory://run",
+        terminal_disposition="retryable",
+        publication_gate_passed=False,
+        policy_decision="accept_for_run_context",
+    )
+    repo_blocked = memory_write_gate_decision(
+        target="repo://AGENTS.md",
+        terminal_disposition="retryable",
+        publication_gate_passed=True,
+        policy_decision="approve_repo_application",
+    )
+
+    assert failed["state"] == "proposed"
+    assert failed["allowed"] is False
+    assert run_local["state"] == "accepted_for_run_context"
+    assert run_local["allowed"] is True
+    assert repo_blocked["state"] == "proposed"
+    assert repo_blocked["allowed"] is False
+    assert repo_blocked["reason"] == "terminal_disposition_not_accepted"
+
+
+def test_memory_side_effect_summary_preserves_policy_refs_and_privileged_candidate() -> None:
+    source = {
+        "workflowId": "workflow-1",
+        "runId": "run-1",
+        "logicalStepId": "implement-story",
+        "executionOrdinal": 2,
+    }
+    summary = memory_side_effect_summary(
+        state="applied_to_repo",
+        target="repo://AGENTS.md",
+        reason="accepted_disposition_and_publication_gate_passed",
+        proposal_ref="artifact://memory/proposal-1",
+        decision_ref="artifact://memory/decision-1",
+        application_result_ref="artifact://memory/application-1",
+        source=source,
+        privileged_action={
+            "actor": "workflow://workflow-1",
+            "action": "memory.apply_repo",
+            "target": "repo://AGENTS.md",
+            "reason": "approved_repo_application",
+            "decision": "approve_repo_application",
+            "evidenceRefs": ["artifact://memory/decision-1"],
+        },
+    )
+    record = side_effect_record(
+        effect_class="memory_update",
+        operation="memory.apply_repo",
+        target="repo://AGENTS.md",
+        workflow_state_accepted=True,
+        memory_effect=summary,
+    )
+
+    assert record["memory"]["state"] == "applied_to_repo"
+    assert record["memory"]["privilegedAction"]["action"] == "memory.apply_repo"
+    assert record["memory"]["source"] == source

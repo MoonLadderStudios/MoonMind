@@ -50,6 +50,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_interval=timedelta(minutes=1),
     maximum_attempts=5,
 )
+MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)(token|password|authorization|cookie)=\S+"
 )
@@ -332,6 +333,7 @@ def build_resolver_run_request(
     initial_parameters: dict[str, Any] = {
         "repo": pr.repo,
         "repository": pr.repo,
+        "priority": MERGE_AUTOMATION_RESOLVER_PRIORITY,
         "publishMode": "none",
         "targetRuntime": target_runtime,
         "task": {

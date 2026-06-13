@@ -249,6 +249,7 @@ def test_build_resolver_run_request_uses_pr_resolver_and_publish_none() -> None:
     )
 
     assert request["workflow_type"] == "MoonMind.UserWorkflow"
+    assert request["initial_parameters"]["priority"] == 10
     assert request["initial_parameters"]["task"]["skill"]["id"] == "pr-resolver"
     assert request["initial_parameters"]["task"]["publish"]["mode"] == "none"
     assert request["initial_parameters"]["task"]["tool"]["name"] == "pr-resolver"

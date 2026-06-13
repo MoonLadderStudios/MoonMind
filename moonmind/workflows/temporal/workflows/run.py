@@ -1733,9 +1733,23 @@ class MoonMindRunWorkflow:
             records,
             git_effect=git_effect,
         )
+        memory_effects = [
+            dict(record["memory"])
+            for record in records
+            if record.get("class") == "memory_update"
+            and isinstance(record.get("memory"), Mapping)
+        ]
         if records:
-            return {"records": records, "summary": summary}
-        return {"summary": summary} if summary else {}
+            payload: dict[str, Any] = {"records": records, "summary": summary}
+            if memory_effects:
+                payload["memory"] = memory_effects
+            return payload
+        if summary:
+            payload = {"summary": summary}
+            if memory_effects:
+                payload["memory"] = memory_effects
+            return payload
+        return {}
 
     def _step_execution_side_effect_summary(
         self,
@@ -2191,6 +2205,7 @@ class MoonMindRunWorkflow:
         effect_kind: str = "normal",
         reason: str | None = None,
         approved_workspace_roots: Sequence[str] = (),
+        memory_effect: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Classify and record one side effect for the current step attempt.
 
@@ -2213,6 +2228,7 @@ class MoonMindRunWorkflow:
             effect_kind=effect_kind,  # type: ignore[arg-type]
             reason=reason,
             approved_workspace_roots=approved_workspace_roots,
+            memory_effect=memory_effect,
         )
         self._step_side_effect_records.setdefault(logical_step_id, []).append(record)
         return record
@@ -9022,6 +9038,7 @@ class MoonMindRunWorkflow:
             "publishMode",
             "commitMessage",
             "allowed_tools",
+            "priority",
             "stepCount",
             "maxAttempts",
             "steps",
@@ -9032,7 +9049,11 @@ class MoonMindRunWorkflow:
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
         ):
-            param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
+            param_val = runtime_block.get(param_key)
+            if param_val is None:
+                param_val = node_inputs.get(param_key)
+            if param_val is None and workflow_parameters is not None:
+                param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
         profile_selector = self._build_profile_selector(

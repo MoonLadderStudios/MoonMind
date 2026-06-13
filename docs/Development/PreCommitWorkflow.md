@@ -89,8 +89,17 @@ pre-commit install
 1. Run `pre-commit run --all-files`
 2. Review and stage any files rewritten by the hooks
 3. If your change touches the frontend, run `npm run frontend:ci`; if `git diff --name-only ... | bash tools/check_openapi_affecting_changes.sh` succeeds, run `npm run contracts:check`
-4. Run `./tools/test_unit.sh` for the canonical unit-test pass
-5. Run targeted selector-equivalent suites when iterating on a narrow backend change:
+4. For every remaining MM-822+ Step Execution PR, record the Step Execution conformance gate before claiming merge readiness. The PR checklist must say either:
+   - the conformance suite was run with:
+
+     ```bash
+     python -m moonmind.workflows.temporal.step_execution_conformance
+     pytest tests/unit/workflows/temporal/test_step_executions.py tests/unit/workflows/temporal/test_step_checkpoints.py tests/integration/workflows/temporal/test_step_execution_manifest_evidence.py -q
+     ```
+
+   - or no fixture update was needed, with an explicit checklist note explaining why the PR does not change Step Execution behavior or fixture coverage.
+5. Run `./tools/test_unit.sh` for the canonical unit-test pass
+6. Run targeted selector-equivalent suites when iterating on a narrow backend change:
 
 ```bash
 python -m pytest tests/unit \
@@ -106,7 +115,7 @@ python -m pytest tests/unit/workflows/temporal \
   -q --durations=25
 ```
 
-6. Run `./tools/test_integration.sh` when Docker, compose, migrations, integration tests, or runtime infrastructure changed
+7. Run `./tools/test_integration.sh` when Docker, compose, migrations, integration tests, or runtime infrastructure changed
 
 If you prefer the Windows wrappers, `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already include step 1 for you.
 

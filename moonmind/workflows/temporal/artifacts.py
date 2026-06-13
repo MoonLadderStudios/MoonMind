@@ -2539,6 +2539,30 @@ class TemporalArtifactActivities:
         )
         return build_artifact_ref(artifact)
 
+    async def step_checkpoint_create(
+        self,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activity_runtime import (
+            TemporalCheckpointActivities,
+        )
+
+        return await TemporalCheckpointActivities(
+            artifact_service=self._service,
+        ).step_checkpoint_create(request or {})
+
+    async def step_checkpoint_validate(
+        self,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activity_runtime import (
+            TemporalCheckpointActivities,
+        )
+
+        return await TemporalCheckpointActivities(
+            artifact_service=self._service,
+        ).step_checkpoint_validate(request or {})
+
     async def artifact_publish_report_bundle(
         self,
         request: Mapping[str, Any] | None = None,
