@@ -65,6 +65,17 @@ from moonmind.schemas.temporal_activity_models import (
     ExternalAgentRunInput,
     PlanGenerateInput,
 )
+from moonmind.schemas.temporal_models import (
+    STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+    StepCheckpointCreateInput,
+    StepCheckpointValidateInput,
+    StepCheckpointValidateResult,
+    WorkspaceCheckpointCaptureInput,
+    WorkspaceCheckpointCaptureResult,
+    WorkspaceCheckpointEvidenceModel,
+    WorkspacePolicyApplyInput,
+    WorkspacePolicyApplyResult,
+)
 from moonmind.workflows.report_output import report_output_display_name
 from moonmind.workflows.executions.routing import _coerce_bool
 from moonmind.workflows.executions.prepared_context import (
@@ -188,6 +199,12 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 from moonmind.workflows.temporal.story_output_tools import (
     JIRA_CHECK_BLOCKERS_TOOL_NAME,
     JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
+)
+from moonmind.workflows.temporal.step_checkpoints import (
+    build_step_checkpoint_create_result,
+    build_step_checkpoint_payload,
+    checkpoint_kinds_for_workspace_policy,
+    validate_step_checkpoint_payload,
 )
 
 class CmdRes:
@@ -812,6 +829,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "artifact.pin": ("artifacts", "artifact_pin"),
     "artifact.unpin": ("artifacts", "artifact_unpin"),
     "artifact.lifecycle_sweep": ("artifacts", "artifact_lifecycle_sweep"),
+    "step_checkpoint.create": ("artifacts", "step_checkpoint_create"),
+    "step_checkpoint.validate": ("artifacts", "step_checkpoint_validate"),
     "manifest.compile": ("manifest", "manifest_compile"),
     "manifest.write_summary": ("manifest", "manifest_write_summary"),
     "plan.generate": ("plans", "plan_generate"),
@@ -822,6 +841,9 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "sandbox.apply_patch": ("sandbox", "sandbox_apply_patch"),
     "sandbox.run_command": ("sandbox", "sandbox_run_command"),
     "sandbox.run_tests": ("sandbox", "sandbox_run_tests"),
+    "workspace.capture_checkpoint": ("sandbox", "workspace_capture_checkpoint"),
+    "workspace.apply_policy": ("sandbox", "workspace_apply_policy"),
+    "workspace.classify_git_effect": ("sandbox", "workspace_classify_git_effect"),
     "provider_profile.list": ("artifacts", "provider_profile_list"),
     "provider_profile.ensure_manager": ("artifacts", "provider_profile_ensure_manager"),
     "provider_profile.reset_manager": ("artifacts", "provider_profile_reset_manager"),
@@ -2420,14 +2442,273 @@ class TemporalSandboxActivities:
         self,
         *,
         artifact_service: TemporalArtifactService | None = None,
+        artifact_store: Any | None = None,
         redactor: SecretRedactor | None = None,
         workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
+        self._artifact_store = artifact_store or InMemoryArtifactStore()
         self._redactor = redactor or SecretRedactor.from_environ()
         self._workspace_root = Path(
             workspace_root or settings.workflow.workspace_root
         ).resolve()
+
+    def _put_checkpoint_bytes(
+        self,
+        payload: bytes,
+        *,
+        content_type: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        artifact = self._artifact_store.put_bytes(
+            payload,
+            content_type=content_type,
+            metadata=dict(metadata or {}),
+        )
+        return _compact_artifact_ref_text(artifact)
+
+    def _pull_auth_diagnostics(self, context_ref: str | None) -> dict[str, Any]:
+        mode = "authenticated" if context_ref else "unavailable"
+        if os.environ.get("GHCR_PULL_USER") or os.environ.get("GHCR_PULL_TOKEN"):
+            mode = "authenticated"
+        return {
+            "mode": mode,
+            "diagnosticRefs": [context_ref] if context_ref else [],
+        }
+
+    def _provider_lease_refs(self, context_ref: str | None) -> list[str]:
+        return [context_ref] if context_ref else []
+
+    def _workspace_has_unsafe_skill_projection(self, workspace: Path) -> bool:
+        for relative in (".agents/skills", ".gemini/skills"):
+            candidate = workspace / relative
+            if not candidate.exists():
+                continue
+            try:
+                info = candidate.lstat()
+            except OSError:
+                continue
+            if info.st_uid == 0 or candidate.is_symlink():
+                return True
+        return False
+
+    def _workspace_has_traversal(self, workspace: Path) -> bool:
+        for path in workspace.rglob("*"):
+            try:
+                if path.is_symlink():
+                    target = path.resolve()
+                    if not target.is_relative_to(workspace):
+                        return True
+            except OSError:
+                return True
+        return False
+
+    async def workspace_capture_checkpoint(
+        self,
+        request: Mapping[str, Any] | WorkspaceCheckpointCaptureInput,
+    ) -> dict[str, Any]:
+        model = (
+            request
+            if isinstance(request, WorkspaceCheckpointCaptureInput)
+            else WorkspaceCheckpointCaptureInput.model_validate(request)
+        )
+        workspace = self._resolve_workspace(
+            model.workspace_path or model.workspace_root_ref or "",
+            must_exist=True,
+        )
+        pull_auth = self._pull_auth_diagnostics(model.pull_auth_context_ref)
+        provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
+
+        if model.kind == "worktree_archive" and (
+            self._workspace_has_traversal(workspace)
+            or self._workspace_has_unsafe_skill_projection(workspace)
+        ):
+            result = WorkspaceCheckpointCaptureResult(
+                status="unsafe",
+                summary="workspace archive refused unsafe materialization",
+                diagnosticRefs=[
+                    self._put_checkpoint_bytes(
+                        b"unsafe workspace materialization",
+                        content_type="text/plain",
+                        metadata={"artifact_kind": "checkpoint_diagnostic"},
+                    )
+                ],
+                cleanupRefs=[
+                    self._put_checkpoint_bytes(
+                        b"skill projection cleanup required",
+                        content_type="text/plain",
+                        metadata={"artifact_kind": "checkpoint_cleanup"},
+                    )
+                ],
+                pullAuth=pull_auth,
+                providerLeaseRefs=provider_refs,
+                failureCode="unsafe_checkpoint",
+            )
+            return result.model_dump(by_alias=True, mode="json")
+
+        try:
+            workspace_evidence = await self._capture_workspace_evidence(model, workspace)
+        except TemporalActivityRuntimeError:
+            raise
+        except Exception as exc:
+            result = WorkspaceCheckpointCaptureResult(
+                status="invalid",
+                summary=str(exc)[:1000],
+                pullAuth=pull_auth,
+                providerLeaseRefs=provider_refs,
+                failureCode="invalid_checkpoint",
+            )
+            return result.model_dump(by_alias=True, mode="json")
+
+        result = WorkspaceCheckpointCaptureResult(
+            status="captured",
+            workspace=workspace_evidence,
+            summary=f"{model.kind} checkpoint captured",
+            diagnosticRefs=[workspace_evidence.manifest_ref]
+            if workspace_evidence.manifest_ref
+            else [],
+            pullAuth=pull_auth,
+            providerLeaseRefs=provider_refs,
+        )
+        return result.model_dump(by_alias=True, mode="json")
+
+    async def _capture_workspace_evidence(
+        self,
+        model: WorkspaceCheckpointCaptureInput,
+        workspace: Path,
+    ) -> WorkspaceCheckpointEvidenceModel:
+        if model.kind == "git_patch":
+            diff_result = await _run_command(
+                ["git", "diff", "--binary", model.base_commit, "--"],
+                cwd=str(workspace),
+            )
+            patch_payload = diff_result.stdout.encode("utf-8")
+            patch_ref = self._put_checkpoint_bytes(
+                patch_payload,
+                content_type="text/x-diff",
+                metadata={"artifact_kind": "checkpoint_patch"},
+            )
+            manifest_ref = self._put_checkpoint_bytes(
+                _json_bytes(
+                    {
+                        "kind": "git_patch",
+                        "baseCommit": model.base_commit,
+                        "patchRef": patch_ref,
+                        "bytes": len(patch_payload),
+                    }
+                ),
+                content_type="application/json",
+                metadata={"artifact_kind": "checkpoint_manifest"},
+            )
+            return WorkspaceCheckpointEvidenceModel(
+                kind="git_patch",
+                baseCommit=model.base_commit,
+                patchRef=patch_ref,
+                manifestRef=manifest_ref,
+                includesUntracked=model.include_untracked,
+                includesIgnoredFiles=model.include_ignored_files,
+                createdAt=datetime.now(UTC),
+            )
+        if model.kind == "git_commit":
+            head = (
+                await _run_command(["git", "rev-parse", "HEAD"], cwd=str(workspace))
+            ).stdout.strip()
+            return WorkspaceCheckpointEvidenceModel(
+                kind="git_commit",
+                baseCommit=model.base_commit,
+                headCommit=head,
+                createdAt=datetime.now(UTC),
+            )
+        if model.kind == "ephemeral_workspace_ref":
+            return WorkspaceCheckpointEvidenceModel(
+                kind="ephemeral_workspace_ref",
+                workspaceRef=str(workspace),
+                createdAt=datetime.now(UTC),
+            )
+        if model.kind == "external_state_ref":
+            return WorkspaceCheckpointEvidenceModel(
+                kind="external_state_ref",
+                externalStateRef=model.workspace_root_ref or str(workspace),
+                createdAt=datetime.now(UTC),
+            )
+        if model.kind == "worktree_archive":
+            archive_ref = self._put_checkpoint_bytes(
+                b"worktree archive capture placeholder",
+                content_type="application/vnd.moonmind.worktree-archive",
+                metadata={"artifact_kind": "checkpoint_archive"},
+            )
+            manifest_ref = self._put_checkpoint_bytes(
+                _json_bytes({"kind": "worktree_archive", "archiveRef": archive_ref}),
+                content_type="application/json",
+                metadata={"artifact_kind": "checkpoint_manifest"},
+            )
+            return WorkspaceCheckpointEvidenceModel(
+                kind="worktree_archive",
+                archiveRef=archive_ref,
+                manifestRef=manifest_ref,
+                createdAt=datetime.now(UTC),
+            )
+        raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
+
+    async def workspace_apply_policy(
+        self,
+        request: Mapping[str, Any] | WorkspacePolicyApplyInput,
+    ) -> dict[str, Any]:
+        model = (
+            request
+            if isinstance(request, WorkspacePolicyApplyInput)
+            else WorkspacePolicyApplyInput.model_validate(request)
+        )
+        workspace_payload = dict(model.checkpoint.get("workspace") or {})
+        kind = workspace_payload.get("kind")
+        accepted = checkpoint_kinds_for_workspace_policy(model.workspace_policy)
+        if kind not in accepted:
+            result = WorkspacePolicyApplyResult(
+                status="rejected",
+                workspaceRef=model.target_workspace_ref,
+                appliedCheckpointRef=model.checkpoint_ref,
+                providerLeaseRefs=self._provider_lease_refs(
+                    model.provider_lease_context_ref
+                ),
+                summary="checkpoint kind does not satisfy workspace policy",
+                failureCode="policy_incompatible",
+            )
+            return result.model_dump(by_alias=True, mode="json")
+        result = WorkspacePolicyApplyResult(
+            status="prepared",
+            workspaceRef=model.target_workspace_ref,
+            appliedCheckpointRef=model.checkpoint_ref,
+            providerLeaseRefs=self._provider_lease_refs(model.provider_lease_context_ref),
+            summary="workspace policy prepared",
+        )
+        return result.model_dump(by_alias=True, mode="json")
+
+    async def workspace_classify_git_effect(
+        self,
+        request: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        payload = _coerce_activity_request(
+            request, activity_type="workspace.classify_git_effect"
+        )
+        workspace = self._resolve_workspace(payload.get("workspacePath"), must_exist=True)
+        status = (
+            await _run_command(["git", "status", "--porcelain"], cwd=str(workspace))
+        ).stdout
+        disposition = "clean" if not status.strip() else "dirty"
+        refs: list[str] = []
+        if status.strip():
+            refs.append(
+                self._put_checkpoint_bytes(
+                    status.encode("utf-8"),
+                    content_type="text/plain",
+                    metadata={"artifact_kind": "git_status"},
+                )
+            )
+        return {
+            "status": disposition,
+            "summary": f"git workspace is {disposition}",
+            "diagnosticRefs": refs,
+        }
 
     def _resolve_workspace(
         self, workspace_ref: str | Path, *, must_exist: bool
@@ -10388,6 +10669,166 @@ class TemporalReviewActivities:
     ) -> dict[str, Any]:
         from moonmind.workflows.temporal.activities.step_review import step_review_activity
         return await step_review_activity(payload)
+
+
+def _compact_artifact_ref_text(artifact: Any) -> str:
+    ref = getattr(artifact, "artifact_ref", None)
+    if ref:
+        return str(ref)
+    artifact_id = getattr(artifact, "artifact_id", None)
+    if artifact_id:
+        return str(artifact_id)
+    return str(artifact)
+
+
+def _json_bytes(payload: Mapping[str, Any] | list[Any]) -> bytes:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+class TemporalCheckpointActivities:
+    """Artifact-fleet activities for canonical Step Execution checkpoints."""
+
+    def __init__(
+        self,
+        *,
+        artifact_store: Any | None = None,
+        artifact_service: TemporalArtifactService | None = None,
+        principal: str = "system",
+    ) -> None:
+        self._artifact_store = artifact_store or InMemoryArtifactStore()
+        self._artifact_service = artifact_service
+        self._principal = principal
+
+    async def _put_bytes(
+        self,
+        payload: bytes,
+        *,
+        content_type: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
+        if self._artifact_service is not None:
+            artifact, _upload = await self._artifact_service.create(
+                principal=self._principal,
+                content_type=content_type,
+                metadata_json=dict(metadata or {}),
+            )
+            completed = await self._artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=self._principal,
+                payload=payload,
+                content_type=content_type,
+            )
+            return _compact_artifact_ref_text(build_artifact_ref(completed))
+        artifact = self._artifact_store.put_bytes(
+            payload,
+            content_type=content_type,
+            metadata=dict(metadata or {}),
+        )
+        return _compact_artifact_ref_text(artifact)
+
+    async def step_checkpoint_create(
+        self,
+        request: Mapping[str, Any] | StepCheckpointCreateInput,
+    ) -> dict[str, Any]:
+        model = (
+            request
+            if isinstance(request, StepCheckpointCreateInput)
+            else StepCheckpointCreateInput.model_validate(request)
+        )
+        payload = build_step_checkpoint_payload(
+            identity=model.identity,
+            boundary=model.boundary,
+            task_input_snapshot_ref=model.task_input_snapshot_ref,
+            workspace=model.workspace.model_dump(by_alias=True, mode="json"),
+            created_at=model.created_at,
+            plan_ref=model.plan_ref,
+            plan_digest=model.plan_digest,
+            prepared_input_refs=model.prepared_input_refs,
+            step_outputs=model.step_outputs,
+        )
+        checkpoint_ref = await self._put_bytes(
+            _json_bytes(payload),
+            content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            metadata={
+                "artifact_kind": "step_execution_checkpoint",
+                "checkpoint_id": payload["checkpointId"],
+            },
+        )
+        return build_step_checkpoint_create_result(
+            checkpoint_ref=checkpoint_ref,
+            checkpoint_id=payload["checkpointId"],
+            workspace_kind=model.workspace.kind,
+            diagnostic_refs=model.diagnostic_refs,
+            idempotency_key=model.idempotency_key,
+        )
+
+    async def step_checkpoint_validate(
+        self,
+        request: Mapping[str, Any] | StepCheckpointValidateInput,
+    ) -> dict[str, Any]:
+        model = (
+            request
+            if isinstance(request, StepCheckpointValidateInput)
+            else StepCheckpointValidateInput.model_validate(request)
+        )
+        checkpoint_id = "unknown-checkpoint"
+        if isinstance(model.checkpoint, Mapping):
+            checkpoint_id = str(model.checkpoint.get("checkpointId") or checkpoint_id)
+
+        for refs, code, message in (
+            (model.unsafe_artifact_refs, "unsafe_checkpoint", "checkpoint evidence is unsafe"),
+            (
+                model.unsupported_artifact_refs,
+                "unsupported_checkpoint_kind",
+                "checkpoint kind is unsupported",
+            ),
+            (
+                model.workspace_incompatible_refs,
+                "workspace_incompatible",
+                "checkpoint evidence is workspace-incompatible",
+            ),
+        ):
+            if refs:
+                result = StepCheckpointValidateResult(
+                    valid=False,
+                    failureCode=code,
+                    message=message,
+                    checkpointId=checkpoint_id,
+                    checkpointRef=model.checkpoint_ref,
+                    diagnosticRefs=list(refs),
+                )
+                return result.model_dump(by_alias=True, mode="json")
+
+        if not isinstance(model.checkpoint, Mapping) or "contentType" not in model.checkpoint:
+            missing_refs = list(model.required_artifact_refs)
+            if missing_refs:
+                result = StepCheckpointValidateResult(
+                    valid=False,
+                    failureCode="artifact_missing",
+                    message=f"checkpoint missing required artifact ref {missing_refs[0]}",
+                    checkpointId=checkpoint_id,
+                    checkpointRef=model.checkpoint_ref,
+                    diagnosticRefs=missing_refs,
+                )
+                return result.model_dump(by_alias=True, mode="json")
+
+        result = validate_step_checkpoint_payload(
+            model.checkpoint,
+            expected_source=model.expected_source,
+            expected_task_input_snapshot_ref=model.expected_task_input_snapshot_ref,
+            expected_plan_ref=model.expected_plan_ref,
+            expected_plan_digest=model.expected_plan_digest,
+            workspace_policy=model.workspace_policy,
+            required_artifact_refs=model.required_artifact_refs,
+            unauthorized_artifact_refs=model.unauthorized_artifact_refs,
+            corrupted_artifact_refs=model.corrupted_artifact_refs,
+            expected_workspace=model.expected_workspace,
+            checkpoint_ref=model.checkpoint_ref,
+        )
+        return StepCheckpointValidateResult(
+            **result.model_dump(by_alias=True),
+            diagnosticRefs=[],
+        ).model_dump(by_alias=True, mode="json")
 
 def build_activity_bindings(
     catalog: TemporalActivityCatalog,
