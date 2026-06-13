@@ -90,7 +90,7 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     assert attempt_context["contextBundleRef"] == (
         f"execution-context-bundle://{attempt_context['contextBundleDigest']}"
     )
-    assert attempt_context["builderVersion"] == "execution-context-builder-v1"
+    assert attempt_context["builderVersion"] == "execution-context-builder-v2"
     assert projection["context"]["contextBundleDigest"] == (
         attempt_context["contextBundleDigest"]
     )

@@ -718,7 +718,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         "sha256:"
     )
     assert writes[0]["payload"]["context"]["builderVersion"] == (
-        "execution-context-builder-v1"
+        "execution-context-builder-v2"
     )
     assert writes[0]["payload"]["execution"] == {
         "runtimeContextPolicy": "fresh_agent_run"
