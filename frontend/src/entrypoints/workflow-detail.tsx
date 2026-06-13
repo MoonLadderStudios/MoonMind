@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
@@ -3332,6 +3332,189 @@ function InterventionPanel({
   );
 }
 
+type WorkflowActionMenuItem = {
+  id: string;
+  label: string;
+  href?: string;
+  danger?: boolean;
+  disabledReason?: string | null;
+  onSelect?: () => void;
+};
+
+function WorkflowActionsMenu({
+  items,
+}: {
+  items: WorkflowActionMenuItem[];
+}) {
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const itemRefs = useRef<Array<HTMLButtonElement | HTMLAnchorElement | null>>([]);
+  const availableIndexes = items
+    .map((item, index) => (item.disabledReason ? -1 : index))
+    .filter((index) => index >= 0);
+
+  const closeMenu = () => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+  const focusItem = (index: number) => {
+    const nextIndex = items[index] ? index : availableIndexes[0] ?? 0;
+    setActiveIndex(nextIndex);
+    requestAnimationFrame(() => itemRefs.current[nextIndex]?.focus());
+  };
+  const selectItem = (item: WorkflowActionMenuItem) => {
+    if (item.disabledReason) return;
+    item.onSelect?.();
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const preferredIndex = availableIndexes.includes(activeIndex)
+      ? activeIndex
+      : availableIndexes[0] ?? 0;
+    setActiveIndex(preferredIndex);
+  }, [activeIndex, availableIndexes, open]);
+
+  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setOpen(true);
+      focusItem(availableIndexes[0] ?? 0);
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setOpen(true);
+      focusItem(availableIndexes[0] ?? 0);
+    }
+  };
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMenu();
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (availableIndexes.length === 0) return;
+      const currentAvailableIndex = Math.max(0, availableIndexes.indexOf(activeIndex));
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      const next =
+        availableIndexes[
+          (currentAvailableIndex + direction + availableIndexes.length) % availableIndexes.length
+        ] ?? availableIndexes[0] ?? 0;
+      focusItem(next);
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      const item = items[activeIndex];
+      if (item) selectItem(item);
+    }
+  };
+
+  return (
+    <div className="td-workflow-actions-menu" ref={rootRef}>
+      <button
+        type="button"
+        ref={triggerRef}
+        className="secondary td-workflow-actions-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => {
+          const nextOpen = !open;
+          setOpen(nextOpen);
+          if (nextOpen) {
+            const firstAvailable = availableIndexes[0] ?? 0;
+            setActiveIndex(firstAvailable);
+          }
+        }}
+        onKeyDown={onTriggerKeyDown}
+      >
+        Workflow actions
+      </button>
+      {open ? (
+        <div
+          className="td-workflow-actions-popover"
+          role="menu"
+          aria-label="Workflow actions"
+          onKeyDown={onMenuKeyDown}
+        >
+          {items.length === 0 ? (
+            <p className="td-workflow-actions-empty">No workflow actions are currently available.</p>
+          ) : (
+            items.map((item, index) => {
+              const commonProps = {
+                role: 'menuitem',
+                tabIndex: index === activeIndex ? 0 : -1,
+                'aria-disabled': item.disabledReason ? true : undefined,
+                className: [
+                  'td-workflow-actions-item',
+                  item.danger ? 'td-workflow-actions-item-danger' : '',
+                  item.disabledReason ? 'td-workflow-actions-item-disabled' : '',
+                ].filter(Boolean).join(' '),
+                ref: (node: HTMLButtonElement | HTMLAnchorElement | null) => {
+                  itemRefs.current[index] = node;
+                },
+                onFocus: () => setActiveIndex(index),
+              };
+              const content = (
+                <>
+                  <span>{item.label}</span>
+                  {item.disabledReason ? (
+                    <span className="td-workflow-actions-disabled-reason">
+                      {item.label} unavailable: {item.disabledReason}
+                    </span>
+                  ) : null}
+                </>
+              );
+              if (item.href && !item.disabledReason) {
+                return (
+                  <a
+                    key={item.id}
+                    {...commonProps}
+                    href={item.href}
+                    onClick={() => {
+                      item.onSelect?.();
+                      setOpen(false);
+                    }}
+                  >
+                    {content}
+                  </a>
+                );
+              }
+              return (
+                <button
+                  key={item.id}
+                  {...commonProps}
+                  type="button"
+                  onClick={() => selectItem(item)}
+                >
+                  {content}
+                </button>
+              );
+            })
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function StaticLogPanel({
   apiBase,
   agentRunId,
@@ -5209,6 +5392,187 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         (execution?.interventionAudit?.length ?? 0) > 0
       ),
   );
+  const actionDisabledReason = (key: string): string | null => {
+    const reason = actions?.disabledReasons?.[key];
+    return reason ? formatStatusLabel(reason) : null;
+  };
+  const workflowActionMenuItems = (() => {
+    if (!actionsOn || !actions) return [];
+    const items: WorkflowActionMenuItem[] = [];
+    const addButton = ({
+      id,
+      label,
+      available,
+      disabledReason,
+      danger,
+      onSelect,
+    }: {
+      id: string;
+      label: string;
+      available: boolean;
+      disabledReason?: string | null;
+      danger?: boolean;
+      onSelect: () => void;
+    }) => {
+      if (available) {
+        items.push({ id, label, ...(danger ? { danger: true } : {}), onSelect });
+      } else if (disabledReason) {
+        items.push({ id, label, ...(danger ? { danger: true } : {}), disabledReason });
+      }
+    };
+    const addLink = ({
+      id,
+      label,
+      href,
+      available,
+      disabledReason,
+      onSelect,
+    }: {
+      id: string;
+      label: string;
+      href: string;
+      available: boolean;
+      disabledReason?: string | null;
+      onSelect: () => void;
+    }) => {
+      if (available && href) {
+        items.push({ id, label, href, onSelect });
+      } else if (disabledReason) {
+        items.push({ id, label, disabledReason });
+      }
+    };
+
+    addButton({
+      id: 'rename',
+      label: 'Rename',
+      available: Boolean(actions.canSetTitle),
+      disabledReason: actionDisabledReason('canSetTitle'),
+      onSelect: onRename,
+    });
+    if (taskEditingOn) {
+      addLink({
+        id: 'edit-task',
+        label: 'Edit task',
+        href: editHref,
+        available: Boolean(canShowEditWorkflow && editHref),
+        disabledReason: editTaskUnavailableReason ? formatStatusLabel(editTaskUnavailableReason) : null,
+        onSelect: () => {
+          if (busy) return;
+          recordTemporalTaskEditingClientEvent({
+            event: 'detail_edit_click',
+            mode: 'detail',
+            workflowId,
+          });
+        },
+      });
+      addLink({
+        id: 'compare-run',
+        label: 'Compare run',
+        href: compareHref,
+        available: Boolean(compareHref),
+        disabledReason: actionDisabledReason('canEditForRerun'),
+        onSelect: () => {
+          if (busy) return;
+          recordTemporalTaskEditingClientEvent({
+            event: 'detail_compare_click',
+            mode: 'detail',
+            workflowId,
+          });
+        },
+      });
+      addButton({
+        id: 'rerun',
+        label: 'Rerun',
+        available: Boolean(actions.canRerun),
+        disabledReason: rerunUnavailableReason ? formatStatusLabel(rerunUnavailableReason) : null,
+        onSelect: onRerun,
+      });
+      addButton({
+        id: 'resume-from-failed-step',
+        label: 'Resume from failed step',
+        available: Boolean(actions.canResumeFromFailedStep),
+        disabledReason: actionDisabledReason('canResumeFromFailedStep'),
+        onSelect: onResumeFromFailedStep,
+      });
+      if (actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0) {
+        addButton({
+          id: 'recover-from-selected-step',
+          label: 'Recover from selected step',
+          available: Boolean(selectedRecoveryStep?.eligible),
+          disabledReason: selectedRecoveryStep?.reason
+            ? formatStatusLabel(selectedRecoveryStep.reason)
+            : 'selected step is not eligible',
+          onSelect: onRecoverFromSelectedStep,
+        });
+      }
+    }
+    addButton({
+      id: 'pause',
+      label: 'Pause',
+      available: Boolean(actions.canPause),
+      disabledReason: actionDisabledReason('canPause'),
+      onSelect: onPause,
+    });
+    addButton({
+      id: 'resume',
+      label: 'Resume',
+      available: Boolean(actions.canResume),
+      disabledReason: actionDisabledReason('canResume'),
+      onSelect: onResume,
+    });
+    addButton({
+      id: 'approve',
+      label: 'Approve',
+      available: Boolean(actions.canApprove),
+      disabledReason: actionDisabledReason('canApprove'),
+      onSelect: onApprove,
+    });
+    addButton({
+      id: 'reject',
+      label: 'Reject',
+      available: Boolean(actions.canReject),
+      disabledReason: actionDisabledReason('canReject'),
+      danger: true,
+      onSelect: onReject,
+    });
+    addButton({
+      id: 'cancel',
+      label: 'Cancel',
+      available: Boolean(actions.canCancel),
+      disabledReason: actionDisabledReason('canCancel'),
+      danger: true,
+      onSelect: onCancel,
+    });
+    addButton({
+      id: 'send-message',
+      label: 'Send Message',
+      available: Boolean(actions.canSendMessage),
+      disabledReason: actionDisabledReason('canSendMessage'),
+      onSelect: () => {
+        const message = window.prompt('Operator message', '');
+        if (message?.trim()) onSendMessage(message.trim());
+      },
+    });
+    addButton({
+      id: 'bypass-dependency-wait',
+      label: 'Bypass Dependency Wait',
+      available: Boolean(actions.canBypassDependencies),
+      disabledReason: actionDisabledReason('canBypassDependencies'),
+      danger: true,
+      onSelect: onBypassDependencies,
+    });
+    addButton({
+      id: 'create-remediation-task',
+      label: 'Create remediation task',
+      available: canCreateRemediation,
+      disabledReason: null,
+      onSelect: () => {
+        setActionError(null);
+        createRemediationMutation.mutate();
+      },
+    });
+    return items;
+  })();
   const toggleStep = (logicalStepId: string) => {
     setExpandedSteps((prev) => ({
       ...prev,
@@ -5252,6 +5616,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           current={detailSubroute}
           search={search}
         />
+      ) : null}
+
+      {actionsOn && actions ? (
+        <section className="td-workflow-actions-surface" aria-label="Workflow action controls">
+          <WorkflowActionsMenu items={workflowActionMenuItems} />
+        </section>
       ) : null}
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
