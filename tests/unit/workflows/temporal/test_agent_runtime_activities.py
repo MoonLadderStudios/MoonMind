@@ -4004,7 +4004,7 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
 
 
 @pytest.mark.asyncio
-async def test_agent_runtime_prepare_turn_instructions_cleans_projection_for_verifier_step(
+async def test_agent_runtime_prepare_turn_instructions_materializes_verifier_skill_snapshot(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -4012,19 +4012,51 @@ async def test_agent_runtime_prepare_turn_instructions_cleans_projection_for_ver
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(managed_root))
     job_root = managed_root / "job-verify"
     workspace = job_root / "repo"
-    active_root = job_root / "runtime" / "skills_active" / "skillset-verify"
-    active_root.mkdir(parents=True)
-    (active_root / "_manifest.json").write_text(
-        '{"snapshot_id": "skillset-verify"}\n',
+    workspace.mkdir(parents=True)
+    stale_root = job_root / "runtime" / "skills_active" / "skillset-stale"
+    stale_root.mkdir(parents=True)
+    (stale_root / "_manifest.json").write_text(
+        '{"snapshot_id": "skillset-stale"}\n',
         encoding="utf-8",
     )
     agents_projection = workspace / ".agents" / "skills"
     gemini_projection = workspace / ".gemini" / "skills"
     agents_projection.parent.mkdir(parents=True)
     gemini_projection.parent.mkdir(parents=True)
-    agents_projection.symlink_to(active_root)
-    gemini_projection.symlink_to(active_root)
-    activities = TemporalAgentRuntimeActivities(artifact_service=_StaticArtifactService({}))
+    agents_projection.symlink_to(stale_root)
+    gemini_projection.symlink_to(stale_root)
+    skill_body = (
+        b"---\n"
+        b"name: moonspec-verify\n"
+        b"description: Verify MoonSpec implementation evidence\n"
+        b"---\n"
+        b"Verifier instructions.\n"
+    )
+    resolved_skillset = ResolvedSkillSet(
+        snapshot_id="skillset-verify",
+        resolved_at=datetime.now(UTC),
+        skills=[
+            ResolvedSkillEntry(
+                skill_name="moonspec-verify",
+                version="1.0.0",
+                content_ref="art-moonspec-verify-body",
+                content_digest="sha256:" + hashlib.sha256(skill_body).hexdigest(),
+                provenance=AgentSkillProvenance(
+                    source_kind=AgentSkillSourceKind.BUILT_IN
+                ),
+            )
+        ],
+    )
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_StaticArtifactService(
+            {
+                "art-moonspec-verify-snapshot": resolved_skillset.model_dump_json().encode(
+                    "utf-8"
+                ),
+                "art-moonspec-verify-body": skill_body,
+            }
+        )
+    )
 
     result = await activities.agent_runtime_prepare_turn_instructions(
         {
@@ -4033,6 +4065,7 @@ async def test_agent_runtime_prepare_turn_instructions_cleans_projection_for_ver
                 "agentId": "codex",
                 "correlationId": "corr-verify",
                 "idempotencyKey": "idem-verify",
+                "resolvedSkillsetRef": "art-moonspec-verify-snapshot",
                 "parameters": {
                     "instructions": "Run final verification.",
                     "metadata": {
@@ -4046,12 +4079,18 @@ async def test_agent_runtime_prepare_turn_instructions_cleans_projection_for_ver
         }
     )
 
+    assert result.startswith("Active MoonMind skill snapshot:")
     assert "Run final verification." in result
-    assert "Active MoonMind skill snapshot:" not in result
-    assert not agents_projection.exists()
-    assert not agents_projection.is_symlink()
-    assert not gemini_projection.exists()
-    assert not gemini_projection.is_symlink()
+    assert ".agents/skills/moonspec-verify/SKILL.md" in result
+    assert agents_projection.is_symlink()
+    assert agents_projection.resolve() == (
+        job_root / "runtime" / "skills_active" / "skillset-verify"
+    ).resolve()
+    assert gemini_projection.resolve() == stale_root.resolve()
+    assert (agents_projection / "moonspec-verify" / "SKILL.md").read_bytes() == skill_body
+    manifest = json.loads((agents_projection / "_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["snapshot_id"] == "skillset-verify"
+    assert manifest["skills"][0]["name"] == "moonspec-verify"
 
 
 @pytest.mark.asyncio
