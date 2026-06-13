@@ -113,6 +113,13 @@ def test_registry_validates_request_and_derives_required_labels(tmp_path: Path) 
         "moonmind.workload_access": "profile",
         "moonmind.workflow_docker_mode": "profiles",
     }
+
+def test_registry_includes_runtime_id_label_when_supplied(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+
+    validated = registry.validate_request(_request(runtimeId="pentestgpt"))
+
+    assert validated.ownership.labels["moonmind.runtime_id"] == "pentestgpt"
     assert validated.container_name == "mm-workload-task-1-step-test-1"
 
 def test_registry_loads_yaml_profiles(tmp_path: Path) -> None:
