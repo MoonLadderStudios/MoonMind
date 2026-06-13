@@ -864,6 +864,8 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "integrations",
         "merge_automation_complete_post_merge_jira",
     ),
+    "memory.evaluate_proposals": ("integrations", "memory_evaluate_proposals"),
+    "memory.apply_policy": ("integrations", "memory_apply_policy"),
     "agent_runtime.build_launch_context": (
         "agent_runtime",
         "agent_runtime_build_launch_context",
@@ -3045,6 +3047,54 @@ class TemporalIntegrationActivities:
             else CodexCloudAgentAdapter(
                 client_factory=self._codex_cloud_client_factory
             )
+        )
+
+    async def memory_evaluate_proposals(
+        self,
+        *,
+        proposal_refs: list[str],
+        source: dict[str, Any],
+        terminal_disposition: str | None,
+        publication_gate: dict[str, Any] | None,
+        requested_target: str,
+        policy_decision: str | None = None,
+        reason: str | None = None,
+        evidence_refs: list[str] | None = None,
+    ) -> dict[str, Any]:
+        from moonmind.memory.services import evaluate_memory_proposals
+
+        return evaluate_memory_proposals(
+            proposal_refs=proposal_refs,
+            source=source,
+            terminal_disposition=terminal_disposition,
+            publication_gate=publication_gate,
+            requested_target=requested_target,
+            policy_decision=policy_decision,
+            reason=reason,
+            evidence_refs=evidence_refs,
+        )
+
+    async def memory_apply_policy(
+        self,
+        *,
+        proposal_ref: str,
+        decision_ref: str,
+        source: dict[str, Any],
+        target: str,
+        decision: str,
+        result_ref: str | None = None,
+        gate_status: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        from moonmind.memory.services import apply_memory_policy
+
+        return apply_memory_policy(
+            proposal_ref=proposal_ref,
+            decision_ref=decision_ref,
+            source=source,
+            target=target,
+            decision=decision,
+            result_ref=result_ref,
+            gate_status=gate_status,
         )
 
     @staticmethod

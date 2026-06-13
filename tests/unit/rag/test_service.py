@@ -604,6 +604,32 @@ def test_memory_policy_boundary_returns_compact_decision_refs() -> None:
     assert result["decisions"][0]["target"] == "memory://run"
 
 
+def test_memory_policy_blocks_repo_application_decision_for_run_memory_target() -> None:
+    source = {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "executionOrdinal": 1,
+    }
+
+    result = evaluate_memory_proposals(
+        proposal_refs=["artifact://memory/proposal-1"],
+        source=source,
+        terminal_disposition="accepted",
+        publication_gate={"passed": True, "evidenceRef": "artifact://gate/publication"},
+        requested_target="memory://run",
+        policy_decision="approve_repo_application",
+        reason="policy_approved",
+        evidence_refs=["artifact://memory/proposal-1"],
+    )
+
+    assert result["decisions"][0]["decision"] == "blocked"
+    assert (
+        result["decisions"][0]["reason"]
+        == "memory_target_requires_run_context_decision"
+    )
+
+
 def test_memory_apply_policy_fails_closed_for_missing_decision_ref() -> None:
     source = {
         "workflowId": "wf-1",
@@ -623,6 +649,34 @@ def test_memory_apply_policy_fails_closed_for_missing_decision_ref() -> None:
     assert result["outcome"] == "blocked"
     assert result["applicationResultRef"] == "artifact://memory/application-1"
     assert result["failureReason"] == "missing_decision_ref"
+
+
+def test_memory_apply_policy_fails_closed_for_repo_target_without_accepted_gates() -> None:
+    source = {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "executionOrdinal": 1,
+    }
+
+    result = apply_memory_policy(
+        proposal_ref="artifact://memory/proposal-1",
+        decision_ref="artifact://memory/decision-1",
+        source=source,
+        target="repo://AGENTS.md",
+        decision="approve_repo_application",
+        gate_status={
+            "terminalDisposition": "accepted",
+            "publicationGate": False,
+            "policyGate": True,
+        },
+    )
+
+    assert result["outcome"] == "blocked"
+    assert (
+        result["failureReason"]
+        == "applied_repo_memory_result_requires_accepted_gates"
+    )
 
 
 def test_add_or_update_long_term_memory_skips_when_disabled() -> None:

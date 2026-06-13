@@ -71,6 +71,9 @@ def evaluate_memory_proposals(
     }:
         decision = "blocked"
         resolved_reason = "unknown_policy_decision"
+    elif not repo_target and decision == "approve_repo_application":
+        decision = "blocked"
+        resolved_reason = "memory_target_requires_run_context_decision"
     elif decision == "approve_repo_application" and (
         terminal_disposition != "accepted" or not publication_passed
     ):
@@ -136,12 +139,22 @@ def apply_memory_policy(
     source_identity = StepExecutionIdentityModel.model_validate(source)
     proposal = str(proposal_ref or "").strip()
     decision_artifact_ref = str(decision_ref or "").strip()
+    repo_target = str(target or "").strip().startswith("repo://")
+    gate = dict(gate_status or {})
+    gates_passed = (
+        gate.get("terminalDisposition") == "accepted"
+        and gate.get("publicationGate") is True
+        and gate.get("policyGate", True) is True
+    )
     if not decision_artifact_ref:
         outcome = "blocked"
         failure_reason = "missing_decision_ref"
     elif decision not in {"accept_for_run_context", "approve_repo_application"}:
         outcome = "blocked"
         failure_reason = "policy_decision_not_approving"
+    elif decision == "approve_repo_application" and repo_target and not gates_passed:
+        outcome = "blocked"
+        failure_reason = "applied_repo_memory_result_requires_accepted_gates"
     else:
         outcome = "applied"
         failure_reason = None
@@ -162,7 +175,7 @@ def apply_memory_policy(
         outcome=outcome,
         resultRef=resolved_result_ref,
         failureReason=failure_reason,
-        gateStatus=gate_status or {},
+        gateStatus=gate,
         createdAt=datetime.now(UTC),
     )
     return {

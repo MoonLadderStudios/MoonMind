@@ -2888,6 +2888,62 @@ async def test_build_activity_bindings_filters_to_requested_fleet(tmp_path: Path
                 for binding in bindings
             )
 
+async def test_build_activity_bindings_resolves_memory_integration_handlers(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            catalog = build_default_activity_catalog()
+            bindings = {
+                binding.activity_type: binding
+                for binding in build_activity_bindings(
+                    catalog,
+                    integration_activities=TemporalIntegrationActivities(
+                        artifact_service=service,
+                        client_factory=_FakeJulesClient,
+                    ),
+                    fleets=(INTEGRATIONS_FLEET,),
+                )
+            }
+
+            source = {
+                "workflowId": "wf-1",
+                "runId": "run-1",
+                "logicalStepId": "implement",
+                "executionOrdinal": 1,
+            }
+            decision_result = await bindings["memory.evaluate_proposals"].handler(
+                {
+                    "proposal_refs": ["artifact://memory/proposal-1"],
+                    "source": source,
+                    "terminal_disposition": "accepted",
+                    "publication_gate": {"passed": True},
+                    "requested_target": "memory://run",
+                    "policy_decision": "accept_for_run_context",
+                }
+            )
+            application_result = await bindings["memory.apply_policy"].handler(
+                {
+                    "proposal_ref": "artifact://memory/proposal-1",
+                    "decision_ref": "artifact://memory/decision-1",
+                    "source": source,
+                    "target": "repo://AGENTS.md",
+                    "decision": "approve_repo_application",
+                    "gate_status": {"terminalDisposition": "accepted"},
+                }
+            )
+
+            assert decision_result["decisionRefs"] == ["artifact://memory/decision-1"]
+            assert application_result["outcome"] == "blocked"
+            assert (
+                application_result["failureReason"]
+                == "applied_repo_memory_result_requires_accepted_gates"
+            )
+
 async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
     tmp_path: Path,
 ):
