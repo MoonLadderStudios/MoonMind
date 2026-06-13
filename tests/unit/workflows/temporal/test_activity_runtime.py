@@ -44,15 +44,23 @@ from moonmind.workflows.temporal import activity_runtime as activity_runtime_mod
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
+    ARTIFACTS_TASK_QUEUE,
     DEPLOYMENT_FLEET,
     INTEGRATIONS_FLEET,
     SANDBOX_FLEET,
+    SANDBOX_TASK_QUEUE,
+    TemporalActivityCatalog,
+    TemporalActivityDefinition,
+    TemporalActivityRetries,
+    TemporalActivityTimeouts,
+    TemporalWorkerFleet,
     build_default_activity_catalog,
 )
 from moonmind.workflows.temporal.activity_runtime import (
     SandboxCommandResult,
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
+    TemporalCheckpointActivities,
     TemporalIntegrationActivities,
     TemporalManifestActivities,
     TemporalPlanActivities,
@@ -84,6 +92,147 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workloads.registry import RunnerProfileRegistry
 
 pytestmark = [pytest.mark.asyncio]
+
+
+async def test_checkpoint_activity_runtime_bindings_are_registered() -> None:
+    catalog = TemporalActivityCatalog(
+        activities=(
+            TemporalActivityDefinition(
+                "step_checkpoint.create",
+                "step_checkpoint",
+                "artifacts",
+                ARTIFACTS_TASK_QUEUE,
+                ARTIFACTS_FLEET,
+                TemporalActivityTimeouts(10, 20),
+                TemporalActivityRetries(1, 10),
+            ),
+            TemporalActivityDefinition(
+                "step_checkpoint.validate",
+                "step_checkpoint",
+                "artifacts",
+                ARTIFACTS_TASK_QUEUE,
+                ARTIFACTS_FLEET,
+                TemporalActivityTimeouts(10, 20),
+                TemporalActivityRetries(1, 10),
+            ),
+            TemporalActivityDefinition(
+                "workspace.capture_checkpoint",
+                "workspace",
+                "sandbox",
+                SANDBOX_TASK_QUEUE,
+                SANDBOX_FLEET,
+                TemporalActivityTimeouts(10, 20),
+                TemporalActivityRetries(1, 10),
+            ),
+            TemporalActivityDefinition(
+                "workspace.apply_policy",
+                "workspace",
+                "sandbox",
+                SANDBOX_TASK_QUEUE,
+                SANDBOX_FLEET,
+                TemporalActivityTimeouts(10, 20),
+                TemporalActivityRetries(1, 10),
+            ),
+            TemporalActivityDefinition(
+                "workspace.classify_git_effect",
+                "workspace",
+                "sandbox",
+                SANDBOX_TASK_QUEUE,
+                SANDBOX_FLEET,
+                TemporalActivityTimeouts(10, 20),
+                TemporalActivityRetries(1, 10),
+            ),
+        ),
+        fleets=(
+            TemporalWorkerFleet(
+                ARTIFACTS_FLEET,
+                (ARTIFACTS_TASK_QUEUE,),
+                ("artifacts",),
+                ("artifact_store",),
+                "test",
+                ("step_checkpoint.create", "step_checkpoint.validate"),
+            ),
+            TemporalWorkerFleet(
+                SANDBOX_FLEET,
+                (SANDBOX_TASK_QUEUE,),
+                ("sandbox",),
+                ("workspace",),
+                "test",
+                (
+                    "workspace.capture_checkpoint",
+                    "workspace.apply_policy",
+                    "workspace.classify_git_effect",
+                ),
+            ),
+        ),
+    )
+    class _ArtifactImplementation:
+        async def __getattr__(self, _name: str):
+            raise AttributeError(f"unexpected dynamic lookup: {_name}")
+
+        async def artifact_create(self):
+            pass
+
+        async def artifact_write_complete(self):
+            pass
+
+        async def artifact_publish_report_bundle(self):
+            pass
+
+        async def artifact_read(self):
+            pass
+
+        async def execution_dependency_status_snapshot(self):
+            pass
+
+        async def execution_record_terminal_state(self):
+            pass
+
+        async def artifact_list_for_execution(self):
+            pass
+
+        async def artifact_compute_preview(self):
+            pass
+
+        async def artifact_link(self):
+            pass
+
+        async def artifact_pin(self):
+            pass
+
+        async def artifact_unpin(self):
+            pass
+
+        async def artifact_lifecycle_sweep(self):
+            pass
+
+        async def step_checkpoint_create(self):
+            pass
+
+        async def step_checkpoint_validate(self):
+            pass
+
+    artifacts = _ArtifactImplementation()
+    sandbox = TemporalSandboxActivities(
+        artifact_store=InMemoryArtifactStore(),
+        workspace_root=Path("/tmp/moonmind-test-workspaces"),
+    )
+
+    bindings = {
+        binding.activity_type: binding
+        for binding in build_activity_bindings(
+            catalog,
+            artifact_activities=artifacts,
+            sandbox_activities=sandbox,
+            fleets=(ARTIFACTS_FLEET, SANDBOX_FLEET),
+        )
+    }
+
+    assert bindings["step_checkpoint.create"].fleet == ARTIFACTS_FLEET
+    assert bindings["step_checkpoint.validate"].fleet == ARTIFACTS_FLEET
+    assert bindings["workspace.capture_checkpoint"].fleet == SANDBOX_FLEET
+    assert bindings["workspace.apply_policy"].fleet == SANDBOX_FLEET
+    assert bindings["workspace.classify_git_effect"].fleet == SANDBOX_FLEET
 
 @asynccontextmanager
 async def temporal_db(tmp_path: Path):
