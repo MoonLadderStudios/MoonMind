@@ -4067,6 +4067,319 @@ def _quality_gate_verdict(checks: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _evidence_ref_status(
+    *,
+    category: str,
+    status: str,
+    artifact_ref: str | None = None,
+    boundary: str | None = None,
+    reason_code: str | None = None,
+    label: str | None = None,
+    summary: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "category": category,
+        "status": status,
+        "artifactRef": artifact_ref,
+        "boundary": boundary,
+        "reasonCode": reason_code,
+        "label": label,
+        "summary": _safe_display_text(summary),
+    }
+
+
+def _ref_evidence(
+    value: Any,
+    *,
+    category: str,
+    missing_reason: str,
+    label: str | None = None,
+) -> dict[str, Any]:
+    artifact_ref = _first_text(value)
+    if artifact_ref:
+        return _evidence_ref_status(
+            category=category,
+            status="available",
+            artifact_ref=artifact_ref,
+            label=label,
+        )
+    return _evidence_ref_status(
+        category=category,
+        status="missing",
+        reason_code=missing_reason,
+        label=label,
+    )
+
+
+def _checkpoint_evidence_by_boundary(
+    workspace: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    boundaries = {
+        "before_execution": ("checkpointBeforeRef", "Before execution checkpoint"),
+        "after_execution": ("checkpointAfterRef", "After execution checkpoint"),
+        "state": ("stateCheckpointRef", "State checkpoint"),
+        "workspace": ("workspaceCheckpointRef", "Workspace checkpoint"),
+        "step": ("stepCheckpointRef", "Step checkpoint"),
+    }
+    refs: dict[str, dict[str, Any]] = {}
+    for boundary, (key, label) in boundaries.items():
+        artifact_ref = _first_text(_field_value(workspace, key))
+        if artifact_ref:
+            refs[boundary] = _evidence_ref_status(
+                category="checkpoint",
+                status="available",
+                artifact_ref=artifact_ref,
+                boundary=boundary,
+                label=label,
+            )
+    return refs
+
+
+def _gate_summary(checks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    verdict = _quality_gate_verdict(checks)
+    artifact_ref = None
+    summary = None
+    for check in checks:
+        if not isinstance(check, (Mapping, BaseModel)):
+            continue
+        artifact_ref = artifact_ref or _first_text(
+            _field_value(check, "artifactRef"),
+            _field_value(check, "verdictRef"),
+        )
+        summary = summary or _safe_display_text(
+            _first_text(_field_value(check, "summary"))
+        )
+    if not verdict and not artifact_ref and not summary:
+        return None
+    return {"verdict": verdict, "summary": summary, "artifactRef": artifact_ref}
+
+
+def _side_effect_summary(side_effects: Mapping[str, Any]) -> dict[str, Any] | None:
+    refs = _bounded_ref_projection(side_effects)
+    artifact_refs = (
+        {
+            str(key): str(value)
+            for key, value in refs.items()
+            if isinstance(key, str) and isinstance(value, str) and value.strip()
+        }
+        if isinstance(refs, Mapping)
+        else {}
+    )
+    summary = _safe_display_text(_first_text(_field_value(side_effects, "summary")))
+    status_value = _first_text(_field_value(side_effects, "status"))
+    allowed_statuses = {
+        "available",
+        "missing",
+        "invalid",
+        "unauthorized",
+        "expired",
+        "legacy",
+        "incompatible",
+        "skipped",
+        "unavailable",
+    }
+    status = (
+        status_value
+        if status_value in allowed_statuses
+        else ("available" if artifact_refs else "skipped")
+    )
+    if not artifact_refs and not summary and status == "skipped":
+        return None
+    return {"status": status, "artifactRefs": artifact_refs, "summary": summary}
+
+
+def _environment_diagnostic_refs(
+    workspace: Mapping[str, Any],
+    execution: Mapping[str, Any],
+    outputs: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    specs = (
+        ("provider_lease", "providerLeaseDiagnosticsRef", "provider_lease_diagnostics"),
+        ("sidecar", "sidecarDiagnosticsRef", "sidecar_diagnostics"),
+        ("ghcr", "ghcrDiagnosticsRef", "ghcr_diagnostics"),
+        ("preflight", "preflightDiagnosticsRef", "preflight_diagnostics"),
+        ("environment", "environmentDiagnosticsRef", "environment_diagnostics"),
+        ("system_error", "systemDiagnosticsRef", "system_error_diagnostics"),
+    )
+    diagnostics: list[dict[str, Any]] = []
+    for kind, camel_key, reason in specs:
+        artifact_ref = _first_text(
+            _field_value(workspace, camel_key),
+            _field_value(execution, camel_key),
+            _field_value(outputs, camel_key),
+        )
+        if not artifact_ref:
+            continue
+        diagnostics.append(
+            {
+                "kind": kind,
+                "status": "available",
+                "diagnosticsRef": artifact_ref,
+                "reasonCode": reason,
+                "summary": (
+                    f"{kind.replace('_', ' ').title()} diagnostics are available "
+                    "for environment repair."
+                ),
+            }
+        )
+    return diagnostics
+
+
+def _step_evidence_summary_payload(manifest: StepExecutionManifestModel) -> dict[str, Any]:
+    return {
+        "logicalStepId": manifest.logical_step_id,
+        "executionOrdinal": manifest.execution_ordinal,
+        "checkpointRefsByBoundary": _checkpoint_evidence_by_boundary(manifest.workspace),
+        "contextBundleRef": _ref_evidence(
+            _field_value(manifest.context, "contextBundleRef"),
+            category="context",
+            missing_reason="context_bundle_missing",
+            label="Context bundle",
+        ),
+        "retrievalManifestRef": _ref_evidence(
+            _field_value(manifest.context, "retrievalManifestRef"),
+            category="retrieval",
+            missing_reason="retrieval_manifest_missing",
+            label="Retrieval manifest",
+        ),
+        "memoryManifestRef": _ref_evidence(
+            _field_value(manifest.context, "memoryManifestRef"),
+            category="memory",
+            missing_reason="memory_manifest_missing",
+            label="Memory manifest",
+        ),
+        "gateSummary": _gate_summary(manifest.checks),
+        "terminalDisposition": manifest.terminal_disposition,
+        "sideEffectSummary": _side_effect_summary(manifest.side_effects),
+        "diagnosticRefs": _environment_diagnostic_refs(
+            manifest.workspace,
+            manifest.execution,
+            manifest.outputs,
+        ),
+    }
+
+
+def _is_environment_blocked_manifest(manifest: StepExecutionManifestModel) -> bool:
+    if manifest.status == "blocked" or manifest.terminal_disposition == "blocked":
+        return True
+    summary = _first_text(
+        _field_value(manifest.outputs, "summary"),
+        _field_value(manifest.execution, "summary"),
+    )
+    return bool(summary and "environment" in summary.lower())
+
+
+def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[str, Any]:
+    required_boundary = "before_execution"
+    checkpoint_ref = _first_text(_field_value(manifest.workspace, "checkpointBeforeRef"))
+    diagnostics = _environment_diagnostic_refs(
+        manifest.workspace,
+        manifest.execution,
+        manifest.outputs,
+    )
+    source_workflow_id = _first_text(_field_value(manifest.lineage, "sourceWorkflowId"))
+    source_run_id = _first_text(_field_value(manifest.lineage, "sourceRunId"))
+    if diagnostics and _is_environment_blocked_manifest(manifest):
+        return {
+            "eligible": False,
+            "defaultAction": "environment_fix",
+            "disabledReasonCode": "environment_invalid",
+            "requiredBoundary": required_boundary,
+            "checkpointRef": None,
+            "sourceWorkflowId": source_workflow_id,
+            "sourceRunId": source_run_id,
+            "operatorGuidance": "fix_environment",
+            "evidence": [
+                _evidence_ref_status(
+                    category=item["kind"] if item["kind"] != "system_error" else "environment",
+                    status=item["status"],
+                    artifact_ref=item["diagnosticsRef"],
+                    reason_code=item["reasonCode"],
+                    label=f"{item['kind'].replace('_', ' ').title()} diagnostics",
+                    summary=item["summary"],
+                )
+                for item in diagnostics
+                if item["kind"] != "system_error"
+            ],
+        }
+    if checkpoint_ref:
+        return {
+            "eligible": True,
+            "defaultAction": "resume_from_checkpoint",
+            "disabledReasonCode": None,
+            "requiredBoundary": required_boundary,
+            "checkpointRef": checkpoint_ref,
+            "sourceWorkflowId": source_workflow_id,
+            "sourceRunId": source_run_id,
+            "operatorGuidance": "resume",
+            "evidence": [
+                _evidence_ref_status(
+                    category="checkpoint",
+                    status="available",
+                    artifact_ref=checkpoint_ref,
+                    boundary=required_boundary,
+                    label="Before execution checkpoint",
+                )
+            ],
+        }
+    return {
+        "eligible": False,
+        "defaultAction": "full_retry",
+        "disabledReasonCode": "missing_required_checkpoint_boundary",
+        "requiredBoundary": required_boundary,
+        "checkpointRef": None,
+        "sourceWorkflowId": source_workflow_id,
+        "sourceRunId": source_run_id,
+        "operatorGuidance": "full_retry",
+        "evidence": [
+            _evidence_ref_status(
+                category="checkpoint",
+                status="missing",
+                boundary=required_boundary,
+                reason_code="missing_required_checkpoint_boundary",
+                label="Before execution checkpoint",
+            )
+        ],
+    }
+
+
+def _preserved_step_provenance_payload(
+    manifest: StepExecutionManifestModel,
+) -> list[dict[str, Any]]:
+    raw_steps = _field_value(manifest.lineage, "preservedSteps")
+    if not isinstance(raw_steps, list):
+        return []
+    preserved: list[dict[str, Any]] = []
+    for item in raw_steps:
+        if not isinstance(item, Mapping):
+            continue
+        logical_step_id = _first_text(
+            _field_value(item, "logicalStepId"),
+            _field_value(item, "stepId"),
+        )
+        if not logical_step_id:
+            continue
+        output_refs = _bounded_ref_projection(_field_value(item, "outputRefs"))
+        preserved.append(
+            {
+                "logicalStepId": logical_step_id,
+                "title": _safe_display_text(_first_text(_field_value(item, "title"))),
+                "sourceWorkflowId": _first_text(
+                    _field_value(item, "sourceWorkflowId"),
+                    _field_value(manifest.lineage, "sourceWorkflowId"),
+                ),
+                "sourceRunId": _first_text(
+                    _field_value(item, "sourceRunId"),
+                    _field_value(manifest.lineage, "sourceRunId"),
+                ),
+                "sourceExecutionOrdinal": _field_value(item, "sourceExecutionOrdinal"),
+                "stateCheckpointRef": _first_text(_field_value(item, "stateCheckpointRef")),
+                "outputRefs": output_refs if isinstance(output_refs, Mapping) else {},
+            }
+        )
+    return preserved
+
+
 def _runtime_child_refs(execution: Any) -> dict[str, Any]:
     refs = dict(_bounded_ref_projection(execution))
     for key in ("childWorkflowId", "childRunId"):
@@ -4129,6 +4442,8 @@ def _step_execution_projection_payload(
         "qualityGateVerdict": _quality_gate_verdict(checks),
         "manifestRefs": {"manifestArtifactRef": manifest_artifact_ref},
         "outputRefs": _bounded_ref_projection(outputs),
+        "stepEvidence": _step_evidence_summary_payload(manifest),
+        "recoveryEligibility": _recovery_eligibility_payload(manifest),
     }
 
 
@@ -4152,6 +4467,7 @@ def _step_execution_detail_payload(
             "dependencyEffectRefs": _bounded_ref_projection(
                 manifest.dependency_effects
             ),
+            "preservedStepProvenance": _preserved_step_provenance_payload(manifest),
         }
     )
     return payload

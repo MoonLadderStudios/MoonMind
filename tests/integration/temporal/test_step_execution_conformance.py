@@ -120,6 +120,12 @@ def test_api_fixtures_expose_artifact_refs_not_inline_evidence() -> None:
     assert fixture["route"].endswith("/step-executions")
     assert "manifestRef" in rendered
     assert "checkpointRef" in rendered
+    assert fixture["projection"]["stepEvidence"]["checkpointRefsByBoundary"][
+        "before_execution"
+    ]["status"] == "available"
+    assert fixture["projection"]["recoveryEligibility"]["defaultAction"] == (
+        "resume_from_checkpoint"
+    )
     for forbidden in ("transcript", "diff --git", "providerPayload", "credentials"):
         assert forbidden not in rendered
 
