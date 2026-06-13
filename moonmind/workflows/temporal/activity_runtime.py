@@ -19,8 +19,10 @@ import smtplib
 import stat
 import tempfile
 import time
+import tarfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
@@ -2620,25 +2622,56 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "ephemeral_workspace_ref":
+            workspace_ref = self._put_checkpoint_bytes(
+                _json_bytes(
+                    {
+                        "kind": "ephemeral_workspace_ref",
+                        "workspaceRootRef": model.workspace_root_ref,
+                        "idempotencyKey": model.idempotency_key,
+                        "createdAt": datetime.now(UTC).isoformat(),
+                    }
+                ),
+                content_type="application/json",
+                metadata={"artifact_kind": "checkpoint_workspace_ref"},
+            )
             return WorkspaceCheckpointEvidenceModel(
                 kind="ephemeral_workspace_ref",
-                workspaceRef=str(workspace),
+                workspaceRef=workspace_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "external_state_ref":
+            external_state_ref = self._put_checkpoint_bytes(
+                _json_bytes(
+                    {
+                        "kind": "external_state_ref",
+                        "sourceRef": model.workspace_root_ref,
+                        "idempotencyKey": model.idempotency_key,
+                        "createdAt": datetime.now(UTC).isoformat(),
+                    }
+                ),
+                content_type="application/json",
+                metadata={"artifact_kind": "checkpoint_external_state_ref"},
+            )
             return WorkspaceCheckpointEvidenceModel(
                 kind="external_state_ref",
-                externalStateRef=model.workspace_root_ref or str(workspace),
+                externalStateRef=external_state_ref,
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "worktree_archive":
+            archive_payload, archived_paths = self._build_worktree_archive(workspace)
             archive_ref = self._put_checkpoint_bytes(
-                b"worktree archive capture placeholder",
+                archive_payload,
                 content_type="application/vnd.moonmind.worktree-archive",
                 metadata={"artifact_kind": "checkpoint_archive"},
             )
             manifest_ref = self._put_checkpoint_bytes(
-                _json_bytes({"kind": "worktree_archive", "archiveRef": archive_ref}),
+                _json_bytes(
+                    {
+                        "kind": "worktree_archive",
+                        "archiveRef": archive_ref,
+                        "pathCount": len(archived_paths),
+                    }
+                ),
                 content_type="application/json",
                 metadata={"artifact_kind": "checkpoint_manifest"},
             )
@@ -2649,6 +2682,38 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         raise TemporalActivityRuntimeError(f"unsupported checkpoint kind: {model.kind}")
+
+    def _build_worktree_archive(self, workspace: Path) -> tuple[bytes, list[str]]:
+        archived_paths: list[str] = []
+        output = BytesIO()
+        with tarfile.open(fileobj=output, mode="w:gz") as archive:
+            for path in sorted(workspace.rglob("*")):
+                relative = path.relative_to(workspace)
+                if any(part in {".git", "__pycache__"} for part in relative.parts):
+                    continue
+                if relative.parts[:2] in {
+                    (".agents", "skills"),
+                    (".gemini", "skills"),
+                }:
+                    continue
+                if path.is_dir():
+                    continue
+                if path.is_symlink():
+                    resolved = path.resolve()
+                    if not resolved.is_relative_to(workspace):
+                        raise TemporalActivityRuntimeError(
+                            f"workspace archive member escapes workspace: {relative}"
+                        )
+                    continue
+                info = archive.gettarinfo(str(path), arcname=str(relative))
+                info.uid = _MANAGED_AGENT_UID
+                info.gid = _MANAGED_AGENT_GID
+                info.uname = "moonmind"
+                info.gname = "moonmind"
+                with path.open("rb") as file_handle:
+                    archive.addfile(info, file_handle)
+                archived_paths.append(str(relative))
+        return output.getvalue(), archived_paths
 
     async def workspace_apply_policy(
         self,

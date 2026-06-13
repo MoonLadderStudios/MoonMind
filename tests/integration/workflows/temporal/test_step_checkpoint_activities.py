@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tarfile
+from io import BytesIO
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -104,6 +106,62 @@ async def test_capture_git_patch_and_create_checkpoint_write_compact_artifacts(
     assert payload["contentType"] == STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE
     assert payload["workspace"]["patchRef"] == capture["workspace"]["patchRef"]
     assert "diff" not in payload["workspace"]
+
+
+async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    base_commit = (
+        subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo)
+        .decode()
+        .strip()
+    )
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    common = {
+        "identity": _identity().model_dump(by_alias=True),
+        "boundary": "after_execution",
+        "workspacePath": str(repo),
+        "workspaceRootRef": "artifact-workspace-root",
+        "artifactNamespace": "checkpoint",
+    }
+    cases = [
+        ("git_commit", {"baseCommit": base_commit}, ("headCommit",)),
+        ("git_patch", {"baseCommit": base_commit}, ("patchRef", "manifestRef")),
+        ("ephemeral_workspace_ref", {}, ("workspaceRef",)),
+        ("worktree_archive", {}, ("archiveRef", "manifestRef")),
+        ("external_state_ref", {}, ("externalStateRef",)),
+    ]
+
+    for kind, extra, required_refs in cases:
+        capture = await sandbox.workspace_capture_checkpoint(
+            {
+                **common,
+                **extra,
+                "kind": kind,
+                "idempotencyKey": f"idem-{kind}",
+            }
+        )
+        assert capture["status"] == "captured"
+        assert capture["workspace"]["kind"] == kind
+        for ref_name in required_refs:
+            assert capture["workspace"][ref_name]
+        rendered = json.dumps(capture, sort_keys=True)
+        assert str(repo) not in rendered
+
+    archive_capture = await sandbox.workspace_capture_checkpoint(
+        {
+            **common,
+            "kind": "worktree_archive",
+            "idempotencyKey": "idem-archive-content",
+        }
+    )
+    archive_bytes = store.get_bytes(archive_capture["workspace"]["archiveRef"])
+    with tarfile.open(fileobj=BytesIO(archive_bytes), mode="r:gz") as archive:
+        names = archive.getnames()
+    assert "README.md" in names
+    assert ".agents/skills" not in names
 
 
 async def test_checkpoint_activity_failures_are_typed_and_secret_safe(
