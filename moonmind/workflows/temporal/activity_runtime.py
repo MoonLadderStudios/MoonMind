@@ -4612,6 +4612,46 @@ class TemporalAgentRuntimeActivities:
                 diagnostics={"scope_id": scope.scope_id, "target": request.target},
             )
 
+    def _validate_pentest_runner_profiles_registered(self) -> None:
+        if self._workload_registry is None or not hasattr(
+            self._workload_registry, "get"
+        ):
+            return
+        pentest_settings = settings.pentest
+        configured_profiles = set(pentest_settings.allowed_runner_profiles)
+        configured_profiles.add(pentest_settings.default_runner_profile)
+        configured_profiles.add(pentest_settings.safe_profile_id)
+        if pentest_settings.allow_vpn_lab_profile:
+            configured_profiles.add(pentest_settings.vpn_lab_profile_id)
+        missing_profiles = sorted(
+            profile_id
+            for profile_id in configured_profiles
+            if profile_id and self._workload_registry.get(profile_id) is None
+        )
+        if missing_profiles:
+            raise PentestLaunchPolicyError(
+                "Configured Pentest runner profile is not present in workload registry",
+                reason="runner_profile_not_registered",
+                diagnostics={"runner_profile_ids": missing_profiles},
+            )
+        drifted_profiles = []
+        for profile_id in configured_profiles:
+            if not profile_id:
+                continue
+            profile = self._workload_registry.get(profile_id)
+            if profile is not None and profile.image != pentest_settings.runner_image:
+                drifted_profiles.append(profile_id)
+        drifted_profiles.sort()
+        if drifted_profiles:
+            raise PentestLaunchPolicyError(
+                "Configured Pentest runner profile image does not match approved runner image",
+                reason="runner_profile_image_drift",
+                diagnostics={
+                    "runner_profile_ids": drifted_profiles,
+                    "approved_runner_image": pentest_settings.runner_image,
+                },
+            )
+
     @staticmethod
     def _write_pentest_json(
         path: str,
@@ -5543,6 +5583,7 @@ class TemporalAgentRuntimeActivities:
                     diagnostics={"scope_artifact_ref": request.scope_artifact_ref},
                 )
             self._validate_pentest_request_policy(request, request.approved_scope)
+            self._validate_pentest_runner_profiles_registered()
             launch_plan = build_pentest_launch_plan(request)
             provider_profile = resolve_pentest_provider_profile(
                 execution_profile_ref=request.execution_profile_ref,
