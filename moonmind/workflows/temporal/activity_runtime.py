@@ -2455,13 +2455,26 @@ class TemporalSandboxActivities:
             workspace_root or settings.workflow.workspace_root
         ).resolve()
 
-    def _put_checkpoint_bytes(
+    async def _put_checkpoint_bytes(
         self,
         payload: bytes,
         *,
         content_type: str,
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
+        if self._artifact_service is not None:
+            artifact, _upload = await self._artifact_service.create(
+                principal="system",
+                content_type=content_type,
+                metadata_json=dict(metadata or {}),
+            )
+            completed = await self._artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal="system",
+                payload=payload,
+                content_type=content_type,
+            )
+            return _compact_artifact_ref_text(build_artifact_ref(completed))
         artifact = self._artifact_store.put_bytes(
             payload,
             content_type=content_type,
@@ -2525,23 +2538,21 @@ class TemporalSandboxActivities:
             self._workspace_has_traversal(workspace)
             or self._workspace_has_unsafe_skill_projection(workspace)
         ):
+            diagnostic_ref = await self._put_checkpoint_bytes(
+                b"unsafe workspace materialization",
+                content_type="text/plain",
+                metadata={"artifact_kind": "checkpoint_diagnostic"},
+            )
+            cleanup_ref = await self._put_checkpoint_bytes(
+                b"skill projection cleanup required",
+                content_type="text/plain",
+                metadata={"artifact_kind": "checkpoint_cleanup"},
+            )
             result = WorkspaceCheckpointCaptureResult(
                 status="unsafe",
                 summary="workspace archive refused unsafe materialization",
-                diagnosticRefs=[
-                    self._put_checkpoint_bytes(
-                        b"unsafe workspace materialization",
-                        content_type="text/plain",
-                        metadata={"artifact_kind": "checkpoint_diagnostic"},
-                    )
-                ],
-                cleanupRefs=[
-                    self._put_checkpoint_bytes(
-                        b"skill projection cleanup required",
-                        content_type="text/plain",
-                        metadata={"artifact_kind": "checkpoint_cleanup"},
-                    )
-                ],
+                diagnosticRefs=[diagnostic_ref],
+                cleanupRefs=[cleanup_ref],
                 pullAuth=pull_auth,
                 providerLeaseRefs=provider_refs,
                 failureCode="unsafe_checkpoint",
@@ -2580,17 +2591,21 @@ class TemporalSandboxActivities:
         workspace: Path,
     ) -> WorkspaceCheckpointEvidenceModel:
         if model.kind == "git_patch":
+            if model.include_untracked or model.include_ignored_files:
+                raise TemporalActivityRuntimeError(
+                    "git_patch checkpoint kind does not support including untracked or ignored files"
+                )
             diff_result = await _run_command(
                 ["git", "diff", "--binary", model.base_commit, "--"],
                 cwd=str(workspace),
             )
             patch_payload = diff_result.stdout.encode("utf-8")
-            patch_ref = self._put_checkpoint_bytes(
+            patch_ref = await self._put_checkpoint_bytes(
                 patch_payload,
                 content_type="text/x-diff",
                 metadata={"artifact_kind": "checkpoint_patch"},
             )
-            manifest_ref = self._put_checkpoint_bytes(
+            manifest_ref = await self._put_checkpoint_bytes(
                 _json_bytes(
                     {
                         "kind": "git_patch",
@@ -2622,7 +2637,7 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "ephemeral_workspace_ref":
-            workspace_ref = self._put_checkpoint_bytes(
+            workspace_ref = await self._put_checkpoint_bytes(
                 _json_bytes(
                     {
                         "kind": "ephemeral_workspace_ref",
@@ -2640,7 +2655,7 @@ class TemporalSandboxActivities:
                 createdAt=datetime.now(UTC),
             )
         if model.kind == "external_state_ref":
-            external_state_ref = self._put_checkpoint_bytes(
+            external_state_ref = await self._put_checkpoint_bytes(
                 _json_bytes(
                     {
                         "kind": "external_state_ref",
@@ -2659,12 +2674,12 @@ class TemporalSandboxActivities:
             )
         if model.kind == "worktree_archive":
             archive_payload, archived_paths = self._build_worktree_archive(workspace)
-            archive_ref = self._put_checkpoint_bytes(
+            archive_ref = await self._put_checkpoint_bytes(
                 archive_payload,
                 content_type="application/vnd.moonmind.worktree-archive",
                 metadata={"artifact_kind": "checkpoint_archive"},
             )
-            manifest_ref = self._put_checkpoint_bytes(
+            manifest_ref = await self._put_checkpoint_bytes(
                 _json_bytes(
                     {
                         "kind": "worktree_archive",
@@ -2704,6 +2719,13 @@ class TemporalSandboxActivities:
                         raise TemporalActivityRuntimeError(
                             f"workspace archive member escapes workspace: {relative}"
                         )
+                    info = archive.gettarinfo(str(path), arcname=str(relative))
+                    info.uid = _MANAGED_AGENT_UID
+                    info.gid = _MANAGED_AGENT_GID
+                    info.uname = "moonmind"
+                    info.gname = "moonmind"
+                    archive.addfile(info)
+                    archived_paths.append(str(relative))
                     continue
                 info = archive.gettarinfo(str(path), arcname=str(relative))
                 info.uid = _MANAGED_AGENT_UID
@@ -2724,7 +2746,9 @@ class TemporalSandboxActivities:
             if isinstance(request, WorkspacePolicyApplyInput)
             else WorkspacePolicyApplyInput.model_validate(request)
         )
-        workspace_payload = dict(model.checkpoint.get("workspace") or {})
+        workspace_payload = model.checkpoint.get("workspace")
+        if not isinstance(workspace_payload, dict):
+            workspace_payload = {}
         kind = workspace_payload.get("kind")
         accepted = checkpoint_kinds_for_workspace_policy(model.workspace_policy)
         if kind not in accepted:
@@ -2755,7 +2779,10 @@ class TemporalSandboxActivities:
         payload = _coerce_activity_request(
             request, activity_type="workspace.classify_git_effect"
         )
-        workspace = self._resolve_workspace(payload.get("workspacePath"), must_exist=True)
+        workspace = self._resolve_workspace(
+            payload.get("workspacePath") or payload.get("workspaceRootRef") or "",
+            must_exist=True,
+        )
         status = (
             await _run_command(["git", "status", "--porcelain"], cwd=str(workspace))
         ).stdout
@@ -2763,7 +2790,7 @@ class TemporalSandboxActivities:
         refs: list[str] = []
         if status.strip():
             refs.append(
-                self._put_checkpoint_bytes(
+                await self._put_checkpoint_bytes(
                     status.encode("utf-8"),
                     content_type="text/plain",
                     metadata={"artifact_kind": "git_status"},

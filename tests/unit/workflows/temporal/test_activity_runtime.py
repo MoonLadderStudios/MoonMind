@@ -166,20 +166,47 @@ async def test_checkpoint_activity_runtime_bindings_are_registered() -> None:
         async def __getattr__(self, _name: str):
             raise AssertionError("unexpected dynamic lookup")
 
-        async def artifact_create(self): ...
-        async def artifact_write_complete(self): ...
-        async def artifact_publish_report_bundle(self): ...
-        async def artifact_read(self): ...
-        async def execution_dependency_status_snapshot(self): ...
-        async def execution_record_terminal_state(self): ...
-        async def artifact_list_for_execution(self): ...
-        async def artifact_compute_preview(self): ...
-        async def artifact_link(self): ...
-        async def artifact_pin(self): ...
-        async def artifact_unpin(self): ...
-        async def artifact_lifecycle_sweep(self): ...
-        async def step_checkpoint_create(self): ...
-        async def step_checkpoint_validate(self): ...
+        async def artifact_create(self):
+            pass
+
+        async def artifact_write_complete(self):
+            pass
+
+        async def artifact_publish_report_bundle(self):
+            pass
+
+        async def artifact_read(self):
+            pass
+
+        async def execution_dependency_status_snapshot(self):
+            pass
+
+        async def execution_record_terminal_state(self):
+            pass
+
+        async def artifact_list_for_execution(self):
+            pass
+
+        async def artifact_compute_preview(self):
+            pass
+
+        async def artifact_link(self):
+            pass
+
+        async def artifact_pin(self):
+            pass
+
+        async def artifact_unpin(self):
+            pass
+
+        async def artifact_lifecycle_sweep(self):
+            pass
+
+        async def step_checkpoint_create(self):
+            pass
+
+        async def step_checkpoint_validate(self):
+            pass
 
     artifacts = _ArtifactImplementation()
     sandbox = TemporalSandboxActivities(

@@ -113,6 +113,18 @@ def test_create_and_policy_contracts_reject_inline_evidence_and_secrets() -> Non
             idempotencyKey="idem-create",
         )
 
+    with pytest.raises(ValidationError, match="raw credentials"):
+        StepCheckpointCreateInput(
+            identity=_identity(),
+            boundary="after_execution",
+            taskInputSnapshotRef="artifact-input",
+            workspace=_workspace_patch(),
+            createdAt=datetime(2026, 6, 13, 12, 0, tzinfo=UTC),
+            planDigest="sha256:plan",
+            stepOutputs={"ghcr_pull_token": "artifact-ref-only"},
+            idempotencyKey="idem-create",
+        )
+
     policy = WorkspacePolicyApplyInput(
         identity=_identity(),
         workspacePolicy="apply_previous_execution_diff_to_clean_baseline",

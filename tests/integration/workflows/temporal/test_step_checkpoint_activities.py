@@ -6,6 +6,8 @@ import tarfile
 from io import BytesIO
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -162,6 +164,140 @@ async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> N
         names = archive.getnames()
     assert "README.md" in names
     assert ".agents/skills" not in names
+
+
+async def test_checkpoint_capture_preserves_internal_symlinks(tmp_path: Path) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    (repo / "target.txt").write_text("target\n", encoding="utf-8")
+    (repo / "link.txt").symlink_to("target.txt")
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "worktree_archive",
+            "workspacePath": str(repo),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-archive-symlink",
+        }
+    )
+
+    archive_bytes = store.get_bytes(capture["workspace"]["archiveRef"])
+    with tarfile.open(fileobj=BytesIO(archive_bytes), mode="r:gz") as archive:
+        link_info = archive.getmember("link.txt")
+    assert link_info.issym()
+    assert link_info.linkname == "target.txt"
+
+
+async def test_git_patch_checkpoint_rejects_unsupported_file_options(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    base_commit = (
+        subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo)
+        .decode()
+        .strip()
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="git_patch checkpoint kind does not support including untracked or ignored files",
+    ):
+        await sandbox.workspace_capture_checkpoint(
+            {
+                "identity": _identity().model_dump(by_alias=True),
+                "boundary": "after_execution",
+                "kind": "git_patch",
+                "workspacePath": str(repo),
+                "artifactNamespace": "checkpoint",
+                "idempotencyKey": "idem-git-patch-options",
+                "baseCommit": base_commit,
+                "includeUntracked": True,
+            }
+        )
+
+
+async def test_workspace_classify_git_effect_accepts_workspace_root_ref(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    result = await sandbox.workspace_classify_git_effect(
+        {
+            "workspaceRootRef": str(repo),
+        }
+    )
+
+    assert result["status"] == "dirty"
+    assert result["diagnosticRefs"]
+
+
+async def test_workspace_apply_policy_handles_degraded_checkpoint_payload(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    policy = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "start_from_last_passed_commit",
+            "checkpointRef": "artifact-checkpoint",
+            "checkpoint": {"workspace": "degraded"},
+            "targetWorkspaceRef": str(repo),
+            "expectedPlanDigest": "sha256:plan",
+            "idempotencyKey": "idem-degraded-policy",
+        }
+    )
+
+    assert policy["status"] == "rejected"
+    assert policy["failureCode"] == "policy_incompatible"
+
+
+async def test_sandbox_checkpoint_writes_use_artifact_service_when_available(
+    tmp_path: Path,
+) -> None:
+    service = AsyncMock()
+    created = SimpleNamespace(artifact_id="artifact-created")
+    completed = SimpleNamespace(
+        artifact_id="artifact-completed",
+        sha256="sha256:payload",
+        size_bytes=12,
+        content_type="application/json",
+        encryption=SimpleNamespace(value="none"),
+    )
+    service.create.return_value = (created, None)
+    service.write_complete.return_value = completed
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_service=service)
+
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "ephemeral_workspace_ref",
+            "workspacePath": str(repo),
+            "workspaceRootRef": "artifact-workspace-root",
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-service-writer",
+        }
+    )
+
+    assert capture["workspace"]["workspaceRef"] == "artifact-completed"
+    service.create.assert_awaited_once()
+    service.write_complete.assert_awaited_once()
 
 
 async def test_checkpoint_activity_failures_are_typed_and_secret_safe(

@@ -2543,119 +2543,25 @@ class TemporalArtifactActivities:
         self,
         request: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        from moonmind.schemas.temporal_models import (
-            STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
-            StepCheckpointCreateInput,
-        )
-        from moonmind.workflows.temporal.step_checkpoints import (
-            build_step_checkpoint_create_result,
-            build_step_checkpoint_payload,
+        from moonmind.workflows.temporal.activity_runtime import (
+            TemporalCheckpointActivities,
         )
 
-        model = StepCheckpointCreateInput.model_validate(request or {})
-        payload = build_step_checkpoint_payload(
-            identity=model.identity,
-            boundary=model.boundary,
-            task_input_snapshot_ref=model.task_input_snapshot_ref,
-            workspace=model.workspace.model_dump(by_alias=True, mode="json"),
-            created_at=model.created_at,
-            plan_ref=model.plan_ref,
-            plan_digest=model.plan_digest,
-            prepared_input_refs=model.prepared_input_refs,
-            step_outputs=model.step_outputs,
-        )
-        artifact, _upload = await self._service.create(
-            principal="system",
-            content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
-            metadata_json={
-                "artifact_kind": "step_execution_checkpoint",
-                "checkpoint_id": payload["checkpointId"],
-            },
-        )
-        completed = await self._service.write_complete(
-            artifact_id=artifact.artifact_id,
-            principal="system",
-            payload=(json.dumps(payload, sort_keys=True, separators=(",", ":"))).encode(
-                "utf-8"
-            ),
-            content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
-        )
-        return build_step_checkpoint_create_result(
-            checkpoint_ref=build_artifact_ref(completed).artifact_id,
-            checkpoint_id=payload["checkpointId"],
-            workspace_kind=model.workspace.kind,
-            diagnostic_refs=model.diagnostic_refs,
-            idempotency_key=model.idempotency_key,
-        )
+        return await TemporalCheckpointActivities(
+            artifact_service=self._service,
+        ).step_checkpoint_create(request or {})
 
     async def step_checkpoint_validate(
         self,
         request: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        from moonmind.schemas.temporal_models import (
-            StepCheckpointValidateInput,
-            StepCheckpointValidateResult,
-        )
-        from moonmind.workflows.temporal.step_checkpoints import (
-            validate_step_checkpoint_payload,
+        from moonmind.workflows.temporal.activity_runtime import (
+            TemporalCheckpointActivities,
         )
 
-        model = StepCheckpointValidateInput.model_validate(request or {})
-        checkpoint_id = "unknown-checkpoint"
-        if isinstance(model.checkpoint, Mapping):
-            checkpoint_id = str(model.checkpoint.get("checkpointId") or checkpoint_id)
-        for refs, code, message in (
-            (model.unsafe_artifact_refs, "unsafe_checkpoint", "checkpoint evidence is unsafe"),
-            (
-                model.unsupported_artifact_refs,
-                "unsupported_checkpoint_kind",
-                "checkpoint kind is unsupported",
-            ),
-            (
-                model.workspace_incompatible_refs,
-                "workspace_incompatible",
-                "checkpoint evidence is workspace-incompatible",
-            ),
-        ):
-            if refs:
-                return StepCheckpointValidateResult(
-                    valid=False,
-                    failureCode=code,
-                    message=message,
-                    checkpointId=checkpoint_id,
-                    checkpointRef=model.checkpoint_ref,
-                    diagnosticRefs=list(refs),
-                ).model_dump(by_alias=True, mode="json")
-        if not isinstance(model.checkpoint, Mapping) or "contentType" not in model.checkpoint:
-            if model.required_artifact_refs:
-                return StepCheckpointValidateResult(
-                    valid=False,
-                    failureCode="artifact_missing",
-                    message=(
-                        "checkpoint missing required artifact ref "
-                        f"{model.required_artifact_refs[0]}"
-                    ),
-                    checkpointId=checkpoint_id,
-                    checkpointRef=model.checkpoint_ref,
-                    diagnosticRefs=list(model.required_artifact_refs),
-                ).model_dump(by_alias=True, mode="json")
-        result = validate_step_checkpoint_payload(
-            model.checkpoint,
-            expected_source=model.expected_source,
-            expected_task_input_snapshot_ref=model.expected_task_input_snapshot_ref,
-            expected_plan_ref=model.expected_plan_ref,
-            expected_plan_digest=model.expected_plan_digest,
-            workspace_policy=model.workspace_policy,
-            required_artifact_refs=model.required_artifact_refs,
-            unauthorized_artifact_refs=model.unauthorized_artifact_refs,
-            corrupted_artifact_refs=model.corrupted_artifact_refs,
-            expected_workspace=model.expected_workspace,
-            checkpoint_ref=model.checkpoint_ref,
-        )
-        return StepCheckpointValidateResult(
-            **result.model_dump(by_alias=True),
-            diagnosticRefs=[],
-        ).model_dump(by_alias=True, mode="json")
+        return await TemporalCheckpointActivities(
+            artifact_service=self._service,
+        ).step_checkpoint_validate(request or {})
 
     async def artifact_publish_report_bundle(
         self,

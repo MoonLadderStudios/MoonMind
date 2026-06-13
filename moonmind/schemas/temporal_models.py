@@ -224,6 +224,7 @@ def _reject_raw_secret_text(value: Any, path: str) -> None:
             raise ValueError(f"{path} must contain refs or summaries, not raw credentials")
     elif isinstance(value, dict):
         for key, nested in value.items():
+            _reject_raw_secret_text(str(key), f"{path}.{key}.__key__")
             _reject_raw_secret_text(nested, f"{path}.{key}")
     elif isinstance(value, list):
         for index, nested in enumerate(value):
