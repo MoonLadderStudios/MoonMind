@@ -118,4 +118,4 @@ def test_conditional_docs_are_left_untouched_without_behavioral_impact() -> None
 
     for path in CONDITIONAL_DOCS:
         assert path.exists()
-        assert f"`{path.relative_to(REPO_ROOT)}`: no Phase 12 update required" in temp_text
+        assert f"`{path.relative_to(REPO_ROOT).as_posix()}`: no Phase 12 update required" in temp_text
