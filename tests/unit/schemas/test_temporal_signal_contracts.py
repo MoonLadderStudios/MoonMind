@@ -72,10 +72,14 @@ def test_reschedule_signal_valid():
 
 def test_request_slot_signal_valid():
     data = {
-        "requesterWorkflowId": "wf-123"
+        "requesterWorkflowId": "wf-123",
+        "runtimeId": "codex_cli",
+        "priority": 10,
     }
     model = RequestSlotSignal.model_validate(data)
     assert model.requester_workflow_id == "wf-123"
+    assert model.runtime_id == "codex_cli"
+    assert model.priority == 10
 
 def test_release_slot_signal_valid():
     data = {
