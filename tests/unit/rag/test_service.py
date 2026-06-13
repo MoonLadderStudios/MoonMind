@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from moonmind.memory.services import apply_memory_policy, evaluate_memory_proposals
 from moonmind.rag.context_pack import ContextItem
 from moonmind.rag.qdrant_client import SearchResult
 from moonmind.rag.service import ContextRetrievalService, RetrievalBudgetExceededError
@@ -577,6 +578,51 @@ def test_retrieve_gateway_flow_forwards_planning_ref(
     assert _GatewayClient.last_instance is not None
     request_kwargs = _GatewayClient.last_instance.calls[0][1]
     assert request_kwargs["json"]["planning_ref"] == "bd-123"
+
+
+def test_memory_policy_boundary_returns_compact_decision_refs() -> None:
+    source = {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "executionOrdinal": 1,
+    }
+
+    result = evaluate_memory_proposals(
+        proposal_refs=["artifact://memory/proposal-1"],
+        source=source,
+        terminal_disposition="accepted",
+        publication_gate={"passed": False, "evidenceRef": "artifact://gate/publication"},
+        requested_target="memory://run",
+        policy_decision="accept_for_run_context",
+        reason="policy_approved_for_later_attempts",
+        evidence_refs=["artifact://memory/proposal-1"],
+    )
+
+    assert result["decisionRefs"] == ["artifact://memory/decision-1"]
+    assert result["decisions"][0]["decision"] == "accept_for_run_context"
+    assert result["decisions"][0]["target"] == "memory://run"
+
+
+def test_memory_apply_policy_fails_closed_for_missing_decision_ref() -> None:
+    source = {
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "implement",
+        "executionOrdinal": 1,
+    }
+
+    result = apply_memory_policy(
+        proposal_ref="artifact://memory/proposal-1",
+        decision_ref=" ",
+        source=source,
+        target="repo://AGENTS.md",
+        decision="approve_repo_application",
+    )
+
+    assert result["outcome"] == "blocked"
+    assert result["applicationResultRef"] == "artifact://memory/application-1"
+    assert result["failureReason"] == "missing_decision_ref"
 
 
 def test_add_or_update_long_term_memory_skips_when_disabled() -> None:
