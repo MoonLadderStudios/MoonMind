@@ -26,6 +26,17 @@ _PENTEST_ALLOWED_OPERATION_MODES = (
     "full_authorized",
 )
 _PENTEST_ALLOWED_EVIDENCE_LEVELS = ("minimal", "standard", "full")
+_PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY = (
+    "ghcr.io/moonladderstudios/moonmind-pentestgpt"
+)
+_PENTEST_APPROVED_RUNNER_IMAGE_TAGS = frozenset(("1.0",))
+_PENTEST_RUNNER_IMAGE_PATTERN = re.compile(
+    r"^(?P<repository>"
+    + re.escape(_PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY)
+    + r")"
+    r"(?::(?P<tag>[A-Za-z0-9_.-]+))?"
+    r"(?:@(?P<digest>sha256:[a-f0-9]{64}))?$"
+)
 _OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _JIRA_PROJECT_KEY_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]+$")
 _JIRA_ALLOWED_ACTIONS = frozenset(
@@ -1452,6 +1463,16 @@ class PentestSettings(BaseSettings):
         validation_alias=AliasChoices("MOONMIND_PENTEST_RUNNER_IMAGE"),
         description="Curated PentestGPT runner image tag or digest.",
     )
+    unsafe_dev_runner_image_override: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_UNSAFE_DEV_RUNNER_IMAGE_OVERRIDE"
+        ),
+        description=(
+            "Allow an unapproved PentestGPT runner image for explicit local "
+            "development only."
+        ),
+    )
     safe_profile_id: str = Field(
         "pentestgpt-safe",
         validation_alias=AliasChoices("MOONMIND_PENTEST_SAFE_PROFILE_ID"),
@@ -1651,6 +1672,8 @@ class PentestSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_default_values_are_allowlisted(self) -> Self:
+        if not self.unsafe_dev_runner_image_override:
+            _validate_pentest_runner_image(self.runner_image)
         if self.default_operation_mode not in self.allowed_operation_modes:
             raise ValueError(
                 "default pentest operation mode must be included in "
@@ -1670,6 +1693,27 @@ class PentestSettings(BaseSettings):
                 "pentest runner profiles"
             )
         return self
+
+def _validate_pentest_runner_image(value: str) -> None:
+    image = str(value or "").strip()
+    match = _PENTEST_RUNNER_IMAGE_PATTERN.fullmatch(image)
+    if not match:
+        raise ValueError(
+            "Pentest runner image must be an approved MoonMind-owned "
+            "ghcr.io/moonladderstudios/moonmind-pentestgpt tag or digest-pinned "
+            "reference"
+        )
+    if match.group("repository") != _PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY:
+        raise ValueError("Pentest runner image repository is not approved")
+    tag = match.group("tag")
+    digest = match.group("digest")
+    if not tag and not digest:
+        raise ValueError("Pentest runner image must include an approved tag or digest")
+    if tag and tag not in _PENTEST_APPROVED_RUNNER_IMAGE_TAGS:
+        raise ValueError(
+            "Pentest runner image tag is not approved; use an approved "
+            "MoonMind-owned tag, digest pin, or explicit unsafe dev override"
+        )
 
 DEFAULT_GOOGLE_EMBEDDING_DIMENSIONS: int = 3072
 
