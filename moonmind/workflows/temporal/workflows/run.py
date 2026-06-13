@@ -1028,6 +1028,7 @@ class MoonMindRunWorkflow:
             side_effects=side_effects_payload,
             side_effect_records=side_effect_records,
             dependency_effects=dependency_effects,
+            recovery_source=self._validate_recovery_source_for_execution(),
             budget=budget,
         )
         manifest_model_payload = dict(manifest_payload)

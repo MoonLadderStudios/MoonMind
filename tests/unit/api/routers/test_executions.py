@@ -34,6 +34,7 @@ from api_service.api.routers.executions import (
     _workflow_input_snapshot_descriptor_from_record,
     _normalize_task_steps,
     _resolve_step_runtime_selections,
+    _step_execution_detail_payload,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -68,6 +69,8 @@ from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationE
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
+    StepExecutionDetailModel,
+    StepExecutionManifestModel,
     StepLedgerSnapshotModel,
     UpdateExecutionRequest,
 )
@@ -91,6 +94,56 @@ class _ExecuteResult:
 
     def scalar_one_or_none(self) -> object | None:
         return self._rows[0] if self._rows else None
+
+
+def _phase_11_manifest(**overrides: Any) -> StepExecutionManifestModel:
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    payload: dict[str, Any] = {
+        "workflowId": "wf-phase-11",
+        "runId": "run-phase-11",
+        "logicalStepId": "implement",
+        "executionOrdinal": 2,
+        "stepExecutionId": "wf-phase-11:run-phase-11:implement:execution:2",
+        "reason": "recover_from_failed_step",
+        "status": "failed",
+        "terminalDisposition": "retryable",
+        "startedAt": now,
+        "updatedAt": now,
+        "context": {
+            "contextBundleRef": "artifact://context/bundle",
+            "retrievalManifestRef": "artifact://retrieval/manifest",
+            "memoryManifestRef": "artifact://memory/manifest",
+        },
+        "workspace": {
+            "checkpointBeforeRef": "artifact://checkpoint/before",
+            "stateCheckpointRef": "artifact://checkpoint/state",
+            "providerLeaseDiagnosticsRef": "artifact://diagnostics/provider-lease",
+        },
+        "checks": [
+            {
+                "kind": "implementation",
+                "status": "passed",
+                "verdict": "FULLY_IMPLEMENTED",
+                "artifactRef": "artifact://checks/verify",
+                "summary": "Gate passed.",
+            }
+        ],
+        "sideEffects": {
+            "summaryRef": "artifact://side-effects/summary",
+            "status": "available",
+            "summary": "Publish skipped.",
+        },
+        "outputs": {"summary": "Step failed after producing ref-only evidence."},
+        "lineage": {
+            "sourceWorkflowId": "wf-source",
+            "sourceRunId": "run-source",
+            "sourceLogicalStepId": "implement",
+            "sourceExecutionOrdinal": 1,
+            "lineageExecutionOrdinal": 2,
+        },
+    }
+    payload.update(overrides)
+    return StepExecutionManifestModel.model_validate(payload)
 
 
 def _artifact_session(rows: list[SimpleNamespace]) -> SimpleNamespace:
@@ -130,6 +183,160 @@ def _completed_attachment_artifact(
         size_bytes=size_bytes,
         created_by_principal=created_by_principal,
     )
+
+
+def test_step_execution_detail_payload_exposes_phase_11_ref_only_evidence_summary() -> None:
+    payload = _step_execution_detail_payload(
+        _phase_11_manifest(),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )
+
+    evidence = payload["stepEvidence"]
+
+    assert evidence["logicalStepId"] == "implement"
+    assert evidence["checkpointRefsByBoundary"]["before_execution"] == {
+        "category": "checkpoint",
+        "status": "available",
+        "artifactRef": "artifact://checkpoint/before",
+        "boundary": "before_execution",
+        "reasonCode": None,
+        "label": "Before execution checkpoint",
+        "summary": None,
+    }
+    assert evidence["contextBundleRef"]["artifactRef"] == "artifact://context/bundle"
+    assert evidence["retrievalManifestRef"]["status"] == "available"
+    assert evidence["memoryManifestRef"]["artifactRef"] == "artifact://memory/manifest"
+    assert evidence["gateSummary"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert evidence["terminalDisposition"] == "retryable"
+    assert evidence["sideEffectSummary"]["artifactRefs"] == {
+        "summaryRef": "artifact://side-effects/summary"
+    }
+    assert evidence["diagnosticRefs"][0]["kind"] == "provider_lease"
+
+    rendered = json.dumps(payload, default=str)
+    for forbidden in (
+        "diff --git",
+        "raw stdout",
+        "raw stderr",
+        "providerPayload",
+        "token=secret",
+        "raw verification report",
+        "checkpoint archive content",
+    ):
+        assert forbidden not in rendered
+
+
+def test_step_execution_detail_payload_exposes_typed_recovery_eligibility() -> None:
+    eligible = _step_execution_detail_payload(
+        _phase_11_manifest(),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )["recoveryEligibility"]
+
+    assert eligible["eligible"] is True
+    assert eligible["defaultAction"] == "resume_from_checkpoint"
+    assert eligible["checkpointRef"] == "artifact://checkpoint/before"
+    assert eligible["requiredBoundary"] == "before_execution"
+    assert eligible["operatorGuidance"] == "resume"
+
+    ineligible = _step_execution_detail_payload(
+        _phase_11_manifest(workspace={"stateCheckpointRef": "artifact://checkpoint/state"}),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )["recoveryEligibility"]
+
+    assert ineligible["eligible"] is False
+    assert ineligible["defaultAction"] == "full_retry"
+    assert ineligible["disabledReasonCode"] == "missing_required_checkpoint_boundary"
+    assert ineligible["evidence"][0]["status"] == "missing"
+
+
+def test_step_execution_detail_payload_tolerates_nullable_manifest_sections() -> None:
+    payload = _step_execution_detail_payload(
+        _phase_11_manifest(
+            workspace=None,
+            execution=None,
+            outputs=None,
+            sideEffects=None,
+            checks=None,
+        ),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )
+
+    assert payload["stepEvidence"]["checkpointRefsByBoundary"] == {}
+    assert payload["stepEvidence"]["sideEffectSummary"] is None
+    assert payload["stepEvidence"]["diagnosticRefs"] == []
+    assert payload["recoveryEligibility"]["eligible"] is False
+    assert (
+        payload["recoveryEligibility"]["disabledReasonCode"]
+        == "missing_required_checkpoint_boundary"
+    )
+
+
+def test_step_execution_detail_payload_reads_preserved_steps_from_recovery_source() -> None:
+    payload = _step_execution_detail_payload(
+        _phase_11_manifest(
+            recoverySource={
+                "sourceWorkflowId": "wf-source",
+                "sourceRunId": "run-source",
+                "preservedSteps": [
+                    {
+                        "logicalStepId": "plan",
+                        "title": "Plan",
+                        "sourceExecutionOrdinal": 1,
+                        "stateCheckpointRef": "artifact://checkpoint/plan-state",
+                        "outputRefs": {"summaryRef": "artifact://output/plan-summary"},
+                    }
+                ],
+            },
+        ),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )
+
+    preserved = payload["preservedStepProvenance"]
+    detail = StepExecutionDetailModel.model_validate(payload)
+
+    assert preserved == [
+        {
+            "logicalStepId": "plan",
+            "title": "Plan",
+            "sourceWorkflowId": "wf-source",
+            "sourceRunId": "run-source",
+            "sourceExecutionOrdinal": 1,
+            "stateCheckpointRef": "artifact://checkpoint/plan-state",
+            "outputRefs": {"summaryRef": "artifact://output/plan-summary"},
+        }
+    ]
+    assert detail.preserved_step_provenance[0].logical_step_id == "plan"
+    assert detail.preserved_step_provenance[0].source_workflow_id == "wf-source"
+
+
+def test_step_execution_detail_payload_exposes_environment_fix_guidance() -> None:
+    payload = _step_execution_detail_payload(
+        _phase_11_manifest(
+            status="blocked",
+            terminalDisposition="blocked",
+            workspace={
+                "providerLeaseDiagnosticsRef": "artifact://diagnostics/provider-lease",
+                "sidecarDiagnosticsRef": "artifact://diagnostics/sidecar",
+                "ghcrDiagnosticsRef": "artifact://diagnostics/ghcr",
+                "preflightDiagnosticsRef": "artifact://diagnostics/preflight",
+            },
+            outputs={"summary": "Environment setup failed."},
+        ),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )
+
+    recovery = payload["recoveryEligibility"]
+    diagnostic_kinds = {
+        item["kind"] for item in payload["stepEvidence"]["diagnosticRefs"]
+    }
+
+    assert recovery["eligible"] is False
+    assert recovery["defaultAction"] == "environment_fix"
+    assert recovery["disabledReasonCode"] == "environment_invalid"
+    assert recovery["operatorGuidance"] == "fix_environment"
+    assert diagnostic_kinds == {"provider_lease", "sidecar", "ghcr", "preflight"}
+    assert "source-code" not in json.dumps(payload, default=str).lower()
+
 
 @pytest.mark.asyncio
 async def test_task_step_runtime_selection_is_normalized_and_resolved() -> None:

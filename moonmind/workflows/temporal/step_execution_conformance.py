@@ -850,6 +850,69 @@ def api_contract_fixture() -> dict[str, Any]:
                 "diffRef": "artifact://diff",
                 "verificationReportRef": "artifact://verification-report",
             },
+            "stepEvidence": {
+                "checkpointRefsByBoundary": {
+                    "before_execution": {
+                        "category": "checkpoint",
+                        "status": "available",
+                        "artifactRef": "artifact://checkpoint",
+                        "boundary": "before_execution",
+                    }
+                },
+                "contextBundleRef": {
+                    "category": "context",
+                    "status": "available",
+                    "artifactRef": "artifact://context-bundle",
+                },
+                "retrievalManifestRef": {
+                    "category": "retrieval",
+                    "status": "available",
+                    "artifactRef": "artifact://retrieval-manifest",
+                },
+                "memoryManifestRef": {
+                    "category": "memory",
+                    "status": "skipped",
+                    "reasonCode": "memory_not_requested",
+                },
+                "gateSummary": {
+                    "verdict": "FULLY_IMPLEMENTED",
+                    "artifactRef": "artifact://verification-report",
+                },
+                "terminalDisposition": "accepted",
+                "sideEffectSummary": {
+                    "status": "available",
+                    "artifactRefs": {
+                        "summaryRef": "artifact://side-effect-summary",
+                    },
+                },
+                "diagnosticRefs": [
+                    {
+                        "kind": "provider_lease",
+                        "status": "available",
+                        "diagnosticsRef": "artifact://provider-lease-diagnostics",
+                        "reasonCode": "provider_lease_diagnostics",
+                        "summary": "Provider lease diagnostics are available by ref.",
+                    }
+                ],
+            },
+            "recoveryEligibility": {
+                "eligible": True,
+                "defaultAction": "resume_from_checkpoint",
+                "disabledReasonCode": None,
+                "requiredBoundary": "before_execution",
+                "checkpointRef": "artifact://checkpoint",
+                "sourceWorkflowId": "workflow-source",
+                "sourceRunId": "run-source",
+                "operatorGuidance": "resume",
+                "evidence": [
+                    {
+                        "category": "checkpoint",
+                        "status": "available",
+                        "artifactRef": "artifact://checkpoint",
+                        "boundary": "before_execution",
+                    }
+                ],
+            },
         },
     }
 

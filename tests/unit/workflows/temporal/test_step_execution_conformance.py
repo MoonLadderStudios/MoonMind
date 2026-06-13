@@ -252,6 +252,52 @@ def test_api_contract_fixture_exposes_refs_and_canonical_terms_only() -> None:
     )
 
 
+def test_api_contract_fixture_covers_phase_11_recovery_evidence_panels() -> None:
+    fixture = api_contract_fixture()
+    projection = fixture["projection"]
+
+    assert projection["stepEvidence"]["checkpointRefsByBoundary"]["before_execution"][
+        "artifactRef"
+    ].startswith("artifact://")
+    assert projection["stepEvidence"]["contextBundleRef"]["status"] == "available"
+    assert projection["stepEvidence"]["retrievalManifestRef"]["status"] == "available"
+    assert projection["stepEvidence"]["memoryManifestRef"]["status"] == "skipped"
+    assert projection["stepEvidence"]["gateSummary"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert projection["stepEvidence"]["sideEffectSummary"]["artifactRefs"] == {
+        "summaryRef": "artifact://side-effect-summary"
+    }
+    assert projection["recoveryEligibility"] == {
+        "eligible": True,
+        "defaultAction": "resume_from_checkpoint",
+        "disabledReasonCode": None,
+        "requiredBoundary": "before_execution",
+        "checkpointRef": "artifact://checkpoint",
+        "sourceWorkflowId": "workflow-source",
+        "sourceRunId": "run-source",
+        "operatorGuidance": "resume",
+        "evidence": [
+            {
+                "category": "checkpoint",
+                "status": "available",
+                "artifactRef": "artifact://checkpoint",
+                "boundary": "before_execution",
+            }
+        ],
+    }
+
+    rendered = json.dumps(projection)
+    for forbidden in (
+        "raw stdout",
+        "raw stderr",
+        "diff --git",
+        "provider payload",
+        "checkpoint archive content",
+        "credential value",
+        "raw verification report",
+    ):
+        assert forbidden not in rendered
+
+
 def test_run_step_execution_conformance_returns_one_aggregate_result() -> None:
     result = run_step_execution_conformance()
 
