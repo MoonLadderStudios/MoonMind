@@ -77,7 +77,7 @@ creates a single managed secret. The browser sends:
 POST /api/v1/secrets
 {
   "slug": "github-pat-local",
-  "plaintext": "ghp_local_first_plaintext_only_in_request"
+  "plaintext": "<github-token-present-only-in-request>"
 }
 ```
 
