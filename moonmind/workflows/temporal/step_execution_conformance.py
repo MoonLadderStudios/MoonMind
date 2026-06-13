@@ -190,10 +190,10 @@ def _classify_checkpoint_payload(
     fixture_id: str,
     payload: Mapping[str, Any],
     *,
+    traceability: Iterable[str],
     category: str = "golden",
     expected: str = "valid",
     workspace_policy: str = "apply_previous_execution_diff_to_clean_baseline",
-    traceability: Iterable[str],
 ) -> dict[str, Any]:
     result = validate_step_checkpoint_payload(
         dict(payload),

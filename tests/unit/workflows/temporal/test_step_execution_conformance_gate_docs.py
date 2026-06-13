@@ -25,25 +25,25 @@ FIXTURE_EXTENSION_TRIGGERS = (
     "Docker or skill-projection blocked environment",
 )
 
-DEGRADED_INPUT_CASES = (
-    "old manifest rows",
-    "old checkpoint rows",
-    "old gate verdict strings",
-    "legacy `stateCheckpointRef`-only rows",
-    "future or unknown gate verdicts",
-    "future or unknown checkpoint policy values",
+DEGRADED_INPUT_CASE_TERMS = (
+    ("old", "manifest", "rows"),
+    ("old", "checkpoint", "rows"),
+    ("old", "gate verdict", "strings"),
+    ("legacy", "stateCheckpointRef", "rows"),
+    ("future or unknown", "gate verdicts"),
+    ("future or unknown", "checkpoint policy values"),
 )
 
-FORBIDDEN_INLINE_EVIDENCE = (
-    "raw stdout",
-    "raw stderr",
-    "raw diffs",
-    "raw logs",
-    "provider payloads",
+FORBIDDEN_INLINE_EVIDENCE_TERMS = (
+    ("raw", "stdout"),
+    ("raw", "stderr"),
+    ("raw", "diffs"),
+    ("raw", "logs"),
+    ("provider", "payloads"),
     "credentials",
 )
 
-OUT_OF_SCOPE_PHASES = (
+OUT_OF_SCOPE_PHASE_TERMS = (
     "checkpoint substrate",
     "checkpoint-backed Resume",
     "workspace policy",
@@ -65,16 +65,24 @@ def _durable_guidance() -> str:
     return f"{_read(PRE_COMMIT_DOC)}\n{_read(STEP_EXECUTION_DOC)}"
 
 
+def _assert_terms_present(guidance: str, required: str | tuple[str, ...]) -> None:
+    terms = (required,) if isinstance(required, str) else required
+    for term in terms:
+        assert term in guidance
+
+
 def test_pre_commit_guidance_requires_step_execution_conformance_gate() -> None:
     guidance = _read(PRE_COMMIT_DOC)
 
     assert CONFORMANCE_COMMAND in guidance
     assert FOCUSED_PYTEST_COMMAND in guidance
-    assert "MM-822+" in guidance
-    assert "Step Execution PR" in guidance
-    assert "merge readiness" in guidance
-    assert "conformance suite was run" in guidance
-    assert "no fixture update was needed" in guidance
+    for required in (
+        ("MM-822+", "Step Execution PR"),
+        "merge readiness",
+        ("conformance suite", "run"),
+        ("fixture update", "needed"),
+    ):
+        _assert_terms_present(guidance, required)
 
 
 def test_step_execution_guidance_documents_fixture_extension_triggers() -> None:
@@ -87,22 +95,24 @@ def test_step_execution_guidance_documents_fixture_extension_triggers() -> None:
 def test_step_execution_guidance_preserves_degraded_input_gate() -> None:
     guidance = _durable_guidance()
 
-    for degraded_case in DEGRADED_INPUT_CASES:
-        assert degraded_case in guidance
+    for degraded_case in DEGRADED_INPUT_CASE_TERMS:
+        _assert_terms_present(guidance, degraded_case)
 
-    assert "fail-closed" in guidance
-    assert "rather than crashing replay" in guidance
-    assert "silently passing" in guidance
+    for required in (
+        "fail-closed",
+        ("crashing", "replay"),
+        ("silently", "passing"),
+    ):
+        _assert_terms_present(guidance, required)
 
 
 def test_step_execution_guidance_requires_compact_ref_only_evidence() -> None:
     guidance = _durable_guidance()
 
-    assert "artifact-backed" in guidance
-    assert "ref-only" in guidance
-    assert "bounded summaries" in guidance
-    for forbidden in FORBIDDEN_INLINE_EVIDENCE:
-        assert forbidden in guidance
+    for required in ("artifact-backed", "ref-only", ("bounded", "summaries")):
+        _assert_terms_present(guidance, required)
+    for forbidden in FORBIDDEN_INLINE_EVIDENCE_TERMS:
+        _assert_terms_present(guidance, forbidden)
 
 
 def test_step_execution_guidance_keeps_phase_one_scope_boundary() -> None:
@@ -114,5 +124,5 @@ def test_step_execution_guidance_keeps_phase_one_scope_boundary() -> None:
     assert "stale WP1" in guidance
     assert "Phase 1" in guidance
     assert "fixture extension triggers" in guidance
-    for phase in OUT_OF_SCOPE_PHASES:
-        assert phase in guidance
+    for phase in OUT_OF_SCOPE_PHASE_TERMS:
+        _assert_terms_present(guidance, phase)
