@@ -1,14 +1,11 @@
 {
   "action": "no_update_required",
-  "docPaths": [
-    "docs/Steps/StepExecutionsAndCheckpointing.md"
-  ],
-  "gateRationale": "Doc reconciliation skipped: no latest post-remediation moonspec-verify report with verdict FULLY_IMPLEMENTED was found in the workspace, so publication remains blocked and the moonspec-doc-reconcile update gate does not allow canonical doc edits.",
+  "docPaths": [],
+  "gateRationale": "No canonical source document under docs/ is recorded for MM-841. The controlling post-remediation verification verdict is FULLY_IMPLEMENTED, but spec.md has no Source Document entry and the available Source Document Drift evidence identifies no durable docs drift, so moonspec-doc-reconcile stops with no_update_required and makes no canonical doc edits.",
   "evidence": [
-    "specs/001-step-execution-conformance/spec.md records Source Document: docs/Steps/StepExecutionsAndCheckpointing.md",
-    "artifacts/ contains only context retrieval files; no moonspec-verify report or Source Document Drift section was present",
-    "/work/agent_jobs/mm:9c6ae3d9-cbc5-45f1-a024-a8e9861ae3b7/artifacts/stdout.log and stderr.log contain prior runtime/tooling diagnostics but no controlling FULLY_IMPLEMENTED post-remediation verdict",
-    "docs/tmp/jira-orchestrate-mm-820-handoff.json is a submission handoff, not a post-remediation verification report",
-    "Could not write artifacts/jira-orchestrate-doc-reconcile.json because ./artifacts is root-owned and not writable by uid 1000(app); chmod was denied by the filesystem"
+    "/work/agent_jobs/mm:4a1b4105-18f8-46ca-aba9-6ce8631c9c6b/session/.moonmind-codex-session-state.json records Post-Remediation Attempt 6 with Verdict FULLY_IMPLEMENTED",
+    "specs/001-workflow-actions-menu/spec.md contains MM-841 feature metadata but no Source Document path under docs/",
+    "/work/agent_jobs/mm:4a1b4105-18f8-46ca-aba9-6ce8631c9c6b/artifacts/moonspec-verify/MM-841-workflow-actions-menu.md Source Document Drift section states no canonical source document was named in spec.md and no durable docs drift was detected",
+    "artifacts/doc-discoveries/001-workflow-actions-menu.json was not present"
   ]
 }
