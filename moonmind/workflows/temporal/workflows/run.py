@@ -111,6 +111,14 @@ from moonmind.workflows.temporal.step_executions import (
     step_execution_operation_idempotency_key,
     workspace_policy_metadata,
 )
+from moonmind.workflows.temporal.bounded_story_loop import (
+    BoundedStoryLoopInput,
+    LoopAttempt,
+    PublicationAction,
+    TypedGateResult,
+    compile_bounded_story_loop,
+    evaluate_publication_decision,
+)
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
@@ -138,6 +146,85 @@ DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+
+
+def bounded_story_loop_step_effects(
+    attempt: LoopAttempt,
+    gate: TypedGateResult,
+) -> dict[str, Any]:
+    """Return compact side-effect eligibility for a bounded story loop attempt."""
+
+    publication = evaluate_publication_decision(
+        action=PublicationAction.PR,
+        latest_attempt=attempt,
+        gate=gate,
+    )
+    refs = [
+        ref
+        for ref in (attempt.checkpoint_before_ref, attempt.checkpoint_after_ref)
+        if ref
+    ]
+    return {
+        "stepExecutionId": attempt.step_execution_id,
+        "checkpointRefs": refs,
+        "candidateDiffRef": attempt.candidate_diff_ref,
+        "acceptedOutputRef": attempt.accepted_output_ref,
+        "commitAllowed": attempt.commit_allowed,
+        "publicationAllowed": publication.allowed,
+        "publicationReason": publication.reason,
+        "gateResultRef": gate.gate_result_ref,
+        "remainingWorkRef": gate.remaining_work_ref,
+    }
+
+
+def bounded_story_loop_resume_decision(
+    resume: Mapping[str, Any],
+    *,
+    current_selected_item_digest: str,
+) -> dict[str, Any]:
+    checkpoint_ref = str(resume.get("recoveryCheckpointRef") or "").strip()
+    selected_digest = str(resume.get("selectedItemDigest") or "").strip()
+    if not checkpoint_ref.startswith("artifact://"):
+        return {
+            "allowed": False,
+            "reason": "recovery_checkpoint_ref_missing",
+            "fallback": "none",
+        }
+    if selected_digest != str(current_selected_item_digest or "").strip():
+        return {
+            "allowed": False,
+            "reason": "selected_item_digest_mismatch",
+            "fallback": "none",
+        }
+    return {
+        "allowed": True,
+        "mode": "checkpoint_backed_resume",
+        "loopId": resume.get("loopId"),
+        "recoveryCheckpointRef": checkpoint_ref,
+        "resumeFromAttemptOrdinal": resume.get("resumeFromAttemptOrdinal"),
+        "fallback": "none",
+    }
+
+
+def bounded_story_loop_scope_guard(
+    *,
+    selected_item_digest: str,
+    candidate_item_digests: Sequence[str],
+    full_supervisor_enabled: bool,
+) -> dict[str, Any]:
+    if full_supervisor_enabled:
+        return {
+            "allowed": False,
+            "reason": "full_autonomous_supervisor_gated",
+        }
+    selected = str(selected_item_digest or "").strip()
+    candidates = [str(item or "").strip() for item in candidate_item_digests]
+    if candidates != [selected]:
+        return {
+            "allowed": False,
+            "reason": "unrelated_work_selection_rejected",
+        }
+    return {"allowed": True, "reason": "selected_item_only"}
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _PR_OPTIONAL_TASK_SKILLS = frozenset(
     {"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS}
@@ -1647,9 +1734,23 @@ class MoonMindRunWorkflow:
             records,
             git_effect=git_effect,
         )
+        memory_effects = [
+            dict(record["memory"])
+            for record in records
+            if record.get("class") == "memory_update"
+            and isinstance(record.get("memory"), Mapping)
+        ]
         if records:
-            return {"records": records, "summary": summary}
-        return {"summary": summary} if summary else {}
+            payload: dict[str, Any] = {"records": records, "summary": summary}
+            if memory_effects:
+                payload["memory"] = memory_effects
+            return payload
+        if summary:
+            payload = {"summary": summary}
+            if memory_effects:
+                payload["memory"] = memory_effects
+            return payload
+        return {}
 
     def _step_execution_side_effect_summary(
         self,
@@ -2105,6 +2206,7 @@ class MoonMindRunWorkflow:
         effect_kind: str = "normal",
         reason: str | None = None,
         approved_workspace_roots: Sequence[str] = (),
+        memory_effect: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Classify and record one side effect for the current step attempt.
 
@@ -2127,6 +2229,7 @@ class MoonMindRunWorkflow:
             effect_kind=effect_kind,  # type: ignore[arg-type]
             reason=reason,
             approved_workspace_roots=approved_workspace_roots,
+            memory_effect=memory_effect,
         )
         self._step_side_effect_records.setdefault(logical_step_id, []).append(record)
         return record
@@ -4227,6 +4330,7 @@ class MoonMindRunWorkflow:
         task_parameters = self._mapping_value(parameters, "workflow")
         if not task_parameters:
             task_parameters = self._mapping_value(parameters, "task")
+        self._record_bounded_story_loop_context(parameters, task_parameters)
         self._declared_dependencies = normalize_dependency_ids(
             task_parameters.get("dependsOn")
         )
@@ -4263,6 +4367,44 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _record_bounded_story_loop_context(
+        self,
+        parameters: Mapping[str, Any],
+        task_parameters: Mapping[str, Any],
+    ) -> None:
+        raw_loop = task_parameters.get("boundedStoryLoop") or parameters.get(
+            "boundedStoryLoop"
+        )
+        if raw_loop is None:
+            return
+        if not isinstance(raw_loop, Mapping):
+            raise ValueError("boundedStoryLoop must be an object when provided")
+
+        loop_payload = self._json_mapping(raw_loop, path="boundedStoryLoop")
+        full_supervisor_enabled = _coerce_bool(
+            loop_payload.pop("fullSupervisorEnabled", None)
+            or loop_payload.pop("full_supervisor_enabled", None),
+            default=False,
+        )
+        loop_input = BoundedStoryLoopInput.model_validate(loop_payload)
+        compiled = compile_bounded_story_loop(loop_input)
+        scope = bounded_story_loop_scope_guard(
+            selected_item_digest=loop_input.selected_item_digest,
+            candidate_item_digests=[loop_input.selected_item_digest],
+            full_supervisor_enabled=full_supervisor_enabled,
+        )
+        if not scope.get("allowed"):
+            raise ValueError(str(scope.get("reason") or "bounded story loop rejected"))
+
+        self._publish_context["boundedStoryLoop"] = {
+            "selectedItemRef": compiled.selected_item_ref,
+            "selectedItemDigest": compiled.selected_item_digest,
+            "nodeKinds": [node.kind for node in compiled.nodes],
+            "publishMode": loop_input.publish_mode,
+            "mergeAutomationEnabled": loop_input.merge_automation_enabled,
+            "scopeGuard": scope,
+        }
 
     def _runtime_visibility_from_parameters(
         self,
@@ -8897,6 +9039,7 @@ class MoonMindRunWorkflow:
             "publishMode",
             "commitMessage",
             "allowed_tools",
+            "priority",
             "stepCount",
             "maxAttempts",
             "steps",
@@ -8907,7 +9050,11 @@ class MoonMindRunWorkflow:
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
         ):
-            param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
+            param_val = runtime_block.get(param_key)
+            if param_val is None:
+                param_val = node_inputs.get(param_key)
+            if param_val is None and workflow_parameters is not None:
+                param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
         profile_selector = self._build_profile_selector(

@@ -1450,6 +1450,7 @@ class MoonMindAgentRun:
         request_slot: bool = True,
         execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
+        request_priority: int | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the ProviderProfileManager for slot requests; auto-start it on first failure.
 
@@ -1469,6 +1470,8 @@ class MoonMindAgentRun:
             "requester_workflow_id": workflow.info().workflow_id,
             "runtime_id": runtime_id,
         }
+        if request_priority is not None:
+            signal_payload["priority"] = request_priority
         if workflow.patched(SLOT_HANDOFF_PATCH_ID):
             lease_group_id = self._lease_group_id()
             if lease_group_id:
@@ -1504,6 +1507,16 @@ class MoonMindAgentRun:
             manager_handle = workflow.get_external_workflow_handle(manager_id)
         return manager_handle
 
+    @staticmethod
+    def _request_priority(request: AgentExecutionRequest) -> int:
+        parameters = request.parameters
+        if not isinstance(parameters, Mapping):
+            return 0
+        try:
+            return int(parameters.get("priority", 0))
+        except (TypeError, ValueError):
+            return 0
+
     async def _manager_state_for_slot_wait(
         self,
         *,
@@ -1531,6 +1544,7 @@ class MoonMindAgentRun:
         *,
         execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
+        request_priority: int | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Terminate a stuck manager, start a fresh one, and re-request a slot.
 
@@ -1552,6 +1566,7 @@ class MoonMindAgentRun:
             request_slot=True,
             execution_profile_ref=execution_profile_ref,
             profile_selector=profile_selector,
+            request_priority=request_priority,
         )
 
     async def _ensure_manager_started(
@@ -1566,6 +1581,7 @@ class MoonMindAgentRun:
             request_slot=False,
             execution_profile_ref=None,
             profile_selector=None,
+            request_priority=None,
         )
 
     async def _sync_manager_profiles(
@@ -1959,6 +1975,7 @@ class MoonMindAgentRun:
             request_slot=True,
             execution_profile_ref=request.execution_profile_ref,
             profile_selector=selector_payload,
+            request_priority=self._request_priority(request),
         )
         self._awaiting_slot_reason_override = None
         self._slot_wait_timeout_override_seconds = None
@@ -2229,6 +2246,7 @@ class MoonMindAgentRun:
                             request_slot=True,
                             execution_profile_ref=request.execution_profile_ref,
                             profile_selector=selector_payload,
+                            request_priority=self._request_priority(request),
                         )
                     else:
                         manager_handle = await self._ensure_manager_and_signal(
@@ -2237,6 +2255,7 @@ class MoonMindAgentRun:
                             request_slot=True,
                             execution_profile_ref=request.execution_profile_ref,
                             profile_selector=selector_payload,
+                            request_priority=self._request_priority(request),
                         )
                         profile_count = await self._sync_manager_profiles(
                             manager_id=manager_id,
@@ -2366,6 +2385,7 @@ class MoonMindAgentRun:
                                             request_slot=True,
                                             execution_profile_ref=request.execution_profile_ref,
                                             profile_selector=selector_payload,
+                                            request_priority=self._request_priority(request),
                                         )
                                         await self._sync_manager_profiles(
                                             manager_id=manager_id,
@@ -2379,6 +2399,7 @@ class MoonMindAgentRun:
                                     runtime_id,
                                     execution_profile_ref=request.execution_profile_ref,
                                     profile_selector=selector_payload,
+                                    request_priority=self._request_priority(request),
                                 )
                                 await self._sync_manager_profiles(
                                     manager_id=manager_id,
@@ -2457,6 +2478,7 @@ class MoonMindAgentRun:
                         payload = {
                             "requester_workflow_id": wf_id,
                             "runtime_id": kw.get("runtime_id", runtime_id),
+                            "priority": self._request_priority(request),
                         }
                         if workflow.patched(SLOT_HANDOFF_PATCH_ID):
                             lease_group_id = self._lease_group_id()

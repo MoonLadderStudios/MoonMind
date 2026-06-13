@@ -338,6 +338,7 @@ Canonical payload concepts:
 
 - `requester_workflow_id`
 - `runtime_id`
+- `priority`
 - `profile_selector`
 - stable dedupe key for the request
 
@@ -345,7 +346,8 @@ Required behavior:
 
 - treat duplicate requests from the same requester as idempotent,
 - avoid enqueuing duplicate pending requests,
-- preserve FIFO semantics unless selector rules require otherwise.
+- assign higher-priority pending requests before lower-priority requests while
+  preserving FIFO order within the same priority.
 
 #### `release_slot`
 

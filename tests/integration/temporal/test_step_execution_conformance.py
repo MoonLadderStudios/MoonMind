@@ -44,12 +44,31 @@ def test_command_reports_complete_golden_fixture_catalog() -> None:
     assert fixture_ids == {
         "successful-execution",
         "failed-reattempt",
+        "memory-failed-proposed",
+        "memory-accepted-run-context",
+        "memory-blocked-repo-write",
+        "memory-superseded",
+        "memory-source-identity",
+        "memory-unsafe-content",
         "gate-failure",
         "recovery-with-preserved-steps",
         "degraded-checkpoint-payload",
         "degraded-gate-verdict",
         "legacy-checkpoint-only-ledger-row",
+        "bounded-story-loop-contract",
+        "bounded-story-loop-ref-only-evidence",
     }
+
+
+def test_bounded_story_loop_traceability_survives_integration_conformance() -> None:
+    summary = build_conformance_summary()
+    covered = {
+        trace_id
+        for decision in summary["decisions"]
+        for trace_id in decision["traceability"]
+    }
+
+    assert {"FR-018", "FR-019", "SC-006", "DESIGN-REQ-009"}.issubset(covered)
 
 
 def test_gate_and_legacy_ledger_replay_inputs_are_typed_degraded() -> None:
@@ -136,6 +155,24 @@ def test_writer_fixtures_reject_superseded_content_type_spellings() -> None:
 
     assert "step-checkpoint" not in rendered
     assert "step-resume-checkpoint" not in rendered
+
+
+def test_conformance_summary_includes_phase_9_memory_manifest_cases() -> None:
+    summary = build_conformance_summary()
+    decisions = {
+        decision["fixtureId"]: decision for decision in summary["decisions"]
+    }
+
+    for fixture_id in (
+        "memory-failed-proposed",
+        "memory-accepted-run-context",
+        "memory-blocked-repo-write",
+        "memory-superseded",
+        "memory-source-identity",
+        "memory-unsafe-content",
+    ):
+        assert decisions[fixture_id]["decision"] == decisions[fixture_id]["expected"]
+        assert "DESIGN-REQ-007" in decisions[fixture_id]["traceability"]
 
 
 def test_terminology_guardrail_is_part_of_conformance_entrypoint() -> None:

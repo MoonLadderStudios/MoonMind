@@ -222,3 +222,26 @@ def test_manifest_ingest_activity_routes_stay_at_activity_queue_boundaries():
         ARTIFACTS_TASK_QUEUE,
         ARTIFACTS_TASK_QUEUE,
     ]
+
+
+def test_checkpoint_activity_routes_stay_on_allowed_fleets():
+    catalog = build_default_activity_catalog()
+
+    expected = {
+        "workspace.capture_checkpoint": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
+        "workspace.apply_policy": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
+        "workspace.classify_git_effect": (SANDBOX_FLEET, SANDBOX_TASK_QUEUE),
+        "step_checkpoint.create": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
+        "step_checkpoint.validate": (ARTIFACTS_FLEET, ARTIFACTS_TASK_QUEUE),
+    }
+
+    for activity_type, (fleet, task_queue) in expected.items():
+        route = catalog.resolve_activity(activity_type)
+        assert route.fleet == fleet
+        assert route.task_queue == task_queue
+        assert route.timeouts.start_to_close_seconds > 0
+        assert route.retries.max_attempts >= 1
+
+    fleets = {fleet.fleet: fleet for fleet in catalog.fleets}
+    assert "workspace.capture_checkpoint" in fleets[SANDBOX_FLEET].activity_types
+    assert "step_checkpoint.create" in fleets[ARTIFACTS_FLEET].activity_types
