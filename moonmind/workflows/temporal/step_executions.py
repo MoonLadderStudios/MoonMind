@@ -11,6 +11,7 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from moonmind.schemas.step_execution_models import (
+    MemorySideEffectSummary,
     StepExecutionIdentityModel,
     StepExecutionManifestModel,
     StepExecutionReason,
@@ -278,6 +279,7 @@ def side_effect_record(
     effect_kind: Literal["normal", "cleanup", "compensation"] = "normal",
     reason: str | None = None,
     approved_workspace_roots: Sequence[str] = (),
+    memory_effect: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a compact side-effect decision and gate unsafe effect classes."""
 
@@ -323,7 +325,115 @@ def side_effect_record(
         )
     elif reason:
         record["reason"] = _sanitize_diagnostic_text(reason)
+    if memory_effect is not None:
+        if effect_class != "memory_update":
+            raise ValueError("memory_effect is only valid for memory_update records")
+        record["memory"] = MemorySideEffectSummary.model_validate(
+            dict(memory_effect)
+        ).model_dump(by_alias=True, mode="json")
     return record
+
+
+def memory_side_effect_summary(
+    *,
+    state: str,
+    target: str,
+    reason: str,
+    proposal_ref: str,
+    source: Mapping[str, Any] | StepExecutionIdentityModel,
+    decision_ref: str | None = None,
+    application_result_ref: str | None = None,
+    privileged_action: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a compact, validated terminal memory side-effect projection."""
+
+    payload = {
+        "state": state,
+        "target": target,
+        "reason": reason,
+        "proposalRef": proposal_ref,
+        "decisionRef": decision_ref,
+        "applicationResultRef": application_result_ref,
+        "source": source,
+        "privilegedAction": dict(privileged_action)
+        if privileged_action is not None
+        else None,
+    }
+    return MemorySideEffectSummary.model_validate(payload).model_dump(
+        by_alias=True,
+        mode="json",
+    )
+
+
+def memory_write_gate_decision(
+    *,
+    target: str,
+    terminal_disposition: str | None,
+    publication_gate_passed: bool | None,
+    policy_decision: str | None,
+) -> dict[str, Any]:
+    """Return deterministic fail-closed memory promotion gate metadata."""
+
+    target_text = str(target or "").strip()
+    decision = str(policy_decision or "").strip()
+    repo_target = target_text.startswith("repo://")
+    if not decision:
+        return {
+            "allowed": False,
+            "state": "proposed",
+            "reason": "missing_policy_decision",
+        }
+    if decision not in {
+        "reject",
+        "accept_for_run_context",
+        "approve_repo_application",
+        "supersede",
+        "blocked",
+    }:
+        return {
+            "allowed": False,
+            "state": "proposed",
+            "reason": "unknown_policy_decision",
+        }
+    if decision in {"reject", "blocked"}:
+        return {
+            "allowed": False,
+            "state": "rejected" if decision == "reject" else "proposed",
+            "reason": "policy_blocked",
+        }
+    if decision == "supersede":
+        return {"allowed": False, "state": "superseded", "reason": "superseded"}
+    if decision == "accept_for_run_context":
+        if terminal_disposition in {"failed_unrecoverable", "discarded", "blocked"}:
+            return {
+                "allowed": False,
+                "state": "proposed",
+                "reason": "terminal_disposition_not_promotable",
+            }
+        return {
+            "allowed": True,
+            "state": "accepted_for_run_context",
+            "reason": "policy_approved_for_later_attempts",
+        }
+    if repo_target and terminal_disposition != "accepted":
+        return {
+            "allowed": False,
+            "state": "proposed",
+            "reason": "terminal_disposition_not_accepted",
+        }
+    if repo_target and publication_gate_passed is not True:
+        return {
+            "allowed": False,
+            "state": "proposed",
+            "reason": "publication_gate_not_passed",
+        }
+    return {
+        "allowed": True,
+        "state": "applied_to_repo" if repo_target else "accepted_for_run_context",
+        "reason": "accepted_disposition_and_publication_gate_passed"
+        if repo_target
+        else "policy_approved_for_later_attempts",
+    }
 
 
 def _side_effect_already_occurred(record: Mapping[str, Any]) -> bool:
