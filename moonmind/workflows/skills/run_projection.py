@@ -31,6 +31,7 @@ from moonmind.schemas.agent_skill_models import (
 from moonmind.services.skills_on_demand import skills_on_demand_runtime_instruction
 from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.temporal.artifacts import TemporalArtifactError
+from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 
 AUTO_SKILL_SENTINEL = "auto"
 ACTIVE_SKILL_SNAPSHOT_HEADER = "Active MoonMind skill snapshot:"
@@ -87,6 +88,7 @@ async def materialize_run_skill_snapshot(
     mode: RuntimeMaterializationMode = RuntimeMaterializationMode.HYBRID,
     projection_owner_uid: int | None = None,
     projection_owner_gid: int | None = None,
+    project_adapter_aliases: bool = True,
 ) -> dict[str, Any]:
     """Materialize a resolved snapshot for one run and return its metadata.
 
@@ -100,6 +102,13 @@ async def materialize_run_skill_snapshot(
     root = Path(run_root).expanduser().resolve()
     backing_root = root / "runtime" / "skills_active" / resolved_skillset.snapshot_id
     source_preservation_root = root / "runtime" / "skill_sources" / "repo_agents_skills"
+    if not project_adapter_aliases:
+        active_root = root / "runtime" / "skills_active"
+        cleanup_moonmind_skill_projections(
+            run_root=workspace,
+            skills_active_path=active_root,
+            owned_roots=(active_root,),
+        )
 
     from moonmind.services.skill_materialization import AgentSkillMaterializer
 
@@ -110,6 +119,7 @@ async def materialize_run_skill_snapshot(
         source_preservation_root=str(source_preservation_root),
         projection_owner_uid=projection_owner_uid,
         projection_owner_gid=projection_owner_gid,
+        project_adapter_aliases=project_adapter_aliases,
     )
     try:
         materialization = await materializer.materialize(

@@ -543,6 +543,41 @@ async def test_materializer_hybrid_returns_compact_metadata_without_skill_body(
     assert "compact_skill" in serialized
     assert "FULL BODY CONTENT" not in serialized
 
+
+@pytest.mark.asyncio
+async def test_materializer_can_skip_adapter_alias_projection(tmp_path: Path):
+    payload = b"---\nname: verifier\ndescription: test\n---\n"
+    materializer = AgentSkillMaterializer(
+        str(tmp_path),
+        artifact_service=_StaticArtifactService({"artifact-verifier": payload}),
+        project_adapter_aliases=False,
+    )
+    skillset = ResolvedSkillSet(
+        snapshot_id="snap_projectionless",
+        resolved_at=datetime.now(tz=UTC),
+        skills=[_skill("verifier", "artifact-verifier")],
+    )
+
+    result = await materializer.materialize(
+        resolved_skillset=skillset,
+        runtime_id="test_runtime",
+        mode=RuntimeMaterializationMode.HYBRID,
+    )
+
+    backing_dir = tmp_path / "runtime" / "skills_active" / "snap_projectionless"
+    assert not (tmp_path / ".agents" / "skills").exists()
+    assert not (tmp_path / ".gemini" / "skills").exists()
+    assert result.metadata["visiblePath"] == str(backing_dir)
+    assert result.metadata["canonicalAliasAvailable"] is False
+    assert (
+        result.metadata["canonicalAliasSkippedReason"]
+        == "adapter_alias_projection_disabled"
+    )
+    manifest = json.loads((backing_dir / "_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["visible_path"] == str(backing_dir)
+    assert (backing_dir / "verifier" / "SKILL.md").is_file()
+
+
 @pytest.mark.asyncio
 async def test_materializer_prompt_bundle_mode(tmp_path: Path):
     materializer = AgentSkillMaterializer(str(tmp_path))
