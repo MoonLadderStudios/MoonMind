@@ -434,12 +434,14 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getAllByRole('heading', { name: 'Workflow Steps' }).length).toBeGreaterThan(0);
-      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
       expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
-      expect(screen.getByLabelText('start to plan')).toBeTruthy();
-      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
-      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
-      expect(screen.getByLabelText('Step dependency edges')).toBeTruthy();
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
+      expect(screen.queryByLabelText('start to plan')).toBeNull();
+      expect(screen.queryByLabelText('plan to apply')).toBeNull();
+      expect(screen.queryByLabelText('apply to verify')).toBeNull();
+      expect(screen.queryByLabelText('Step dependency edges')).toBeNull();
       expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
@@ -450,7 +452,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
   });
 
-  it('MM-746 renders an empty step DAG without a fake start edge', async () => {
+  it('MM-842 renders empty steps without a separate Step DAG panel', async () => {
     window.history.pushState({}, 'Empty Steps Test', '/workflows/test-123/steps?source=temporal');
     const emptyStepsSnapshot = { ...latestStepsSnapshot, steps: [] };
     const mockExecution = {
@@ -490,8 +492,10 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
-      expect(screen.getByText('No steps in the ledger yet.')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      expect(screen.getByText('0 steps')).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
+      expect(screen.queryByText('No steps in the ledger yet.')).toBeNull();
       expect(screen.queryByLabelText('start to none')).toBeNull();
       expect(screen.queryByLabelText('Step dependency edges')).toBeNull();
     });
@@ -733,10 +737,10 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Plan work').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
-      expect(screen.getByRole('heading', { name: 'Step DAG' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
       expect(screen.getAllByText('Depends on: plan').length).toBeGreaterThan(0);
-      expect(screen.getByLabelText('plan to apply')).toBeTruthy();
-      expect(screen.getByLabelText('apply to verify')).toBeTruthy();
+      expect(screen.queryByLabelText('plan to apply')).toBeNull();
+      expect(screen.queryByLabelText('apply to verify')).toBeNull();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 

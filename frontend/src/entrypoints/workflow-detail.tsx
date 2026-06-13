@@ -4249,78 +4249,6 @@ function ArtifactBrowserPanel({
   );
 }
 
-function StepDagOverview({
-  snapshot,
-}: {
-  snapshot: z.infer<typeof StepLedgerSnapshotSchema>;
-}) {
-  const stepIds = new Set(snapshot.steps.map((step) => step.logicalStepId));
-  const dependencyEdges = snapshot.steps.flatMap((step) =>
-    step.dependsOn.map((sourceId) => ({
-      sourceId,
-      targetId: step.logicalStepId,
-      isKnownSource: stepIds.has(sourceId),
-    })),
-  );
-  const rootEdges = snapshot.steps
-    .filter((step) => step.dependsOn.length === 0)
-    .map((step) => ({
-      sourceId: 'start',
-      targetId: step.logicalStepId,
-      isKnownSource: true,
-    }));
-  const displayEdges = [...rootEdges, ...dependencyEdges];
-
-  return (
-    <section className="step-dag-panel" aria-label="Step DAG visualization">
-      <h4>Step DAG</h4>
-      <div className="step-dag-canvas">
-        {snapshot.steps.length > 0 ? (
-          <div className="step-dag-grid" role="list" aria-label="Step dependency nodes">
-            {snapshot.steps.map((step) => (
-              <article key={step.logicalStepId} className="step-dag-node" role="listitem">
-                <div className="step-dag-node-header">
-                  <strong>{step.title}</strong>
-                  <span {...executionStatusPillProps(step.status)}>
-                    {formatStatusLabel(step.status)}
-                  </span>
-                </div>
-                <div className="small">
-                  <code>{step.logicalStepId}</code>
-                </div>
-                <div className="small">
-                  Depends on: {step.dependsOn.length > 0 ? step.dependsOn.join(', ') : 'start'}
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <p className="small step-dag-empty">No steps in the ledger yet.</p>
-        )}
-        {displayEdges.length > 0 ? (
-          <div className="step-dag-edges" aria-label="Step dependency edges">
-            {displayEdges.map((edge) => (
-              <div
-                key={`${edge.sourceId}->${edge.targetId}`}
-                className={
-                  edge.isKnownSource
-                    ? 'step-dag-edge-label'
-                    : 'step-dag-edge-label step-dag-edge-label-missing'
-                }
-                aria-label={`${edge.sourceId} to ${edge.targetId}`}
-              >
-                <code>{edge.sourceId}</code>
-                <span aria-hidden="true">-&gt;</span>
-                <code>{edge.targetId}</code>
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
 function InterventionMonitorPanel({
   execution,
 }: {
@@ -5630,7 +5558,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 <div className="notice error">{(stepsQuery.error as Error).message}</div>
               ) : stepsQuery.data ? (
                 <>
-                  <StepDagOverview snapshot={stepsQuery.data} />
                   <div className="step-tl-list">
                     {stepsQuery.data.steps.map((row, idx) => (
                       <StepLedgerRowCard
