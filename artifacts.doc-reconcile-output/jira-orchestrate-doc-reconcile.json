@@ -3,12 +3,15 @@
   "docPaths": [
     "docs/tmp/StepExecutionsCheckpointingGapPlan.md"
   ],
-  "gateRationale": "No canonical source document exists for this reconciliation step. The latest moonspec-verify report verdict is FULLY_IMPLEMENTED, but spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md, an imperative working document under docs/tmp/. Per the document model and Constitution XII, docs/tmp material is not a canonical desired-state document and must not be reconciled into canonical docs. No artifacts/doc-discoveries/001-checkpoint-activity-substrate.json ledger was present, and the verify report states no canonical source-document drift was found.",
+  "gateRationale": "No canonical source document exists for this reconciliation step. The checkpoint activity substrate and use-conformance-gate specs both reference docs/tmp/StepExecutionsCheckpointingGapPlan.md, an imperative working document under docs/tmp/. Per the document model and Constitution XII, docs/tmp migration or execution notes are not canonical desired-state documents and must not be reconciled into canonical docs. The available verification and discovery evidence identifies no durable canonical docs drift.",
   "evidence": [
     "specs/001-checkpoint-activity-substrate/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md and labels it an imperative working document used only as bounded source context",
     "/work/agent_jobs/mm:fff3123a-815e-44d1-a9f6-af38c17b5dd1/artifacts/stdout.log latest MoonSpec Verification Report records Verdict: FULLY_IMPLEMENTED",
     "/work/agent_jobs/mm:fff3123a-815e-44d1-a9f6-af38c17b5dd1/artifacts/stdout.log verification report states: No canonical source-document drift was found; the source document is the disposable docs/tmp/StepExecutionsCheckpointingGapPlan.md",
     "specs/001-checkpoint-activity-substrate/quickstart.md Documentation Drift section states no canonical documentation reconciliation is required because the source document is an imperative working document and no durable desired-state drift was found",
-    "No artifacts/doc-discoveries/001-checkpoint-activity-substrate.json file was present in the workspace"
+    "specs/001-use-conformance-gate/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md (imperative working document)",
+    ".specify/memory/constitution.md Principle XII classifies migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs as docs/tmp or local-only material, not canonical docs",
+    "No artifacts/doc-discoveries ledger was present in this workspace",
+    "No canonical docs/ source document was identified for these features"
   ]
 }
