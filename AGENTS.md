@@ -312,6 +312,7 @@ Key diagnostics:
 - Existing Temporal workflow/activity payloads and provider-profile manager workflow signals; no new persistent storage (001-pentest-provider-leases)
 - Python 3.12 + Pydantic v2 settings/models, PyYAML-backed workload profile loading, Temporal activity boundary helpers (001-harden-pentest-provenance)
 - No new persistent storage; deterministic validation only (001-harden-pentest-provenance)
+- TypeScript/React for Mission Control UI; Python 3.12 remains present but is not part of this story + React, TanStack Query, Zod, Testing Library, Vitest, existing Mission Control stylesheet (001-remove-step-dag)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

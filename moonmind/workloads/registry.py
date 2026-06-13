@@ -167,6 +167,7 @@ class RunnerProfileRegistry:
                     attempt=parsed_request.attempt,
                     toolName=parsed_request.tool_name,
                     workloadProfile=parsed_request.profile_id,
+                    runtimeId=parsed_request.runtime_id,
                     sessionId=parsed_request.session_id,
                     sessionEpoch=parsed_request.session_epoch,
                     workloadAccess="profile",

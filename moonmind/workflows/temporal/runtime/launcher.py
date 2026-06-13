@@ -901,6 +901,10 @@ class ManagedRuntimeLauncher:
         resolved_skillset = await load_resolved_skillset(
             self._artifact_service, skillset_ref
         )
+        params = request.parameters if isinstance(request.parameters, Mapping) else {}
+        from moonmind.workflows.agent_skills.selection import selected_agent_skill
+
+        selected_skill_name = selected_agent_skill(params) or None
         materialization_metadata = await materialize_run_skill_snapshot(
             workspace_path=resolved_workspace_path,
             run_root=str(run_root),
@@ -909,12 +913,9 @@ class ManagedRuntimeLauncher:
             artifact_service=self._artifact_service,
             projection_owner_uid=1000,
             projection_owner_gid=1000,
+            project_adapter_aliases=selected_skill_name != "moonspec-verify",
         )
 
-        params = request.parameters if isinstance(request.parameters, Mapping) else {}
-        from moonmind.workflows.agent_skills.selection import selected_agent_skill
-
-        selected_skill_name = selected_agent_skill(params) or None
         await verify_skill_projection(
             materialization_metadata=materialization_metadata,
             resolved_skillset=resolved_skillset,
