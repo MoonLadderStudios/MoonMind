@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
@@ -3192,18 +3192,8 @@ function LiveLogsPanel({
 }
 
 function InterventionPanel({
-  actions,
-  busy,
   audit,
-  onPause,
-  onResume,
-  onApprove,
-  onCancel,
-  onReject,
-  onSendMessage,
 }: {
-  actions: NonNullable<z.infer<typeof ExecutionDetailSchema>['actions']>;
-  busy: boolean;
   audit: Array<{
     action: string;
     transport: string;
@@ -3211,103 +3201,15 @@ function InterventionPanel({
     detail?: string | null | undefined;
     createdAt: string;
   }>;
-  onPause: () => void;
-  onResume: () => void;
-  onApprove: () => void;
-  onCancel: () => void;
-  onReject: () => void;
-  onSendMessage: (message: string) => void;
 }) {
-  const [operatorMessage, setOperatorMessage] = useState('');
-  const hasControls = Boolean(
-    actions.canPause ||
-      actions.canResume ||
-      actions.canApprove ||
-      actions.canCancel ||
-      actions.canReject ||
-      actions.canSendMessage,
-  );
-
-  const submitMessage = () => {
-    const message = operatorMessage.trim();
-    if (!message) return;
-    onSendMessage(message);
-    setOperatorMessage('');
-  };
-
   return (
     <section className="stack">
       <div>
         <h3>Intervention</h3>
         <p className="small">
-          Controls use Temporal or provider-native APIs and do not require a live log connection.
+          Intervention history is shown here. Current workflow operations are available from the workflow actions menu.
         </p>
       </div>
-
-      {hasControls ? (
-        <div className="actions">
-          {actions.canPause ? (
-            <button type="button" disabled={busy} className="secondary" onClick={onPause}>
-              Pause
-            </button>
-          ) : null}
-          {actions.canResume ? (
-            <button type="button" disabled={busy} className="queue-action" onClick={onResume}>
-              Resume
-            </button>
-          ) : null}
-          {actions.canApprove ? (
-            <button type="button" disabled={busy} className="queue-action" onClick={onApprove}>
-              Approve
-            </button>
-          ) : null}
-          {actions.canReject ? (
-            <button
-              type="button"
-              disabled={busy}
-              className="queue-action queue-action-danger"
-              onClick={onReject}
-            >
-              Reject
-            </button>
-          ) : null}
-          {actions.canCancel ? (
-            <button
-              type="button"
-              disabled={busy}
-              className="queue-action queue-action-danger"
-              onClick={onCancel}
-            >
-              Cancel
-            </button>
-          ) : null}
-        </div>
-      ) : (
-        <p className="small">No intervention controls are available for the current task state.</p>
-      )}
-
-      {actions.canSendMessage ? (
-        <div className="stack">
-          <label htmlFor="operator-message">Operator message</label>
-          <textarea
-            id="operator-message"
-            value={operatorMessage}
-            onChange={(event) => setOperatorMessage(event.target.value)}
-            rows={3}
-            placeholder="Send an explicit operator message without using the log viewer."
-          />
-          <div className="actions">
-            <button
-              type="button"
-              className="secondary"
-              disabled={busy || !operatorMessage.trim()}
-              onClick={submitMessage}
-            >
-              Send Message
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       <div className="stack">
         <h4>Intervention History</h4>
@@ -3428,7 +3330,15 @@ function WorkflowActionsMenu({
   };
 
   return (
-    <div className="td-workflow-actions-menu" ref={rootRef}>
+    <div
+      className="td-workflow-actions-menu"
+      ref={rootRef}
+      onBlur={(event) => {
+        if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setOpen(false);
+        }
+      }}
+    >
       <button
         type="button"
         ref={triggerRef}
@@ -5307,20 +5217,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     : '';
   const compareHref =
     workflowId && actions?.canEditForRerun ? taskCompareHref(workflowId) : '';
-  const onTaskEditingNavigation = (
-    event: MouseEvent<HTMLAnchorElement>,
-    telemetryEvent: 'detail_edit_click' | 'detail_compare_click',
-  ) => {
-    if (busy) {
-      event.preventDefault();
-      return;
-    }
-    recordTemporalTaskEditingClientEvent({
-      event: telemetryEvent,
-      mode: 'detail',
-      workflowId,
-    });
-  };
   const onRerun = () => {
     setActionError(null);
     if (busy || !workflowId) return;
@@ -6068,18 +5964,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               {execution.blockedOnDependencies ? (
                 <div className="notice">
                   <strong>Blocked on prerequisites.</strong> This run keeps waiting until every prerequisite reaches <code>completed</code>. Failed, canceled, terminated, or timed-out prerequisites do not fail this run automatically — rerun the prerequisite, cancel this run, or bypass the dependency.
-                  {actionsOn && actions?.canBypassDependencies ? (
-                    <div className="actions" style={{ marginTop: '0.75rem' }}>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        className="queue-action queue-action-danger"
-                        onClick={onBypassDependencies}
-                      >
-                        Bypass Dependency Wait
-                      </button>
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
               <div className="stack">
@@ -6198,107 +6082,49 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           {actionsOn && actions && hasTaskActions ? (
             <section className="stack td-actions-region">
               <div>
-                <h3>Workflow Actions</h3>
-                <p className="small">Workflow editing actions stay separate from intervention controls.</p>
+                <h3>Workflow Action Context</h3>
+                <p className="small">Workflow action settings and related context are shown here; current operations are available from the workflow actions menu.</p>
               </div>
-              <div className="actions">
-                {canCreateRemediation ? (
-                  <div className="stack td-remediation-create-preview">
-                    <h4>Remediation create preview</h4>
-                    <div className="grid-2">
-                      <label>
-                        Remediation mode
-                        <select
-                          value={remediationMode}
-                          onChange={(event) => setRemediationMode(event.target.value)}
-                        >
-                          <option value="snapshot_then_follow">Snapshot then follow</option>
-                          <option value="snapshot">Snapshot only</option>
-                          <option value="live_follow">Live follow</option>
-                        </select>
-                      </label>
-                      <label>
-                        Remediation authority
-                        <select
-                          value={remediationAuthority}
-                          onChange={(event) => setRemediationAuthority(event.target.value)}
-                        >
-                          <option value="approval_gated">Approval-gated admin remediation</option>
-                          <option value="observe_only">Troubleshooting only</option>
-                          <option value="admin_auto">Admin remediation</option>
-                        </select>
-                      </label>
-                      <label>
-                        Remediation action policy
-                        <input
-                          value={remediationActionPolicy}
-                          onChange={(event) => setRemediationActionPolicy(event.target.value)}
-                        />
-                      </label>
-                      <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
-                    </div>
-                    <p className="small">
-                      Evidence preview: step ledger, diagnostics, and 2000 log lines.
-                    </p>
-                    <button
-                      type="button"
-                      className="secondary"
-                      disabled={busy}
-                      onClick={() => {
-                        setActionError(null);
-                        createRemediationMutation.mutate();
-                      }}
-                    >
-                      Create remediation task
-                    </button>
+              {canCreateRemediation ? (
+                <div className="stack td-remediation-create-preview">
+                  <h4>Remediation create preview</h4>
+                  <div className="grid-2">
+                    <label>
+                      Remediation mode
+                      <select
+                        value={remediationMode}
+                        onChange={(event) => setRemediationMode(event.target.value)}
+                      >
+                        <option value="snapshot_then_follow">Snapshot then follow</option>
+                        <option value="snapshot">Snapshot only</option>
+                        <option value="live_follow">Live follow</option>
+                      </select>
+                    </label>
+                    <label>
+                      Remediation authority
+                      <select
+                        value={remediationAuthority}
+                        onChange={(event) => setRemediationAuthority(event.target.value)}
+                      >
+                        <option value="approval_gated">Approval-gated admin remediation</option>
+                        <option value="observe_only">Troubleshooting only</option>
+                        <option value="admin_auto">Admin remediation</option>
+                      </select>
+                    </label>
+                    <label>
+                      Remediation action policy
+                      <input
+                        value={remediationActionPolicy}
+                        onChange={(event) => setRemediationActionPolicy(event.target.value)}
+                      />
+                    </label>
+                    <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
                   </div>
-                ) : null}
-                {actions.canSetTitle ? (
-                  <button type="button" disabled={busy} className="secondary" onClick={onRename}>
-                    Rename
-                  </button>
-                ) : null}
-                {taskEditingOn && canShowEditWorkflow && editHref ? (
-                  <a
-                    className="button secondary"
-                    href={editHref}
-                    aria-disabled={busy}
-                    onClick={(event) => onTaskEditingNavigation(event, 'detail_edit_click')}
-                  >
-                    Edit task
-                  </a>
-                ) : null}
-                {taskEditingOn && compareHref ? (
-                  <a
-                    className="button secondary"
-                    href={compareHref}
-                    aria-disabled={busy}
-                    onClick={(event) => onTaskEditingNavigation(event, 'detail_compare_click')}
-                  >
-                    Compare run
-                  </a>
-                ) : null}
-                {taskEditingOn && actions.canRerun ? (
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy}
-                    onClick={onRerun}
-                  >
-                    Rerun
-                  </button>
-                ) : null}
-                {taskEditingOn && actions.canResumeFromFailedStep ? (
-                  <button
-                    type="button"
-                    className="queue-action"
-                    disabled={busy}
-                    onClick={onResumeFromFailedStep}
-                  >
-                    Resume from failed step
-                  </button>
-                ) : null}
-              </div>
+                  <p className="small">
+                    Evidence preview: step ledger, diagnostics, and 2000 log lines.
+                  </p>
+                </div>
+              ) : null}
               {taskEditingOn && actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0 ? (
                 <div className="stack">
                   <label className="field-label" htmlFor="selected-recovery-step">
@@ -6322,14 +6148,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                       </option>
                     ))}
                   </select>
-                  <button
-                    type="button"
-                    className="secondary"
-                    disabled={busy || !selectedRecoveryStep?.eligible}
-                    onClick={onRecoverFromSelectedStep}
-                  >
-                    Recover from selected step
-                  </button>
                 </div>
               ) : null}
               {editTaskUnavailableReason ? (
@@ -6365,15 +6183,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           {actionsOn && actions && hasInterventionSection ? (
             <InterventionPanel
-              actions={actions}
-              busy={busy}
               audit={execution.interventionAudit || []}
-              onPause={onPause}
-              onResume={onResume}
-              onApprove={onApprove}
-              onCancel={onCancel}
-              onReject={onReject}
-              onSendMessage={onSendMessage}
             />
           ) : null}
 
