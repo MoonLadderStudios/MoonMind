@@ -63,6 +63,10 @@ REQUIRED_TRACEABILITY_IDS = (
     "DESIGN-REQ-012",
     "DESIGN-REQ-021",
     "DESIGN-REQ-024",
+    "FR-018",
+    "FR-019",
+    "SC-006",
+    "DESIGN-REQ-009",
 )
 
 _VALID_GATE_VERDICTS = {
@@ -680,6 +684,49 @@ def golden_fixture_catalog() -> list[dict[str, Any]]:
                 },
                 category="replay",
                 expected="degraded",
+            ),
+        },
+        {
+            "fixtureId": "bounded-story-loop-contract",
+            "decision": _decision(
+                fixture_id="bounded-story-loop-contract",
+                category="golden",
+                contract_surface="bounded_story_loop",
+                decision="valid",
+                expected="valid",
+                failure_code=None,
+                message=(
+                    "bounded story loop contract covers manifest, checkpoint, gate, "
+                    "publication, replay, and degraded input traceability"
+                ),
+                traceability=(
+                    "FR-018",
+                    "SC-006",
+                    "DESIGN-REQ-009",
+                    "FR-001",
+                    "FR-002",
+                    "FR-003",
+                ),
+            ),
+        },
+        {
+            "fixtureId": "bounded-story-loop-ref-only-evidence",
+            "decision": _decision(
+                fixture_id="bounded-story-loop-ref-only-evidence",
+                category="golden",
+                contract_surface="bounded_story_loop",
+                decision="valid",
+                expected="valid",
+                failure_code=None,
+                message="bounded story loop evidence remains artifact-ref only",
+                traceability=(
+                    "FR-019",
+                    "FR-005",
+                    "FR-006",
+                    "FR-011",
+                    "DESIGN-REQ-002",
+                    "DESIGN-REQ-009",
+                ),
             ),
         },
     ]
