@@ -1509,8 +1509,11 @@ class MoonMindAgentRun:
 
     @staticmethod
     def _request_priority(request: AgentExecutionRequest) -> int:
+        parameters = request.parameters
+        if not isinstance(parameters, Mapping):
+            return 0
         try:
-            return int(request.parameters.get("priority", 0))
+            return int(parameters.get("priority", 0))
         except (TypeError, ValueError):
             return 0
 

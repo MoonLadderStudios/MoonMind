@@ -10,6 +10,7 @@ fallback and causes ExternalWorkflowExecutionNotFound crashes.
 import ast
 import inspect
 import textwrap
+from types import SimpleNamespace
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
@@ -510,3 +511,14 @@ class TestEnsureManagerAutoStart:
 
         assert found_guard
         assert found_payload_write
+
+    def test_request_priority_handles_missing_or_invalid_parameters(self):
+        assert MoonMindAgentRun._request_priority(
+            SimpleNamespace(parameters=None)  # type: ignore[arg-type]
+        ) == 0
+        assert MoonMindAgentRun._request_priority(
+            SimpleNamespace(parameters=[])  # type: ignore[arg-type]
+        ) == 0
+        assert MoonMindAgentRun._request_priority(
+            SimpleNamespace(parameters={"priority": "bad"})  # type: ignore[arg-type]
+        ) == 0

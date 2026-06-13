@@ -1325,6 +1325,33 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
 
         self.assertEqual(request.parameters["priority"], 10)
 
+    def test_build_agent_execution_request_preserves_explicit_zero_priority(self) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "codex",
+                        "priority": 0,
+                    },
+                },
+                node_id="node-priority-zero",
+                tool_name="pr-resolver",
+                workflow_parameters={"priority": 10},
+            )
+
+        self.assertEqual(request.parameters["priority"], 0)
+
     def test_build_agent_execution_request_falls_back_on_invalid_profile_ref(self) -> None:
         """When a plan node carries a profile ID that doesn't match any known
         profile for the runtime (e.g. AI-hallucinated 'default:codex_cli'),
