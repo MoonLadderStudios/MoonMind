@@ -113,6 +113,9 @@ def test_degraded_inputs_return_typed_decisions_without_exceptions() -> None:
     assert decisions["old-manifest-row"]["expected"] == "invalid"
     assert decisions["old-checkpoint-row"]["decision"] == "invalid"
     assert decisions["old-checkpoint-row"]["expected"] == "invalid"
+    assert decisions["future-checkpoint-policy"]["decision"] == "invalid"
+    assert decisions["future-checkpoint-policy"]["expected"] == "invalid"
+    assert "workspacePolicy" in decisions["future-checkpoint-policy"]["message"]
     assert decisions["blank-gate-verdict"]["decision"] == "degraded"
     assert decisions["blank-gate-verdict"]["expected"] == "degraded"
     assert decisions["unknown-gate-verdict"]["decision"] == "degraded"

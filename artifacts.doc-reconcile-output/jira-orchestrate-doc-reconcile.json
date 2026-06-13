@@ -1,11 +1,14 @@
 {
   "action": "no_update_required",
-  "docPaths": [],
-  "gateRationale": "No canonical source document under docs/ is recorded for MM-841. The controlling post-remediation verification verdict is FULLY_IMPLEMENTED, but spec.md has no Source Document entry and the available Source Document Drift evidence identifies no durable docs drift, so moonspec-doc-reconcile stops with no_update_required and makes no canonical doc edits.",
+  "docPaths": [
+    "docs/tmp/StepExecutionsCheckpointingGapPlan.md"
+  ],
+  "gateRationale": "No canonical source document exists for this reconciliation step. specs/001-use-conformance-gate/spec.md records docs/tmp/StepExecutionsCheckpointingGapPlan.md as an imperative working document, and Constitution XII keeps docs/tmp migration or execution notes outside canonical docs. The moonspec-doc-reconcile precondition therefore requires a no-op outcome.",
   "evidence": [
-    "/work/agent_jobs/mm:4a1b4105-18f8-46ca-aba9-6ce8631c9c6b/session/.moonmind-codex-session-state.json records Post-Remediation Attempt 6 with Verdict FULLY_IMPLEMENTED",
-    "specs/001-workflow-actions-menu/spec.md contains MM-841 feature metadata but no Source Document path under docs/",
-    "/work/agent_jobs/mm:4a1b4105-18f8-46ca-aba9-6ce8631c9c6b/artifacts/moonspec-verify/MM-841-workflow-actions-menu.md Source Document Drift section states no canonical source document was named in spec.md and no durable docs drift was detected",
-    "artifacts/doc-discoveries/001-workflow-actions-menu.json was not present"
+    "specs/001-use-conformance-gate/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md (imperative working document)",
+    ".specify/memory/constitution.md Principle XII classifies migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs as docs/tmp or local-only material, not canonical docs",
+    "No artifacts/doc-discoveries/ ledger is present in this workspace",
+    "No canonical docs/ source document was identified for this feature",
+    "artifacts/ is root-owned and not writable by uid 1000(app), so the structured result was written to the writable existing reconcile output directory artifacts.doc-reconcile-output/"
   ]
 }

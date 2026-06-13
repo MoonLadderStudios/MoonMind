@@ -190,16 +190,17 @@ def _classify_checkpoint_payload(
     fixture_id: str,
     payload: Mapping[str, Any],
     *,
+    traceability: Iterable[str],
     category: str = "golden",
     expected: str = "valid",
-    traceability: Iterable[str],
+    workspace_policy: str = "apply_previous_execution_diff_to_clean_baseline",
 ) -> dict[str, Any]:
     result = validate_step_checkpoint_payload(
         dict(payload),
         expected_source=_identity(),
         expected_task_input_snapshot_ref="artifact://input",
         expected_plan_digest="sha256:plan",
-        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        workspace_policy=workspace_policy,
         checkpoint_ref=f"artifact://{fixture_id}",
     )
     decision = "valid" if result.valid else "invalid"
@@ -524,6 +525,14 @@ def replay_degraded_fixture_decisions() -> list[dict[str, Any]]:
             old_checkpoint,
             category="degraded_input",
             expected="invalid",
+            traceability=("FR-005", "SC-004", "DESIGN-REQ-024"),
+        ),
+        _classify_checkpoint_payload(
+            "future-checkpoint-policy",
+            _valid_checkpoint_payload(),
+            category="degraded_input",
+            expected="invalid",
+            workspace_policy="future_checkpoint_policy",
             traceability=("FR-005", "SC-004", "DESIGN-REQ-024"),
         ),
         classify_gate_verdict(
