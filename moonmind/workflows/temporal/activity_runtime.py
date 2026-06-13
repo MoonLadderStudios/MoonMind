@@ -219,6 +219,17 @@ _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
 
 
+class PentestWorkloadHandle(Protocol):
+    async def poll(self) -> Any | None:
+        """Return a workload result once complete, otherwise None."""
+
+    async def stop(self, *, grace_seconds: int) -> Mapping[str, Any] | None:
+        """Attempt graceful workload termination."""
+
+    async def remove(self) -> Mapping[str, Any] | None:
+        """Remove workload runtime resources."""
+
+
 class PentestProviderLeaseManager(Protocol):
     async def acquire(
         self,
@@ -380,7 +391,9 @@ def emit_pentest_activity_heartbeat(
     compact_metadata = {
         str(key): redact_pentest_diagnostic_value(value)
         for key, value in dict(metadata or {}).items()
-        if value is not None and str(key) not in dropped_metadata_keys
+        if value is not None
+        and str(key) not in dropped_metadata_keys
+        and not re.search(r"(?i)(api[_-]?key|token|password|secret)", str(key))
     }
     payload: dict[str, Any] = {
         "phase": build_pentest_progress_annotation(
@@ -445,6 +458,120 @@ async def _await_pentest_workload_with_activity_heartbeats(
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
+        raise
+
+async def _supervise_pentest_workload_with_activity_heartbeats(
+    launcher: Any,
+    validated_workload_request: Any,
+    *,
+    request: PentestWorkloadRequest,
+    timeout_seconds: float,
+    heartbeat_interval_seconds: float = _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS,
+) -> WorkloadResult:
+    """Run a Pentest workload with activity-visible heartbeats and cleanup."""
+
+    if not callable(getattr(launcher, "start", None)):
+        raw_result = await _await_pentest_workload_with_activity_heartbeats(
+            launcher.run(validated_workload_request),
+            request=request,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
+        if isinstance(raw_result, WorkloadResult):
+            return raw_result
+        return WorkloadResult.model_validate(raw_result)
+
+    started_at = datetime.now(UTC)
+    monotonic_started_at = time.monotonic()
+    interval = max(0.001, float(heartbeat_interval_seconds))
+    timeout = max(0.001, float(timeout_seconds))
+    cleanup_metadata: dict[str, Any] = {
+        "gracefulTerminationAttempted": False,
+        "killEscalated": False,
+        "containerRemoved": False,
+        "cleanupErrors": [],
+    }
+
+    def _cleanup_metadata() -> dict[str, Any]:
+        return redact_sensitive_payload(dict(cleanup_metadata))
+
+    def _kill_grace_seconds() -> int:
+        profile = getattr(validated_workload_request, "profile", None)
+        cleanup = getattr(profile, "cleanup", None)
+        return int(getattr(cleanup, "kill_grace_seconds", 30) or 30)
+
+    async def _stop_and_remove(*, terminal_reason: str) -> None:
+        cleanup_metadata["terminalReason"] = terminal_reason
+        cleanup_metadata["gracefulTerminationAttempted"] = True
+        try:
+            stop_result = await handle.stop(grace_seconds=_kill_grace_seconds())
+            if isinstance(stop_result, Mapping):
+                cleanup_metadata.update(dict(stop_result))
+        except Exception as exc:
+            cleanup_metadata["killEscalated"] = True
+            cleanup_metadata["cleanupErrors"].append(
+                redact_pentest_human_text(str(exc))
+            )
+        try:
+            remove_result = await handle.remove()
+            cleanup_metadata["containerRemoved"] = True
+            if isinstance(remove_result, Mapping):
+                cleanup_metadata.update(dict(remove_result))
+        except Exception as exc:
+            cleanup_metadata["containerRemoved"] = False
+            cleanup_metadata["cleanupErrors"].append(
+                redact_pentest_human_text(str(exc))
+            )
+
+    handle: PentestWorkloadHandle = await launcher.start(validated_workload_request)
+    emit_pentest_activity_heartbeat(
+        phase="running",
+        agent_run_id=request.agent_run_id,
+        step_id=request.step_id,
+        attempt=request.attempt,
+        message="Pentest workload is running.",
+        elapsed_seconds=0.0,
+    )
+    try:
+        while True:
+            raw_result = await handle.poll()
+            if raw_result is not None:
+                result = (
+                    raw_result
+                    if isinstance(raw_result, WorkloadResult)
+                    else WorkloadResult.model_validate(raw_result)
+                )
+                result.metadata.setdefault("cleanup", _cleanup_metadata())
+                return result
+            elapsed = time.monotonic() - monotonic_started_at
+            if elapsed >= timeout:
+                await _stop_and_remove(terminal_reason="timeout")
+                completed_at = datetime.now(UTC)
+                return WorkloadResult(
+                    requestId=getattr(
+                        validated_workload_request,
+                        "container_name",
+                        f"pentest-{request.agent_run_id}-{request.step_id}-{request.attempt}",
+                    ),
+                    profileId=request.runner_profile_id,
+                    status="timed_out",
+                    exitCode=None,
+                    startedAt=started_at,
+                    completedAt=completed_at,
+                    durationSeconds=(completed_at - started_at).total_seconds(),
+                    timeoutReason="workload exceeded timeoutSeconds",
+                    metadata={"cleanup": _cleanup_metadata()},
+                )
+            await asyncio.sleep(min(interval, max(0.001, timeout - elapsed)))
+            emit_pentest_activity_heartbeat(
+                phase="running",
+                agent_run_id=request.agent_run_id,
+                step_id=request.step_id,
+                attempt=request.attempt,
+                message="Pentest workload is still running.",
+                elapsed_seconds=time.monotonic() - monotonic_started_at,
+            )
+    except asyncio.CancelledError:
+        await _stop_and_remove(terminal_reason="cancellation")
         raise
 
 async def cleanup_pentest_orphan_containers(
@@ -6051,16 +6178,17 @@ class TemporalAgentRuntimeActivities:
                         "container_name": launch_plan.container_name,
                     },
                 )
-                raw_workload_result = (
-                    await _await_pentest_workload_with_activity_heartbeats(
-                        self._workload_launcher.run(validated_workload_request),
+                workload_result = (
+                    await _supervise_pentest_workload_with_activity_heartbeats(
+                        self._workload_launcher,
+                        validated_workload_request,
                         request=request,
+                        timeout_seconds=float(launch_plan.timeout_seconds),
+                        heartbeat_interval_seconds=(
+                            _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS
+                        ),
                     )
                 )
-                if isinstance(raw_workload_result, WorkloadResult):
-                    workload_result = raw_workload_result
-                else:
-                    workload_result = WorkloadResult.model_validate(raw_workload_result)
         except asyncio.CancelledError:
             provider_lease_released = False
             try:
@@ -6135,6 +6263,13 @@ class TemporalAgentRuntimeActivities:
 
         workload_dump = workload_result.model_dump(mode="json", by_alias=True)
         output["workload_result"] = workload_dump
+        workload_cleanup = (
+            workload_result.metadata.get("cleanup")
+            if isinstance(workload_result.metadata, Mapping)
+            else None
+        )
+        if not isinstance(workload_cleanup, Mapping):
+            workload_cleanup = {}
         runner_findings = self._load_pentest_runner_findings(
             execution_materialization.runtime_paths.normalizer_input_file
         )
@@ -6209,7 +6344,29 @@ class TemporalAgentRuntimeActivities:
             )
             output["terminal_cleanup"]["terminal_reason"] = terminal_reason
             output["terminal_cleanup"]["graceful_termination_attempted"] = True
-            output["terminal_cleanup"]["container_removed"] = True
+            output["terminal_cleanup"]["kill_escalated"] = bool(
+                workload_cleanup.get(
+                    "kill_escalated",
+                    workload_cleanup.get("killEscalated", False),
+                )
+            )
+            output["terminal_cleanup"]["container_removed"] = bool(
+                workload_cleanup.get(
+                    "container_removed",
+                    workload_cleanup.get("containerRemoved", True),
+                )
+            )
+            cleanup_errors = workload_cleanup.get(
+                "cleanup_errors",
+                workload_cleanup.get("cleanupErrors", ()),
+            )
+            if isinstance(cleanup_errors, Sequence) and not isinstance(
+                cleanup_errors, (str, bytes)
+            ):
+                output["terminal_cleanup"]["cleanup_errors"] = [
+                    redact_pentest_human_text(str(item))
+                    for item in cleanup_errors
+                ]
             emit_pentest_activity_heartbeat(
                 phase="cleanup",
                 agent_run_id=request.agent_run_id,
@@ -6219,7 +6376,10 @@ class TemporalAgentRuntimeActivities:
                 metadata={
                     "terminal_reason": terminal_reason,
                     "provider_lease_released": provider_lease_released,
-                    "container_removed": True,
+                    "container_removed": output["terminal_cleanup"][
+                        "container_removed"
+                    ],
+                    "kill_escalated": output["terminal_cleanup"]["kill_escalated"],
                 },
             )
             return output
