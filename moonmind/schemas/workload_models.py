@@ -440,6 +440,7 @@ class WorkloadOwnershipMetadata(BaseModel):
     attempt: int = Field(..., alias="attempt", ge=1)
     tool_name: NonBlankStr = Field(..., alias="toolName")
     workload_profile: NonBlankStr = Field(..., alias="workloadProfile")
+    runtime_id: NonBlankStr | None = Field(None, alias="runtimeId")
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     workload_access: WorkloadAccessKind = Field("profile", alias="workloadAccess")
@@ -455,6 +456,8 @@ class WorkloadOwnershipMetadata(BaseModel):
             "moonmind.tool_name": self.tool_name,
             "moonmind.workload_profile": self.workload_profile,
         }
+        if self.runtime_id is not None:
+            labels["moonmind.runtime_id"] = self.runtime_id
         if self.session_id is not None:
             labels["moonmind.session_id"] = self.session_id
         if self.session_epoch is not None:
@@ -473,6 +476,7 @@ class WorkloadRequest(BaseModel):
     step_id: NonBlankStr = Field(..., alias="stepId")
     attempt: int = Field(..., alias="attempt", ge=1)
     tool_name: NonBlankStr = Field(..., alias="toolName")
+    runtime_id: NonBlankStr | None = Field(None, alias="runtimeId")
     repo_dir: NonBlankStr = Field(..., alias="repoDir")
     artifacts_dir: NonBlankStr = Field(..., alias="artifactsDir")
     command: tuple[NonBlankStr, ...] = Field(..., alias="command", min_length=1)
@@ -527,6 +531,7 @@ class WorkloadRequest(BaseModel):
             attempt=self.attempt,
             toolName=self.tool_name,
             workloadProfile=self.profile_id,
+            runtimeId=self.runtime_id,
             sessionId=self.session_id,
             sessionEpoch=self.session_epoch,
             workloadAccess="profile",
