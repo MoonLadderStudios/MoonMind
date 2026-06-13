@@ -31,7 +31,9 @@ _PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY = (
 )
 _PENTEST_APPROVED_RUNNER_IMAGE_TAGS = frozenset(("1.0",))
 _PENTEST_RUNNER_IMAGE_PATTERN = re.compile(
-    r"^(?P<repository>ghcr\.io/moonladderstudios/moonmind-pentestgpt)"
+    r"^(?P<repository>"
+    + re.escape(_PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY)
+    + r")"
     r"(?::(?P<tag>[A-Za-z0-9_.-]+))?"
     r"(?:@(?P<digest>sha256:[a-f0-9]{64}))?$"
 )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import re
 
 import pytest
 from pydantic import ValidationError
@@ -392,8 +391,15 @@ def test_default_registry_contains_unreal_pilot_profile() -> None:
     assert profile.max_timeout_seconds == 7200
     assert profile.max_concurrency == 1
 
-def test_pentest_runner_defaults_registry_and_publish_workflow_do_not_drift() -> None:
-    settings_image = PentestSettings().runner_image
+def test_pentest_runner_defaults_registry_and_publish_workflow_do_not_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.config.settings import settings
+
+    default_image = PentestSettings.model_fields["runner_image"].default
+    monkeypatch.setattr(settings.pentest, "runner_image", default_image)
+
+    settings_image = settings.pentest.runner_image
     domain_profile = get_pentest_runner_profile("pentestgpt-safe")
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),

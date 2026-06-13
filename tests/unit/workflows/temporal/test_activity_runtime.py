@@ -1918,6 +1918,78 @@ async def test_security_pentest_execute_rejects_configured_profiles_missing_from
     assert "pentestgpt-missing" in str(result["diagnostics"])
     assert launcher.requests == []
 
+async def test_security_pentest_execute_rejects_registered_runner_image_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    launcher = _FakePentestLauncher()
+    registry_path = tmp_path / "profiles.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "pentestgpt-safe",
+                        "kind": "one_shot",
+                        "image": "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0-drift",
+                        "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
+                        "requiredMounts": [
+                            {
+                                "type": "volume",
+                                "source": "agent_workspaces",
+                                "target": "/work/agent_jobs",
+                            }
+                        ],
+                        "envAllowlist": ["ANTHROPIC_API_KEY"],
+                        "networkPolicy": "bridge",
+                        "resources": {
+                            "cpu": "4",
+                            "memory": "8g",
+                            "shmSize": "1g",
+                            "maxCpu": "4",
+                            "maxMemory": "8g",
+                            "maxShmSize": "1g",
+                        },
+                        "timeoutSeconds": 28800,
+                        "maxTimeoutSeconds": 28800,
+                        "cleanup": {
+                            "removeContainerOnExit": True,
+                            "killGraceSeconds": 30,
+                        },
+                        "devicePolicy": {"mode": "none"},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = RunnerProfileRegistry.load_file(
+        registry_path,
+        workspace_root="/work/agent_jobs",
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=registry,
+    )
+    monkeypatch.setattr(
+        settings.pentest,
+        "runner_image",
+        "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0",
+    )
+    monkeypatch.setattr(
+        settings.pentest, "allowed_runner_profiles", ("pentestgpt-safe",)
+    )
+    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", False)
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert result["status"] == "validation_failed"
+    assert "runner_profile_image_drift" in str(result["diagnostics"])
+    assert "pentestgpt-safe" in str(result["diagnostics"])
+    assert launcher.requests == []
+
 async def test_security_pentest_execute_validates_safe_profile_against_registry(
     monkeypatch: pytest.MonkeyPatch,
 ):

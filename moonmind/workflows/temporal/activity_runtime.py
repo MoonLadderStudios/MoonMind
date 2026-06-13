@@ -4634,6 +4634,23 @@ class TemporalAgentRuntimeActivities:
                 reason="runner_profile_not_registered",
                 diagnostics={"runner_profile_ids": missing_profiles},
             )
+        drifted_profiles = []
+        for profile_id in configured_profiles:
+            if not profile_id:
+                continue
+            profile = self._workload_registry.get(profile_id)
+            if profile is not None and profile.image != pentest_settings.runner_image:
+                drifted_profiles.append(profile_id)
+        drifted_profiles.sort()
+        if drifted_profiles:
+            raise PentestLaunchPolicyError(
+                "Configured Pentest runner profile image does not match approved runner image",
+                reason="runner_profile_image_drift",
+                diagnostics={
+                    "runner_profile_ids": drifted_profiles,
+                    "approved_runner_image": pentest_settings.runner_image,
+                },
+            )
 
     @staticmethod
     def _write_pentest_json(
