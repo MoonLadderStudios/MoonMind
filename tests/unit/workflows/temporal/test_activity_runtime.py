@@ -168,7 +168,7 @@ async def test_checkpoint_activity_runtime_bindings_are_registered() -> None:
     )
     class _ArtifactImplementation:
         async def __getattr__(self, _name: str):
-            raise AssertionError("unexpected dynamic lookup")
+            raise AttributeError(f"unexpected dynamic lookup: {_name}")
 
         async def artifact_create(self):
             pass
