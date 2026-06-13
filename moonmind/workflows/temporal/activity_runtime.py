@@ -5795,7 +5795,6 @@ class TemporalAgentRuntimeActivities:
             ),
             default=False,
         )
-        pre_validation_attempt = 1
         try:
             pre_validation_attempt = int(request_payload.get("attempt") or 1)
         except (TypeError, ValueError):
