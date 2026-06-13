@@ -112,9 +112,11 @@ from moonmind.workflows.temporal.step_executions import (
     workspace_policy_metadata,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
+    BoundedStoryLoopInput,
     LoopAttempt,
     PublicationAction,
     TypedGateResult,
+    compile_bounded_story_loop,
     evaluate_publication_decision,
 )
 from moonmind.workflows.temporal.completion_summary import (
@@ -4311,6 +4313,7 @@ class MoonMindRunWorkflow:
         task_parameters = self._mapping_value(parameters, "workflow")
         if not task_parameters:
             task_parameters = self._mapping_value(parameters, "task")
+        self._record_bounded_story_loop_context(parameters, task_parameters)
         self._declared_dependencies = normalize_dependency_ids(
             task_parameters.get("dependsOn")
         )
@@ -4347,6 +4350,44 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _record_bounded_story_loop_context(
+        self,
+        parameters: Mapping[str, Any],
+        task_parameters: Mapping[str, Any],
+    ) -> None:
+        raw_loop = task_parameters.get("boundedStoryLoop") or parameters.get(
+            "boundedStoryLoop"
+        )
+        if raw_loop is None:
+            return
+        if not isinstance(raw_loop, Mapping):
+            raise ValueError("boundedStoryLoop must be an object when provided")
+
+        loop_payload = self._json_mapping(raw_loop, path="boundedStoryLoop")
+        full_supervisor_enabled = _coerce_bool(
+            loop_payload.pop("fullSupervisorEnabled", None)
+            or loop_payload.pop("full_supervisor_enabled", None),
+            default=False,
+        )
+        loop_input = BoundedStoryLoopInput.model_validate(loop_payload)
+        compiled = compile_bounded_story_loop(loop_input)
+        scope = bounded_story_loop_scope_guard(
+            selected_item_digest=loop_input.selected_item_digest,
+            candidate_item_digests=[loop_input.selected_item_digest],
+            full_supervisor_enabled=full_supervisor_enabled,
+        )
+        if not scope.get("allowed"):
+            raise ValueError(str(scope.get("reason") or "bounded story loop rejected"))
+
+        self._publish_context["boundedStoryLoop"] = {
+            "selectedItemRef": compiled.selected_item_ref,
+            "selectedItemDigest": compiled.selected_item_digest,
+            "nodeKinds": [node.kind for node in compiled.nodes],
+            "publishMode": loop_input.publish_mode,
+            "mergeAutomationEnabled": loop_input.merge_automation_enabled,
+            "scopeGuard": scope,
+        }
 
     def _runtime_visibility_from_parameters(
         self,

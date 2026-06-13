@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from moonmind.workflows.temporal.bounded_story_loop import LoopAttempt, TypedGateResult
 from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
     bounded_story_loop_resume_decision,
     bounded_story_loop_scope_guard,
     bounded_story_loop_step_effects,
@@ -119,3 +122,63 @@ def test_scope_guard_keeps_full_autonomous_supervisor_gated() -> None:
     )
     assert supervisor["allowed"] is False
     assert supervisor["reason"] == "full_autonomous_supervisor_gated"
+
+
+def test_workflow_payload_records_compiled_bounded_story_loop_context() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_bounded_story_loop_context(
+        {},
+        {
+            "boundedStoryLoop": {
+                "selectedItemRef": "artifact://story/item-1",
+                "selectedItemDigest": "sha256:item-1",
+                "publishMode": "pr",
+                "mergeAutomationEnabled": True,
+                "budgets": {
+                    "maxAttempts": 3,
+                    "maxConsecutiveNoProgressAttempts": 2,
+                    "maxRepeatedFailedCommands": 2,
+                    "maxUnsafeOrPolicyDeniedAttempts": 0,
+                },
+            }
+        },
+    )
+
+    context = workflow._publish_context["boundedStoryLoop"]
+    assert context == {
+        "selectedItemRef": "artifact://story/item-1",
+        "selectedItemDigest": "sha256:item-1",
+        "nodeKinds": [
+            "implementation",
+            "verification",
+            "remediation",
+            "post_remediation_verification",
+            "publication_evaluation",
+        ],
+        "publishMode": "pr",
+        "mergeAutomationEnabled": True,
+        "scopeGuard": {"allowed": True, "reason": "selected_item_only"},
+    }
+
+
+def test_workflow_payload_rejects_full_supervisor_for_bounded_story_loop() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    with pytest.raises(ValueError, match="full_autonomous_supervisor_gated"):
+        workflow._record_bounded_story_loop_context(
+            {},
+            {
+                "boundedStoryLoop": {
+                    "selectedItemRef": "artifact://story/item-1",
+                    "selectedItemDigest": "sha256:item-1",
+                    "fullSupervisorEnabled": True,
+                    "budgets": {
+                        "maxAttempts": 3,
+                        "maxConsecutiveNoProgressAttempts": 2,
+                        "maxRepeatedFailedCommands": 2,
+                        "maxUnsafeOrPolicyDeniedAttempts": 0,
+                    },
+                }
+            },
+        )
