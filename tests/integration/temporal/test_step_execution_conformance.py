@@ -49,7 +49,20 @@ def test_command_reports_complete_golden_fixture_catalog() -> None:
         "degraded-checkpoint-payload",
         "degraded-gate-verdict",
         "legacy-checkpoint-only-ledger-row",
+        "bounded-story-loop-contract",
+        "bounded-story-loop-ref-only-evidence",
     }
+
+
+def test_bounded_story_loop_traceability_survives_integration_conformance() -> None:
+    summary = build_conformance_summary()
+    covered = {
+        trace_id
+        for decision in summary["decisions"]
+        for trace_id in decision["traceability"]
+    }
+
+    assert {"FR-018", "FR-019", "SC-006", "DESIGN-REQ-009"}.issubset(covered)
 
 
 def test_gate_and_legacy_ledger_replay_inputs_are_typed_degraded() -> None:

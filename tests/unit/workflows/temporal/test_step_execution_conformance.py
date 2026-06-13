@@ -65,6 +65,8 @@ def test_golden_fixture_catalog_is_complete_and_deterministic() -> None:
         "degraded-checkpoint-payload",
         "degraded-gate-verdict",
         "legacy-checkpoint-only-ledger-row",
+        "bounded-story-loop-contract",
+        "bounded-story-loop-ref-only-evidence",
     ]
     assert {fixture["decision"]["decision"] for fixture in catalog} == {
         "valid",
@@ -202,6 +204,25 @@ def test_traceability_matrix_covers_all_mm_820_categories() -> None:
     }
 
     assert set(REQUIRED_TRACEABILITY_IDS).issubset(covered)
+
+
+def test_bounded_story_loop_traceability_is_in_conformance_matrix() -> None:
+    summary = build_conformance_summary()
+    covered = {
+        trace_id
+        for decision in summary["decisions"]
+        for trace_id in decision["traceability"]
+    }
+    fixture_ids = {decision["fixtureId"] for decision in summary["decisions"]}
+
+    assert {
+        "FR-018",
+        "FR-019",
+        "SC-006",
+        "DESIGN-REQ-009",
+    }.issubset(covered)
+    assert "bounded-story-loop-contract" in fixture_ids
+    assert "bounded-story-loop-ref-only-evidence" in fixture_ids
 
 
 def test_api_contract_fixture_exposes_refs_and_canonical_terms_only() -> None:

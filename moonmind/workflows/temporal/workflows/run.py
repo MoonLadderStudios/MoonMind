@@ -111,6 +111,12 @@ from moonmind.workflows.temporal.step_executions import (
     step_execution_operation_idempotency_key,
     workspace_policy_metadata,
 )
+from moonmind.workflows.temporal.bounded_story_loop import (
+    LoopAttempt,
+    PublicationAction,
+    TypedGateResult,
+    evaluate_publication_decision,
+)
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
@@ -138,6 +144,85 @@ DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
+
+
+def bounded_story_loop_step_effects(
+    attempt: LoopAttempt,
+    gate: TypedGateResult,
+) -> dict[str, Any]:
+    """Return compact side-effect eligibility for a bounded story loop attempt."""
+
+    publication = evaluate_publication_decision(
+        action=PublicationAction.PR,
+        latest_attempt=attempt,
+        gate=gate,
+    )
+    refs = [
+        ref
+        for ref in (attempt.checkpoint_before_ref, attempt.checkpoint_after_ref)
+        if ref
+    ]
+    return {
+        "stepExecutionId": attempt.step_execution_id,
+        "checkpointRefs": refs,
+        "candidateDiffRef": attempt.candidate_diff_ref,
+        "acceptedOutputRef": attempt.accepted_output_ref,
+        "commitAllowed": attempt.commit_allowed,
+        "publicationAllowed": publication.allowed,
+        "publicationReason": publication.reason,
+        "gateResultRef": gate.gate_result_ref,
+        "remainingWorkRef": gate.remaining_work_ref,
+    }
+
+
+def bounded_story_loop_resume_decision(
+    resume: Mapping[str, Any],
+    *,
+    current_selected_item_digest: str,
+) -> dict[str, Any]:
+    checkpoint_ref = str(resume.get("recoveryCheckpointRef") or "").strip()
+    selected_digest = str(resume.get("selectedItemDigest") or "").strip()
+    if not checkpoint_ref.startswith("artifact://"):
+        return {
+            "allowed": False,
+            "reason": "recovery_checkpoint_ref_missing",
+            "fallback": "none",
+        }
+    if selected_digest != str(current_selected_item_digest or "").strip():
+        return {
+            "allowed": False,
+            "reason": "selected_item_digest_mismatch",
+            "fallback": "none",
+        }
+    return {
+        "allowed": True,
+        "mode": "checkpoint_backed_resume",
+        "loopId": resume.get("loopId"),
+        "recoveryCheckpointRef": checkpoint_ref,
+        "resumeFromAttemptOrdinal": resume.get("resumeFromAttemptOrdinal"),
+        "fallback": "none",
+    }
+
+
+def bounded_story_loop_scope_guard(
+    *,
+    selected_item_digest: str,
+    candidate_item_digests: Sequence[str],
+    full_supervisor_enabled: bool,
+) -> dict[str, Any]:
+    if full_supervisor_enabled:
+        return {
+            "allowed": False,
+            "reason": "full_autonomous_supervisor_gated",
+        }
+    selected = str(selected_item_digest or "").strip()
+    candidates = [str(item or "").strip() for item in candidate_item_digests]
+    if candidates != [selected]:
+        return {
+            "allowed": False,
+            "reason": "unrelated_work_selection_rejected",
+        }
+    return {"allowed": True, "reason": "selected_item_only"}
 _PR_OPTIONAL_AGENT_SKILLS = JIRA_AGENT_SKILLS
 _PR_OPTIONAL_TASK_SKILLS = frozenset(
     {"jira-implement", *_PR_OPTIONAL_AGENT_SKILLS}

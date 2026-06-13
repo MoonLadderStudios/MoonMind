@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from moonmind.workflows.temporal.bounded_story_loop import (
+    BoundedStoryLoopInput,
+    LoopAttempt,
+    LoopBudget,
+    LoopStopState,
+    PublicationAction,
+    TypedGateResult,
+    compile_bounded_story_loop,
+    evaluate_attempt_continuation,
+    evaluate_attempt_preflight,
+    evaluate_provider_lease,
+    evaluate_publication_decision,
+)
+
+
+def _budget(**overrides: object) -> LoopBudget:
+    payload = {
+        "maxAttempts": 3,
+        "maxConsecutiveNoProgressAttempts": 2,
+        "maxRepeatedFailedCommands": 2,
+        "maxUnsafeOrPolicyDeniedAttempts": 0,
+    }
+    payload.update(overrides)
+    return LoopBudget.model_validate(payload)
+
+
+def _gate(**overrides: object) -> TypedGateResult:
+    payload = {
+        "verdict": "ADDITIONAL_WORK_NEEDED",
+        "terminalDisposition": "failed_with_remaining_work",
+        "gateResultRef": "artifact://gate/attempt-1",
+        "remainingWorkRef": "artifact://remaining-work/attempt-1",
+        "progressSignature": "sig-1",
+    }
+    payload.update(overrides)
+    return TypedGateResult.model_validate(payload)
+
+
+def _attempt(**overrides: object) -> LoopAttempt:
+    payload = {
+        "attemptOrdinal": 1,
+        "kind": "implementation",
+        "stepExecutionId": "workflow:run:implement-story:execution:1",
+        "checkpointBeforeRef": "artifact://checkpoint/before",
+        "checkpointAfterRef": "artifact://checkpoint/after",
+        "candidateDiffRef": "artifact://diff/candidate",
+        "gateResultRef": "artifact://gate/attempt-1",
+        "terminalDisposition": "failed_with_remaining_work",
+    }
+    payload.update(overrides)
+    return LoopAttempt.model_validate(payload)
+
+
+def test_selected_item_validation_and_compilation_are_single_item_only() -> None:
+    loop_input = BoundedStoryLoopInput.model_validate(
+        {
+            "selectedItemRef": "artifact://story/item-1",
+            "selectedItemDigest": "sha256:item-1",
+            "publishMode": "pr",
+            "mergeAutomationEnabled": True,
+            "budgets": _budget().model_dump(by_alias=True),
+        }
+    )
+
+    compiled = compile_bounded_story_loop(loop_input)
+
+    assert compiled.selected_item_ref == "artifact://story/item-1"
+    assert compiled.selected_item_digest == "sha256:item-1"
+    assert [node.kind for node in compiled.nodes] == [
+        "implementation",
+        "verification",
+        "remediation",
+        "post_remediation_verification",
+        "publication_evaluation",
+    ]
+    assert all(node.selected_item_digest == "sha256:item-1" for node in compiled.nodes)
+
+    with pytest.raises(ValidationError):
+        BoundedStoryLoopInput.model_validate(
+            {
+                "selectedItemRef": "artifact://story/item-1",
+                "selectedItemDigest": "sha256:item-1",
+                "additionalItemRefs": ["artifact://story/item-2"],
+                "budgets": _budget().model_dump(by_alias=True),
+            }
+        )
+
+
+def test_stop_state_enum_malformed_gate_and_continuation_decisions() -> None:
+    assert {state.value for state in LoopStopState} == {
+        "accepted",
+        "blocked",
+        "needs_human",
+        "failed_with_remaining_work",
+        "failed_unrecoverable",
+    }
+
+    malformed = TypedGateResult.from_boundary_payload(
+        {"verdict": "approved in prose", "diagnosticsRef": "artifact://diag"}
+    )
+    assert malformed.verdict == "NO_DETERMINATION"
+    assert malformed.terminal_disposition == "blocked"
+    assert malformed.degraded is True
+
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(candidateDiffRef=None, acceptedOutputRef="artifact://accepted"),
+        gate=_gate(
+            verdict="FULLY_IMPLEMENTED",
+            terminalDisposition="accepted",
+            remainingWorkRef=None,
+        ),
+        budget=_budget(consumed={"attempts": 1}),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.state == "accepted"
+    assert decision.reason == "accepted_gate_passed"
+    assert decision.continue_loop is False
+
+
+def test_checkpoint_candidate_remaining_work_refs_are_required_and_ref_only() -> None:
+    failed = _attempt()
+    assert failed.checkpoint_before_ref == "artifact://checkpoint/before"
+    assert failed.checkpoint_after_ref == "artifact://checkpoint/after"
+    assert failed.candidate_diff_ref == "artifact://diff/candidate"
+    assert failed.accepted_output_ref is None
+    assert failed.commit_allowed is False
+    assert failed.publication_allowed is False
+
+    with pytest.raises(ValidationError):
+        LoopAttempt.model_validate(
+            {
+                "attemptOrdinal": 1,
+                "kind": "implementation",
+                "stepExecutionId": "workflow:run:implement-story:execution:1",
+                "checkpointBeforeRef": "artifact://checkpoint/before",
+                "checkpointAfterRef": "artifact://checkpoint/after",
+                "candidateDiffRef": "diff --git a/file b/file",
+                "gateResultRef": "artifact://gate",
+                "terminalDisposition": "failed_with_remaining_work",
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        TypedGateResult.model_validate(
+            {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "gateResultRef": "artifact://gate",
+                "remainingWork": "raw logs and stdout must not be inline",
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        PublicationAction.PR,
+        PublicationAction.JIRA,
+        PublicationAction.MERGE,
+        PublicationAction.DEPLOY,
+        PublicationAction.PROVIDER_ACCOUNT,
+    ],
+)
+def test_publication_decision_requires_latest_accepted_step(action: PublicationAction) -> None:
+    denied = evaluate_publication_decision(
+        action=action,
+        latest_attempt=_attempt(),
+        gate=_gate(),
+    )
+    assert denied.allowed is False
+    assert denied.reason == "latest_step_execution_not_accepted"
+
+    allowed = evaluate_publication_decision(
+        action=action,
+        latest_attempt=_attempt(
+            candidateDiffRef=None,
+            acceptedOutputRef="artifact://accepted-output",
+            terminalDisposition="accepted",
+        ),
+        gate=_gate(
+            verdict="FULLY_IMPLEMENTED",
+            terminalDisposition="accepted",
+            remainingWorkRef=None,
+        ),
+    )
+    assert allowed.allowed is True
+    assert allowed.reason == "accepted_latest_step_execution"
+    assert allowed.latest_producing_step_execution_id.endswith(":execution:1")
+
+
+@pytest.mark.parametrize(
+    ("consumed", "expected_reason"),
+    [
+        ({"attempts": 3}, "max_attempts_exhausted"),
+        ({"consecutiveNoProgressAttempts": 2}, "no_progress_attempts_exhausted"),
+        ({"repeatedFailedCommands": 3}, "repeated_failed_commands_exhausted"),
+        ({"unsafeOrPolicyDeniedAttempts": 1}, "unsafe_policy_attempts_exhausted"),
+        ({"provider": 11}, "provider_budget_exhausted"),
+        ({"tokens": 101}, "token_budget_exhausted"),
+        ({"cost": 11}, "cost_budget_exhausted"),
+    ],
+)
+def test_budget_dimensions_stop_with_remaining_work(
+    consumed: dict[str, int], expected_reason: str
+) -> None:
+    decision = evaluate_attempt_continuation(
+        attempt=_attempt(),
+        gate=_gate(),
+        budget=_budget(
+            providerBudget=10,
+            tokenBudget=100,
+            costBudget=10,
+            consumed=consumed,
+        ),
+        checkpoint_available=True,
+        policy_allowed=True,
+    )
+
+    assert decision.state in {"needs_human", "failed_with_remaining_work"}
+    assert decision.reason == expected_reason
+    assert decision.remaining_work_ref == "artifact://remaining-work/attempt-1"
+    assert decision.continue_loop is False
+
+
+def test_preflight_blocks_before_remediation_budget_consumption() -> None:
+    decision = evaluate_attempt_preflight(
+        {
+            "sidecar": {"ok": True},
+            "runtime": {"ok": False, "diagnosticsRef": "artifact://runtime-diag"},
+            "skillProjection": {"ok": True},
+            "role": {"ok": True},
+            "exceptionalWorkload": {"ok": True},
+            "policy": {"ok": True},
+        },
+        budget=_budget(consumed={"attempts": 1}),
+    )
+
+    assert decision.allowed is False
+    assert decision.state == "blocked"
+    assert decision.reason == "runtime_preflight_failed"
+    assert decision.diagnostics_ref == "artifact://runtime-diag"
+    assert decision.consumes_attempt_budget is False
+
+
+def test_provider_lease_decisions_reject_unavailable_and_stale_entitlements() -> None:
+    unavailable = evaluate_provider_lease(
+        {
+            "status": "unavailable",
+            "leaseRef": "artifact://lease/unavailable",
+            "queueWhenUnavailable": True,
+        }
+    )
+    assert unavailable.allowed is False
+    assert unavailable.queued is True
+    assert unavailable.reason == "provider_lease_unavailable"
+
+    stale = evaluate_provider_lease(
+        {
+            "status": "granted",
+            "leaseRef": "artifact://lease/stale",
+            "stale": True,
+        }
+    )
+    assert stale.allowed is False
+    assert stale.queued is False
+    assert stale.reason == "provider_lease_stale"
