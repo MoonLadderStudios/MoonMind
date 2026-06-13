@@ -3253,9 +3253,12 @@ function WorkflowActionsMenu({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const itemRefs = useRef<Array<HTMLButtonElement | HTMLAnchorElement | null>>([]);
-  const availableIndexes = items
-    .map((item, index) => (item.disabledReason ? -1 : index))
-    .filter((index) => index >= 0);
+  const availableIndexes = useMemo(
+    () => items
+      .map((item, index) => (item.disabledReason ? -1 : index))
+      .filter((index) => index >= 0),
+    [items],
+  );
 
   const closeMenu = () => {
     setOpen(false);
@@ -3264,7 +3267,6 @@ function WorkflowActionsMenu({
   const focusItem = (index: number) => {
     const nextIndex = items[index] ? index : availableIndexes[0] ?? 0;
     setActiveIndex(nextIndex);
-    requestAnimationFrame(() => itemRefs.current[nextIndex]?.focus());
   };
   const selectItem = (item: WorkflowActionMenuItem) => {
     if (item.disabledReason) return;
@@ -3291,6 +3293,14 @@ function WorkflowActionsMenu({
       : availableIndexes[0] ?? 0;
     setActiveIndex(preferredIndex);
   }, [activeIndex, availableIndexes, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const activeItem = itemRefs.current[activeIndex];
+    if (activeItem && document.activeElement !== activeItem) {
+      activeItem.focus();
+    }
+  }, [activeIndex, open]);
 
   const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -3324,8 +3334,7 @@ function WorkflowActionsMenu({
     }
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      const item = items[activeIndex];
-      if (item) selectItem(item);
+      itemRefs.current[activeIndex]?.click();
     }
   };
 
@@ -3368,10 +3377,15 @@ function WorkflowActionsMenu({
             <p className="td-workflow-actions-empty">No workflow actions are currently available.</p>
           ) : (
             items.map((item, index) => {
+              const disabledReasonId = item.disabledReason
+                ? `workflow-action-${item.id}-disabled-reason`
+                : undefined;
               const commonProps = {
                 role: 'menuitem',
                 tabIndex: index === activeIndex ? 0 : -1,
+                'aria-label': item.label,
                 'aria-disabled': item.disabledReason ? true : undefined,
+                'aria-describedby': disabledReasonId,
                 className: [
                   'td-workflow-actions-item',
                   item.danger ? 'td-workflow-actions-item-danger' : '',
@@ -3386,7 +3400,10 @@ function WorkflowActionsMenu({
                 <>
                   <span>{item.label}</span>
                   {item.disabledReason ? (
-                    <span className="td-workflow-actions-disabled-reason">
+                    <span
+                      id={disabledReasonId}
+                      className="td-workflow-actions-disabled-reason"
+                    >
                       {item.label} unavailable: {item.disabledReason}
                     </span>
                   ) : null}
@@ -5295,6 +5312,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const workflowActionMenuItems = (() => {
     if (!actionsOn || !actions) return [];
     const items: WorkflowActionMenuItem[] = [];
+    const pendingActionReason = busy ? 'action pending' : null;
     const addButton = ({
       id,
       label,
@@ -5310,10 +5328,22 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       danger?: boolean;
       onSelect: () => void;
     }) => {
+      const effectiveDisabledReason = available ? pendingActionReason : disabledReason ?? null;
       if (available) {
-        items.push({ id, label, ...(danger ? { danger: true } : {}), onSelect });
-      } else if (disabledReason) {
-        items.push({ id, label, ...(danger ? { danger: true } : {}), disabledReason });
+        items.push({
+          id,
+          label,
+          ...(danger ? { danger: true } : {}),
+          onSelect,
+          ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+        });
+      } else if (effectiveDisabledReason) {
+        items.push({
+          id,
+          label,
+          ...(danger ? { danger: true } : {}),
+          disabledReason: effectiveDisabledReason,
+        });
       }
     };
     const addLink = ({
@@ -5331,10 +5361,21 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       disabledReason?: string | null;
       onSelect: () => void;
     }) => {
+      const effectiveDisabledReason = available ? pendingActionReason : disabledReason ?? null;
       if (available && href) {
-        items.push({ id, label, href, onSelect });
-      } else if (disabledReason) {
-        items.push({ id, label, disabledReason });
+        items.push({
+          id,
+          label,
+          href,
+          onSelect,
+          ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+        });
+      } else if (effectiveDisabledReason) {
+        items.push({
+          id,
+          label,
+          disabledReason: effectiveDisabledReason,
+        });
       }
     };
 

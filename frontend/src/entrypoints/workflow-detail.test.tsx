@@ -2063,7 +2063,8 @@ describe('Workflow Detail Entrypoint', () => {
     );
     const editLink = within(menu).getByRole('menuitem', { name: 'Edit task' });
     editLink.addEventListener('click', (event) => event.preventDefault());
-    fireEvent.click(editLink);
+    fireEvent.focus(editLink);
+    fireEvent.keyDown(editLink, { key: 'Enter' });
     fireEvent.click(await screen.findByRole('button', { name: 'Workflow actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rerun' }));
     await waitFor(() => {
@@ -2566,7 +2567,10 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     menu = await openWorkflowActionsMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rerun' }));
+    const rerunItem = within(menu).getByRole('menuitem', { name: /Rerun/ });
+    expect(rerunItem.getAttribute('aria-disabled')).toBe('true');
+    expect(within(rerunItem).getByText('Rerun unavailable: action pending')).toBeTruthy();
+    fireEvent.click(rerunItem);
     const updateCalls = fetchSpy.mock.calls.filter(([input]) => String(input).includes('/update'));
     expect(updateCalls).toHaveLength(1);
     promptSpy.mockRestore();
@@ -2947,6 +2951,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     const select = await screen.findByLabelText('Recovery start step');
     fireEvent.change(select, { target: { value: 'plan' } });
+    await waitFor(() => {
+      expect((select as HTMLSelectElement).value).toBe('plan');
+    });
     expect(
       (screen.getByRole('option', { name: /Publish - after failed step/ }) as HTMLOptionElement).disabled,
     ).toBe(true);
