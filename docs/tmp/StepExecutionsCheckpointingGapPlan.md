@@ -69,6 +69,25 @@ one downstream Jira Orchestrate execution focused on the recovery-default path;
 WP1-WP4 remain prerequisites or supporting substrate, and WP6-WP13 remain
 post-recovery hardening/alignment work.
 
+### 1.4 Phase 12 cleanup decision
+
+Phase 12 evidence review retains this temp plan because the final definition of
+done is still open: `build_step_execution_manifest_payload` remains in the live
+workflow path, checkpoint-backed recovery is not yet the default operator flow,
+retrieval-backed context packs are not injected into Temporal step execution,
+and remediation panels remain partial. The plan is non-canonical temporary
+material and must not be cited as implementation completion evidence.
+
+Conditional documentation review:
+
+- `docs/ManagedAgents/DockerSidecarRuntime.md`: no Phase 12 update required;
+  current evidence did not change sidecar checkpoint/restore behavior.
+- `docs/Security/SecretsSystem.md`: no Phase 12 update required; current
+  evidence did not add secret refs to checkpoint or context payloads.
+- `docs/Steps/PentestTool.md`: no Phase 12 update required; current evidence
+  did not change provider leases, role constraints, or side-effect gates for
+  pentest workflows.
+
 ---
 
 ## 2. Cross-project alignment rules

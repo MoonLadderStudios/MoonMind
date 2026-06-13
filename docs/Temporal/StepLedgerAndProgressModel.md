@@ -2,7 +2,7 @@
 
 Status: Normative  
 Owners: MoonMind Platform + Mission Control  
-Last updated: 2026-05-06
+Last updated: 2026-06-13
 
 ## 1. Purpose
 
