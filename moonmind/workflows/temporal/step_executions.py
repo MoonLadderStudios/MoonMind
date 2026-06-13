@@ -11,6 +11,8 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from moonmind.schemas.step_execution_models import (
+    HandoffGateDecision,
+    HandoffGateInput,
     StepExecutionIdentityModel,
     StepExecutionManifestModel,
     StepExecutionReason,
@@ -60,12 +62,31 @@ _NON_IDEMPOTENT_SIDE_EFFECT_CLASSES = {
 }
 _COMPENSATION_OPERATION_PREFIX = "compensate"
 _GATED_OPERATION_PREFIXES = (
+    "github.",
     "jira.transition",
+    "jira.add_comment",
+    "repo.create_pull_request",
     "repo.merge",
     "repo.publish",
     "deployment.",
     "provider_account.",
+    "provider_profile.",
+    "security.pentest.",
 )
+_SENSITIVE_RECORD_KEYS = {
+    "payload",
+    "raw",
+    "rawLog",
+    "rawLogs",
+    "diff",
+    "stdout",
+    "stderr",
+    "providerPayload",
+    "credential",
+    "credentials",
+    "token",
+    "password",
+}
 _SECRET_LIKE_PATTERNS = (
     re.compile(r"ghp_[A-Za-z0-9_]+"),
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
@@ -84,6 +105,31 @@ def _sanitize_diagnostic_text(value: str | None) -> str | None:
     for pattern in _SECRET_LIKE_PATTERNS:
         text = pattern.sub("[REDACTED]", text)
     return text
+
+
+def _sanitize_compact_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        compact: dict[str, Any] = {}
+        for key, nested in value.items():
+            key_text = str(key)
+            if key_text in _SENSITIVE_RECORD_KEYS:
+                continue
+            compact[key_text] = _sanitize_compact_value(nested)
+        return compact
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_sanitize_compact_value(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _sanitize_diagnostic_text(str(value))
+
+
+def _compact_refs(values: Sequence[Any] | None) -> list[str]:
+    refs: list[str] = []
+    for value in values or ():
+        text = _sanitize_diagnostic_text(str(value or ""))
+        if text:
+            refs.append(text)
+    return refs
 
 
 def _normalized_absolute_workspace_path(value: str | None) -> str | None:
@@ -278,6 +324,13 @@ def side_effect_record(
     effect_kind: Literal["normal", "cleanup", "compensation"] = "normal",
     reason: str | None = None,
     approved_workspace_roots: Sequence[str] = (),
+    actor: Mapping[str, Any] | str | None = None,
+    action: str | None = None,
+    policy_decision: Mapping[str, Any] | None = None,
+    evidence_refs: Sequence[str] = (),
+    gate_source: Mapping[str, Any] | None = None,
+    disposition_source: Mapping[str, Any] | None = None,
+    diagnostics: Mapping[str, Any] | Sequence[Any] | str | None = None,
 ) -> dict[str, Any]:
     """Build a compact side-effect decision and gate unsafe effect classes."""
 
@@ -309,12 +362,32 @@ def side_effect_record(
     record: dict[str, Any] = {
         "class": effect_class,
         "kind": effect_kind,
+        "actor": _sanitize_compact_value(actor or {"type": "workflow"}),
+        "action": _sanitize_diagnostic_text(action or operation_text),
         "operation": operation_text,
-        "target": _sanitize_diagnostic_text(target),
+        "target": _sanitize_compact_value(target),
         "idempotencyKey": _sanitize_diagnostic_text(key_text),
         "workflowStateAccepted": workflow_state_accepted,
         "disposition": final_disposition,
+        "policyDecision": _sanitize_compact_value(
+            policy_decision
+            or {
+                "decision": "block" if final_disposition == "blocked" else "allow",
+                "reason": "workflow_state_not_gate_approved"
+                if final_disposition == "blocked"
+                else "accepted",
+            }
+        ),
+        "evidenceRefs": _compact_refs(evidence_refs),
     }
+    if gate_source is not None:
+        record["gateSource"] = _sanitize_compact_value(gate_source)
+    if disposition_source is not None:
+        record["dispositionSource"] = _sanitize_compact_value(disposition_source)
+    if diagnostics is not None:
+        sanitized_diagnostics = _sanitize_compact_value(diagnostics)
+        if sanitized_diagnostics not in ({}, [], None, ""):
+            record["diagnosticMessages"] = sanitized_diagnostics
     if workspace_boundary_blocked:
         record["reason"] = "workspace_target_outside_approved_roots"
     elif workflow_gate_blocked:
@@ -324,6 +397,118 @@ def side_effect_record(
     elif reason:
         record["reason"] = _sanitize_diagnostic_text(reason)
     return record
+
+
+def evaluate_handoff_gate(gate_input: HandoffGateInput | Mapping[str, Any]) -> HandoffGateDecision:
+    """Evaluate a compact fail-closed handoff gate decision."""
+
+    model = (
+        gate_input
+        if isinstance(gate_input, HandoffGateInput)
+        else HandoffGateInput.model_validate(gate_input)
+    )
+    producing = model.producing_step_execution
+    gate_source = (
+        model.gate_source.model_dump(by_alias=True, exclude_none=True)
+        if model.gate_source is not None
+        else None
+    )
+    disposition_source = {
+        "stepExecutionId": producing.step_execution_id,
+        "terminalDisposition": producing.terminal_disposition,
+        "manifestRef": producing.manifest_ref,
+        "logicalStepId": producing.logical_step_id,
+        "executionOrdinal": producing.execution_ordinal,
+    }
+    evidence_refs = list(model.evidence_refs)
+    if producing.manifest_ref:
+        evidence_refs.append(producing.manifest_ref)
+    if gate_source:
+        for ref_key in ("evidenceRef", "diagnosticsRef"):
+            ref_value = gate_source.get(ref_key)
+            if ref_value:
+                evidence_refs.append(str(ref_value))
+
+    reason = "accepted_step_execution_and_passing_gate"
+    diagnostics: list[str] = []
+    terminal_disposition = str(producing.terminal_disposition or "").strip()
+    if terminal_disposition != "accepted":
+        reason = "producing_step_execution_not_accepted"
+        diagnostics.append(
+            "Blocked "
+            f"{model.action}: producing Step Execution terminal disposition was "
+            f"{terminal_disposition or 'missing'}"
+        )
+    elif model.requires_gate and (
+        model.gate_source is None
+        or not model.gate_source.passed
+        or not str(model.gate_source.verdict or "").strip()
+    ):
+        reason = "structured_gate_not_passed"
+        diagnostics.append(f"Blocked {model.action}: structured gate did not pass")
+    elif model.requires_idempotency_key and not model.idempotency_key:
+        reason = "missing_idempotency_key"
+        diagnostics.append(f"Blocked {model.action}: missing stable idempotency key")
+    elif (
+        model.requires_explicit_policy_approval
+        and not model.explicit_policy_approval
+    ):
+        reason = "explicit_policy_approval_required"
+        diagnostics.append(
+            f"Blocked {model.action}: explicit policy approval is required"
+        )
+
+    allowed = reason == "accepted_step_execution_and_passing_gate"
+    return HandoffGateDecision(
+        allowed=allowed,
+        decision="allow" if allowed else "block",
+        handoffClass=model.handoff_class,
+        actor=_sanitize_compact_value(model.actor),
+        action=model.action,
+        target=_sanitize_compact_value(model.target),
+        idempotencyKey=model.idempotency_key,
+        policyDecision={
+            "decision": "allow" if allowed else "block",
+            "reason": reason,
+            "source": "step_execution_handoff_gate",
+        },
+        gateSource=gate_source,
+        dispositionSource=_sanitize_compact_value(disposition_source),
+        evidenceRefs=_compact_refs(evidence_refs),
+        diagnostics=[text for text in (_sanitize_diagnostic_text(d) for d in diagnostics) if text],
+    )
+
+
+def handoff_gate_side_effect_record(
+    decision: HandoffGateDecision | Mapping[str, Any],
+    *,
+    effect_class: SideEffectClass,
+    effect_kind: Literal["normal", "cleanup", "compensation"] = "normal",
+) -> dict[str, Any]:
+    """Map a handoff gate decision to compact terminal side-effect evidence."""
+
+    decision_model = (
+        decision
+        if isinstance(decision, HandoffGateDecision)
+        else HandoffGateDecision.model_validate(decision)
+    )
+    return side_effect_record(
+        effect_class=effect_class,
+        effect_kind=effect_kind,
+        operation=decision_model.action,
+        action=decision_model.action,
+        target=decision_model.target,  # type: ignore[arg-type]
+        idempotency_key=decision_model.idempotency_key,
+        workflow_state_accepted=decision_model.allowed,
+        disposition="accepted" if decision_model.allowed else "blocked",
+        actor=decision_model.actor,
+        policy_decision=decision_model.policy_decision,
+        evidence_refs=decision_model.evidence_refs,
+        gate_source=decision_model.gate_source,
+        disposition_source=decision_model.disposition_source,
+        diagnostics=decision_model.diagnostics,
+        reason=decision_model.policy_decision.get("reason"),
+    )
 
 
 def _side_effect_already_occurred(record: Mapping[str, Any]) -> bool:
