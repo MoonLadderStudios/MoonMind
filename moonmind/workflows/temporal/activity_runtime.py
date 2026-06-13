@@ -5994,13 +5994,6 @@ class TemporalAgentRuntimeActivities:
                 )
             )
             return output
-        emit_pentest_activity_heartbeat(
-            phase="publishing_artifacts",
-            agent_run_id=request.agent_run_id,
-            step_id=request.step_id,
-            attempt=request.attempt,
-            message="Preparing Pentest artifact publication metadata.",
-        )
         publication = build_pentest_publication_result(
             request,
             findings=list(publication_payload.get("findings") or ()),
@@ -6018,18 +6011,6 @@ class TemporalAgentRuntimeActivities:
             errors=list(publication_payload.get("publication_errors") or ()),
         ).model_dump(mode="json")
         output.update(publication)
-        emit_pentest_activity_heartbeat(
-            phase="normalizing_findings",
-            agent_run_id=request.agent_run_id,
-            step_id=request.step_id,
-            attempt=request.attempt,
-            message="Normalizing Pentest findings.",
-            metadata={
-                "findings_count": publication["normalized_findings"]["summary"][
-                    "findings_count"
-                ],
-            },
-        )
         progress_annotations = [
             progress(phase, f"Pentest phase {phase}.")
             for phase in PENTEST_HEARTBEAT_PHASES
@@ -6276,6 +6257,31 @@ class TemporalAgentRuntimeActivities:
         if runner_findings is not None:
             publication["normalized_findings"] = runner_findings
             output["normalized_findings"] = runner_findings
+        emit_pentest_activity_heartbeat(
+            phase="publishing_artifacts",
+            agent_run_id=request.agent_run_id,
+            step_id=request.step_id,
+            attempt=request.attempt,
+            message="Publishing Pentest artifact metadata.",
+            metadata={
+                "artifact_count": len(
+                    publication.get("artifact_publication", {}).get("artifacts", ())
+                ),
+                "status": publication.get("artifact_publication", {}).get("status"),
+            },
+        )
+        emit_pentest_activity_heartbeat(
+            phase="normalizing_findings",
+            agent_run_id=request.agent_run_id,
+            step_id=request.step_id,
+            attempt=request.attempt,
+            message="Normalizing Pentest findings.",
+            metadata={
+                "findings_count": publication["normalized_findings"]["summary"][
+                    "findings_count"
+                ],
+            },
+        )
         output_refs = workload_result.output_refs or {}
         stdout_ref = workload_result.stdout_ref or _artifact_ref_for_pentest_name(
             publication, "runtime.stdout"

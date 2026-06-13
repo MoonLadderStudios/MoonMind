@@ -2063,7 +2063,11 @@ async def test_security_pentest_execute_supervised_handle_emits_running_heartbea
     monkeypatch: pytest.MonkeyPatch,
 ):
     heartbeats: list[dict[str, object]] = []
-    monkeypatch.setattr(activity_runtime_module, "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
+        0.001,
+    )
     monkeypatch.setattr(
         activity_runtime_module.temporal_activity,
         "heartbeat",
@@ -2086,17 +2090,57 @@ async def test_security_pentest_execute_supervised_handle_emits_running_heartbea
         "validating_scope",
         "waiting_for_profile_slot",
         "materializing_inputs",
-        "publishing_artifacts",
-        "normalizing_findings",
         "launching_container",
         "running",
         "running",
+        "publishing_artifacts",
+        "normalizing_findings",
         "cleanup",
     ]
     assert handle.polls >= 2
     for heartbeat in heartbeats:
         assert "ANTHROPIC_API_KEY" not in str(heartbeat)
         assert "hunter2" not in str(heartbeat)
+
+async def test_security_pentest_execute_emits_publication_heartbeat_after_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    heartbeats: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
+        0.001,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "heartbeat",
+        lambda payload: heartbeats.append(payload),
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert result["status"] == "completed"
+    phases = [heartbeat["phase"] for heartbeat in heartbeats]
+    assert phases == [
+        "validating_scope",
+        "waiting_for_profile_slot",
+        "materializing_inputs",
+        "launching_container",
+        "running",
+        "publishing_artifacts",
+        "normalizing_findings",
+        "cleanup",
+    ]
+    assert phases.index("publishing_artifacts") > phases.index("running")
+    assert phases.index("normalizing_findings") > phases.index(
+        "publishing_artifacts"
+    )
 
 async def test_supervised_pentest_workload_timeout_stops_removes_and_returns_cleanup():
     handle = _SupervisedPentestHandle(result_after_polls=None)
