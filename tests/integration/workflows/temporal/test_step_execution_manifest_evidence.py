@@ -177,6 +177,9 @@ async def test_recovery_step_execution_manifest_carries_lineage_without_large_pa
     assert manifest["lineage"]["sourceRunId"] == "run-source"
     assert manifest["lineage"]["sourceExecutionOrdinal"] == 2
     assert manifest["lineage"]["lineageExecutionOrdinal"] == 3
+    assert manifest["recoverySource"]["sourceWorkflowId"] == "wf-source"
+    assert manifest["recoverySource"]["sourceRunId"] == "run-source"
+    assert manifest["recoverySource"]["preservedSteps"] == []
     assert manifest["workspace"]["policy"] == "start_from_last_passed_commit"
     assert manifest["workspace"]["checkpointRef"] == (
         "artifact://workspace/before-implement"

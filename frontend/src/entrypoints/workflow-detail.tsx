@@ -3665,7 +3665,8 @@ function RecoveryEvidencePanel({
   busy: boolean;
   taskEditingOn: boolean;
 }) {
-  if (!recovery) return null;
+  const diagnosticsRecovery = diagnostics?.recovery ?? null;
+  if (!recovery && !diagnosticsRecovery && !resume?.checkpointRef) return null;
   const checkpointRef = recovery?.checkpointRef || resume?.checkpointRef || diagnostics?.recovery?.checkpointRef || null;
   const requiredBoundary = recovery?.requiredBoundary || 'before_execution';
   const disabledReason = recovery?.disabledReasonCode || resume?.disabledReason || null;
@@ -3674,7 +3675,7 @@ function RecoveryEvidencePanel({
   const diagnosticsEvidence = recovery?.evidence?.filter((item) =>
     ['environment', 'provider_lease', 'preflight', 'sidecar', 'ghcr', 'diagnostics'].includes(item.category),
   ) || [];
-  const preservedSteps = diagnostics?.recovery?.preservedSteps || [];
+  const preservedSteps = diagnosticsRecovery?.preservedSteps || [];
 
   return (
     <section className="detail-section">
