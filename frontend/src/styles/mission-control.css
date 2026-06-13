@@ -5398,6 +5398,92 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: var(--mm-control-shell);
 }
 
+.td-workflow-actions-surface {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.td-workflow-actions-menu {
+  position: relative;
+  display: inline-flex;
+  justify-content: flex-end;
+}
+
+.td-workflow-actions-trigger {
+  min-width: 10.5rem;
+}
+
+.td-workflow-actions-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.45rem);
+  z-index: 30;
+  display: grid;
+  gap: 0.25rem;
+  width: min(22rem, calc(100vw - 2rem));
+  max-height: min(70vh, 34rem);
+  overflow-y: auto;
+  padding: 0.45rem;
+  border: 1px solid rgb(var(--mm-border) / 0.78);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel) / 0.98);
+  box-shadow: var(--mm-elevation-floating);
+}
+
+.td-workflow-actions-item {
+  display: grid;
+  gap: 0.18rem;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: rgb(var(--mm-ink));
+  font: inherit;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: left;
+  text-decoration: none;
+}
+
+.td-workflow-actions-item:hover,
+.td-workflow-actions-item:focus-visible {
+  border-color: rgb(var(--mm-accent-2) / 0.55);
+  background: var(--mm-control-shell-hover);
+  outline: none;
+}
+
+.td-workflow-actions-item-danger {
+  color: rgb(var(--mm-danger));
+}
+
+.td-workflow-actions-item-disabled {
+  cursor: not-allowed;
+  color: rgb(var(--mm-muted));
+}
+
+.td-workflow-actions-item-disabled:hover,
+.td-workflow-actions-item-disabled:focus-visible {
+  border-color: rgb(var(--mm-border) / 0.72);
+  background: rgb(var(--mm-border) / 0.16);
+}
+
+.td-workflow-actions-disabled-reason,
+.td-workflow-actions-empty {
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.td-workflow-actions-empty {
+  margin: 0;
+  padding: 0.45rem 0.55rem;
+}
+
 .td-evidence-slab {
   background: rgb(var(--mm-panel) / 0.94);
 }
