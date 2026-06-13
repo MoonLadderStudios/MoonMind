@@ -4112,8 +4112,10 @@ def _ref_evidence(
 
 
 def _checkpoint_evidence_by_boundary(
-    workspace: Mapping[str, Any],
+    workspace: Mapping[str, Any] | None,
 ) -> dict[str, dict[str, Any]]:
+    if not workspace:
+        return {}
     boundaries = {
         "before_execution": ("checkpointBeforeRef", "Before execution checkpoint"),
         "after_execution": ("checkpointAfterRef", "After execution checkpoint"),
@@ -4154,7 +4156,9 @@ def _gate_summary(checks: list[dict[str, Any]]) -> dict[str, Any] | None:
     return {"verdict": verdict, "summary": summary, "artifactRef": artifact_ref}
 
 
-def _side_effect_summary(side_effects: Mapping[str, Any]) -> dict[str, Any] | None:
+def _side_effect_summary(side_effects: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not side_effects:
+        return None
     refs = _bounded_ref_projection(side_effects)
     artifact_refs = (
         {
@@ -4189,9 +4193,9 @@ def _side_effect_summary(side_effects: Mapping[str, Any]) -> dict[str, Any] | No
 
 
 def _environment_diagnostic_refs(
-    workspace: Mapping[str, Any],
-    execution: Mapping[str, Any],
-    outputs: Mapping[str, Any],
+    workspace: Mapping[str, Any] | None,
+    execution: Mapping[str, Any] | None,
+    outputs: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
     specs = (
         ("provider_lease", "providerLeaseDiagnosticsRef", "provider_lease_diagnostics"),
@@ -4271,7 +4275,11 @@ def _is_environment_blocked_manifest(manifest: StepExecutionManifestModel) -> bo
 
 def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[str, Any]:
     required_boundary = "before_execution"
-    checkpoint_ref = _first_text(_field_value(manifest.workspace, "checkpointBeforeRef"))
+    checkpoint_ref = (
+        _first_text(_field_value(manifest.workspace, "checkpointBeforeRef"))
+        if manifest.workspace
+        else None
+    )
     diagnostics = _environment_diagnostic_refs(
         manifest.workspace,
         manifest.execution,
@@ -4346,34 +4354,40 @@ def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[
 def _preserved_step_provenance_payload(
     manifest: StepExecutionManifestModel,
 ) -> list[dict[str, Any]]:
+    if not manifest.lineage:
+        return []
     raw_steps = _field_value(manifest.lineage, "preservedSteps")
     if not isinstance(raw_steps, list):
         return []
     preserved: list[dict[str, Any]] = []
     for item in raw_steps:
-        if not isinstance(item, Mapping):
+        if isinstance(item, BaseModel):
+            source = item.model_dump(by_alias=True, exclude_none=True)
+        elif isinstance(item, Mapping):
+            source = item
+        else:
             continue
         logical_step_id = _first_text(
-            _field_value(item, "logicalStepId"),
-            _field_value(item, "stepId"),
+            _field_value(source, "logicalStepId"),
+            _field_value(source, "stepId"),
         )
         if not logical_step_id:
             continue
-        output_refs = _bounded_ref_projection(_field_value(item, "outputRefs"))
+        output_refs = _bounded_ref_projection(_field_value(source, "outputRefs"))
         preserved.append(
             {
                 "logicalStepId": logical_step_id,
-                "title": _safe_display_text(_first_text(_field_value(item, "title"))),
+                "title": _safe_display_text(_first_text(_field_value(source, "title"))),
                 "sourceWorkflowId": _first_text(
-                    _field_value(item, "sourceWorkflowId"),
+                    _field_value(source, "sourceWorkflowId"),
                     _field_value(manifest.lineage, "sourceWorkflowId"),
                 ),
                 "sourceRunId": _first_text(
-                    _field_value(item, "sourceRunId"),
+                    _field_value(source, "sourceRunId"),
                     _field_value(manifest.lineage, "sourceRunId"),
                 ),
-                "sourceExecutionOrdinal": _field_value(item, "sourceExecutionOrdinal"),
-                "stateCheckpointRef": _first_text(_field_value(item, "stateCheckpointRef")),
+                "sourceExecutionOrdinal": _field_value(source, "sourceExecutionOrdinal"),
+                "stateCheckpointRef": _first_text(_field_value(source, "stateCheckpointRef")),
                 "outputRefs": output_refs if isinstance(output_refs, Mapping) else {},
             }
         )

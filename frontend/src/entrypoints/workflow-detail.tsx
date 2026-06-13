@@ -1068,6 +1068,14 @@ const StepLedgerSnapshotSchema = z.object({
   steps: z.array(StepLedgerRowSchema).default([]),
 });
 
+const StepExecutionDetailSchema = z
+  .object({
+    logicalStepId: z.string(),
+    executionOrdinal: z.number(),
+    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
+  })
+  .passthrough();
+
 const RunSummaryArtifactSchema = z
   .object({
     finishOutcome: z
@@ -3663,7 +3671,7 @@ function RecoveryEvidencePanel({
   const disabledReason = recovery?.disabledReasonCode || resume?.disabledReason || null;
   const sourceWorkflowId = recovery?.sourceWorkflowId || diagnostics?.recovery?.sourceWorkflowId || null;
   const sourceRunId = recovery?.sourceRunId || resume?.sourceRunId || diagnostics?.recovery?.sourceRunId || null;
-  const diagnosticsEvidence = recovery?.evidence.filter((item) =>
+  const diagnosticsEvidence = recovery?.evidence?.filter((item) =>
     ['environment', 'provider_lease', 'preflight', 'sidecar', 'ghcr', 'diagnostics'].includes(item.category),
   ) || [];
   const preservedSteps = diagnostics?.recovery?.preservedSteps || [];
@@ -4832,6 +4840,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return {
         logicalStepId: row.logicalStepId,
         title: row.title,
+        executionOrdinal: row.executionOrdinal,
         eligible,
         reason,
         isFailedStep,
@@ -4843,6 +4852,42 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     selectedRecoveryOptions.find((option) => option.isFailedStep) ||
     selectedRecoveryOptions.find((option) => option.eligible) ||
     null;
+
+  const stepRecoveryQuery = useQuery({
+    queryKey: [
+      'workflow-detail-step-execution',
+      workflowId,
+      selectedRecoveryStep?.logicalStepId,
+      selectedRecoveryStep?.executionOrdinal,
+      sourceTemporal,
+    ],
+    queryFn: async () => {
+      if (!workflowId || !selectedRecoveryStep?.logicalStepId || !selectedRecoveryStep.executionOrdinal) {
+        throw new Error('Step execution recovery evidence requires a selected step.');
+      }
+      const suffix = sourceTemporal ? '?source=temporal' : '';
+      const response = await fetch(
+        `${payload.apiBase}/executions/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(
+          selectedRecoveryStep.logicalStepId,
+        )}/step-executions/${encodeURIComponent(String(selectedRecoveryStep.executionOrdinal))}${suffix}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) {
+        const statusText = response.statusText.trim();
+        const detail = statusText ? ` ${statusText}` : '';
+        throw new Error(`Step execution: ${response.status}${detail}`);
+      }
+      return StepExecutionDetailSchema.parse(await response.json());
+    },
+    enabled: Boolean(
+      workflowId &&
+        selectedRecoveryStep?.logicalStepId &&
+        selectedRecoveryStep.executionOrdinal > 0,
+    ),
+    refetchInterval: liveUpdates && !isTerminalExecution ? detailPoll : false,
+  });
+  const recoveryEligibility =
+    execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
 
   const artifactsQuery = useQuery({
     queryKey: ['workflow-detail-artifacts', namespace, workflowId, latestRunId],
@@ -6131,7 +6176,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
           <RecoveryEvidencePanel
-            recovery={execution.recoveryEligibility}
+            recovery={recoveryEligibility}
             resume={execution.resume}
             diagnostics={execution.targetDiagnostics}
             onResumeFromFailedStep={onResumeFromFailedStep}

@@ -426,6 +426,97 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('renders recovery evidence from the failed step execution detail payload', async () => {
+    window.history.pushState({}, 'Recovery Evidence Test', '/workflows/test-123?source=temporal');
+    const failedStepsSnapshot = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) =>
+        step.logicalStepId === 'apply'
+          ? { ...step, status: 'failed', executionOrdinal: 2 }
+          : step,
+      ),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Recovery task',
+      summary: 'Needs recovery',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      resume: {
+        available: true,
+        failedStepId: 'apply',
+      },
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps/apply/step-executions/2')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            logicalStepId: 'apply',
+            executionOrdinal: 2,
+            recoveryEligibility: {
+              eligible: true,
+              defaultAction: 'resume_from_checkpoint',
+              requiredBoundary: 'before_execution',
+              checkpointRef: 'artifact://checkpoint/before',
+              sourceWorkflowId: 'wf-source',
+              sourceRunId: 'run-source',
+              operatorGuidance: 'resume',
+              evidence: [
+                {
+                  category: 'checkpoint',
+                  status: 'available',
+                  artifactRef: 'artifact://checkpoint/before',
+                  boundary: 'before_execution',
+                },
+              ],
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => failedStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recovery evidence' })).toBeTruthy();
+    expect(screen.getByText(/Resume from checkpoint is the default recovery action/)).toBeTruthy();
+    expect(screen.getByText('artifact://checkpoint/before')).toBeTruthy();
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/executions/test-123/steps/apply/step-executions/2?source=temporal',
+      { credentials: 'include' },
+    );
+  });
+
   it('MM-801 renders Steps as the focused step ledger route', async () => {
     window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
     mockWorkflowDetailSubrouteFetch();

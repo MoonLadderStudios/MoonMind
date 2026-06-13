@@ -273,7 +273,7 @@ class EnvironmentDiagnosticReferenceModel(BaseModel):
         return self
 
 
-class PreservedStepProvenanceModel(BaseModel):
+class PreservedStepProvenanceDetailModel(BaseModel):
     """Ref-backed provenance for steps preserved during recovery."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -500,6 +500,17 @@ class StepExecutionLineageModel(BaseModel):
     lineage_execution_ordinal: int | None = Field(
         None, alias="lineageExecutionOrdinal", ge=1
     )
+    preserved_steps: list[PreservedStepProvenanceDetailModel] = Field(
+        default_factory=list, alias="preservedSteps"
+    )
+
+    @model_serializer(mode="wrap")
+    def _serialize_without_empty_preserved_steps(self, handler):
+        data = handler(self)
+        if not self.preserved_steps:
+            data.pop("preservedSteps", None)
+            data.pop("preserved_steps", None)
+        return data
 
 
 class StepExecutionSummaryRefModel(BaseModel):
@@ -550,6 +561,30 @@ class StepExecutionManifestModel(BaseModel):
         default_factory=dict, alias="dependencyEffects"
     )
     budget: dict[str, Any] = Field(default_factory=dict, alias="budget")
+
+    @field_validator(
+        "input",
+        "context",
+        "workspace",
+        "execution",
+        "outputs",
+        "side_effects",
+        "dependency_effects",
+        "budget",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_nullable_mapping(cls, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        return value
+
+    @field_validator("checks", mode="before")
+    @classmethod
+    def _coerce_nullable_checks(cls, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        return value
 
     @model_validator(mode="after")
     def _validate_compact_evidence(self) -> "StepExecutionManifestModel":
@@ -2135,7 +2170,7 @@ class StepExecutionDetailModel(StepExecutionProjectionModel):
     dependency_effect_refs: dict[str, Any] = Field(
         default_factory=dict, alias="dependencyEffectRefs"
     )
-    preserved_step_provenance: list[PreservedStepProvenanceModel] = Field(
+    preserved_step_provenance: list[PreservedStepProvenanceDetailModel] = Field(
         default_factory=list, alias="preservedStepProvenance"
     )
 

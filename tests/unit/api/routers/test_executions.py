@@ -69,6 +69,7 @@ from moonmind.workflows.temporal.artifacts import TemporalArtifactAuthorizationE
 from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProgressModel,
+    StepExecutionDetailModel,
     StepExecutionManifestModel,
     StepLedgerSnapshotModel,
     UpdateExecutionRequest,
@@ -246,6 +247,60 @@ def test_step_execution_detail_payload_exposes_typed_recovery_eligibility() -> N
     assert ineligible["defaultAction"] == "full_retry"
     assert ineligible["disabledReasonCode"] == "missing_required_checkpoint_boundary"
     assert ineligible["evidence"][0]["status"] == "missing"
+
+
+def test_step_execution_detail_payload_tolerates_nullable_manifest_sections() -> None:
+    payload = _step_execution_detail_payload(
+        _phase_11_manifest(
+            workspace=None,
+            execution=None,
+            outputs=None,
+            sideEffects=None,
+            checks=None,
+        ),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )
+
+    assert payload["stepEvidence"]["checkpointRefsByBoundary"] == {}
+    assert payload["stepEvidence"]["sideEffectSummary"] is None
+    assert payload["stepEvidence"]["diagnosticRefs"] == []
+    assert payload["recoveryEligibility"]["eligible"] is False
+    assert (
+        payload["recoveryEligibility"]["disabledReasonCode"]
+        == "missing_required_checkpoint_boundary"
+    )
+
+
+def test_step_execution_detail_payload_validates_preserved_step_provenance() -> None:
+    payload = _step_execution_detail_payload(
+        _phase_11_manifest(
+            lineage={
+                "sourceWorkflowId": "wf-source",
+                "sourceRunId": "run-source",
+                "sourceLogicalStepId": "implement",
+                "sourceExecutionOrdinal": 1,
+                "preservedSteps": [
+                    {
+                        "logicalStepId": "plan",
+                        "title": "Plan",
+                        "sourceWorkflowId": "wf-source",
+                        "sourceRunId": "run-source",
+                        "sourceExecutionOrdinal": 1,
+                        "stateCheckpointRef": "artifact://checkpoint/plan-state",
+                        "outputRefs": {"summaryRef": "artifact://outputs/plan-summary"},
+                    }
+                ],
+            }
+        ),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )
+    detail = StepExecutionDetailModel.model_validate(payload)
+
+    assert detail.preserved_step_provenance[0].logical_step_id == "plan"
+    assert detail.preserved_step_provenance[0].source_workflow_id == "wf-source"
+    assert detail.preserved_step_provenance[0].output_refs == {
+        "summaryRef": "artifact://outputs/plan-summary"
+    }
 
 
 def test_step_execution_detail_payload_exposes_environment_fix_guidance() -> None:
