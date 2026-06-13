@@ -312,6 +312,8 @@ Key diagnostics:
 - Existing Temporal workflow/activity payloads and provider-profile manager workflow signals; no new persistent storage (001-pentest-provider-leases)
 - Python 3.12 + Pydantic v2 settings/models, PyYAML-backed workload profile loading, Temporal activity boundary helpers (001-harden-pentest-provenance)
 - No new persistent storage; deterministic validation only (001-harden-pentest-provenance)
+- Python 3.12; TypeScript/React only if Mission Control surfaces change + Pydantic v2, Temporal Python SDK, FastAPI, SQLAlchemy async ORM where API/projection changes are exposed, existing provider-profile and artifact services (001-bounded-story-loops)
+- existing Temporal workflow history, Temporal artifact store, execution records, step ledger/projection rows, provider-profile lease state; no new persistent tables planned unless query needs cannot reuse existing execution/artifact records (001-bounded-story-loops)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
