@@ -38,6 +38,7 @@ from moonmind.security.outbound_scan import (
 )
 from moonmind.integrations.pentest.models import (
     PENTEST_HEARTBEAT_PHASES,
+    PENTEST_RUNTIME_ID,
     PentestApprovedScope,
     PentestLaunchPolicyError,
     PentestProviderMaterializationError,
@@ -430,7 +431,7 @@ async def _await_pentest_workload_with_activity_heartbeats(
     """Await a launched Pentest workload while emitting bounded running heartbeats."""
 
     started_at = time.monotonic()
-    task = asyncio.create_task(workload_awaitable)
+    task = asyncio.ensure_future(workload_awaitable)
     emit_pentest_activity_heartbeat(
         phase="running",
         agent_run_id=request.agent_run_id,
@@ -456,8 +457,7 @@ async def _await_pentest_workload_with_activity_heartbeats(
         return await task
     except asyncio.CancelledError:
         task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
+        await asyncio.gather(task, return_exceptions=True)
         raise
 
 async def _supervise_pentest_workload_with_activity_heartbeats(
@@ -572,6 +572,9 @@ async def _supervise_pentest_workload_with_activity_heartbeats(
             )
     except asyncio.CancelledError:
         await _stop_and_remove(terminal_reason="cancellation")
+        raise
+    except Exception:
+        await _stop_and_remove(terminal_reason="failure")
         raise
 
 async def cleanup_pentest_orphan_containers(
@@ -5792,11 +5795,16 @@ class TemporalAgentRuntimeActivities:
             ),
             default=False,
         )
+        pre_validation_attempt = 1
+        try:
+            pre_validation_attempt = int(request_payload.get("attempt") or 1)
+        except (TypeError, ValueError):
+            pre_validation_attempt = 1
         emit_pentest_activity_heartbeat(
             phase="validating_scope",
             agent_run_id=str(request_payload.get("agent_run_id") or "") or None,
             step_id=str(request_payload.get("step_id") or "") or None,
-            attempt=int(request_payload.get("attempt") or 1),
+            attempt=pre_validation_attempt,
             message="Validating Pentest scope and policy.",
         )
         if not enabled:
@@ -5804,7 +5812,7 @@ class TemporalAgentRuntimeActivities:
                 phase="cleanup",
                 agent_run_id=str(request_payload.get("agent_run_id") or "") or None,
                 step_id=str(request_payload.get("step_id") or "") or None,
-                attempt=int(request_payload.get("attempt") or 1),
+                attempt=pre_validation_attempt,
                 message="Pentest execution denied before launch.",
                 metadata={"terminal_reason": "failure"},
             )
@@ -5915,6 +5923,7 @@ class TemporalAgentRuntimeActivities:
             PentestScopeValidationError,
             PentestLaunchPolicyError,
             PentestProviderMaterializationError,
+            ValidationError,
         ) as exc:
             provider_lease_released = False
             if lease_id:
@@ -6077,6 +6086,7 @@ class TemporalAgentRuntimeActivities:
             "stepId": request.step_id,
             "attempt": request.attempt,
             "toolName": "security.pentest.run",
+            "runtimeId": PENTEST_RUNTIME_ID,
             "repoDir": request.repo_dir or launch_plan.workdir,
             "artifactsDir": request.artifacts_dir,
             "command": list(execution_materialization.wrapper_invocation.command),
