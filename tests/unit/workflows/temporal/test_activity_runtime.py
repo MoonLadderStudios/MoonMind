@@ -39,6 +39,7 @@ from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
     DEPLOYMENT_UPDATE_TOOL_VERSION,
 )
+from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
 from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_FLEET,
     ARTIFACTS_FLEET,
@@ -996,6 +997,18 @@ class _FakePentestLauncher:
             }
         )
 
+class _BlockingPentestLauncher(_FakePentestLauncher):
+    def __init__(self, *, status: str = "succeeded") -> None:
+        super().__init__(status=status)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(self, request: object) -> WorkloadResult:
+        self.requests.append(request)
+        self.started.set()
+        await self.release.wait()
+        return await super().run(request)
+
 class _RecordingPentestRegistry:
     """Registry stand-in that validates requests into the launcher contract.
 
@@ -1160,6 +1173,36 @@ async def test_temporal_pentest_provider_lease_manager_fails_closed_without_upda
             metadata={},
         )
 
+async def test_pentest_heartbeat_helper_emits_compact_redacted_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    emitted: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "heartbeat",
+        lambda payload: emitted.append(payload),
+    )
+
+    payload = activity_runtime_module.emit_pentest_activity_heartbeat(
+        phase="running",
+        agent_run_id="run-123",
+        step_id="step-pentest",
+        attempt=1,
+        message="running with token=secret-value",
+        metadata={
+            "stdout": "raw stdout body must be dropped",
+            "safe": "password=hunter2",
+        },
+    )
+
+    assert emitted == [payload]
+    assert payload["phase"] == "running"
+    assert payload["message"] == "running with token=[REDACTED]"
+    assert payload["metadata"] == {"safe": "password=[REDACTED]"}
+    assert "secret-value" not in str(payload)
+    assert "raw stdout body" not in str(payload)
+
 async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_default():
     launcher = _FakePentestLauncher()
     activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
@@ -1175,6 +1218,111 @@ async def test_security_pentest_execute_fails_closed_before_runner_when_disabled
     assert result["failure_classification"]["interaction_state"] == "pre_interaction"
     assert result["terminal_cleanup"]["terminal_reason"] == "failure"
     assert launcher.requests == []
+
+async def test_security_pentest_execute_emits_all_phase_heartbeats(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "heartbeat",
+        lambda payload: emitted.append(payload),
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
+        0.01,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert result["status"] == "completed"
+    phases = [str(item["phase"]) for item in emitted]
+    for phase in (
+        "validating_scope",
+        "waiting_for_profile_slot",
+        "materializing_inputs",
+        "launching_container",
+        "running",
+        "publishing_artifacts",
+        "normalizing_findings",
+        "cleanup",
+    ):
+        assert phase in phases
+
+async def test_security_pentest_execute_repeats_running_heartbeats(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        activity_runtime_module.temporal_activity,
+        "heartbeat",
+        lambda payload: emitted.append(payload),
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS",
+        0.01,
+    )
+    launcher = _BlockingPentestLauncher()
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    task = asyncio.create_task(
+        activities._security_pentest_execute_trusted_internal(
+            _pentest_activity_payload()
+        )
+    )
+    await asyncio.wait_for(launcher.started.wait(), timeout=1)
+    await asyncio.sleep(0.035)
+    launcher.release.set()
+    result = await task
+
+    assert result["status"] == "completed"
+    running = [item for item in emitted if item["phase"] == "running"]
+    assert len(running) >= 2
+
+async def test_pentest_orphan_cleanup_uses_deterministic_label_selector():
+    class _Janitor:
+        def __init__(self) -> None:
+            self.selectors: list[dict[str, str]] = []
+            self.removed: list[str] = []
+
+        async def find_by_labels(self, labels: dict[str, str]) -> tuple[str, ...]:
+            self.selectors.append(dict(labels))
+            return ("container-1", "container-2")
+
+        async def remove(self, container_id: str) -> None:
+            self.removed.append(container_id)
+
+    janitor = _Janitor()
+
+    result = await activity_runtime_module.cleanup_pentest_orphan_containers(
+        janitor,
+        agent_run_id="run-123",
+        step_id="step-pentest",
+        runner_profile_id="pentestgpt-safe",
+    )
+
+    assert janitor.selectors == [
+        {
+            "moonmind.kind": "workload",
+            "moonmind.tool_name": "security.pentest.run",
+            "moonmind.agent_run_id": "run-123",
+            "moonmind.step_id": "step-pentest",
+            "moonmind.workload_profile": "pentestgpt-safe",
+        }
+    ]
+    assert janitor.removed == ["container-1", "container-2"]
+    assert result["removed_count"] == 2
 
 async def test_security_pentest_execute_fails_closed_before_runner_without_scope():
     launcher = _FakePentestLauncher()

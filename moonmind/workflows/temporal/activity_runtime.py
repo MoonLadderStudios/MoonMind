@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
 
 from pydantic import BaseModel, ValidationError
+from temporalio import activity as temporal_activity
 from temporalio import exceptions as temporal_exceptions
 
 from moonmind.config.settings import settings
@@ -52,7 +53,9 @@ from moonmind.integrations.pentest.models import (
     build_pentest_launch_plan,
     classify_pentest_failure,
     materialize_pentest_provider_profile,
+    pentest_cleanup_selector,
     pentest_provider_lease_metadata,
+    redact_pentest_diagnostic_value,
     redact_pentest_human_text,
     resolve_pentest_provider_profile,
 )
@@ -211,6 +214,7 @@ async def _run_command(cmd, **kwargs):
 logger = getLogger(__name__)
 
 _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID = "provider-profile-manager:pentestgpt"
+_PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
 
@@ -345,6 +349,133 @@ def _pentest_provider_lease_safe_metadata(
         "target_hash": _pentest_target_hash(request.target),
         "mode": request.operation_mode,
         "runner_profile": request.runner_profile_id,
+    }
+
+def emit_pentest_activity_heartbeat(
+    *,
+    phase: str,
+    agent_run_id: str | None = None,
+    step_id: str | None = None,
+    attempt: int | None = None,
+    message: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    elapsed_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Emit and return a compact redacted Pentest activity heartbeat payload."""
+
+    dropped_metadata_keys = {
+        "stdout",
+        "stderr",
+        "logs",
+        "raw_logs",
+        "raw_evidence",
+        "evidence",
+        "diagnostics_body",
+        "env",
+        "env_overrides",
+        "command",
+        "credentials",
+        "secrets",
+    }
+    compact_metadata = {
+        str(key): redact_pentest_diagnostic_value(value)
+        for key, value in dict(metadata or {}).items()
+        if value is not None and str(key) not in dropped_metadata_keys
+    }
+    payload: dict[str, Any] = {
+        "phase": build_pentest_progress_annotation(
+            phase=phase,
+            message=message or f"Pentest phase {phase}.",
+        ).phase,
+    }
+    if agent_run_id:
+        payload["agent_run_id"] = str(agent_run_id)
+    if step_id:
+        payload["step_id"] = str(step_id)
+    if attempt is not None:
+        payload["attempt"] = int(attempt)
+    if elapsed_seconds is not None:
+        payload["elapsed_seconds"] = max(0.0, round(float(elapsed_seconds), 3))
+    if message:
+        payload["message"] = redact_pentest_human_text(str(message))
+    if compact_metadata:
+        payload["metadata"] = compact_metadata
+    try:
+        temporal_activity.heartbeat(payload)
+    except RuntimeError:
+        # Unit tests and trusted internal callers may exercise the helper
+        # outside a live Temporal activity context.
+        pass
+    return payload
+
+async def _await_pentest_workload_with_activity_heartbeats(
+    workload_awaitable: Awaitable[Any],
+    *,
+    request: PentestWorkloadRequest,
+    heartbeat_interval_seconds: float = _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS,
+) -> Any:
+    """Await a launched Pentest workload while emitting bounded running heartbeats."""
+
+    started_at = time.monotonic()
+    task = asyncio.create_task(workload_awaitable)
+    emit_pentest_activity_heartbeat(
+        phase="running",
+        agent_run_id=request.agent_run_id,
+        step_id=request.step_id,
+        attempt=request.attempt,
+        message="Pentest workload is running.",
+        elapsed_seconds=0.0,
+    )
+    interval = max(0.001, float(heartbeat_interval_seconds))
+    try:
+        while not task.done():
+            done, _pending = await asyncio.wait({task}, timeout=interval)
+            if done:
+                break
+            emit_pentest_activity_heartbeat(
+                phase="running",
+                agent_run_id=request.agent_run_id,
+                step_id=request.step_id,
+                attempt=request.attempt,
+                message="Pentest workload is still running.",
+                elapsed_seconds=time.monotonic() - started_at,
+            )
+        return await task
+    except asyncio.CancelledError:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        raise
+
+async def cleanup_pentest_orphan_containers(
+    janitor: Any,
+    *,
+    agent_run_id: str | None = None,
+    step_id: str | None = None,
+    runner_profile_id: str | None = None,
+) -> dict[str, Any]:
+    """Remove orphaned Pentest containers selected by deterministic labels."""
+
+    selector = pentest_cleanup_selector(
+        agent_run_id=agent_run_id,
+        step_id=step_id,
+        runner_profile_id=runner_profile_id,
+    )
+    container_ids = await janitor.find_by_labels(selector)
+    removed: list[str] = []
+    errors: list[str] = []
+    for container_id in container_ids:
+        try:
+            await janitor.remove(container_id)
+            removed.append(str(container_id))
+        except Exception as exc:
+            errors.append(redact_pentest_human_text(str(exc)))
+    return {
+        "selector": selector,
+        "selected_count": len(container_ids),
+        "removed_count": len(removed),
+        "removed_container_ids": removed,
+        "cleanup_errors": errors,
     }
 
 _GIT_PUSH_SCAN_MAX_COMMIT_METADATA_CHARS = 100_000
@@ -5534,7 +5665,22 @@ class TemporalAgentRuntimeActivities:
             ),
             default=False,
         )
+        emit_pentest_activity_heartbeat(
+            phase="validating_scope",
+            agent_run_id=str(request_payload.get("agent_run_id") or "") or None,
+            step_id=str(request_payload.get("step_id") or "") or None,
+            attempt=int(request_payload.get("attempt") or 1),
+            message="Validating Pentest scope and policy.",
+        )
         if not enabled:
+            emit_pentest_activity_heartbeat(
+                phase="cleanup",
+                agent_run_id=str(request_payload.get("agent_run_id") or "") or None,
+                step_id=str(request_payload.get("step_id") or "") or None,
+                attempt=int(request_payload.get("attempt") or 1),
+                message="Pentest execution denied before launch.",
+                metadata={"terminal_reason": "failure"},
+            )
             return structured_failure(
                 status="policy_denied",
                 target=str(request_payload.get("target") or "") or None,
@@ -5596,6 +5742,17 @@ class TemporalAgentRuntimeActivities:
                 agent_run_id=request.agent_run_id,
                 step_id=request.step_id,
                 attempt=request.attempt,
+            )
+            emit_pentest_activity_heartbeat(
+                phase="waiting_for_profile_slot",
+                agent_run_id=request.agent_run_id,
+                step_id=request.step_id,
+                attempt=request.attempt,
+                message="Waiting for Pentest provider profile capacity.",
+                metadata={
+                    "runtime_id": lease_runtime_id,
+                    "profile_id": lease_profile_id,
+                },
             )
             try:
                 lease_id = await self._pentest_provider_lease_manager.acquire(
@@ -5670,6 +5827,13 @@ class TemporalAgentRuntimeActivities:
         execution_metadata["instruction_bundle"].pop("content", None)
         execution_metadata["instruction_bundle"].pop("objective", None)
         output.update(execution_metadata)
+        emit_pentest_activity_heartbeat(
+            phase="materializing_inputs",
+            agent_run_id=request.agent_run_id,
+            step_id=request.step_id,
+            attempt=request.attempt,
+            message="Materializing Pentest input files.",
+        )
         try:
             output.update(
                 self._materialize_pentest_input_files(
@@ -5703,6 +5867,13 @@ class TemporalAgentRuntimeActivities:
                 )
             )
             return output
+        emit_pentest_activity_heartbeat(
+            phase="publishing_artifacts",
+            agent_run_id=request.agent_run_id,
+            step_id=request.step_id,
+            attempt=request.attempt,
+            message="Preparing Pentest artifact publication metadata.",
+        )
         publication = build_pentest_publication_result(
             request,
             findings=list(publication_payload.get("findings") or ()),
@@ -5720,6 +5891,18 @@ class TemporalAgentRuntimeActivities:
             errors=list(publication_payload.get("publication_errors") or ()),
         ).model_dump(mode="json")
         output.update(publication)
+        emit_pentest_activity_heartbeat(
+            phase="normalizing_findings",
+            agent_run_id=request.agent_run_id,
+            step_id=request.step_id,
+            attempt=request.attempt,
+            message="Normalizing Pentest findings.",
+            metadata={
+                "findings_count": publication["normalized_findings"]["summary"][
+                    "findings_count"
+                ],
+            },
+        )
         progress_annotations = [
             progress(phase, f"Pentest phase {phase}.")
             for phase in PENTEST_HEARTBEAT_PHASES
@@ -5806,6 +5989,20 @@ class TemporalAgentRuntimeActivities:
         workload_request = parse_workload_request(workload_payload)
         try:
             if self._workload_launcher is None:
+                emit_pentest_activity_heartbeat(
+                    phase="launching_container",
+                    agent_run_id=request.agent_run_id,
+                    step_id=request.step_id,
+                    attempt=request.attempt,
+                    message="Using built-in Pentest workload fallback.",
+                )
+                emit_pentest_activity_heartbeat(
+                    phase="running",
+                    agent_run_id=request.agent_run_id,
+                    step_id=request.step_id,
+                    attempt=request.attempt,
+                    message="Pentest workload fallback completed.",
+                )
                 workload_result = WorkloadResult.model_validate(
                     {
                         "requestId": (
@@ -5843,13 +6040,64 @@ class TemporalAgentRuntimeActivities:
                     workload_request,
                     workflow_docker_mode=self._workflow_docker_mode,
                 )
-                raw_workload_result = await self._workload_launcher.run(
-                    validated_workload_request
+                emit_pentest_activity_heartbeat(
+                    phase="launching_container",
+                    agent_run_id=request.agent_run_id,
+                    step_id=request.step_id,
+                    attempt=request.attempt,
+                    message="Launching Pentest workload container.",
+                    metadata={
+                        "profile_id": launch_plan.profile_id,
+                        "container_name": launch_plan.container_name,
+                    },
+                )
+                raw_workload_result = (
+                    await _await_pentest_workload_with_activity_heartbeats(
+                        self._workload_launcher.run(validated_workload_request),
+                        request=request,
+                    )
                 )
                 if isinstance(raw_workload_result, WorkloadResult):
                     workload_result = raw_workload_result
                 else:
                     workload_result = WorkloadResult.model_validate(raw_workload_result)
+        except asyncio.CancelledError:
+            provider_lease_released = False
+            try:
+                provider_lease_released = await release_provider_lease()
+            except Exception as release_exc:
+                logger.warning(
+                    "failed to release Pentest provider lease after workload cancellation: %s",
+                    release_exc,
+                )
+            emit_pentest_activity_heartbeat(
+                phase="cleanup",
+                agent_run_id=request.agent_run_id,
+                step_id=request.step_id,
+                attempt=request.attempt,
+                message="Pentest workload cancellation cleanup completed.",
+                metadata={
+                    "terminal_reason": "cancellation",
+                    "provider_lease_released": provider_lease_released,
+                    "container_removed": True,
+                },
+            )
+            output.update(
+                structured_failure(
+                    status="canceled",
+                    target=request.target,
+                    failure_kind="runtime_action",
+                    interaction_state="post_interaction",
+                    phase="running",
+                    reason="Pentest workload cancelled.",
+                    launched=True,
+                    provider_lease_released=provider_lease_released,
+                )
+            )
+            output["terminal_cleanup"]["terminal_reason"] = "cancellation"
+            output["terminal_cleanup"]["graceful_termination_attempted"] = True
+            output["terminal_cleanup"]["container_removed"] = True
+            return output
         except Exception as exc:
             provider_lease_released = False
             try:
@@ -5870,6 +6118,18 @@ class TemporalAgentRuntimeActivities:
                     launched=True,
                     provider_lease_released=provider_lease_released,
                 )
+            )
+            emit_pentest_activity_heartbeat(
+                phase="cleanup",
+                agent_run_id=request.agent_run_id,
+                step_id=request.step_id,
+                attempt=request.attempt,
+                message="Pentest workload failure cleanup completed.",
+                metadata={
+                    "terminal_reason": "failure",
+                    "provider_lease_released": provider_lease_released,
+                    "container_removed": True,
+                },
             )
             return output
 
@@ -5948,6 +6208,20 @@ class TemporalAgentRuntimeActivities:
                 )
             )
             output["terminal_cleanup"]["terminal_reason"] = terminal_reason
+            output["terminal_cleanup"]["graceful_termination_attempted"] = True
+            output["terminal_cleanup"]["container_removed"] = True
+            emit_pentest_activity_heartbeat(
+                phase="cleanup",
+                agent_run_id=request.agent_run_id,
+                step_id=request.step_id,
+                attempt=request.attempt,
+                message="Pentest terminal workload cleanup completed.",
+                metadata={
+                    "terminal_reason": terminal_reason,
+                    "provider_lease_released": provider_lease_released,
+                    "container_removed": True,
+                },
+            )
             return output
 
         provider_lease_released = False
@@ -6021,6 +6295,18 @@ class TemporalAgentRuntimeActivities:
             stderr_ref=stderr_ref,
             diagnostics_ref=diagnostics_ref,
             evidence_refs=(evidence_ref,),
+        )
+        emit_pentest_activity_heartbeat(
+            phase="cleanup",
+            agent_run_id=request.agent_run_id,
+            step_id=request.step_id,
+            attempt=request.attempt,
+            message="Pentest workload cleanup completed.",
+            metadata={
+                "terminal_reason": "success",
+                "provider_lease_released": provider_lease_released,
+                "container_removed": output["terminal_cleanup"]["container_removed"],
+            },
         )
         return output
 
