@@ -314,6 +314,7 @@ Key diagnostics:
 - No new persistent storage; deterministic validation only (001-harden-pentest-provenance)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, existing MoonMind Step Execution helpers, existing artifact service, existing memory/RAG services (001-memory-promotion-manifests)
 - Existing artifact store and workflow history refs only; no new persistent database table planned (001-memory-promotion-manifests)
+- TypeScript/React for Mission Control UI; Python 3.12 remains present but is not part of this story + React, TanStack Query, Zod, Testing Library, Vitest, existing Mission Control stylesheet (001-remove-step-dag)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

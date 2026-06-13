@@ -8912,6 +8912,7 @@ class MoonMindRunWorkflow:
             "publishMode",
             "commitMessage",
             "allowed_tools",
+            "priority",
             "stepCount",
             "maxAttempts",
             "steps",
@@ -8922,7 +8923,11 @@ class MoonMindRunWorkflow:
             "storyBreakdownMarkdownPath",
             "story_breakdown_markdown_path",
         ):
-            param_val = runtime_block.get(param_key) or node_inputs.get(param_key)
+            param_val = runtime_block.get(param_key)
+            if param_val is None:
+                param_val = node_inputs.get(param_key)
+            if param_val is None and workflow_parameters is not None:
+                param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
         profile_selector = self._build_profile_selector(

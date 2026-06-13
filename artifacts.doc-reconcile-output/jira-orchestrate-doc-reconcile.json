@@ -1,14 +1,14 @@
 {
   "action": "no_update_required",
   "docPaths": [
-    "docs/tmp/StepExecutionsCheckpointingGapPlan.md",
-    "docs/Steps/StepExecutionsAndCheckpointing.md"
+    "docs/tmp/StepExecutionsCheckpointingGapPlan.md"
   ],
-  "gateRationale": "No canonical documentation update passed the moonspec-doc-reconcile gate. The latest moonspec-verify report for specs/001-memory-promotion-manifests/spec.md is FULLY_IMPLEMENTED, but its Source Document Drift section records 'None identified' with severity 'none'. No artifacts/doc-discoveries/001-memory-promotion-manifests.json ledger is present. The primary source design path is docs/tmp/StepExecutionsCheckpointingGapPlan.md, an imperative working document rather than a canonical declarative source, and the canonical cross-check document docs/Steps/StepExecutionsAndCheckpointing.md agrees with the verified Phase 9 implementation.",
+  "gateRationale": "No canonical source document exists for this reconciliation step. specs/001-use-conformance-gate/spec.md records docs/tmp/StepExecutionsCheckpointingGapPlan.md as an imperative working document, and Constitution XII keeps docs/tmp migration or execution notes outside canonical docs. The moonspec-doc-reconcile precondition therefore requires a no-op outcome.",
   "evidence": [
-    "/work/agent_jobs/mm:8c1daad6-afc6-4c52-90d0-fbf006290a62/artifacts/stdout.log lines 26285-26331: moonspec-verify report with Verdict FULLY_IMPLEMENTED and Source Document Drift 'None identified' severity 'none'",
-    "specs/001-memory-promotion-manifests/spec.md records Source Document docs/tmp/StepExecutionsCheckpointingGapPlan.md with desired-state cross-checks from docs/Steps/StepExecutionsAndCheckpointing.md",
-    "specs/001-memory-promotion-manifests/quickstart.md Doc Reconciliation Notes state that docs and implementation match Phase 9 requirements",
-    "No artifacts/doc-discoveries/001-memory-promotion-manifests.json file exists in the workspace"
+    "specs/001-use-conformance-gate/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md (imperative working document)",
+    ".specify/memory/constitution.md Principle XII classifies migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs as docs/tmp or local-only material, not canonical docs",
+    "No artifacts/doc-discoveries/ ledger is present in this workspace",
+    "No canonical docs/ source document was identified for this feature",
+    "artifacts/ is root-owned and not writable by uid 1000(app), so the structured result was written to the writable existing reconcile output directory artifacts.doc-reconcile-output/"
   ]
 }
