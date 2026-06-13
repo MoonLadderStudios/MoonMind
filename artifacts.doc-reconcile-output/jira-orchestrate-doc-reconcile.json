@@ -1,14 +1,14 @@
 {
   "action": "no_update_required",
   "docPaths": [
-    "docs/Steps/StepExecutionsAndCheckpointing.md"
+    "docs/tmp/StepExecutionsCheckpointingGapPlan.md"
   ],
-  "gateRationale": "Doc reconciliation skipped: no latest post-remediation moonspec-verify report with verdict FULLY_IMPLEMENTED was found in the workspace, so publication remains blocked and the moonspec-doc-reconcile update gate does not allow canonical doc edits.",
+  "gateRationale": "No canonical source document exists for this reconciliation step. The latest moonspec-verify report verdict is FULLY_IMPLEMENTED, but spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md, an imperative working document under docs/tmp/. Per the document model and Constitution XII, docs/tmp material is not a canonical desired-state document and must not be reconciled into canonical docs. No artifacts/doc-discoveries/001-checkpoint-activity-substrate.json ledger was present, and the verify report states no canonical source-document drift was found.",
   "evidence": [
-    "specs/001-step-execution-conformance/spec.md records Source Document: docs/Steps/StepExecutionsAndCheckpointing.md",
-    "artifacts/ contains only context retrieval files; no moonspec-verify report or Source Document Drift section was present",
-    "/work/agent_jobs/mm:9c6ae3d9-cbc5-45f1-a024-a8e9861ae3b7/artifacts/stdout.log and stderr.log contain prior runtime/tooling diagnostics but no controlling FULLY_IMPLEMENTED post-remediation verdict",
-    "docs/tmp/jira-orchestrate-mm-820-handoff.json is a submission handoff, not a post-remediation verification report",
-    "Could not write artifacts/jira-orchestrate-doc-reconcile.json because ./artifacts is root-owned and not writable by uid 1000(app); chmod was denied by the filesystem"
+    "specs/001-checkpoint-activity-substrate/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md and labels it an imperative working document used only as bounded source context",
+    "/work/agent_jobs/mm:fff3123a-815e-44d1-a9f6-af38c17b5dd1/artifacts/stdout.log latest MoonSpec Verification Report records Verdict: FULLY_IMPLEMENTED",
+    "/work/agent_jobs/mm:fff3123a-815e-44d1-a9f6-af38c17b5dd1/artifacts/stdout.log verification report states: No canonical source-document drift was found; the source document is the disposable docs/tmp/StepExecutionsCheckpointingGapPlan.md",
+    "specs/001-checkpoint-activity-substrate/quickstart.md Documentation Drift section states no canonical documentation reconciliation is required because the source document is an imperative working document and no durable desired-state drift was found",
+    "No artifacts/doc-discoveries/001-checkpoint-activity-substrate.json file was present in the workspace"
   ]
 }
