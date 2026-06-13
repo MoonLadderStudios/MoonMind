@@ -74,6 +74,8 @@ _ROLLUP_EVENT_TYPES_MAX = 24
 _LOG_EXCERPT_MAX_ROWS = 20
 _TURN_ITEMS_PAGE_LIMIT = 200
 _TURN_ITEMS_MAX_PAGES = 20
+_EMPTY_ROLLOUT_READ_GRACE_SECONDS = 1.0
+_EMPTY_ROLLOUT_READ_RETRY_SECONDS = 0.1
 _SECRET_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
@@ -1934,8 +1936,38 @@ class CodexManagedSessionRuntime:
         rollout_mirror: _RolloutLiveMirror,
     ) -> tuple[Mapping[str, Any], _TurnTerminalOutcome]:
         deadline = time.monotonic() + self._turn_completion_timeout_seconds
+        empty_rollout_first_seen_at: float | None = None
         while True:
-            thread_payload = client.request("thread/read", {"threadId": vendor_thread_id})
+            try:
+                thread_payload = client.request(
+                    "thread/read",
+                    {"threadId": vendor_thread_id},
+                )
+            except RuntimeError as exc:
+                message = str(exc)
+                if not self._failure_message_reports_empty_rollout(message):
+                    raise
+                now = time.monotonic()
+                if empty_rollout_first_seen_at is None:
+                    empty_rollout_first_seen_at = now
+                remaining = deadline - now
+                grace_remaining = _EMPTY_ROLLOUT_READ_GRACE_SECONDS - (
+                    now - empty_rollout_first_seen_at
+                )
+                if remaining <= 0 or grace_remaining <= 0:
+                    raise
+                try:
+                    client.wait_for_notification(
+                        None,
+                        timeout_seconds=min(
+                            _EMPTY_ROLLOUT_READ_RETRY_SECONDS,
+                            remaining,
+                            grace_remaining,
+                        ),
+                    )
+                except TimeoutError:
+                    pass
+                continue
             self._publish_rollout_live_updates(
                 state=state,
                 vendor_turn_id=vendor_turn_id,
