@@ -17,6 +17,7 @@ def write_fake_app_server(
     thread_status_reason: str | None = None,
     fail_thread_resume: bool = False,
     fail_thread_read: bool = False,
+    thread_read_fail_limit: int | None = 1,
     thread_read_fail_after_attempts: int = 0,
     resume_requires_existing_rollout_path: bool = False,
     start_thread_id: str = "vendor-thread-1",
@@ -57,6 +58,7 @@ FAIL_THREAD_READ = __FAIL_THREAD_READ__
 THREAD_READ_FAIL_AFTER_ATTEMPTS = __THREAD_READ_FAIL_AFTER_ATTEMPTS__
 THREAD_RESUME_ERROR_MESSAGE = __THREAD_RESUME_ERROR_MESSAGE__
 THREAD_READ_ERROR_MESSAGE = __THREAD_READ_ERROR_MESSAGE__
+THREAD_READ_FAIL_LIMIT = __THREAD_READ_FAIL_LIMIT__
 RESUME_REQUIRES_EXISTING_ROLLOUT_PATH = __RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__
 START_THREAD_ID = __START_THREAD_ID__
 START_THREAD_PATH = __START_THREAD_PATH__
@@ -74,6 +76,7 @@ SKILL_OUTCOME_PAYLOAD = __SKILL_OUTCOME_PAYLOAD__
 SKILL_OUTCOME_PAYLOAD_IS_RAW = __SKILL_OUTCOME_PAYLOAD_IS_RAW__
 turn_completed = False
 thread_read_failed = False
+thread_read_failures = 0
 thread_read_attempts = 0
 
 for line in sys.stdin:
@@ -254,10 +257,14 @@ __COMPLETION_BLOCK__
         if (
             FAIL_THREAD_READ
             and thread_id == "vendor-thread-1"
-            and not thread_read_failed
+            and (
+                THREAD_READ_FAIL_LIMIT is None
+                or thread_read_failures < THREAD_READ_FAIL_LIMIT
+            )
             and thread_read_attempts >= THREAD_READ_FAIL_AFTER_ATTEMPTS
         ):
             thread_read_failed = True
+            thread_read_failures += 1
             sys.stdout.write(json.dumps({
                 "id": msg_id,
                 "error": {
@@ -354,6 +361,7 @@ __COMPLETION_BLOCK__
         )
         .replace("__THREAD_RESUME_ERROR_MESSAGE__", repr(thread_recovery_error_message))
         .replace("__THREAD_READ_ERROR_MESSAGE__", repr(thread_read_error_message))
+        .replace("__THREAD_READ_FAIL_LIMIT__", repr(thread_read_fail_limit))
         .replace(
             "__RESUME_REQUIRES_EXISTING_ROLLOUT_PATH__",
             "True" if resume_requires_existing_rollout_path else "False",
