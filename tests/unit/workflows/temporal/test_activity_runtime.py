@@ -1891,6 +1891,61 @@ async def test_pentest_workload_profile_registry_includes_safe_runner():
     assert profile.network_policy == "bridge"
     assert "ANTHROPIC_API_KEY" in profile.env_allowlist
 
+async def test_security_pentest_execute_rejects_configured_profiles_missing_from_registry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    launcher = _FakePentestLauncher()
+    registry = RunnerProfileRegistry.load_file(
+        Path("config/workloads/default-runner-profiles.yaml"),
+        workspace_root="/work/agent_jobs",
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=registry,
+    )
+    monkeypatch.setattr(
+        settings.pentest,
+        "allowed_runner_profiles",
+        ("pentestgpt-safe", "pentestgpt-missing"),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert result["status"] == "validation_failed"
+    assert "runner_profile_not_registered" in str(result["diagnostics"])
+    assert "pentestgpt-missing" in str(result["diagnostics"])
+    assert launcher.requests == []
+
+async def test_security_pentest_execute_validates_safe_profile_against_registry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    launcher = _FakePentestLauncher()
+    registry = RunnerProfileRegistry.load_file(
+        Path("config/workloads/default-runner-profiles.yaml"),
+        workspace_root="/work/agent_jobs",
+    )
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=launcher,
+        workload_registry=registry,
+    )
+    monkeypatch.setattr(
+        settings.pentest, "allowed_runner_profiles", ("pentestgpt-safe",)
+    )
+    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", False)
+
+    payload = _pentest_activity_payload()
+    payload["request"]["repo_dir"] = "/work/agent_jobs/run-123/repo"
+    payload["request"][
+        "artifacts_dir"
+    ] = "/work/agent_jobs/run-123/artifacts/pentest"
+
+    result = await activities._security_pentest_execute_trusted_internal(payload)
+
+    assert result["status"] == "completed"
+    assert len(launcher.requests) == 1
+
 async def test_security_pentest_execute_materializes_input_files_without_secrets(
     tmp_path: Path,
 ):

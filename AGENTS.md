@@ -310,6 +310,8 @@ Key diagnostics:
 - No new persistent storage; conformance fixtures are deterministic repository test data and command output only (001-step-execution-conformance)
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing Pentest workload launcher and artifact services (001-pentest-provider-leases)
 - Existing Temporal workflow/activity payloads and provider-profile manager workflow signals; no new persistent storage (001-pentest-provider-leases)
+- Python 3.12 + Pydantic v2 settings/models, PyYAML-backed workload profile loading, Temporal activity boundary helpers (001-harden-pentest-provenance)
+- No new persistent storage; deterministic validation only (001-harden-pentest-provenance)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

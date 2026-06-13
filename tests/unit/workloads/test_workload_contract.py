@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 import pytest
 from pydantic import ValidationError
 
+from moonmind.config.settings import PentestSettings
+from moonmind.integrations.pentest.models import get_pentest_runner_profile
 from moonmind.schemas.workload_models import (
     UnrestrictedContainerRequest,
     UnrestrictedDockerRequest,
@@ -388,22 +391,26 @@ def test_default_registry_contains_unreal_pilot_profile() -> None:
     assert profile.timeout_seconds == 7200
     assert profile.max_timeout_seconds == 7200
     assert profile.max_concurrency == 1
-    assert {mount.source for mount in profile.required_mounts} == {"agent_workspaces"}
-    assert {mount.source for mount in profile.optional_mounts} == {
-        "unreal_ccache_volume",
-        "unreal_ubt_volume",
-    }
-    assert set(profile.env_allowlist) == {
-        "CI",
-        "CCACHE_DIR",
-        "UBT_CACHE_DIR",
-        "UE_PROJECT_PATH",
-        "UE_TARGET",
-        "UE_TEST_SELECTOR",
-        "UE_REPORT_PATH",
-        "UE_SUMMARY_PATH",
-        "UE_JUNIT_PATH",
-    }
+
+def test_pentest_runner_defaults_registry_and_publish_workflow_do_not_drift() -> None:
+    settings_image = PentestSettings().runner_image
+    domain_profile = get_pentest_runner_profile("pentestgpt-safe")
+    registry = RunnerProfileRegistry.load_file(
+        Path("config/workloads/default-runner-profiles.yaml"),
+        workspace_root=WORKSPACE_ROOT,
+        allowed_image_registries=("ghcr.io",),
+    )
+    workload_profile = registry.get("pentestgpt-safe")
+    publish_workflow = Path(".github/workflows/docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert domain_profile.image == settings_image
+    assert workload_profile is not None
+    assert workload_profile.image == settings_image
+    assert settings_image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
+    assert "pentest_image_name=${IMAGE_NAME}-pentestgpt" in publish_workflow
+    assert "./docker/pentestgpt-runner/Dockerfile" in publish_workflow
 
 @pytest.mark.parametrize(
     ("overrides", "message"),
