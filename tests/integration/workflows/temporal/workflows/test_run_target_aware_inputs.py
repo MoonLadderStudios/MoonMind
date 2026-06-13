@@ -71,8 +71,15 @@ def test_run_boundary_prepares_objective_and_current_step_context_only() -> None
         "artifact://first-step-artifact",
     ]
     assert attempt_context["contextBundleDigest"].startswith("sha256:")
+    assert attempt_context["builderVersion"] == "execution-context-builder-v2"
+    assert attempt_context["retrievalManifestRef"].startswith(
+        "attempt-retrieval-manifest://sha256:"
+    )
     assert projection["context"]["contextBundleRef"] == (
         attempt_context["contextBundleRef"]
+    )
+    assert projection["context"]["retrievalManifestRef"] == (
+        attempt_context["retrievalManifestRef"]
     )
     assert "preparedInputRefs" not in projection["context"]
 
@@ -130,6 +137,85 @@ def test_run_boundary_projects_memory_context_ref() -> None:
     assert projection["context"]["contextBundleRef"] == (
         attempt_context["contextBundleRef"]
     )
+
+
+def test_run_boundary_carries_phase8_launch_context_refs() -> None:
+    wf = MoonMindRunWorkflow()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=SimpleNamespace(
+            workflow_id="run-phase8-context-integration",
+            run_id="run-id-1",
+            namespace="default",
+        ),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "codex_cli"},
+                "parameters": {"model": "gpt-5", "effort": "high"},
+            },
+            node_id="first-step",
+            tool_name="codex_cli",
+            workflow_parameters={
+                "task": {
+                    "taskInputSnapshotRef": "artifact://task-input",
+                    "planRef": "artifact://plan",
+                    "planDigest": "sha256:plan",
+                    "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+                    "workspaceBaseline": {"kind": "git_commit", "commit": "abc123"},
+                    "checkpointRefs": {
+                        "sourceCheckpointRef": "artifact://checkpoint-1"
+                    },
+                    "priorEvidenceRefs": ["artifact://attempt-1-gate"],
+                    "provenance": {"source": "reattempt"},
+                    "qualityGateProfile": "repo-default",
+                    "providerLeaseRefs": [
+                        {"leaseRef": "lease://profile/slot", "status": "acquired"}
+                    ],
+                    "skillProjectionStateRefs": [
+                        {"resolvedSkillsetRef": "artifact://skillset"}
+                    ],
+                    "retrieval": {
+                        "state": "available",
+                        "query": "step scoped context",
+                        "returnedRefs": ["artifact://context-pack-1"],
+                        "exclusions": [
+                            {"ref": "artifact://noisy", "reason": "filtered"}
+                        ],
+                    },
+                    "steps": [{"id": "first-step"}],
+                }
+            },
+        )
+
+    moonmind_metadata = request.parameters["metadata"]["moonmind"]
+    attempt_context = moonmind_metadata["executionContext"]
+    projection = moonmind_metadata["stepExecutionManifestProjection"]
+
+    assert attempt_context["taskInputSnapshotRef"] == "artifact://task-input"
+    assert attempt_context["planRef"] == "artifact://plan"
+    assert attempt_context["planDigest"] == "sha256:plan"
+    assert attempt_context["workspaceBaseline"]["commit"] == "abc123"
+    assert attempt_context["checkpointRefs"]["sourceCheckpointRef"] == (
+        "artifact://checkpoint-1"
+    )
+    assert attempt_context["priorEvidenceRefs"] == ["artifact://attempt-1-gate"]
+    assert attempt_context["providerLeaseRefs"][0]["leaseRef"] == (
+        "lease://profile/slot"
+    )
+    assert attempt_context["skillProjectionStateRefs"][0]["resolvedSkillsetRef"] == (
+        "artifact://skillset"
+    )
+    assert projection["context"]["contextBundleRef"] == (
+        attempt_context["contextBundleRef"]
+    )
+    assert projection["context"]["contextBundleDigest"] == (
+        attempt_context["contextBundleDigest"]
+    )
+    assert projection["context"]["retrievalManifestRef"] == (
+        attempt_context["retrievalManifestRef"]
+    )
+    assert "priorEvidenceRefs" not in projection["context"]
 
 
 def test_agent_run_child_input_scope_is_parent_selected() -> None:

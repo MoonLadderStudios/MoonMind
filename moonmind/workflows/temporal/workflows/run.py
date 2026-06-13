@@ -9076,6 +9076,19 @@ class MoonMindRunWorkflow:
         memory_proposals = None
         memory_context = None
         fix_patterns = None
+        task_input_snapshot_ref = None
+        plan_ref = None
+        plan_digest = None
+        workspace_policy = None
+        workspace_baseline = None
+        checkpoint_refs = None
+        prior_evidence_refs = None
+        provenance = None
+        quality_gate_profile = None
+        provider_lease_refs: list[Mapping[str, Any]] = []
+        skill_projection_state_refs: list[Mapping[str, Any]] = []
+        diagnostic_refs: dict[str, Any] = {}
+        correlation_refs = None
         if isinstance(task_payload_for_context, Mapping):
             raw_retrieval_context = (
                 task_payload_for_context.get("attemptRetrieval")
@@ -9084,6 +9097,72 @@ class MoonMindRunWorkflow:
             )
             if isinstance(raw_retrieval_context, Mapping):
                 retrieval_context = raw_retrieval_context
+            task_input_snapshot_ref = (
+                task_payload_for_context.get("taskInputSnapshotRef")
+                or task_payload_for_context.get("inputSnapshotRef")
+                or task_payload_for_context.get("snapshotRef")
+            )
+            plan_ref = task_payload_for_context.get("planRef")
+            plan_digest = task_payload_for_context.get("planDigest")
+            workspace_policy = task_payload_for_context.get("workspacePolicy")
+            raw_workspace_baseline = task_payload_for_context.get("workspaceBaseline")
+            if isinstance(raw_workspace_baseline, Mapping):
+                workspace_baseline = raw_workspace_baseline
+            raw_checkpoint_refs = (
+                task_payload_for_context.get("checkpointRefs")
+                or task_payload_for_context.get("sourceCheckpointRefs")
+            )
+            if isinstance(raw_checkpoint_refs, Mapping):
+                checkpoint_refs = raw_checkpoint_refs
+            raw_prior_evidence_refs = (
+                task_payload_for_context.get("priorEvidenceRefs")
+                or task_payload_for_context.get("previousEvidenceRefs")
+            )
+            if isinstance(raw_prior_evidence_refs, Sequence) and not isinstance(
+                raw_prior_evidence_refs,
+                (str, bytes, bytearray),
+            ):
+                prior_evidence_refs = [
+                    str(ref).strip() for ref in raw_prior_evidence_refs if str(ref).strip()
+                ]
+            raw_provenance = task_payload_for_context.get("provenance")
+            if isinstance(raw_provenance, Mapping):
+                provenance = raw_provenance
+            raw_quality_gate_profile = (
+                task_payload_for_context.get("qualityGateProfile")
+                or task_payload_for_context.get("qualityGateProfileRef")
+            )
+            if isinstance(raw_quality_gate_profile, str):
+                quality_gate_profile = raw_quality_gate_profile
+            raw_provider_lease_refs = task_payload_for_context.get("providerLeaseRefs")
+            if isinstance(raw_provider_lease_refs, Sequence) and not isinstance(
+                raw_provider_lease_refs,
+                (str, bytes, bytearray),
+            ):
+                provider_lease_refs = [
+                    dict(ref)
+                    for ref in raw_provider_lease_refs
+                    if isinstance(ref, Mapping)
+                ]
+            raw_skill_projection_refs = (
+                task_payload_for_context.get("skillProjectionStateRefs")
+                or task_payload_for_context.get("skillProjectionRefs")
+            )
+            if isinstance(raw_skill_projection_refs, Sequence) and not isinstance(
+                raw_skill_projection_refs,
+                (str, bytes, bytearray),
+            ):
+                skill_projection_state_refs = [
+                    dict(ref)
+                    for ref in raw_skill_projection_refs
+                    if isinstance(ref, Mapping)
+                ]
+            raw_diagnostic_refs = task_payload_for_context.get("diagnosticRefs")
+            if isinstance(raw_diagnostic_refs, Mapping):
+                diagnostic_refs = dict(raw_diagnostic_refs)
+            raw_correlation_refs = task_payload_for_context.get("correlationRefs")
+            if isinstance(raw_correlation_refs, Mapping):
+                correlation_refs = raw_correlation_refs
             raw_memory_proposals = (
                 task_payload_for_context.get("memoryProposals")
                 or task_payload_for_context.get("memoryEffects")
@@ -9117,17 +9196,49 @@ class MoonMindRunWorkflow:
                     for pattern in raw_fix_patterns
                     if isinstance(pattern, Mapping)
                 ]
+        if retrieval_context is None:
+            retrieval_context = {
+                "state": "skipped",
+                "reason": "no_step_retrieval_context",
+            }
+        if execution_profile_ref and not provider_lease_refs:
+            provider_lease_refs = [
+                {
+                    "profileRef": execution_profile_ref,
+                    "status": "diagnostic_only",
+                }
+            ]
+        if resolved_skillset_ref and not skill_projection_state_refs:
+            skill_projection_state_refs = [
+                {
+                    "resolvedSkillsetRef": resolved_skillset_ref,
+                }
+            ]
         attempt_context = build_execution_context_bundle(
             workflow_id=wf_info.workflow_id,
             run_id=wf_info.run_id,
             logical_step_id=node_id,
             execution_ordinal=step_execution or 1,
+            reason=attempt_reason,
+            task_input_snapshot_ref=task_input_snapshot_ref,
+            plan_ref=plan_ref,
+            plan_digest=plan_digest,
             prepared_context=prepared_context,
+            workspace_policy=workspace_policy,
+            workspace_baseline=workspace_baseline,
+            checkpoint_refs=checkpoint_refs,
+            prior_evidence_refs=prior_evidence_refs,
+            provenance=provenance,
             runtime_selection=runtime_selection,
             retrieval=retrieval_context,
             memory_proposals=memory_proposals,
             memory_context=memory_context,
             fix_patterns=fix_patterns,
+            quality_gate_profile=quality_gate_profile,
+            provider_lease_refs=provider_lease_refs,
+            skill_projection_state_refs=skill_projection_state_refs,
+            diagnostic_refs=diagnostic_refs,
+            correlation_refs=correlation_refs,
         )
         metadata_payload = (
             parameters.get("metadata")

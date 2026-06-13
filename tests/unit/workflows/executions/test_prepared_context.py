@@ -367,7 +367,7 @@ def test_execution_context_bundle_digest_is_stable_and_execution_scoped() -> Non
         f"execution-context-bundle://{first.context_bundle_digest}"
     )
     assert first.context_bundle_digest != changed_execution.context_bundle_digest
-    assert first.builder_version == "execution-context-builder-v1"
+    assert first.builder_version == "execution-context-builder-v2"
     projection = first.to_manifest_projection()
     assert projection["context"]["contextBundleDigest"] == first.context_bundle_digest
     assert "preparedInputRefs" not in projection["context"]
@@ -651,3 +651,149 @@ def test_prepare_failure_payload_is_bounded() -> None:
     assert dumped["reason"] == "RuntimeError"
     assert "data:image" not in dumped["message"]
     assert len(dumped["message"]) <= 180
+
+
+
+def test_phase8_context_bundle_includes_full_launch_context_fields() -> None:
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=2,
+        reason="reattempt",
+        task_input_snapshot_ref="artifact://task-input-snapshot",
+        plan_ref="artifact://plan",
+        plan_digest="sha256:plan",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        workspace_baseline={"kind": "git_commit", "commit": "abc123"},
+        checkpoint_refs={"sourceCheckpointRef": "artifact://checkpoint-1"},
+        prior_evidence_refs=["artifact://attempt-1-gate"],
+        provenance={"source": "reattempt", "sourceCheckpointRef": "artifact://checkpoint-1"},
+        runtime_selection={"runtimeId": "codex_cli", "model": "gpt-5"},
+        quality_gate_profile="repo-default",
+        provider_lease_refs=[{"leaseRef": "lease://profile/slot", "status": "acquired"}],
+        skill_projection_state_refs=[{"resolvedSkillsetRef": "artifact://skillset"}],
+        diagnostic_refs={"ghcrAuth": {"authMode": "anonymous", "diagnosticRefs": ["artifact://ghcr-diag"]}},
+        correlation_refs={"traceRef": "trace://workflow-1", "logRef": "artifact://logs", "costRef": "cost://estimate"},
+        retrieval={"state": "disabled", "reason": "retrieval_disabled_by_policy"},
+    )
+
+    dumped = bundle.model_dump(by_alias=True, exclude_none=True)
+
+    assert dumped["schemaVersion"] == "v1"
+    assert dumped["taskInputSnapshotRef"] == "artifact://task-input-snapshot"
+    assert dumped["planRef"] == "artifact://plan"
+    assert dumped["planDigest"] == "sha256:plan"
+    assert dumped["workspacePolicy"] == "apply_previous_execution_diff_to_clean_baseline"
+    assert dumped["workspaceBaseline"] == {"kind": "git_commit", "commit": "abc123"}
+    assert dumped["checkpointRefs"] == {"sourceCheckpointRef": "artifact://checkpoint-1"}
+    assert dumped["priorEvidenceRefs"] == ["artifact://attempt-1-gate"]
+    assert dumped["provenance"]["source"] == "reattempt"
+    assert dumped["qualityGateProfile"] == "repo-default"
+    assert dumped["providerLeaseRefs"] == [{"leaseRef": "lease://profile/slot", "status": "acquired"}]
+    assert dumped["skillProjectionStateRefs"] == [{"resolvedSkillsetRef": "artifact://skillset"}]
+    assert dumped["diagnosticRefs"]["ghcrAuth"]["authMode"] == "anonymous"
+    assert dumped["correlationRefs"]["traceRef"] == "trace://workflow-1"
+    assert dumped["retrievalManifestRef"].startswith("attempt-retrieval-manifest://sha256:")
+    assert dumped["builderVersion"] == "execution-context-builder-v2"
+    assert dumped["contextBundleRef"] == f"execution-context-bundle://{dumped['contextBundleDigest']}"
+
+
+def test_phase8_retrieval_manifest_supports_all_explicit_states() -> None:
+    available = build_retrieval_manifest(
+        {
+            "state": "available",
+            "query": "step scoped context",
+            "selector": {"logicalStepId": "collect-evidence"},
+            "indexVersion": "rag-index-1",
+            "returnedRefs": ["artifact://context-pack-1"],
+            "filters": {"trust": "canonical"},
+            "exclusions": [{"ref": "artifact://noisy", "reason": "filtered"}],
+            "compactSummaries": ["Bounded source summary."],
+            "correlationRefs": {"traceRef": "trace://retrieval"},
+        }
+    )
+    assert available.state == "available"
+    assert available.exclusions == [{"ref": "artifact://noisy", "reason": "filtered"}]
+    assert available.correlation_refs == {"traceRef": "trace://retrieval"}
+
+    for state in ("disabled", "skipped", "unavailable"):
+        manifest = build_retrieval_manifest({"state": state, "reason": f"{state}_reason"})
+        assert manifest.state == state
+        assert manifest.reason == f"{state}_reason"
+        assert manifest.returned_refs == []
+
+    empty = build_retrieval_manifest(
+        {
+            "state": "empty",
+            "query": "step scoped context",
+            "indexVersion": "rag-index-1",
+            "filters": {"trust": "canonical"},
+            "exclusions": [{"reason": "no refs after filters"}],
+            "reason": "no_usable_refs",
+        }
+    )
+    assert empty.state == "empty"
+    assert empty.returned_refs == []
+    assert empty.reason == "no_usable_refs"
+
+
+def test_phase8_context_digest_changes_for_launch_visible_inputs() -> None:
+    base_kwargs = dict(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=1,
+        workspace_baseline={"kind": "git_commit", "commit": "abc123"},
+        prior_evidence_refs=["artifact://attempt-1"],
+        runtime_selection={"runtimeId": "codex_cli", "model": "gpt-5"},
+        retrieval={
+            "state": "available",
+            "query": "context",
+            "returnedRefs": ["artifact://doc-1"],
+            "exclusions": [{"ref": "artifact://doc-2", "reason": "filtered"}],
+        },
+    )
+    base = build_execution_context_bundle(**base_kwargs)
+
+    variants = [
+        {**base_kwargs, "workspace_baseline": {"kind": "git_commit", "commit": "def456"}},
+        {**base_kwargs, "prior_evidence_refs": ["artifact://attempt-2"]},
+        {**base_kwargs, "runtime_selection": {"runtimeId": "claude_code", "model": "sonnet"}},
+        {**base_kwargs, "retrieval": {**base_kwargs["retrieval"], "returnedRefs": ["artifact://doc-3"]}},
+        {**base_kwargs, "retrieval": {**base_kwargs["retrieval"], "exclusions": [{"ref": "artifact://doc-9", "reason": "filtered"}]}},
+        {**base_kwargs, "retrieval": {**base_kwargs["retrieval"], "selector": {"topic": "changed"}}},
+    ]
+
+    assert {build_execution_context_bundle(**variant).context_bundle_digest for variant in variants} == {
+        build_execution_context_bundle(**variant).context_bundle_digest for variant in variants
+    }
+    assert all(build_execution_context_bundle(**variant).context_bundle_digest != base.context_bundle_digest for variant in variants)
+
+
+def test_phase8_ref_only_fields_reject_raw_payloads_and_credentials() -> None:
+    forbidden_contexts = [
+        {"provider_lease_refs": [{"leaseRef": "lease://profile", "token": "ghp_unsafe"}]},
+        {"diagnostic_refs": {"sidecar": {"stdout": "raw log output"}}},
+        {"diagnostic_refs": {"preflight": {"diff": "diff --git a/file b/file"}}},
+        {"skill_projection_state_refs": [{"materializedState": "inline workspace state"}]},
+        {"correlation_refs": {"log": "x" * 5000}},
+    ]
+    for extra in forbidden_contexts:
+        with pytest.raises(ValueError):
+            build_execution_context_bundle(
+                workflow_id="workflow-1",
+                run_id="run-1",
+                logical_step_id="collect-evidence",
+                **extra,
+            )
+
+    with pytest.raises(ValueError):
+        build_retrieval_manifest(
+            {
+                "state": "available",
+                "query": "context",
+                "returnedRefs": ["artifact://doc-1"],
+                "compactSummaries": ["raw stdout: " + "x" * 5000],
+            }
+        )
