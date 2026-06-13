@@ -2003,6 +2003,13 @@ async def test_security_pentest_execute_validates_safe_profile_against_registry(
         workload_registry=registry,
     )
     monkeypatch.setattr(
+        settings.pentest,
+        "runner_image",
+        "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0",
+    )
+    monkeypatch.setattr(settings.pentest, "safe_profile_id", "pentestgpt-safe")
+    monkeypatch.setattr(settings.pentest, "default_runner_profile", "pentestgpt-safe")
+    monkeypatch.setattr(
         settings.pentest, "allowed_runner_profiles", ("pentestgpt-safe",)
     )
     monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", False)
