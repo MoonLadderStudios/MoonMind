@@ -1,11 +1,9 @@
 # MoonMind Workflow Run History and New Run Semantics
 
-**Implementation tracking:** Rollout and backlog notes live in `docs/tmp/` or gitignored local-only paths (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
-**Status:** Draft
-**Owner:** MoonMind Platform
-**Last updated:** 2026-06-10
-**Audience:** backend, dashboard, workflow authors, API owners
+Status: Desired State
+Owner: MoonMind Platform
+Last updated: 2026-06-13
+Audience: backend, dashboard, workflow authors, API owners
 
 ## 1. Purpose
 

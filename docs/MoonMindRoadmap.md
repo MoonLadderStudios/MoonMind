@@ -3,7 +3,7 @@
 > Tracking the major milestones remaining to fully deliver on the README promise:
 > **safety, resiliency, and observability for Claude Code and Codex CLI.**
 >
-> Last updated: 2026-06-09
+> Last updated: 2026-06-13
 
 ---
 
@@ -150,7 +150,7 @@ All six items (run digests, fix patterns/error signatures, Mem0 long-term adapte
 - [ ] **7.2** Artifact browsing UI — API exists (`temporal_artifacts.py`); dashboard browsing of files/logs/patches still partial
 - [ ] **7.5** Side-by-side comparison view — Comparison runs preserve lineage (MM-773), but no side-by-side UI
 - [x] **7.6** Multi-step / step DAG visualization — Mission Control workflow detail Steps renders step nodes and dependency edges from the step ledger (MM-746)
-- [ ] **7.7** Remediation panels — Tracked as 13.4
+- [ ] **7.7** Remediation panels - Tracked with 13.3
 
 ---
 

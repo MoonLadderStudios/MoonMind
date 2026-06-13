@@ -1266,7 +1266,7 @@ Rules:
 3. Renaming or removing a field, changing identity/key shapes, or changing disposition semantics requires a new content-type version and a cutover in which the old version is deleted, not aliased (Constitution principle XIII).
 4. Replay safety: any change to manifest/checkpoint payloads carried through workflow state must include a compatibility or replay-style regression test at the workflow boundary, or documented proof that no in-flight run can carry the old shape.
 
-Migration sequencing and the implementation gap backlog are tracked outside this document under `docs/tmp/` per Constitution principle XII; this document describes only the target contracts.
+Non-canonical working notes remain outside this document under `docs/tmp/` per Constitution principle XII; this document describes only the target contracts.
 
 ---
 

@@ -652,7 +652,7 @@ Allowed reference patterns:
 
 The manifest contract (`manifest_contract.py`) enforces this at validation time via `detect_manifest_secret_leaks`, which scans all manifest values for:
 - Known sensitive field names (`api_key`, `token`, `password`, etc.)
-- Suspect value prefixes (`sk-`, `ghp_`, `AKIA`, etc.)
+- Suspect value prefixes (for example provider API key, GitHub token, and cloud access key prefixes)
 - JWT patterns and base64-encoded secrets
 
 ### 18.2 Secret reference collection

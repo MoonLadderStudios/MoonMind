@@ -1,9 +1,7 @@
 # Activity Catalog and Worker Topology
 
-**Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
-
-Status: **Implemented in core runtime** (catalog live; some target-state families still pending)
-Last updated: **2026-03-30**
+Status: Implemented in core runtime (catalog live; some target-state families still pending)
+Last updated: 2026-06-13
 Scope: Defines MoonMind’s canonical **Activity Types**, **worker fleets**, **Task Queue routing**, and the operational rules for executing artifacts, planning, skills, integrations, managed runtime supervision, and related Temporal-side support work.
 
 ## Related docs
