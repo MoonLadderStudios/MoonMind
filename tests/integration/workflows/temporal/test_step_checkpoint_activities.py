@@ -110,6 +110,56 @@ async def test_capture_git_patch_and_create_checkpoint_write_compact_artifacts(
     assert "diff" not in payload["workspace"]
 
 
+async def test_create_checkpoint_is_idempotent_for_step_boundary_key(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    checkpoint_activities = TemporalCheckpointActivities(artifact_store=store)
+    base_commit = (
+        subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo)
+        .decode()
+        .strip()
+    )
+
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "git_patch",
+            "workspacePath": str(repo),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": (
+                "workflow-1:run-1:checkpoint-story:execution:1:"
+                "checkpoint:after_execution"
+            ),
+            "baseCommit": base_commit,
+        }
+    )
+
+    request = {
+        "identity": _identity().model_dump(by_alias=True),
+        "boundary": "after_execution",
+        "taskInputSnapshotRef": "artifact-input",
+        "workspace": capture["workspace"],
+        "createdAt": datetime(2026, 6, 13, 12, 0, tzinfo=UTC).isoformat(),
+        "planDigest": "sha256:plan",
+        "idempotencyKey": (
+            "workflow-1:run-1:checkpoint-story:execution:1:"
+            "checkpoint:after_execution"
+        ),
+    }
+
+    first = await checkpoint_activities.step_checkpoint_create(request)
+    second = await checkpoint_activities.step_checkpoint_create(request)
+
+    assert first == second
+    assert first["checkpointRef"] == second["checkpointRef"]
+    assert first["idempotencyKey"].endswith(":checkpoint:after_execution")
+
+
 async def test_capture_all_checkpoint_kinds_as_compact_refs(tmp_path: Path) -> None:
     store = InMemoryArtifactStore()
     root = _workspace_root(tmp_path)
@@ -345,7 +395,13 @@ async def test_checkpoint_activity_failures_are_typed_and_secret_safe(
             "identity": _identity().model_dump(by_alias=True),
             "workspacePolicy": "start_from_last_passed_commit",
             "checkpointRef": "artifact-checkpoint",
-            "checkpoint": {"workspace": {"kind": "git_patch", "baseCommit": "abc", "patchRef": "artifact-patch"}},
+            "checkpoint": {
+                "workspace": {
+                    "kind": "git_patch",
+                    "baseCommit": "abc",
+                    "patchRef": "artifact-patch",
+                }
+            },
             "targetWorkspaceRef": str(repo),
             "expectedPlanDigest": "sha256:plan",
             "idempotencyKey": "idem-policy",
@@ -353,3 +409,77 @@ async def test_checkpoint_activity_failures_are_typed_and_secret_safe(
     )
     assert policy["status"] == "rejected"
     assert policy["failureCode"] == "policy_incompatible"
+
+
+async def test_checkpoint_validate_activity_reports_boundary_failure_classes(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    checkpoint_activities = TemporalCheckpointActivities(artifact_store=store)
+    base_commit = (
+        subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo)
+        .decode()
+        .strip()
+    )
+    capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "git_patch",
+            "workspacePath": str(repo),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-validation-capture",
+            "baseCommit": base_commit,
+        }
+    )
+    created = await checkpoint_activities.step_checkpoint_create(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "taskInputSnapshotRef": "artifact-input",
+            "workspace": capture["workspace"],
+            "createdAt": datetime(2026, 6, 13, 12, 0, tzinfo=UTC).isoformat(),
+            "planDigest": "sha256:plan",
+            "idempotencyKey": "idem-validation-create",
+        }
+    )
+    checkpoint = json.loads(store.get_bytes(created["checkpointRef"]).decode())
+
+    cases = [
+        (
+            {"requiredArtifactRefs": ["artifact-missing"]},
+            "artifact_missing",
+        ),
+        (
+            {"unauthorizedArtifactRefs": [capture["workspace"]["patchRef"]]},
+            "artifact_unauthorized",
+        ),
+        (
+            {"corruptedArtifactRefs": [capture["workspace"]["patchRef"]]},
+            "artifact_corrupted",
+        ),
+        (
+            {"workspacePolicy": "start_from_last_passed_commit"},
+            "policy_incompatible",
+        ),
+        (
+            {"checkpoint": {"checkpointId": "bad-checkpoint"}},
+            "invalid_checkpoint",
+        ),
+    ]
+
+    for extra, expected_code in cases:
+        payload = {
+            "checkpoint": checkpoint,
+            "expectedSource": _identity().model_dump(by_alias=True),
+            "expectedTaskInputSnapshotRef": "artifact-input",
+            "expectedPlanDigest": "sha256:plan",
+            "checkpointRef": created["checkpointRef"],
+            **extra,
+        }
+        result = await checkpoint_activities.step_checkpoint_validate(payload)
+        assert result["valid"] is False
+        assert result["failureCode"] == expected_code

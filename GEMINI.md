@@ -314,6 +314,8 @@ Key diagnostics:
 - No new persistent storage; deterministic validation only (001-harden-pentest-provenance)
 - Python 3.12; TypeScript/React for Mission Control. + FastAPI, Pydantic v2, SQLAlchemy async ORM where persisted execution records are read, Temporal Python SDK workflow/query surfaces, React, TanStack Query, Zod, Vitest, Testing Library. (001-ui-api-recovery-panels)
 - Existing Temporal execution records, workflow query payloads, and Temporal artifact metadata/content store only. No new persistent tables are planned. (001-ui-api-recovery-panels)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing artifact and activity runtime services (001-mm-822-checkpoints)
+- existing artifact store/service only; no new persistent tables (001-mm-822-checkpoints)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
