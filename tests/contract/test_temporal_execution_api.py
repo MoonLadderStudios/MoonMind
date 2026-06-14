@@ -257,7 +257,9 @@ async def _create_uploaded_artifact(
     return artifact_id
 
 @pytest.mark.asyncio
-async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, monkeypatch):
+async def test_execution_lifecycle_endpoints_report_projection_contract(
+    tmp_path, query_state, monkeypatch
+):
     original_db_url = db_base.DATABASE_URL
     original_engine = db_base.engine
     original_session_maker = db_base.async_session_maker
@@ -379,6 +381,51 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
                     payload=b'{"summary":true}',
                     content_type='application/json',
                 )
+                structured_artifact, _structured_upload = await artifact_service.create(
+                    principal=str(shared_user_id),
+                    content_type='application/json',
+                    size_bytes=len(b'{"findings":[]}'),
+                    link={
+                        'namespace': execution['namespace'],
+                        'workflow_id': workflow_id,
+                        'run_id': execution['runId'],
+                        'link_type': 'report.structured',
+                        'label': 'Structured findings',
+                    },
+                    metadata_json={
+                        'report_type': 'security_pentest_report',
+                        'report_scope': 'final',
+                    },
+                )
+                await artifact_service.write_complete(
+                    artifact_id=structured_artifact.artifact_id,
+                    principal=str(shared_user_id),
+                    payload=b'{"findings":[]}',
+                    content_type='application/json',
+                )
+                evidence_artifact, _evidence_upload = await artifact_service.create(
+                    principal=str(shared_user_id),
+                    content_type='application/zstd',
+                    size_bytes=len(b'evidence bundle bytes'),
+                    link={
+                        'namespace': execution['namespace'],
+                        'workflow_id': workflow_id,
+                        'run_id': execution['runId'],
+                        'link_type': 'report.evidence',
+                        'label': 'Restricted evidence',
+                    },
+                    metadata_json={
+                        'report_type': 'security_pentest_report',
+                        'report_scope': 'final',
+                        'sensitivity': 'security_restricted',
+                    },
+                )
+                await artifact_service.write_complete(
+                    artifact_id=evidence_artifact.artifact_id,
+                    principal=str(shared_user_id),
+                    payload=b'evidence bundle bytes',
+                    content_type='application/zstd',
+                )
 
             report_describe_response = await client.get(f"/api/executions/{workflow_id}")
             assert report_describe_response.status_code == 200
@@ -398,6 +445,19 @@ async def test_execution_lifecycle_endpoints_contract(tmp_path, query_state, mon
             latest_summary_ref = report_projection['latestReportSummaryRef']
             assert latest_summary_ref['artifact_ref_v'] == 1
             assert latest_summary_ref['artifact_id'] == summary_artifact.artifact_id
+            report_refs = report_projection['reportArtifactRefs']
+            assert set(report_refs) == {
+                'report.primary',
+                'report.summary',
+                'report.structured',
+                'report.evidence',
+            }
+            assert report_refs['report.primary']['artifact_id'] == primary_artifact.artifact_id
+            assert report_refs['report.summary']['artifact_id'] == summary_artifact.artifact_id
+            assert report_refs['report.structured']['artifact_id'] == structured_artifact.artifact_id
+            assert report_refs['report.evidence']['artifact_id'] == evidence_artifact.artifact_id
+            assert 'reportBody' not in report_refs['report.primary']
+            assert 'evidence bundle bytes' not in json.dumps(report_projection)
 
             pending_primary_artifact, _pending_primary_upload = await artifact_service.create(
                 principal=str(shared_user_id),

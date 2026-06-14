@@ -8286,8 +8286,39 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
             'report_scope': 'final',
         },
     )
+    structured_artifact = SimpleNamespace(
+        artifact_id='art-structured',
+        status=TemporalArtifactStatus.COMPLETE,
+        sha256='sha-structured',
+        size_bytes=96,
+        content_type='application/json',
+        encryption=TemporalArtifactEncryption.NONE,
+        metadata_json={
+            'report_type': 'security_pentest_report',
+            'report_scope': 'final',
+        },
+    )
+    evidence_artifact = SimpleNamespace(
+        artifact_id='art-evidence',
+        status=TemporalArtifactStatus.COMPLETE,
+        sha256='sha-evidence',
+        size_bytes=256,
+        content_type='application/zstd',
+        encryption=TemporalArtifactEncryption.NONE,
+        metadata_json={
+            'report_type': 'security_pentest_report',
+            'report_scope': 'final',
+        },
+    )
     artifact_service = SimpleNamespace(
-        list_for_execution=AsyncMock(side_effect=[[primary_artifact], [summary_artifact]])
+        list_for_execution=AsyncMock(
+            side_effect=[
+                [primary_artifact],
+                [summary_artifact],
+                [structured_artifact],
+                [evidence_artifact],
+            ]
+        )
     )
 
     with patch(
@@ -8316,6 +8347,22 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
             link_type='report.summary',
             latest_only=True,
         ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.structured',
+            latest_only=True,
+        ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.evidence',
+            latest_only=True,
+        ),
     ]
     assert payload['reportProjection'] == {
         'hasReport': True,
@@ -8326,6 +8373,24 @@ def test_describe_execution_includes_report_projection_when_latest_report_artifa
         'latestReportSummaryRef': {
             'artifact_ref_v': 1,
             'artifact_id': 'art-summary',
+        },
+        'reportArtifactRefs': {
+            'report.primary': {
+                'artifact_ref_v': 1,
+                'artifact_id': 'art-primary',
+            },
+            'report.summary': {
+                'artifact_ref_v': 1,
+                'artifact_id': 'art-summary',
+            },
+            'report.structured': {
+                'artifact_ref_v': 1,
+                'artifact_id': 'art-structured',
+            },
+            'report.evidence': {
+                'artifact_ref_v': 1,
+                'artifact_id': 'art-evidence',
+            },
         },
         'reportType': 'security_pentest_report',
         'reportStatus': 'final',
@@ -8375,6 +8440,22 @@ def test_describe_execution_report_projection_degrades_safely_when_no_report_exi
             link_type='report.summary',
             latest_only=True,
         ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.structured',
+            latest_only=True,
+        ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.evidence',
+            latest_only=True,
+        ),
     ]
     assert payload['reportProjection'] == {'hasReport': False}
 
@@ -8411,7 +8492,9 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
         metadata_json={'report_type': 'security_pentest_report', 'report_scope': 'final'},
     )
     artifact_service = SimpleNamespace(
-        list_for_execution=AsyncMock(side_effect=[[pending_primary], [pending_summary]])
+        list_for_execution=AsyncMock(
+            side_effect=[[pending_primary], [pending_summary], [], []]
+        )
     )
 
     with patch(
@@ -8438,6 +8521,22 @@ def test_describe_execution_report_projection_ignores_incomplete_report_artifact
             run_id='run-2',
             principal=str(user.id),
             link_type='report.summary',
+            latest_only=True,
+        ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.structured',
+            latest_only=True,
+        ),
+        call(
+            namespace='moonmind',
+            workflow_id='mm:wf-1',
+            run_id='run-2',
+            principal=str(user.id),
+            link_type='report.evidence',
             latest_only=True,
         ),
     ]

@@ -184,6 +184,7 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactError,
     TemporalArtifactService,
+    TemporalArtifactValidationError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
@@ -5519,6 +5520,7 @@ class TemporalAgentRuntimeActivities:
         *,
         request: PentestWorkloadRequest,
         paths: Any,
+        normalized_findings: Mapping[str, Any],
         finding_summary: Mapping[str, Any],
         severity_counts: Mapping[str, int],
     ) -> dict[str, Any] | None:
@@ -5643,18 +5645,24 @@ class TemporalAgentRuntimeActivities:
             "counts": counts,
         }
         workspace_root = Path(paths.workspace_root)
-        primary_payload = await asyncio.to_thread(
-            (workspace_root / "findings" / "findings.report.md").read_bytes
-        )
-        summary_payload = await asyncio.to_thread(
-            (workspace_root / "findings" / "findings.summary.md").read_bytes
-        )
-        structured_payload = await asyncio.to_thread(
-            Path(paths.normalizer_input_file).read_bytes
-        )
-        evidence_payload = await asyncio.to_thread(
-            (workspace_root / "evidence" / "bundle.tar.zst").read_bytes
-        )
+        report_path = workspace_root / "findings" / "findings.report.md"
+        summary_path = workspace_root / "findings" / "findings.summary.md"
+        evidence_path = workspace_root / "evidence" / "bundle.tar.zst"
+        missing_report_files = [
+            (report_path, "Pentest primary report file was not found"),
+            (summary_path, "Pentest summary report file was not found"),
+            (evidence_path, "Pentest evidence bundle file was not found"),
+        ]
+        for file_path, error_message in missing_report_files:
+            if not file_path.is_file():
+                raise TemporalArtifactValidationError(error_message)
+        primary_payload = await asyncio.to_thread(report_path.read_bytes)
+        summary_payload = await asyncio.to_thread(summary_path.read_bytes)
+        structured_payload = json.dumps(
+            normalized_findings,
+            sort_keys=True,
+        ).encode("utf-8")
+        evidence_payload = await asyncio.to_thread(evidence_path.read_bytes)
 
         bundle = await self._artifact_service.publish_report_bundle(
             principal=principal,
@@ -7047,16 +7055,19 @@ class TemporalAgentRuntimeActivities:
         published_artifacts = await self._publish_pentest_success_artifacts(
             request=request,
             paths=execution_materialization.runtime_paths,
+            normalized_findings=publication["normalized_findings"],
             finding_summary=finding_summary,
             severity_counts=severity_counts,
         )
         report_bundle = None
         counts = {
-            "findings_count": finding_summary["findings_count"],
-            "confirmed_findings_count": finding_summary[
-                "confirmed_findings_count"
-            ],
-            "high_or_critical_count": finding_summary["high_or_critical_count"],
+            "findings_count": finding_summary.get("findings_count", 0),
+            "confirmed_findings_count": finding_summary.get(
+                "confirmed_findings_count", 0
+            ),
+            "high_or_critical_count": finding_summary.get(
+                "high_or_critical_count", 0
+            ),
             "severity_counts": severity_counts,
         }
         if published_artifacts is not None:
@@ -7113,9 +7124,11 @@ class TemporalAgentRuntimeActivities:
                     "artifact_ref_v": 1,
                     "artifact_id": structured_ref,
                 },
-                "evidence_refs": [
-                    {"artifact_ref_v": 1, "artifact_id": evidence_ref}
-                ],
+                "evidence_refs": (
+                    [{"artifact_ref_v": 1, "artifact_id": evidence_ref}]
+                    if evidence_ref
+                    else []
+                ),
                 "report_type": "security_pentest_report",
                 "report_scope": "final",
                 "sensitivity": "security_restricted",
@@ -7133,8 +7146,10 @@ class TemporalAgentRuntimeActivities:
             findings_artifact_ref=structured_ref,
             evidence_bundle_artifact_ref=evidence_ref,
             provider_snapshot_artifact_ref=provider_snapshot_ref,
-            findings_count=finding_summary["findings_count"],
-            confirmed_findings_count=finding_summary["confirmed_findings_count"],
+            findings_count=finding_summary.get("findings_count", 0),
+            confirmed_findings_count=finding_summary.get(
+                "confirmed_findings_count", 0
+            ),
         )
         output.update(result.model_dump(mode="json"))
         output["status"] = "completed"
@@ -7142,7 +7157,7 @@ class TemporalAgentRuntimeActivities:
         output["primary_report_ref"] = primary_ref
         output["summary_ref"] = summary_ref
         output["structured_ref"] = structured_ref
-        output["evidence_refs"] = [evidence_ref]
+        output["evidence_refs"] = [evidence_ref] if evidence_ref else []
         output["report_type"] = "security_pentest_report"
         output["report_scope"] = "final"
         output["sensitivity"] = {

@@ -2531,6 +2531,9 @@ class ExecutionReportProjectionModel(BaseModel):
     latest_report_summary_ref: CompactArtifactRefModel | None = Field(
         None, alias="latestReportSummaryRef"
     )
+    report_artifact_refs: dict[str, CompactArtifactRefModel] | None = Field(
+        None, alias="reportArtifactRefs"
+    )
     report_type: str | None = Field(None, alias="reportType")
     report_status: str | None = Field(None, alias="reportStatus")
     finding_counts: dict[str, int] | None = Field(None, alias="findingCounts")

@@ -87,6 +87,7 @@ REPORT_PROJECTION_ALLOWED_KEYS = frozenset(
         "has_report",
         "latest_report_ref",
         "latest_report_summary_ref",
+        "report_artifact_refs",
         "report_type",
         "report_status",
         "finding_counts",
@@ -94,8 +95,8 @@ REPORT_PROJECTION_ALLOWED_KEYS = frozenset(
     }
 )
 _UNSAFE_REPORT_BUNDLE_KEY_PATTERN = re.compile(
-    r"(?i)(body|blob|payload|raw_?download_?url|presigned|url|log|screenshot|"
-    r"transcript|finding_?details|evidence_?body)"
+    r"(?i)(body|blob|payload|raw_?download_?url|presigned|url|log|stdout|"
+    r"stderr|diagnostics|screenshot|transcript|finding_?details|evidence_?body)"
 )
 
 _MAX_REPORT_METADATA_STRING_CHARS = 2048
@@ -372,11 +373,31 @@ def build_report_projection_summary(
 
     primary_ref = bundle.get("primary_report_ref")
     summary_ref = bundle.get("summary_ref")
+    structured_ref = bundle.get("structured_ref")
+    evidence_refs = bundle.get("evidence_refs") or []
     projection: dict[str, Any] = {"has_report": primary_ref is not None}
     if primary_ref is not None:
         projection["latest_report_ref"] = _compact_artifact_ref(primary_ref)
     if summary_ref is not None:
         projection["latest_report_summary_ref"] = _compact_artifact_ref(summary_ref)
+    report_artifact_refs: dict[str, Any] = {}
+    if primary_ref is not None:
+        report_artifact_refs["report.primary"] = _compact_artifact_ref(primary_ref)
+    if summary_ref is not None:
+        report_artifact_refs["report.summary"] = _compact_artifact_ref(summary_ref)
+    if structured_ref is not None:
+        report_artifact_refs["report.structured"] = _compact_artifact_ref(
+            structured_ref
+        )
+    if isinstance(evidence_refs, Sequence) and not isinstance(
+        evidence_refs, (str, bytes, bytearray)
+    ):
+        for ref in evidence_refs:
+            if ref is not None:
+                report_artifact_refs["report.evidence"] = _compact_artifact_ref(ref)
+                break
+    if report_artifact_refs:
+        projection["report_artifact_refs"] = report_artifact_refs
     if bundle.get("report_type") is not None:
         projection["report_type"] = str(bundle["report_type"])
     if bundle.get("report_scope") is not None:

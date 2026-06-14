@@ -1197,6 +1197,18 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
             path.write_text(body, encoding="utf-8")
         return await super().run(request)
 
+
+class _MalformedFindingsFileLauncher(_FileWritingPentestLauncher):
+    async def run(self, request: object) -> WorkloadResult:
+        result = await super().run(request)
+        workload_request = getattr(request, "request", request)
+        artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
+        (
+            artifacts_dir / "pentest" / "findings" / "findings.normalizer-input.json"
+        ).write_text("{malformed-json", encoding="utf-8")
+        return result
+
+
 class _BlockingPentestLauncher(_FakePentestLauncher):
     def __init__(self, *, status: str = "succeeded") -> None:
         super().__init__(status=status)
@@ -1208,6 +1220,7 @@ class _BlockingPentestLauncher(_FakePentestLauncher):
         self.started.set()
         await self.release.wait()
         return await super().run(request)
+
 
 class _RecordingPentestRegistry:
     """Registry stand-in that validates requests into the launcher contract.
@@ -2284,6 +2297,89 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
                 by_link_type["report.primary"].metadata_json["sensitivity"]
                 == "security_restricted"
             )
+            _structured_artifact, structured_payload = await service.read(
+                artifact_id=result["report_bundle"]["structured_ref"]["artifact_id"],
+                principal="user-security",
+                allow_restricted_raw=True,
+            )
+            assert isinstance(structured_payload, bytes)
+            assert json.loads(structured_payload.decode("utf-8")) == result[
+                "normalized_findings"
+            ]
+
+
+async def test_security_pentest_execute_publishes_parsed_structured_findings_when_file_is_malformed(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workload_launcher=_MalformedFindingsFileLauncher(),
+                workload_registry=_RecordingPentestRegistry(),
+            )
+
+            result = await activities._security_pentest_execute_trusted_internal(
+                _pentest_activity_payload(
+                    artifacts_dir=str(tmp_path / "runner-artifacts"),
+                    findings=[],
+                    provider_snapshot_available=True,
+                )
+            )
+
+            assert result["status"] == "completed"
+            _structured_artifact, structured_payload = await service.read(
+                artifact_id=result["report_bundle"]["structured_ref"]["artifact_id"],
+                principal="user-security",
+                allow_restricted_raw=True,
+            )
+            assert json.loads(structured_payload.decode("utf-8")) == result[
+                "normalized_findings"
+            ]
+            assert structured_payload != b"{malformed-json"
+
+
+async def test_security_pentest_execute_rejects_missing_report_bundle_files(
+    tmp_path: Path,
+):
+    class _MissingSummaryReportLauncher(_FileWritingPentestLauncher):
+        async def run(self, request: object) -> WorkloadResult:
+            result = await super().run(request)
+            workload_request = getattr(request, "request", request)
+            artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
+            (
+                artifacts_dir / "pentest" / "findings" / "findings.summary.md"
+            ).unlink()
+            return result
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workload_launcher=_MissingSummaryReportLauncher(),
+                workload_registry=_RecordingPentestRegistry(),
+            )
+
+            with pytest.raises(
+                TemporalArtifactValidationError,
+                match="Pentest summary report file was not found",
+            ):
+                await activities._security_pentest_execute_trusted_internal(
+                    _pentest_activity_payload(
+                        artifacts_dir=str(tmp_path / "runner-artifacts"),
+                        findings=[],
+                        provider_snapshot_available=True,
+                    )
+                )
+
 
 async def test_security_pentest_report_bundle_rejects_unsafe_custom_keys():
     unsafe_cases = (
