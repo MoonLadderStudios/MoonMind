@@ -353,6 +353,7 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
+RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -6309,6 +6310,7 @@ class MoonMindRunWorkflow:
         if self._jira_blocker_wait_started_at is None:
             self._jira_blocker_wait_started_at = workflow.now()
         signature = self._jira_blocker_wait_signature(execution_result)
+        coalesce_wait = workflow.patched(RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH)
         should_publish = (
             not self._jira_blocker_wait_active
             or signature != self._jira_blocker_wait_published_signature
@@ -6319,9 +6321,10 @@ class MoonMindRunWorkflow:
         self._jira_blocker_wait_summary = summary
         self._waiting_reason = "jira_blocker_wait"
         self._attention_required = False
-        if not should_publish:
+        if coalesce_wait and not should_publish:
             return
-        self._jira_blocker_wait_published_signature = signature
+        if coalesce_wait:
+            self._jira_blocker_wait_published_signature = signature
         self._set_state(STATE_WAITING_ON_DEPENDENCIES, summary=summary)
         self._mark_step_waiting(
             node_id,
@@ -6467,9 +6470,26 @@ class MoonMindRunWorkflow:
                 break
 
             recheck_count += 1
+            coalesce_wait = workflow.patched(RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH)
+            if not coalesce_wait:
+                self._clear_jira_blocker_wait()
             await self._wait_if_paused_at_safe_boundary()
             if self._cancel_requested:
                 return current_result, skipped
+            if not coalesce_wait:
+                self._set_state(STATE_EXECUTING, summary="Re-checking Jira blockers.")
+                self._mark_step_running(
+                    node_id,
+                    updated_at=workflow.now(),
+                    summary=f"Re-checking Jira blockers for {tool_name}",
+                    increment_attempt=False,
+                )
+                await self._record_step_execution_manifest(
+                    node_id,
+                    phase="start",
+                    updated_at=workflow.now(),
+                    reason="policy_revalidation",
+                )
             recheck_attempt = self._step_execution_for(node_id) or 0
             if self._is_step_execution_launch_blocked(
                 node_id,
@@ -6543,9 +6563,12 @@ class MoonMindRunWorkflow:
                     raise ValueError(
                         "skill Jira blocker recheck requires activity context"
                     )
-                recheck_payload = self._compact_jira_blocker_recheck_payload(
-                    execute_payload
-                )
+                if coalesce_wait:
+                    recheck_payload = self._compact_jira_blocker_recheck_payload(
+                        execute_payload
+                    )
+                else:
+                    recheck_payload = dict(execute_payload)
                 idempotency_key = recheck_payload.get("idempotency_key")
                 if isinstance(idempotency_key, str) and idempotency_key.strip():
                     recheck_payload["idempotency_key"] = (

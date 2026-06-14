@@ -1203,6 +1203,14 @@ def test_jira_blocker_wait_coalesces_unchanged_observations(
         "now",
         lambda: datetime.now(timezone.utc),
     )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id
+            == run_workflow_module.RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH
+        ),
+    )
     monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", fake_set_state)
     monkeypatch.setattr(workflow, "_mark_step_waiting", fake_mark_waiting)
     monkeypatch.setattr(
@@ -1235,6 +1243,58 @@ def test_jira_blocker_wait_coalesces_unchanged_observations(
     ]
     assert waiting_rows == published
     assert metadata_updates == ["search", "memo", "search", "memo"]
+
+
+def test_jira_blocker_wait_unpatched_histories_publish_each_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    published: list[str] = []
+    blocked_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "blocked",
+            "blockingIssues": [
+                {"issueKey": "MM-685", "status": "In Progress", "done": False}
+            ],
+            "summary": "MM-686 is blocked by MM-685.",
+        },
+    }
+
+    def fake_set_state(self: MoonMindRunWorkflow, state: str, summary: str) -> None:
+        self._state = state
+        self._summary = summary
+        published.append(summary)
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", fake_set_state)
+    monkeypatch.setattr(workflow, "_mark_step_waiting", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(workflow, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow, "_update_memo", lambda: None)
+
+    workflow._enter_jira_blocker_wait(
+        node_id="check-blockers",
+        execution_result=blocked_result,
+    )
+    workflow._enter_jira_blocker_wait(
+        node_id="check-blockers",
+        execution_result=blocked_result,
+    )
+
+    assert published == [
+        "Workflow blocked by plan step: MM-686 is blocked by MM-685.",
+        "Workflow blocked by plan step: MM-686 is blocked by MM-685.",
+    ]
 
 
 @pytest.mark.asyncio
@@ -1350,16 +1410,22 @@ async def test_jira_blocker_wait_rechecks_with_compact_payload_and_no_manifest(
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "patched",
-        lambda _patch_id: False,
+        lambda patch_id: (
+            patch_id
+            == run_workflow_module.RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH
+        ),
     )
-    monkeypatch.setattr(
-        run_workflow_module.workflow,
-        "info",
-        lambda: type(
+    def fake_workflow_info() -> Any:
+        return type(
             "WorkflowInfo",
             (),
             {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
-        )(),
+        )()
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        fake_workflow_info,
     )
     monkeypatch.setattr(
         MoonMindRunWorkflow,
