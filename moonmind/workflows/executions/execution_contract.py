@@ -1497,6 +1497,17 @@ class WorkflowStepSpec(BaseModel):
             raise WorkflowContractError(
                 f"workflow.steps entries may not define workflow-scoped overrides: {formatted}"
             )
+        for graph_key in ("dependsOn", "depends_on", "dependencies"):
+            if graph_key not in payload:
+                continue
+            graph_value = payload.get(graph_key)
+            if graph_value in (None, "", [], (), {}):
+                continue
+            raise WorkflowContractError(
+                f"workflow.steps[].{graph_key} is no longer supported. "
+                "Authored workflow steps are ordered by their steps[] position; use "
+                "workflow.dependsOn only for dependencies between workflow executions"
+            )
         return payload
 
 

@@ -5068,7 +5068,7 @@ def _normalize_task_input_attachments(
 def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_edges = task_payload.get("edges")
     if isinstance(raw_edges, list):
-        if any(raw_edges):
+        if raw_edges:
             raise _invalid_workflow_request(
                 "payload.workflow.edges is no longer supported. Authored workflow "
                 "steps are ordered by their steps[] position; use "
