@@ -2562,7 +2562,9 @@ function StepMetadataList({
       <li><strong>Run id:</strong> <code className="text-xs break-all">{runId}</code></li>
       <li><strong>Tool:</strong> <code className="text-xs break-all">{formatStepToolLabel(row.tool)}</code></li>
       <li><strong>Execution ordinal:</strong> {row.executionOrdinal}</li>
-      <li><strong>Depends on:</strong> {row.dependsOn.length > 0 ? row.dependsOn.join(', ') : 'None'}</li>
+      {row.dependsOn.length > 0 ? (
+        <li><strong>Prior step evidence:</strong> {row.dependsOn.join(', ')}</li>
+      ) : null}
       <li><strong>Child workflow:</strong> {row.refs.childWorkflowId ? <code className="text-xs break-all">{row.refs.childWorkflowId}</code> : '—'}</li>
       <li><strong>Child run:</strong> {row.refs.childRunId ? <code className="text-xs break-all">{row.refs.childRunId}</code> : '—'}</li>
       <li><strong>Workflow run:</strong> {row.refs.agentRunId ? <code className="text-xs break-all">{row.refs.agentRunId}</code> : '—'}</li>
@@ -2809,7 +2811,7 @@ function StepLedgerRowCard({
             <p className="step-tl-summary">{row.summary}</p>
           ) : null}
           {!expanded && row.dependsOn.length > 0 ? (
-            <p className="step-tl-summary">Depends on: {row.dependsOn.join(', ')}</p>
+            <p className="step-tl-summary">Prior step evidence: {row.dependsOn.join(', ')}</p>
           ) : null}
           {!expanded && row.checks.length > 0 ? (
             <div className="step-check-badges">

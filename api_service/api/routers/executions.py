@@ -5066,6 +5066,22 @@ def _normalize_task_input_attachments(
     return normalized
 
 def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_edges = task_payload.get("edges")
+    if isinstance(raw_edges, list):
+        if any(raw_edges):
+            raise _invalid_workflow_request(
+                "payload.workflow.edges is no longer supported. Authored workflow "
+                "steps are ordered by their steps[] position; use "
+                "payload.workflow.dependsOn only for dependencies between workflow executions."
+            )
+        task_payload.pop("edges", None)
+    elif raw_edges is not None:
+        raise _invalid_workflow_request(
+            "payload.workflow.edges is no longer supported. Authored workflow "
+            "steps are ordered by their steps[] position; use "
+            "payload.workflow.dependsOn only for dependencies between workflow executions."
+        )
+
     raw_steps = task_payload.get("steps")
     if raw_steps is None:
         return []
@@ -5102,6 +5118,18 @@ def _normalize_task_steps(task_payload: dict[str, Any]) -> list[dict[str, Any]]:
             formatted = ", ".join(blocked)
             raise _invalid_workflow_request(
                 f"payload.workflow.steps[{index}] may not define workflow-scoped overrides: {formatted}"
+            )
+        for graph_key in ("dependsOn", "depends_on", "dependencies"):
+            if graph_key not in step_payload:
+                continue
+            graph_value = step_payload.get(graph_key)
+            if graph_value in (None, "", [], (), {}):
+                step_payload.pop(graph_key, None)
+                continue
+            raise _invalid_workflow_request(
+                f"payload.workflow.steps[{index}].{graph_key} is no longer supported. "
+                "Authored workflow steps are ordered by their steps[] position; use "
+                "payload.workflow.dependsOn only for dependencies between workflow executions."
             )
 
         normalized_step: dict[str, Any] = {}

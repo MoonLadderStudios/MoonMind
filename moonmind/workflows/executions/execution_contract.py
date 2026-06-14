@@ -2562,11 +2562,6 @@ def build_authoritative_workflow_input_snapshot(
             "title": _clean_optional_str(step.get("title")),
             "instructions": _raw_instruction_string(step.get("instructions")),
             "inputAttachments": _safe_list(step.get("inputAttachments")),
-            "dependencies": _first_present_snapshot_list(
-                step,
-                "dependsOn",
-                "dependencies",
-            ),
             "templateStepId": _clean_optional_str(step.get("templateStepId")),
             "stepType": _clean_optional_str(step.get("type")),
             "presetProvenance": _safe_mapping(step.get("presetProvenance")),

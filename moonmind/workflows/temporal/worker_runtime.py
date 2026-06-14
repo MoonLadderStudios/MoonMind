@@ -1489,7 +1489,17 @@ def _build_runtime_planner():
                     **{
                         k: v
                         for k, v in step_entry.items()
-                        if k not in {"id", "tool", "skill", "instructions", "runtime"}
+                        if k
+                        not in {
+                            "id",
+                            "tool",
+                            "skill",
+                            "instructions",
+                            "runtime",
+                            "dependsOn",
+                            "depends_on",
+                            "dependencies",
+                        }
                     },
                     "instructions": step_instructions,
                 }

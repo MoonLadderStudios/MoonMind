@@ -545,7 +545,8 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
-    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Depends on: plan')).toBeNull();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Prior step evidence: plan').length).toBeGreaterThan(0);
   });
 
   it('MM-842 renders empty steps without a separate Step DAG panel', async () => {
@@ -834,16 +835,19 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
       expect(screen.getAllByText('Verify tests').length).toBeGreaterThan(0);
       expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
-      expect(screen.getAllByText('Depends on: plan').length).toBeGreaterThan(0);
+      expect(screen.queryByText('Depends on: plan')).toBeNull();
+      expect(screen.getAllByText('Prior step evidence: plan').length).toBeGreaterThan(0);
       expect(screen.queryByLabelText('plan to apply')).toBeNull();
       expect(screen.queryByLabelText('apply to verify')).toBeNull();
       expect(screen.getAllByText('02-run').length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Depends on: plan')).toBeNull();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Prior step evidence: plan').length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
-    expect(screen.getAllByText((_, element) => element?.textContent === 'Depends on: plan').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Depends on: plan')).toBeNull();
+    expect(screen.getAllByText((_, element) => element?.textContent === 'Prior step evidence: plan').length).toBeGreaterThan(0);
 
     const stepsHeading = screen.getByRole('heading', { name: 'Workflow Steps' });
     const timelineHeading = screen.getByRole('heading', { name: 'Timeline' });

@@ -136,6 +136,40 @@ def test_mm641_task_shaped_submission_boundary_exposes_canonical_task_parameters
     assert task["steps"][0]["jiraOrchestration"] == {"issueKey": "MM-641"}
 
 
+def test_mm842_task_shaped_submission_rejects_stale_step_graph_metadata() -> None:
+    test_client, service = _client()
+
+    with test_client:
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "Moon/Mind",
+                    "targetRuntime": "codex",
+                    "workflow": {
+                        "instructions": "Run ordered steps.",
+                        "steps": [
+                            {"id": "plan", "instructions": "Plan."},
+                            {
+                                "id": "implement",
+                                "instructions": "Implement.",
+                                "dependsOn": ["plan"],
+                            },
+                        ],
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_execution_request"
+    assert "payload.workflow.steps[1].dependsOn" in detail["message"]
+    assert "ordered by their steps[] position" in detail["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_task_shaped_submission_boundary_assigns_step_id_for_step_attachment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

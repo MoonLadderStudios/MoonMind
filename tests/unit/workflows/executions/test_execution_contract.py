@@ -53,24 +53,42 @@ def test_task_skills_accepts_valid_properties() -> None:
     assert spec.skills.materialization_mode == "hybrid"
 
 
-def test_authoritative_snapshot_preserves_explicit_empty_dependencies() -> None:
+def test_mm842_authoritative_snapshot_omits_authored_step_graph_metadata() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
-            "instructions": "Run MM-639 without dependencies.",
-            "dependencies": [],
+            "instructions": "Run MM-842 as ordered steps.",
             "steps": [
                 {
-                    "id": "step-1",
-                    "instructions": "Use the explicit empty dependency list.",
+                    "id": "plan",
+                    "instructions": "Plan the change.",
                     "dependsOn": [],
-                }
+                    "dependencies": [],
+                },
+                {
+                    "id": "implement",
+                    "instructions": "Implement the change.",
+                    "dependsOn": ["plan"],
+                    "dependencies": ["plan"],
+                },
             ],
         },
-        dependency_declarations=["MM-638"],
+        dependency_declarations=["mm:upstream-workflow"],
     )
 
-    assert snapshot["dependencyDeclarations"] == []
-    assert snapshot["steps"][0]["dependencies"] == []
+    assert [step["id"] for step in snapshot["steps"]] == ["plan", "implement"]
+    assert [step["instructions"] for step in snapshot["steps"]] == [
+        "Plan the change.",
+        "Implement the change.",
+    ]
+    assert snapshot["finalSubmittedOrder"] == [
+        {"stepId": "plan", "ordinal": 0},
+        {"stepId": "implement", "ordinal": 1},
+    ]
+    assert "dependencies" not in snapshot["steps"][0]
+    assert "dependencies" not in snapshot["steps"][1]
+    assert "dependsOn" not in snapshot["steps"][0]
+    assert "dependsOn" not in snapshot["steps"][1]
+    assert snapshot["dependencyDeclarations"] == ["mm:upstream-workflow"]
 
 
 def test_authoritative_snapshot_detects_jira_key_without_serializing_metadata() -> None:
