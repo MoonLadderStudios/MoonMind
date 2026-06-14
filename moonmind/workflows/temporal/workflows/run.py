@@ -353,6 +353,7 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
+RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -750,6 +751,7 @@ class MoonMindRunWorkflow:
         self._jira_blocker_wait_started_at: datetime | None = None
         self._jira_blocker_wait_issue_keys: list[str] = []
         self._jira_blocker_wait_summary: str | None = None
+        self._jira_blocker_wait_published_signature: str | None = None
 
         # Action flags
         self._cancel_requested = False
@@ -6205,6 +6207,120 @@ class MoonMindRunWorkflow:
         )
         return [target_issue_key] if target_issue_key else []
 
+    def _jira_blocker_wait_signature(self, execution_result: Any) -> str:
+        outputs = self._get_from_result(execution_result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return ""
+        blockers = outputs.get("blockingIssues")
+        if blockers is None:
+            blockers = outputs.get("blocking_issues")
+        compact_blockers: list[dict[str, Any]] = []
+        if isinstance(blockers, Sequence) and not isinstance(blockers, (str, bytes)):
+            for blocker in blockers:
+                if not isinstance(blocker, Mapping):
+                    continue
+                compact_blockers.append(
+                    {
+                        "issueKey": self._coerce_text(
+                            blocker.get("issueKey") or blocker.get("issue_key"),
+                            max_chars=80,
+                        ),
+                        "status": self._coerce_text(
+                            blocker.get("status"),
+                            max_chars=80,
+                        ),
+                        "statusKnown": bool(
+                            blocker.get("statusKnown")
+                            if "statusKnown" in blocker
+                            else blocker.get("status_known")
+                        ),
+                        "done": bool(blocker.get("done")),
+                    }
+                )
+        return json.dumps(
+            {
+                "decision": self._coerce_text(outputs.get("decision"), max_chars=40),
+                "targetIssueKey": self._coerce_text(
+                    outputs.get("targetIssueKey")
+                    or outputs.get("target_issue_key")
+                    or outputs.get("issueKey")
+                    or outputs.get("jiraIssueKey"),
+                    max_chars=80,
+                ),
+                "blockingIssues": sorted(
+                    compact_blockers,
+                    key=lambda item: str(item.get("issueKey") or ""),
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _compact_jira_blocker_recheck_payload(
+        self,
+        execute_payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        invocation_payload = execute_payload.get("invocation_payload")
+        if not isinstance(invocation_payload, Mapping):
+            return dict(execute_payload)
+        original_inputs = invocation_payload.get("inputs")
+        if not isinstance(original_inputs, Mapping):
+            return dict(execute_payload)
+
+        def first_text(*values: Any) -> str | None:
+            for value in values:
+                text = self._coerce_text(value, max_chars=120)
+                if text:
+                    return text
+            return None
+
+        nested = original_inputs.get("blockerPreflight")
+        if not isinstance(nested, Mapping):
+            nested = original_inputs.get("blocker_preflight")
+        if not isinstance(nested, Mapping):
+            nested = original_inputs.get("jira")
+        if not isinstance(nested, Mapping):
+            nested = {}
+
+        target_issue_key = first_text(
+            original_inputs.get("targetIssueKey"),
+            original_inputs.get("target_issue_key"),
+            original_inputs.get("issueKey"),
+            original_inputs.get("issue_key"),
+            original_inputs.get("jiraIssueKey"),
+            original_inputs.get("jira_issue_key"),
+            nested.get("targetIssueKey"),
+            nested.get("target_issue_key"),
+            nested.get("issueKey"),
+            nested.get("issue_key"),
+        )
+        if not target_issue_key:
+            return dict(execute_payload)
+
+        link_type = first_text(
+            original_inputs.get("linkType"),
+            original_inputs.get("link_type"),
+            nested.get("linkType"),
+            nested.get("link_type"),
+        )
+        compact_inputs: dict[str, Any] = {"targetIssueKey": target_issue_key}
+        blocker_preflight: dict[str, Any] = {"targetIssueKey": target_issue_key}
+        if link_type:
+            blocker_preflight["linkType"] = link_type
+            compact_inputs["linkType"] = link_type
+        compact_inputs["blockerPreflight"] = blocker_preflight
+
+        compact_invocation = {
+            key: value
+            for key, value in invocation_payload.items()
+            if key not in {"inputs", "previousOutputs", "previous_outputs"}
+        }
+        compact_invocation["inputs"] = compact_inputs
+
+        compact_payload = dict(execute_payload)
+        compact_payload["invocation_payload"] = compact_invocation
+        return compact_payload
+
     def _enter_jira_blocker_wait(
         self,
         *,
@@ -6217,12 +6333,22 @@ class MoonMindRunWorkflow:
         issue_keys = self._jira_blocker_issue_keys(execution_result)
         if self._jira_blocker_wait_started_at is None:
             self._jira_blocker_wait_started_at = workflow.now()
+        signature = self._jira_blocker_wait_signature(execution_result)
+        coalesce_wait = workflow.patched(RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH)
+        should_publish = (
+            not self._jira_blocker_wait_active
+            or signature != self._jira_blocker_wait_published_signature
+        )
         self._jira_blocker_wait_active = True
         self._jira_blocker_wait_skipped = False
         self._jira_blocker_wait_issue_keys = issue_keys
         self._jira_blocker_wait_summary = summary
         self._waiting_reason = "jira_blocker_wait"
         self._attention_required = False
+        if coalesce_wait and not should_publish:
+            return
+        if coalesce_wait:
+            self._jira_blocker_wait_published_signature = signature
         self._set_state(STATE_WAITING_ON_DEPENDENCIES, summary=summary)
         self._mark_step_waiting(
             node_id,
@@ -6239,6 +6365,7 @@ class MoonMindRunWorkflow:
         self._jira_blocker_wait_started_at = None
         self._jira_blocker_wait_issue_keys = []
         self._jira_blocker_wait_summary = None
+        self._jira_blocker_wait_published_signature = None
         if self._waiting_reason == "jira_blocker_wait":
             self._waiting_reason = None
         self._attention_required = False
@@ -6367,23 +6494,26 @@ class MoonMindRunWorkflow:
                 break
 
             recheck_count += 1
-            self._clear_jira_blocker_wait()
+            coalesce_wait = workflow.patched(RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH)
+            if not coalesce_wait:
+                self._clear_jira_blocker_wait()
             await self._wait_if_paused_at_safe_boundary()
             if self._cancel_requested:
                 return current_result, skipped
-            self._set_state(STATE_EXECUTING, summary="Re-checking Jira blockers.")
-            self._mark_step_running(
-                node_id,
-                updated_at=workflow.now(),
-                summary=f"Re-checking Jira blockers for {tool_name}",
-                increment_attempt=False,
-            )
-            await self._record_step_execution_manifest(
-                node_id,
-                phase="start",
-                updated_at=workflow.now(),
-                reason="policy_revalidation",
-            )
+            if not coalesce_wait:
+                self._set_state(STATE_EXECUTING, summary="Re-checking Jira blockers.")
+                self._mark_step_running(
+                    node_id,
+                    updated_at=workflow.now(),
+                    summary=f"Re-checking Jira blockers for {tool_name}",
+                    increment_attempt=False,
+                )
+                await self._record_step_execution_manifest(
+                    node_id,
+                    phase="start",
+                    updated_at=workflow.now(),
+                    reason="policy_revalidation",
+                )
             recheck_attempt = self._step_execution_for(node_id) or 0
             if self._is_step_execution_launch_blocked(
                 node_id,
@@ -6457,7 +6587,12 @@ class MoonMindRunWorkflow:
                     raise ValueError(
                         "skill Jira blocker recheck requires activity context"
                     )
-                recheck_payload = dict(execute_payload)
+                if coalesce_wait:
+                    recheck_payload = self._compact_jira_blocker_recheck_payload(
+                        execute_payload
+                    )
+                else:
+                    recheck_payload = dict(execute_payload)
                 idempotency_key = recheck_payload.get("idempotency_key")
                 if isinstance(idempotency_key, str) and idempotency_key.strip():
                     recheck_payload["idempotency_key"] = (
