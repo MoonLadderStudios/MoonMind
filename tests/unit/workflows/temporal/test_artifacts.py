@@ -884,6 +884,33 @@ async def test_report_bundle_result_is_compact_and_rejects_inline_payloads() -> 
             }
         )
 
+@pytest.mark.parametrize(
+    "unsafe_key",
+    (
+        "raw_log",
+        "finding_details",
+        "presigned_url",
+        "evidence_body",
+        "raw_stdout",
+        "raw_stderr",
+        "raw_diagnostics",
+    ),
+)
+async def test_report_bundle_rejects_pentest_unsafe_custom_keys(
+    unsafe_key: str,
+) -> None:
+    with pytest.raises(TemporalArtifactValidationError, match="unsafe report bundle"):
+        validate_report_bundle_result(
+            {
+                "report_bundle_v": 1,
+                "primary_report_ref": {
+                    "artifact_ref_v": 1,
+                    "artifact_id": "art_primary",
+                },
+                unsafe_key: "inline pentest output body",
+            }
+        )
+
 async def test_publish_report_bundle_writes_links_final_marker_and_step_metadata(
     tmp_path: Path,
 ) -> None:

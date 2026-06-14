@@ -183,9 +183,11 @@ from moonmind.workflows.temporal.artifacts import (
     ArtifactUploadDescriptor,
     ExecutionRef,
     TemporalArtifactError,
+    TemporalArtifactValidationError,
     TemporalArtifactService,
     build_artifact_ref,
 )
+from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workflows.temporal.manifest_ingest import (
     build_manifest_run_index,
     build_manifest_summary,
@@ -5208,6 +5210,230 @@ class TemporalAgentRuntimeActivities:
                 },
             ) from exc
 
+    async def _publish_pentest_activity_artifacts(
+        self,
+        *,
+        request: PentestWorkloadRequest,
+        publication: Mapping[str, Any],
+        finding_summary: Mapping[str, Any],
+        severity_counts: Mapping[str, int],
+        runtime_paths: Any,
+        provider_snapshot_available: bool,
+    ) -> dict[str, Any]:
+        if self._artifact_service is None:
+            return {}
+
+        from api_service.db import models as db_models
+
+        try:
+            info = temporal_activity.info()
+        except RuntimeError:
+            info = None
+
+        def execution_ref(link_type: str) -> ExecutionRef | None:
+            if info is None:
+                return ExecutionRef(
+                    namespace="default",
+                    workflow_id=request.agent_run_id,
+                    run_id=f"{request.step_id}-{request.attempt}",
+                    link_type=link_type,
+                    label=link_type,
+                )
+            return ExecutionRef(
+                namespace=info.namespace,
+                workflow_id=info.workflow_id,
+                run_id=info.workflow_run_id,
+                link_type=link_type,
+                label=link_type,
+            )
+
+        principal = str(request.principal_id or request.agent_run_id or "workflow")
+        common_metadata: dict[str, Any] = {
+            "producer": "activity:security.pentest.execute",
+            "tool_name": "security.pentest.run",
+            "report_type": "security_pentest_report",
+            "subject": request.target,
+            "step_id": request.step_id,
+            "attempt": request.attempt,
+            "scope_artifact_ref": request.scope_artifact_ref,
+            "sensitivity": "security_restricted",
+        }
+        report_metadata: dict[str, Any] = {
+            "artifact_type": "security_pentest_report",
+            "producer": "activity:security.pentest.execute",
+            "subject": request.target,
+            "sensitivity": "security_restricted",
+        }
+
+        async def publish_file(
+            *,
+            link_type: str,
+            path: str,
+            content_type: str,
+            metadata: Mapping[str, Any],
+            required: bool = True,
+        ) -> str | None:
+            file_path = Path(path)
+            if not file_path.is_file():
+                if required:
+                    raise TemporalArtifactValidationError(
+                        f"Pentest output file for {link_type} was not found"
+                    )
+                return None
+            payload = file_path.read_bytes()
+            artifact, _upload = await self._artifact_service.create(
+                principal=principal,
+                content_type=content_type,
+                size_bytes=len(payload),
+                link=execution_ref(link_type),
+                metadata_json=dict(metadata),
+                redaction_level=db_models.TemporalArtifactRedactionLevel.RESTRICTED,
+            )
+            completed = await self._artifact_service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=principal,
+                payload=payload,
+                content_type=content_type,
+            )
+            return build_artifact_ref(completed).artifact_id
+
+        runtime_refs = {
+            "runtime.stdout": await publish_file(
+                link_type="runtime.stdout",
+                path=runtime_paths.stdout_file,
+                content_type="text/plain",
+                metadata={
+                    **common_metadata,
+                    "name": "stdout.log",
+                    "artifact_role": "runtime.stdout",
+                },
+            ),
+            "runtime.stderr": await publish_file(
+                link_type="runtime.stderr",
+                path=runtime_paths.stderr_file,
+                content_type="text/plain",
+                metadata={
+                    **common_metadata,
+                    "name": "stderr.log",
+                    "artifact_role": "runtime.stderr",
+                },
+            ),
+            "runtime.diagnostics": await publish_file(
+                link_type="runtime.diagnostics",
+                path=runtime_paths.diagnostics_file,
+                content_type="application/json",
+                metadata={
+                    **common_metadata,
+                    "name": "diagnostics.json",
+                    "artifact_role": "runtime.diagnostics",
+                },
+            ),
+        }
+        provider_snapshot_ref = await publish_file(
+            link_type="output.provider_snapshot",
+            path=runtime_paths.provider_snapshot_file,
+            content_type="application/json",
+            metadata={
+                **common_metadata,
+                "name": "provider-snapshot.json",
+                "artifact_role": "output.provider_snapshot",
+            },
+            required=provider_snapshot_available,
+        )
+
+        counts = {
+            "total": int(finding_summary.get("findings_count", 0) or 0),
+            "confirmed": int(
+                finding_summary.get("confirmed_findings_count", 0) or 0
+            ),
+            "high_or_critical": int(
+                finding_summary.get("high_or_critical_count", 0) or 0
+            ),
+            **{str(key): int(value) for key, value in severity_counts.items()},
+        }
+        structured_path = Path(runtime_paths.normalizer_input_file)
+        if structured_path.is_file():
+            structured_payload: bytes | Mapping[str, Any] = structured_path.read_bytes()
+        else:
+            structured_payload = publication.get("normalized_findings", {})
+        pentest_artifact_root = Path(request.artifacts_dir) / "pentest"
+        report_path = pentest_artifact_root / "findings" / "findings.report.md"
+        summary_path = pentest_artifact_root / "findings" / "findings.summary.md"
+        evidence_path = pentest_artifact_root / "evidence" / "bundle.tar.zst"
+        report_bundle = await self._artifact_service.publish_report_bundle(
+            principal=principal,
+            namespace=info.namespace if info is not None else "default",
+            workflow_id=info.workflow_id if info is not None else request.agent_run_id,
+            run_id=info.workflow_run_id if info is not None else request.step_id,
+            report_type="security_pentest_report",
+            report_scope="final",
+            primary={
+                "payload": report_path.read_bytes(),
+                "content_type": "text/markdown",
+                "label": "Pentest report",
+                "metadata": {
+                    **report_metadata,
+                    "name": "findings.report.md",
+                    "title": "Pentest report",
+                    "render_hint": "text",
+                    "finding_counts": dict(finding_summary),
+                    "severity_counts": dict(severity_counts),
+                },
+            },
+            summary={
+                "payload": summary_path.read_bytes(),
+                "content_type": "text/markdown",
+                "label": "Pentest summary",
+                "metadata": {
+                    **report_metadata,
+                    "name": "findings.summary.md",
+                    "title": "Pentest summary",
+                    "render_hint": "text",
+                },
+            },
+            structured={
+                "payload": structured_payload,
+                "content_type": "application/json",
+                "label": "Pentest structured findings",
+                "metadata": {
+                    **report_metadata,
+                    "name": "findings.normalizer-input.json",
+                    "title": "Pentest structured findings",
+                    "render_hint": "json",
+                },
+            },
+            evidence=(
+                {
+                    "payload": evidence_path.read_bytes(),
+                    "content_type": "application/zstd",
+                    "label": "Pentest evidence",
+                    "metadata": {
+                        **report_metadata,
+                        "name": "bundle.tar.zst",
+                        "title": "Pentest evidence",
+                        "render_hint": "binary",
+                    },
+                },
+            ),
+            sensitivity="security_restricted",
+            counts=counts,
+            step_id=request.step_id,
+            attempt=request.attempt,
+            scope=request.scope_artifact_ref,
+        )
+        validate_report_bundle_result(report_bundle)
+        refs: dict[str, Any] = {
+            **runtime_refs,
+            "report_bundle": report_bundle,
+            "report.primary": report_bundle.get("primary_report_ref"),
+            "report.summary": report_bundle.get("summary_ref"),
+            "report.structured": report_bundle.get("structured_ref"),
+            "report.evidence": (report_bundle.get("evidence_refs") or [None])[0],
+        }
+        if provider_snapshot_ref:
+            refs["output.provider_snapshot"] = provider_snapshot_ref
+        return refs
+
     @staticmethod
     def _validate_pentest_request_policy(
         request: PentestWorkloadRequest,
@@ -6828,6 +7054,52 @@ class TemporalAgentRuntimeActivities:
                 "failed to release Pentest provider lease after success: %s",
                 release_exc,
             )
+        published_refs = await self._publish_pentest_activity_artifacts(
+            request=request,
+            publication=publication,
+            finding_summary=finding_summary,
+            severity_counts=severity_counts,
+            runtime_paths=execution_materialization.runtime_paths,
+            provider_snapshot_available=bool(
+                _artifact_ref_for_pentest_name(publication, "output.provider_snapshot")
+            ),
+        )
+        report_bundle = published_refs.get("report_bundle")
+        if isinstance(report_bundle, Mapping):
+            primary_report_ref = report_bundle.get("primary_report_ref")
+            summary_report_ref = report_bundle.get("summary_ref")
+            structured_report_ref = report_bundle.get("structured_ref")
+            evidence_report_refs = list(report_bundle.get("evidence_refs") or [])
+        else:
+            primary_report_ref = {"artifact_ref_v": 1, "artifact_id": primary_ref}
+            summary_report_ref = {"artifact_ref_v": 1, "artifact_id": summary_ref}
+            structured_report_ref = {"artifact_ref_v": 1, "artifact_id": structured_ref}
+            evidence_report_refs = [{"artifact_ref_v": 1, "artifact_id": evidence_ref}]
+
+        def published_ref_text(name: str, fallback: str | None) -> str | None:
+            value = published_refs.get(name)
+            if isinstance(value, Mapping):
+                artifact_id = value.get("artifact_id")
+                return str(artifact_id) if artifact_id else fallback
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            return fallback
+
+        stdout_ref = published_ref_text("runtime.stdout", stdout_ref) or stdout_ref
+        stderr_ref = published_ref_text("runtime.stderr", stderr_ref) or stderr_ref
+        diagnostics_ref = (
+            published_ref_text("runtime.diagnostics", diagnostics_ref) or diagnostics_ref
+        )
+        summary_ref = published_ref_text("report.summary", summary_ref) or summary_ref
+        primary_ref = published_ref_text("report.primary", primary_ref) or primary_ref
+        structured_ref = (
+            published_ref_text("report.structured", structured_ref) or structured_ref
+        )
+        evidence_ref = published_ref_text("report.evidence", evidence_ref) or evidence_ref
+        provider_snapshot_ref = (
+            published_ref_text("output.provider_snapshot", None)
+            or _artifact_ref_for_pentest_name(publication, "output.provider_snapshot")
+        )
         result = PentestWorkloadResult(
             status="completed",
             target=request.target,
@@ -6839,19 +7111,17 @@ class TemporalAgentRuntimeActivities:
             summary_artifact_ref=summary_ref,
             findings_artifact_ref=structured_ref,
             evidence_bundle_artifact_ref=evidence_ref,
-            provider_snapshot_artifact_ref=_artifact_ref_for_pentest_name(
-                publication, "output.provider_snapshot"
-            ),
+            provider_snapshot_artifact_ref=provider_snapshot_ref,
             findings_count=finding_summary["findings_count"],
             confirmed_findings_count=finding_summary["confirmed_findings_count"],
         )
         output.update(result.model_dump(mode="json"))
         output["status"] = "completed"
         output["report_bundle_v"] = 1
-        output["primary_report_ref"] = primary_ref
-        output["summary_ref"] = summary_ref
-        output["structured_ref"] = structured_ref
-        output["evidence_refs"] = [evidence_ref]
+        output["primary_report_ref"] = primary_report_ref
+        output["summary_ref"] = summary_report_ref
+        output["structured_ref"] = structured_report_ref
+        output["evidence_refs"] = evidence_report_refs
         output["report_type"] = "security_pentest_report"
         output["report_scope"] = "final"
         output["sensitivity"] = {
@@ -6865,21 +7135,36 @@ class TemporalAgentRuntimeActivities:
             ],
         }
         output["severity_counts"] = severity_counts
-        output["report_bundle"] = {
-            "report_bundle_v": 1,
-            "primary_report_ref": primary_ref,
-            "summary_ref": summary_ref,
-            "structured_ref": structured_ref,
-            "evidence_refs": [evidence_ref],
-            "report_type": "security_pentest_report",
-            "report_scope": "final",
-            "sensitivity": output["sensitivity"],
-            "findings_count": finding_summary["findings_count"],
-            "confirmed_findings_count": finding_summary[
-                "confirmed_findings_count"
-            ],
-            "high_or_critical_count": finding_summary["high_or_critical_count"],
-            "severity_counts": severity_counts,
+        output["counts"] = {
+            "total": finding_summary["findings_count"],
+            "confirmed": finding_summary["confirmed_findings_count"],
+            "high_or_critical": finding_summary["high_or_critical_count"],
+            **severity_counts,
+        }
+        if isinstance(report_bundle, Mapping):
+            output["report_bundle"] = dict(report_bundle)
+        else:
+            output["report_bundle"] = {
+                "report_bundle_v": 1,
+                "primary_report_ref": primary_report_ref,
+                "summary_ref": summary_report_ref,
+                "structured_ref": structured_report_ref,
+                "evidence_refs": evidence_report_refs,
+                "report_type": "security_pentest_report",
+                "report_scope": "final",
+                "sensitivity": "security_restricted",
+                "counts": output["counts"],
+            }
+            validate_report_bundle_result(output["report_bundle"])
+        output["output_refs"] = {
+            "runtime.stdout": stdout_ref,
+            "runtime.stderr": stderr_ref,
+            "runtime.diagnostics": diagnostics_ref,
+            "output.provider_snapshot": provider_snapshot_ref,
+            "report.primary": primary_report_ref,
+            "report.summary": summary_report_ref,
+            "report.structured": structured_report_ref,
+            "report.evidence": evidence_report_refs[0] if evidence_report_refs else None,
         }
         output["execution_policy"] = execution_policy.model_dump(mode="json")
         output["terminal_cleanup"] = cleanup(

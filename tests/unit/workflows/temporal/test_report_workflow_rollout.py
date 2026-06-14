@@ -163,6 +163,11 @@ def test_report_projection_summary_is_ref_only() -> None:
             "artifact_ref_v": 1,
             "artifact_id": "art_summary",
         },
+        "report_artifact_refs": {
+            "report.primary": {"artifact_ref_v": 1, "artifact_id": "art_primary"},
+            "report.summary": {"artifact_ref_v": 1, "artifact_id": "art_summary"},
+            "report.evidence": {"artifact_ref_v": 1, "artifact_id": "art_evidence"},
+        },
         "report_type": "security_pentest_report",
         "report_status": "final",
         "finding_counts": {"total": 3},

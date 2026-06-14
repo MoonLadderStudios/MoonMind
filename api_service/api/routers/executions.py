@@ -3423,23 +3423,29 @@ async def _hydrate_execution_report_projection(
     principal = str(getattr(user, "id", "") or "system")
     try:
         artifact_service = get_temporal_artifact_service(session)
-        primary_artifacts, summary_artifacts = await asyncio.gather(
-            artifact_service.list_for_execution(
-                namespace=execution.namespace,
-                workflow_id=execution.workflow_id,
-                run_id=execution.run_id,
-                principal=principal,
-                link_type="report.primary",
-                latest_only=True,
-            ),
-            artifact_service.list_for_execution(
-                namespace=execution.namespace,
-                workflow_id=execution.workflow_id,
-                run_id=execution.run_id,
-                principal=principal,
-                link_type="report.summary",
-                latest_only=True,
-            ),
+        report_roles = (
+            "report.primary",
+            "report.summary",
+            "report.structured",
+            "report.evidence",
+        )
+        (
+            primary_artifacts,
+            summary_artifacts,
+            structured_artifacts,
+            evidence_artifacts,
+        ) = await asyncio.gather(
+            *(
+                artifact_service.list_for_execution(
+                    namespace=execution.namespace,
+                    workflow_id=execution.workflow_id,
+                    run_id=execution.run_id,
+                    principal=principal,
+                    link_type=role,
+                    latest_only=True,
+                )
+                for role in report_roles
+            )
         )
         primary_artifact = _select_complete_execution_artifact(primary_artifacts)
         if primary_artifact is None:
@@ -3452,11 +3458,23 @@ async def _hydrate_execution_report_projection(
             )
 
         summary_artifact = _select_complete_execution_artifact(summary_artifacts)
+        structured_artifact = _select_complete_execution_artifact(structured_artifacts)
+        evidence_artifact = _select_complete_execution_artifact(evidence_artifacts)
 
         primary_ref_model = _build_execution_artifact_ref_model(primary_artifact)
         summary_ref_model = (
             _build_execution_artifact_ref_model(summary_artifact)
             if summary_artifact is not None
+            else None
+        )
+        structured_ref_model = (
+            _build_execution_artifact_ref_model(structured_artifact)
+            if structured_artifact is not None
+            else None
+        )
+        evidence_ref_model = (
+            _build_execution_artifact_ref_model(evidence_artifact)
+            if evidence_artifact is not None
             else None
         )
         metadata_json = (
@@ -3468,13 +3486,21 @@ async def _hydrate_execution_report_projection(
             "report_bundle_v": 1,
             "evidence_refs": [],
             "primary_report_ref": primary_ref_model.model_dump(
-                by_alias=True, exclude_none=False
+                by_alias=True, exclude_none=True
             ),
         }
         if summary_ref_model is not None:
             projection_bundle["summary_ref"] = summary_ref_model.model_dump(
-                by_alias=True, exclude_none=False
+                by_alias=True, exclude_none=True
             )
+        if structured_ref_model is not None:
+            projection_bundle["structured_ref"] = structured_ref_model.model_dump(
+                by_alias=True, exclude_none=True
+            )
+        if evidence_ref_model is not None:
+            projection_bundle["evidence_refs"] = [
+                evidence_ref_model.model_dump(by_alias=True, exclude_none=True)
+            ]
         report_type = metadata_json.get("report_type")
         if report_type is not None:
             projection_bundle["report_type"] = report_type
