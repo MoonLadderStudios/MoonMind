@@ -89,6 +89,7 @@ from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactValidationError,
     build_artifact_ref,
 )
+from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workloads.registry import RunnerProfileRegistry
 
 pytestmark = [pytest.mark.asyncio]
@@ -1149,6 +1150,53 @@ class _FakePentestLauncher:
             }
         )
 
+class _FileWritingPentestLauncher(_FakePentestLauncher):
+    async def run(self, request: object) -> WorkloadResult:
+        workload_request = getattr(request, "request", request)
+        artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
+        base = artifacts_dir / "pentest"
+        files = {
+            "runtime/stdout.log": "stdout token=ghp_rawshouldnotleak1234567890\n",
+            "runtime/stderr.log": "stderr password=rawshouldnotleak\n",
+            "runtime/diagnostics.json": json.dumps(
+                {"status": "ok", "raw_log": "must stay in artifact body"}
+            ),
+            "findings/findings.summary.md": "Summary without secrets.\n",
+            "findings/findings.report.md": "# Pentest report\n\nPrimary report.\n",
+            "findings/findings.normalizer-input.json": json.dumps(
+                {
+                    "tool_name": "security.pentest.run",
+                    "target": "https://lab.example.test",
+                    "scope_artifact_ref": "art:sha256:scope",
+                    "operation_mode": "validate_hypothesis",
+                    "runner_profile_id": "pentestgpt-safe",
+                    "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                    "produced_at": "2026-06-14T00:00:00Z",
+                    "findings": [
+                        {
+                            "finding_id": "finding-1",
+                            "title": "Supported issue",
+                            "severity": "high",
+                            "confidence": "confirmed",
+                            "target": "https://lab.example.test",
+                            "summary": "Evidence supports issue",
+                        }
+                    ],
+                    "summary": {
+                        "findings_count": 1,
+                        "confirmed_findings_count": 1,
+                        "high_or_critical_count": 1,
+                    },
+                }
+            ),
+            "evidence/bundle.tar.zst": "fake evidence body ghp_evidenceshouldnotleak123456\n",
+        }
+        for relative, body in files.items():
+            path = base / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        return await super().run(request)
+
 class _BlockingPentestLauncher(_FakePentestLauncher):
     def __init__(self, *, status: str = "succeeded") -> None:
         super().__init__(status=status)
@@ -2132,11 +2180,8 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
     assert result["evidence_refs"]
     assert result["report_bundle"]["report_type"] == "security_pentest_report"
     assert result["report_bundle"]["report_scope"] == "final"
-    assert (
-        result["report_bundle"]["sensitivity"]["classification"]
-        == "security_restricted"
-    )
-    assert result["report_bundle"]["high_or_critical_count"] == 1
+    assert result["report_bundle"]["sensitivity"] == "security_restricted"
+    assert result["report_bundle"]["counts"]["high_or_critical_count"] == 1
     assert result["severity_counts"] == {"high": 1}
     assert "session.summary" not in artifact_names
     assert "session.step_checkpoint" not in artifact_names
@@ -2164,6 +2209,149 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
     assert "hunter2" not in str(result)
     assert "terminal_control" not in str(live_logs)
     assert "docker attach" not in str(result).lower()
+
+async def test_security_pentest_execute_publishes_runner_outputs_through_artifact_service(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workload_launcher=_FileWritingPentestLauncher(),
+                workload_registry=_RecordingPentestRegistry(),
+            )
+
+            result = await activities._security_pentest_execute_trusted_internal(
+                _pentest_activity_payload(
+                    artifacts_dir=str(tmp_path / "runner-artifacts"),
+                    findings=[],
+                    provider_snapshot_available=True,
+                )
+            )
+
+            assert result["status"] == "completed"
+            artifact_ref_fields = {
+                "stdout_artifact_ref",
+                "stderr_artifact_ref",
+                "diagnostics_artifact_ref",
+                "provider_snapshot_artifact_ref",
+                "primary_report_ref",
+                "summary_ref",
+                "structured_ref",
+                "evidence_bundle_artifact_ref",
+            }
+            for field in artifact_ref_fields:
+                assert str(result[field]).startswith("art_"), field
+
+            validate_report_bundle_result(result["report_bundle"])
+            assert result["report_bundle"]["counts"] == {
+                "findings_count": 1,
+                "confirmed_findings_count": 1,
+                "high_or_critical_count": 1,
+                "severity_counts": {"high": 1},
+            }
+            assert "findings_count" not in result["report_bundle"]
+            assert "high_or_critical_count" not in result["report_bundle"]
+
+            expected_link_types = {
+                "runtime.stdout",
+                "runtime.stderr",
+                "runtime.diagnostics",
+                "output.provider_snapshot",
+                "report.primary",
+                "report.summary",
+                "report.structured",
+                "report.evidence",
+            }
+            by_link_type = {}
+            for link_type in expected_link_types:
+                artifacts = await service.list_for_execution(
+                    namespace="default",
+                    workflow_id="run-123",
+                    run_id="step-pentest-1",
+                    principal="user-security",
+                    link_type=link_type,
+                    latest_only=True,
+                )
+                assert artifacts, link_type
+                by_link_type[link_type] = artifacts[0]
+            assert by_link_type["report.primary"].metadata_json["is_final_report"] is True
+            assert (
+                by_link_type["report.primary"].metadata_json["sensitivity"]
+                == "security_restricted"
+            )
+
+async def test_security_pentest_report_bundle_rejects_unsafe_custom_keys():
+    unsafe_cases = (
+        {"raw_log": "inline log"},
+        {"finding_details": {"body": "raw finding"}},
+        {"presigned_url": "https://example.invalid/raw"},
+        {"evidence_body": "raw evidence"},
+    )
+
+    for unsafe in unsafe_cases:
+        bundle = {"report_bundle_v": 1, **unsafe}
+        with pytest.raises(TemporalArtifactValidationError, match="unsafe report bundle"):
+            validate_report_bundle_result(bundle)
+
+async def test_security_pentest_serialized_result_and_metadata_stay_compact_and_secret_safe(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workload_launcher=_FileWritingPentestLauncher(),
+                workload_registry=_RecordingPentestRegistry(),
+            )
+
+            result = await activities._security_pentest_execute_trusted_internal(
+                _pentest_activity_payload(
+                    artifacts_dir=str(tmp_path / "runner-artifacts"),
+                    summary_text="Pentest finished with token=ghp_summaryshouldnotleak",
+                    provider_snapshot_available=True,
+                )
+            )
+
+            serialized = json.dumps(result, sort_keys=True)
+            assert len(serialized.encode("utf-8")) < 60000
+            blocked_patterns = (
+                "ghp_rawshouldnotleak",
+                "rawshouldnotleak",
+                "ghp_evidenceshouldnotleak",
+                "ghp_summaryshouldnotleak",
+                "presigned_url",
+                "finding_details",
+                "evidence_body",
+                "session.summary",
+                "session.step_checkpoint",
+                "session.control_event",
+                "session.reset_boundary",
+            )
+            for pattern in blocked_patterns:
+                assert pattern not in serialized
+
+            artifacts = await service.list_for_execution(
+                namespace="default",
+                workflow_id="run-123",
+                run_id="step-pentest-1",
+                principal="user-security",
+                latest_only=False,
+            )
+            metadata_payload = json.dumps(
+                [artifact.metadata_json for artifact in artifacts],
+                sort_keys=True,
+            )
+            for pattern in blocked_patterns:
+                assert pattern not in metadata_payload
 
 async def test_pentest_heartbeat_emitter_returns_redacted_compact_payload(
     monkeypatch: pytest.MonkeyPatch,
@@ -2732,7 +2920,7 @@ async def test_security_pentest_execute_uses_runner_normalized_findings_after_la
     assert result["status"] == "completed"
     assert result["findings_count"] == 1
     assert result["confirmed_findings_count"] == 1
-    assert result["report_bundle"]["high_or_critical_count"] == 1
+    assert result["report_bundle"]["counts"]["high_or_critical_count"] == 1
     assert result["severity_counts"] == {"critical": 1}
     assert [
         item["finding_id"] for item in result["normalized_findings"]["findings"]
