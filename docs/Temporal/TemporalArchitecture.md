@@ -875,6 +875,29 @@ Use it for:
 - explicit reruns that preserve durable identity
 - history growth approaching configured thresholds
 
+Long waits must also avoid creating high-cardinality no-op history before
+Continue-As-New is needed. A wait or polling loop whose domain state has not
+changed should coalesce evidence instead of recording each identical
+observation as a full step attempt.
+
+For unchanged wait cycles:
+
+- preserve the first blocked/waiting observation,
+- preserve the latest observation in compact workflow state,
+- record durable artifacts only for state transitions, terminal outcomes,
+  explicit operator actions, and coarse periodic checkpoints,
+- keep repeated activity inputs compact and free of large previous outputs,
+  prompts, logs, or instructions,
+- avoid memo and Search Attribute upserts on every internal polling tick,
+- avoid per-cycle step-attempt manifests unless a real re-execution attempt or
+  externally visible state transition occurred.
+
+The workflow history is not an evidence store for every "still waiting" sample.
+Detailed repeated observations belong in bounded projection state or external
+artifacts written at controlled intervals. Temporal history should contain the
+commands required to replay the workflow and enough compact state to explain the
+current wait.
+
 Rules:
 
 - preserve Workflow ID
