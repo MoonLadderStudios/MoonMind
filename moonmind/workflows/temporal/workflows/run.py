@@ -76,7 +76,10 @@ with workflow.unsafe.imports_passed_through():
         build_step_execution_idempotency_key,
         normalize_dependency_ids,
     )
-    from moonmind.workflows.temporal.step_checkpoints import build_step_checkpoint_id
+    from moonmind.workflows.temporal.step_checkpoints import (
+        StepExecutionCheckpointBoundary,
+        build_step_checkpoint_id,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
@@ -2694,7 +2697,7 @@ class MoonMindRunWorkflow:
         self,
         *,
         identity: StepExecutionIdentityModel,
-        boundary: str,
+        boundary: StepExecutionCheckpointBoundary,
         task_input_snapshot_ref: str,
         workspace: Mapping[str, Any],
         created_at: datetime,
@@ -2726,14 +2729,24 @@ class MoonMindRunWorkflow:
             "idempotencyKey": checkpoint_id,
         }
         result = await workflow.execute_activity(
-            "step_checkpoint.create",
+            route.activity_type,
             payload,
             **self._execute_kwargs_for_route(route),
         )
         if isinstance(result, Mapping):
             checkpoint_ref = str(result.get("checkpointRef") or "").strip()
             if checkpoint_ref:
-                self._step_checkpoint_refs[identity.logical_step_id] = checkpoint_ref
+                try:
+                    mark_step_checkpoint_evidence(
+                        self._step_ledger_rows,
+                        identity.logical_step_id,
+                        updated_at=created_at,
+                        step_checkpoint_ref=checkpoint_ref,
+                    )
+                except KeyError:
+                    pass
+                else:
+                    self._sync_progress_snapshot(updated_at=created_at)
             return dict(result)
         raise ValueError("step_checkpoint.create returned a non-mapping result")
 

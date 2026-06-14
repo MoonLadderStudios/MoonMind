@@ -1380,6 +1380,12 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
     captured: dict[str, Any] = {}
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
 
     async def fake_execute_activity(
         activity: str,
@@ -1420,7 +1426,7 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
             "patchRef": "artifact://patch",
             "createdAt": "2026-06-13T12:00:00+00:00",
         },
-        created_at=datetime(2026, 6, 13, 12, 0, tzinfo=UTC),
+        created_at=now,
         plan_digest="sha256:plan",
         step_outputs={"summaryRef": "artifact://summary"},
     )
@@ -1431,6 +1437,10 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
     assert captured["payload"]["idempotencyKey"].endswith(
         ":checkpoint:after_execution"
     )
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["stepCheckpointRef"] == "artifact://checkpoint/created"
+    assert "stateCheckpointRef" not in step
+    assert "implement" not in workflow._step_checkpoint_refs
     assert "workspacePath" not in captured["payload"]
     assert "diff" not in json.dumps(captured["payload"], sort_keys=True)
 
