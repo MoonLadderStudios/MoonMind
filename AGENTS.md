@@ -321,6 +321,8 @@ Key diagnostics:
 - Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing Temporal activity catalog/runtime helpers, existing artifact services and sandbox/runtime helpers (001-checkpoint-activity-substrate)
 - Existing Temporal workflow history, step ledger rows/projections, and artifact store refs only; no new persistent tables planned (001-checkpoint-activity-substrate)
 - TypeScript/React for Mission Control UI; Python 3.12 remains present but is not part of this story + React, TanStack Query, Zod, Testing Library, Vitest, existing Mission Control stylesheet (001-remove-step-dag)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, FastAPI, SQLAlchemy async service fixtures, pytest, existing workload launcher/registry, Docker Buildx, GitHub Actions (001-finish-pentestgpt)
+- Existing Temporal workflow history and artifact store; existing provider-profile/secret configuration; no new persistent storage. (001-finish-pentestgpt)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
