@@ -76,6 +76,10 @@ with workflow.unsafe.imports_passed_through():
         build_step_execution_idempotency_key,
         normalize_dependency_ids,
     )
+    from moonmind.workflows.temporal.step_checkpoints import (
+        StepExecutionCheckpointBoundary,
+        build_step_checkpoint_id,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
@@ -2688,6 +2692,63 @@ class MoonMindRunWorkflow:
             self._step_checkpoint_refs[logical_step_id] = recorded_checkpoint_ref
         self._sync_progress_snapshot(updated_at=updated_at)
         return self._step_checkpoint_refs.get(logical_step_id)
+
+    async def _create_step_checkpoint_via_activity(
+        self,
+        *,
+        identity: StepExecutionIdentityModel,
+        boundary: StepExecutionCheckpointBoundary,
+        task_input_snapshot_ref: str,
+        workspace: Mapping[str, Any],
+        created_at: datetime,
+        plan_ref: str | None = None,
+        plan_digest: str | None = None,
+        prepared_input_refs: Sequence[str] = (),
+        step_outputs: Mapping[str, Any] | None = None,
+        diagnostic_refs: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Write checkpoint evidence through the artifact activity boundary.
+
+        Workflow code receives and forwards compact refs only. Workspace and git
+        inspection must happen before this call in sandbox/service activities.
+        """
+
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step_checkpoint.create")
+        checkpoint_id = build_step_checkpoint_id(identity, boundary)
+        payload = {
+            "identity": identity.model_dump(by_alias=True, mode="json"),
+            "boundary": boundary,
+            "taskInputSnapshotRef": task_input_snapshot_ref,
+            "workspace": dict(workspace),
+            "createdAt": created_at.isoformat(),
+            "planRef": plan_ref,
+            "planDigest": plan_digest,
+            "preparedInputRefs": list(prepared_input_refs),
+            "stepOutputs": dict(step_outputs or {}),
+            "diagnosticRefs": list(diagnostic_refs),
+            "idempotencyKey": checkpoint_id,
+        }
+        result = await workflow.execute_activity(
+            route.activity_type,
+            payload,
+            **self._execute_kwargs_for_route(route),
+        )
+        if isinstance(result, Mapping):
+            checkpoint_ref = str(result.get("checkpointRef") or "").strip()
+            if checkpoint_ref:
+                try:
+                    mark_step_checkpoint_evidence(
+                        self._step_ledger_rows,
+                        identity.logical_step_id,
+                        updated_at=created_at,
+                        step_checkpoint_ref=checkpoint_ref,
+                    )
+                except KeyError:
+                    pass
+                else:
+                    self._sync_progress_snapshot(updated_at=created_at)
+            return dict(result)
+        raise ValueError("step_checkpoint.create returned a non-mapping result")
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
