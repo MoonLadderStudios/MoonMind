@@ -4787,6 +4787,7 @@ class MoonMindRunWorkflow:
             execution_result = None
             accepted_execution = False
             gate_stop_requested = False
+            step_failure_summary: str | None = None
             blocked_outcome_wait_skipped = False
             current_review_attempt = 1
 
@@ -5121,6 +5122,10 @@ class MoonMindRunWorkflow:
                         operator_failure_summary = (
                             provider_failure_summary or failure_message
                         )
+                        step_failure_summary = (
+                            operator_failure_summary
+                            or f"{tool_name} failed"
+                        )
 
                         retryable = failure_message == "system_error" or (
                             failure_message == "execution_error"
@@ -5165,8 +5170,7 @@ class MoonMindRunWorkflow:
                             node_id,
                             status="failed",
                             updated_at=workflow.now(),
-                            summary=operator_failure_summary
-                            or f"{tool_name} failed",
+                            summary=step_failure_summary,
                             last_error=failure_message,
                         )
                         await self._record_step_execution_manifest(
@@ -5420,6 +5424,26 @@ class MoonMindRunWorkflow:
                     self._publish_status = "not_required"
                     self._publish_reason = self._plan_blocked_message
                     self._refresh_step_readiness(updated_at=workflow.now())
+                    continue
+                if (
+                    publish_mode in {"pr", "branch"}
+                    and result_status != "COMPLETED"
+                ):
+                    self._plan_blocked_message = (
+                        step_failure_summary
+                        or self._activity_result_provider_failure_summary(
+                            execution_result
+                        )
+                        or self._activity_result_failure_message(execution_result)
+                        or f"{tool_name} failed"
+                    )
+                    self._publish_status = "not_required"
+                    self._publish_reason = self._plan_blocked_message
+                    require_pull_request_url = False
+                    pull_request_url = None
+                    self._summary = self._plan_blocked_message
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
                     continue
                 continue
 

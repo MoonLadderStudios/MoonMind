@@ -1515,6 +1515,154 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
     assert child_calls == 2
 
 @pytest.mark.asyncio
+async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    step_execution_artifact_ids = count(1)
+    child_calls = 0
+    create_pr_called = False
+    executed_steps: list[str] = []
+
+    def _request_step_id(request: object) -> str:
+        parameters = getattr(request, "parameters", {})
+        metadata = parameters.get("metadata") if isinstance(parameters, dict) else {}
+        moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
+        step_ledger = moonmind.get("stepLedger") if isinstance(moonmind, dict) else {}
+        return str(step_ledger.get("logicalStepId") or "")
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        nonlocal create_pr_called
+        if activity_type == "repo.create_pr":
+            create_pr_called = True
+            return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+        if activity_type == "artifact.create":
+            artifact_create_result = _step_execution_artifact_create_result(
+                payload,
+                step_execution_artifact_ids,
+            )
+            if artifact_create_result is not None:
+                return artifact_create_result
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Jira Orchestrate Publish Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "CONTINUE", "max_concurrency": 1},
+                    "nodes": [
+                        _agent_runtime_step(
+                            "tpl:jira-orchestrate:1.0.0:01:update"
+                        ),
+                        _agent_runtime_step(
+                            "tpl:jira-orchestrate:1.0.0:02:verify"
+                        ),
+                        _agent_runtime_step(
+                            "tpl:jira-orchestrate:1.0.0:03:notify"
+                        ),
+                    ],
+                    "edges": [
+                        {
+                            "from": "tpl:jira-orchestrate:1.0.0:01:update",
+                            "to": "tpl:jira-orchestrate:1.0.0:02:verify",
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal child_calls
+        child_calls += 1
+        step_id = _request_step_id(_args)
+        executed_steps.append(step_id)
+        if step_id.endswith(":03:notify"):
+            return {
+                "summary": "Independent notification completed.",
+                "metadata": {"push_status": "not_requested"},
+                "output_refs": [],
+            }
+        return {
+            "summary": "codex app-server turn/completed produced no assistant output",
+            "failureClass": "execution_error",
+            "diagnosticsRef": "art_empty_turn",
+            "metadata": {
+                "profileId": "codex_default",
+                "turnStatus": "failed",
+                "turnMetadata": {
+                    "failureCause": "app_server_protocol_empty_turn",
+                    "retryRecommendedAction": "clear_session",
+                },
+            },
+            "output_refs": [],
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow, "execute_activity", fake_execute_activity
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={
+            "repo": "MoonLadderStudios/MoonMind",
+            "publishMode": "pr",
+        },
+        plan_ref="art_plan_1",
+    )
+
+    status, message, publish_failure = workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert child_calls >= 1
+    assert any(step.endswith(":03:notify") for step in executed_steps)
+    assert not any(step.endswith(":02:verify") for step in executed_steps)
+    assert not create_pr_called
+    assert workflow._publish_status == "not_required"
+    assert status == "failed"
+    assert publish_failure is True
+    assert "app_server_protocol_empty_turn" in message
+    assert "no PR was created" not in message
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_publish_mode_pr_requires_pull_request_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
