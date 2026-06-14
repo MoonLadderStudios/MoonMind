@@ -8,7 +8,11 @@ from typing import Any
 
 import pytest
 
-from moonmind.schemas.temporal_models import STEP_EXECUTION_MANIFEST_CONTENT_TYPE
+from moonmind.schemas.temporal_models import (
+    STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+    STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
+    StepExecutionIdentityModel,
+)
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
@@ -1367,6 +1371,78 @@ def test_run_records_prepared_refs_and_idempotent_checkpoint_evidence(
     assert step["stateCheckpointRef"] == "artifact://runtime/checkpoint"
     assert step["recoveryPreservation"]["eligible"] is True
     assert step["recoveryPreservation"]["reason"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_run_routes_step_checkpoint_create_through_activity_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    captured: dict[str, Any] = {}
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured["activity"] = activity
+        captured["payload"] = payload
+        captured["kwargs"] = kwargs
+        return {
+            "checkpointRef": "artifact://checkpoint/created",
+            "checkpointId": (
+                "wf-run-1:run-1:implement:execution:1:checkpoint:after_execution"
+            ),
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": "git_patch",
+            "diagnosticRefs": [],
+            "idempotencyKey": (
+                "wf-run-1:run-1:implement:execution:1:checkpoint:after_execution"
+            ),
+        }
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    identity = StepExecutionIdentityModel(
+        workflowId="wf-run-1",
+        runId="run-1",
+        logicalStepId="implement",
+        executionOrdinal=1,
+    )
+
+    result = await workflow._create_step_checkpoint_via_activity(
+        identity=identity,
+        boundary="after_execution",
+        task_input_snapshot_ref="artifact://task-input",
+        workspace={
+            "kind": "git_patch",
+            "baseCommit": "abc123",
+            "patchRef": "artifact://patch",
+            "createdAt": "2026-06-13T12:00:00+00:00",
+        },
+        created_at=now,
+        plan_digest="sha256:plan",
+        step_outputs={"summaryRef": "artifact://summary"},
+    )
+
+    assert result["checkpointRef"] == "artifact://checkpoint/created"
+    assert captured["activity"] == "step_checkpoint.create"
+    assert captured["payload"]["workspace"]["patchRef"] == "artifact://patch"
+    assert captured["payload"]["idempotencyKey"].endswith(
+        ":checkpoint:after_execution"
+    )
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["stepCheckpointRef"] == "artifact://checkpoint/created"
+    assert step.get("stateCheckpointRef") is None
+    assert "implement" not in workflow._step_checkpoint_refs
+    assert "workspacePath" not in captured["payload"]
+    assert "diff" not in json.dumps(captured["payload"], sort_keys=True)
 
 
 def test_run_marks_completed_step_without_checkpoint_ineligible(
