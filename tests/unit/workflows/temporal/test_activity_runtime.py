@@ -2611,6 +2611,31 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
     assert report_request["sensitivity"] == "security_restricted"
     assert report_request["primary"]["metadata"]["sensitivity"] == "security_restricted"
     assert report_request["primary"]["metadata"]["subject"] == "https://lab.example.test"
+    assert isinstance(report_request["structured"]["payload"], bytes)
+    assert json.loads(report_request["structured"]["payload"].decode("utf-8")) == {
+        "tool_name": "security.pentest.run",
+        "tool_version": "1.0.0",
+        "target": "https://lab.example.test",
+        "scope_artifact_ref": "art:sha256:approved-scope",
+        "operation_mode": "validate_hypothesis",
+        "runner_profile_id": "pentestgpt-safe",
+        "execution_profile_ref": "pentestgpt_anthropic_api_team",
+        "produced_at": "2026-01-01T00:00:00Z",
+        "findings": [
+            {
+                "finding_id": "finding-1",
+                "title": "Supported issue",
+                "severity": "high",
+                "confidence": "supported",
+                "summary": "Evidence supports issue",
+            }
+        ],
+        "summary": {
+            "findings_count": 1,
+            "confirmed_findings_count": 0,
+            "high_or_critical_count": 1,
+        },
+    }
     component_metadata_by_role = {
         item["link_type"]: item["metadata_json"]
         for item in artifact_service.report_component_creates
@@ -2643,6 +2668,7 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
     assert "sk-test" not in serialized
     assert len(serialized) < 20000
 
+
 async def test_security_pentest_execute_rejects_invalid_report_bundle_before_return(
     tmp_path: Path,
 ) -> None:
@@ -2659,6 +2685,38 @@ async def test_security_pentest_execute_rejects_invalid_report_bundle_before_ret
     )
 
     with pytest.raises(TemporalArtifactValidationError, match="unsafe report bundle"):
+        await activities._security_pentest_execute_trusted_internal(
+            _pentest_activity_payload(artifacts_dir=str(tmp_path / "artifacts"))
+        )
+
+
+async def test_security_pentest_execute_rejects_missing_report_bundle_files(
+    tmp_path: Path,
+) -> None:
+    class _MissingReportLauncher(_FakePentestLauncher):
+        async def run(self, request: object) -> WorkloadResult:
+            result = await super().run(request)
+            workload_request = getattr(request, "request", request)
+            artifacts_dir = getattr(workload_request, "artifacts_dir", None)
+            assert artifacts_dir is not None
+            (
+                Path(str(artifacts_dir))
+                / "pentest"
+                / "findings"
+                / "findings.summary.md"
+            ).unlink()
+            return result
+
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_FakePentestArtifactService({}),
+        workload_launcher=_MissingReportLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    with pytest.raises(
+        TemporalArtifactValidationError,
+        match="Pentest summary report file was not found",
+    ):
         await activities._security_pentest_execute_trusted_internal(
             _pentest_activity_payload(artifacts_dir=str(tmp_path / "artifacts"))
         )

@@ -5351,15 +5351,22 @@ class TemporalAgentRuntimeActivities:
             ),
             **{str(key): int(value) for key, value in severity_counts.items()},
         }
-        structured_path = Path(runtime_paths.normalizer_input_file)
-        if structured_path.is_file():
-            structured_payload: bytes | Mapping[str, Any] = structured_path.read_bytes()
-        else:
-            structured_payload = publication.get("normalized_findings", {})
+        structured_payload = json.dumps(
+            publication.get("normalized_findings", {}),
+            sort_keys=True,
+        ).encode("utf-8")
         pentest_artifact_root = Path(request.artifacts_dir) / "pentest"
         report_path = pentest_artifact_root / "findings" / "findings.report.md"
         summary_path = pentest_artifact_root / "findings" / "findings.summary.md"
         evidence_path = pentest_artifact_root / "evidence" / "bundle.tar.zst"
+        missing_report_files = [
+            (report_path, "Pentest primary report file was not found"),
+            (summary_path, "Pentest summary report file was not found"),
+            (evidence_path, "Pentest evidence bundle file was not found"),
+        ]
+        for file_path, error_message in missing_report_files:
+            if not file_path.is_file():
+                raise TemporalArtifactValidationError(error_message)
         report_bundle = await self._artifact_service.publish_report_bundle(
             principal=principal,
             namespace=info.namespace if info is not None else "default",
@@ -7074,7 +7081,11 @@ class TemporalAgentRuntimeActivities:
             primary_report_ref = {"artifact_ref_v": 1, "artifact_id": primary_ref}
             summary_report_ref = {"artifact_ref_v": 1, "artifact_id": summary_ref}
             structured_report_ref = {"artifact_ref_v": 1, "artifact_id": structured_ref}
-            evidence_report_refs = [{"artifact_ref_v": 1, "artifact_id": evidence_ref}]
+            evidence_report_refs = (
+                [{"artifact_ref_v": 1, "artifact_id": evidence_ref}]
+                if evidence_ref
+                else []
+            )
 
         def published_ref_text(name: str, fallback: str | None) -> str | None:
             value = published_refs.get(name)
@@ -7091,7 +7102,6 @@ class TemporalAgentRuntimeActivities:
             published_ref_text("runtime.diagnostics", diagnostics_ref) or diagnostics_ref
         )
         summary_ref = published_ref_text("report.summary", summary_ref) or summary_ref
-        primary_ref = published_ref_text("report.primary", primary_ref) or primary_ref
         structured_ref = (
             published_ref_text("report.structured", structured_ref) or structured_ref
         )
@@ -7112,8 +7122,10 @@ class TemporalAgentRuntimeActivities:
             findings_artifact_ref=structured_ref,
             evidence_bundle_artifact_ref=evidence_ref,
             provider_snapshot_artifact_ref=provider_snapshot_ref,
-            findings_count=finding_summary["findings_count"],
-            confirmed_findings_count=finding_summary["confirmed_findings_count"],
+            findings_count=finding_summary.get("findings_count", 0),
+            confirmed_findings_count=finding_summary.get(
+                "confirmed_findings_count", 0
+            ),
         )
         output.update(result.model_dump(mode="json"))
         output["status"] = "completed"
@@ -7136,9 +7148,9 @@ class TemporalAgentRuntimeActivities:
         }
         output["severity_counts"] = severity_counts
         output["counts"] = {
-            "total": finding_summary["findings_count"],
-            "confirmed": finding_summary["confirmed_findings_count"],
-            "high_or_critical": finding_summary["high_or_critical_count"],
+            "total": finding_summary.get("findings_count", 0),
+            "confirmed": finding_summary.get("confirmed_findings_count", 0),
+            "high_or_critical": finding_summary.get("high_or_critical_count", 0),
             **severity_counts,
         }
         if isinstance(report_bundle, Mapping):
