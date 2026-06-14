@@ -4936,6 +4936,10 @@ export interface components {
             hasReport: boolean;
             latestReportRef?: components["schemas"]["CompactArtifactRefModel"] | null;
             latestReportSummaryRef?: components["schemas"]["CompactArtifactRefModel"] | null;
+            /** Reportartifactrefs */
+            reportArtifactRefs?: {
+                [key: string]: components["schemas"]["CompactArtifactRefModel"];
+            } | null;
             /** Reporttype */
             reportType?: string | null;
             /** Reportstatus */
