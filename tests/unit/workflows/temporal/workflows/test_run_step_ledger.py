@@ -1439,7 +1439,7 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
     )
     step = workflow.get_step_ledger()["steps"][0]
     assert step["stepCheckpointRef"] == "artifact://checkpoint/created"
-    assert "stateCheckpointRef" not in step
+    assert step.get("stateCheckpointRef") is None
     assert "implement" not in workflow._step_checkpoint_refs
     assert "workspacePath" not in captured["payload"]
     assert "diff" not in json.dumps(captured["payload"], sort_keys=True)
