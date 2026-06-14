@@ -1521,8 +1521,17 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
     workflow = MoonMindRunWorkflow()
     workflow._owner_id = "owner-1"
     workflow._repo = "MoonLadderStudios/MoonMind"
+    step_execution_artifact_ids = count(1)
     child_calls = 0
     create_pr_called = False
+    executed_steps: list[str] = []
+
+    def _request_step_id(request: object) -> str:
+        parameters = getattr(request, "parameters", {})
+        metadata = parameters.get("metadata") if isinstance(parameters, dict) else {}
+        moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
+        step_ledger = moonmind.get("stepLedger") if isinstance(moonmind, dict) else {}
+        return str(step_ledger.get("logicalStepId") or "")
 
     async def fake_execute_activity(
         activity_type: str,
@@ -1533,6 +1542,13 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
         if activity_type == "repo.create_pr":
             create_pr_called = True
             return {"url": "https://github.com/MoonLadderStudios/MoonMind/pull/999"}
+        if activity_type == "artifact.create":
+            artifact_create_result = _step_execution_artifact_create_result(
+                payload,
+                step_execution_artifact_ids,
+            )
+            if artifact_create_result is not None:
+                return artifact_create_result
         if activity_type == "artifact.read":
             return json.dumps(
                 {
@@ -1553,6 +1569,9 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
                         _agent_runtime_step(
                             "tpl:jira-orchestrate:1.0.0:02:verify"
                         ),
+                        _agent_runtime_step(
+                            "tpl:jira-orchestrate:1.0.0:03:notify"
+                        ),
                     ],
                     "edges": [
                         {
@@ -1571,6 +1590,14 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
     ) -> object:
         nonlocal child_calls
         child_calls += 1
+        step_id = _request_step_id(_args)
+        executed_steps.append(step_id)
+        if step_id.endswith(":03:notify"):
+            return {
+                "summary": "Independent notification completed.",
+                "metadata": {"push_status": "not_requested"},
+                "output_refs": [],
+            }
         return {
             "summary": "codex app-server turn/completed produced no assistant output",
             "failureClass": "execution_error",
@@ -1626,6 +1653,8 @@ async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(
     )
 
     assert child_calls >= 1
+    assert any(step.endswith(":03:notify") for step in executed_steps)
+    assert not any(step.endswith(":02:verify") for step in executed_steps)
     assert not create_pr_called
     assert workflow._publish_status == "not_required"
     assert status == "failed"

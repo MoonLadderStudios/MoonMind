@@ -5427,7 +5427,6 @@ class MoonMindRunWorkflow:
                     continue
                 if (
                     publish_mode in {"pr", "branch"}
-                    and result_status is not None
                     and result_status != "COMPLETED"
                 ):
                     self._plan_blocked_message = (
@@ -5443,14 +5442,9 @@ class MoonMindRunWorkflow:
                     require_pull_request_url = False
                     pull_request_url = None
                     self._summary = self._plan_blocked_message
-                    self._mark_remaining_plan_steps_skipped(
-                        ordered_nodes=ordered_nodes,
-                        completed_index=index - 1,
-                        summary=self._plan_blocked_message,
-                    )
                     self._refresh_step_readiness(updated_at=workflow.now())
                     self._update_memo()
-                    break
+                    continue
                 continue
 
             self._mark_step_terminal(
