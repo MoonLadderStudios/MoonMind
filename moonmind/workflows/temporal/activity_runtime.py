@@ -5539,7 +5539,7 @@ class TemporalAgentRuntimeActivities:
             workflow_id = request.agent_run_id
             run_id = f"{request.step_id}-{request.attempt}"
 
-        principal = "system:agent_runtime"
+        principal = request.principal_id
         common_metadata = {
             "producer": "activity:security.pentest.execute",
             "subject": request.target,
@@ -5559,7 +5559,7 @@ class TemporalAgentRuntimeActivities:
         ) -> dict[str, Any] | None:
             file_path = Path(path)
             try:
-                payload = file_path.read_bytes()
+                payload = await asyncio.to_thread(file_path.read_bytes)
             except OSError:
                 if required:
                     raise
@@ -5643,6 +5643,19 @@ class TemporalAgentRuntimeActivities:
             "counts": counts,
         }
         workspace_root = Path(paths.workspace_root)
+        primary_payload = await asyncio.to_thread(
+            (workspace_root / "findings" / "findings.report.md").read_bytes
+        )
+        summary_payload = await asyncio.to_thread(
+            (workspace_root / "findings" / "findings.summary.md").read_bytes
+        )
+        structured_payload = await asyncio.to_thread(
+            Path(paths.normalizer_input_file).read_bytes
+        )
+        evidence_payload = await asyncio.to_thread(
+            (workspace_root / "evidence" / "bundle.tar.zst").read_bytes
+        )
+
         bundle = await self._artifact_service.publish_report_bundle(
             principal=principal,
             namespace=namespace,
@@ -5656,7 +5669,7 @@ class TemporalAgentRuntimeActivities:
             attempt=request.attempt,
             scope=request.scope_artifact_ref,
             primary={
-                "payload": (workspace_root / "findings" / "findings.report.md").read_bytes(),
+                "payload": primary_payload,
                 "content_type": "text/markdown",
                 "label": "Pentest primary report",
                 "metadata": {
@@ -5668,7 +5681,7 @@ class TemporalAgentRuntimeActivities:
                 },
             },
             summary={
-                "payload": (workspace_root / "findings" / "findings.summary.md").read_bytes(),
+                "payload": summary_payload,
                 "content_type": "text/markdown",
                 "label": "Pentest report summary",
                 "metadata": {
@@ -5680,7 +5693,7 @@ class TemporalAgentRuntimeActivities:
                 },
             },
             structured={
-                "payload": Path(paths.normalizer_input_file).read_bytes(),
+                "payload": structured_payload,
                 "content_type": "application/json",
                 "label": "Pentest structured findings",
                 "metadata": {
@@ -5693,7 +5706,7 @@ class TemporalAgentRuntimeActivities:
             },
             evidence=[
                 {
-                    "payload": (workspace_root / "evidence" / "bundle.tar.zst").read_bytes(),
+                    "payload": evidence_payload,
                     "content_type": "application/zstd",
                     "label": "Pentest restricted evidence bundle",
                     "metadata": {

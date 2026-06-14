@@ -2273,7 +2273,7 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
                     namespace="default",
                     workflow_id="run-123",
                     run_id="step-pentest-1",
-                    principal="system:agent_runtime",
+                    principal="user-security",
                     link_type=link_type,
                     latest_only=True,
                 )
@@ -2343,7 +2343,7 @@ async def test_security_pentest_serialized_result_and_metadata_stay_compact_and_
                 namespace="default",
                 workflow_id="run-123",
                 run_id="step-pentest-1",
-                principal="system:agent_runtime",
+                principal="user-security",
                 latest_only=False,
             )
             metadata_payload = json.dumps(
