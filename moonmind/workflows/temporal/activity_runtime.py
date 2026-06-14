@@ -184,6 +184,7 @@ from moonmind.workflows.temporal.artifacts import (
     ExecutionRef,
     TemporalArtifactError,
     TemporalArtifactService,
+    TemporalArtifactValidationError,
     build_artifact_ref,
 )
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
