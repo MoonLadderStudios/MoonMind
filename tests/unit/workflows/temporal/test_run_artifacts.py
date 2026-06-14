@@ -7,6 +7,11 @@ from typing import Any, Callable
 import pytest
 
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityRetries,
+    TemporalActivityRoute,
+    TemporalActivityTimeouts,
+)
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 def _normalize_payload(payload: Any) -> dict[str, Any]:
@@ -1096,6 +1101,306 @@ async def test_jira_blocker_recheck_wait_honors_pause_before_activity(
     assert workflow._jira_blocker_wait_started_at is None
     assert workflow._jira_blocker_wait_issue_keys == []
     assert workflow._jira_blocker_wait_summary is None
+
+
+def test_compact_jira_blocker_recheck_payload_strips_large_context() -> None:
+    workflow = MoonMindRunWorkflow()
+    payload = {
+        "registry_snapshot_ref": "art_registry",
+        "principal": "owner-1",
+        "invocation_payload": {
+            "id": "check-blockers",
+            "tool": {
+                "type": "skill",
+                "name": "jira.check_blockers",
+                "version": "1.0",
+            },
+            "skill": {"name": "jira.check_blockers", "version": "1.0"},
+            "inputs": {
+                "targetIssueKey": "MM-686",
+                "blockerPreflight": {
+                    "targetIssueKey": "MM-686",
+                    "linkType": "Blocks",
+                },
+                "instructions": "large prompt" * 100,
+                "previousOutputs": {"summary": "large previous output" * 100},
+            },
+            "options": {"dryRun": False},
+        },
+        "context": {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "node_id": "check-blockers",
+        },
+        "idempotency_key": "base-key",
+    }
+
+    compact = workflow._compact_jira_blocker_recheck_payload(payload)
+
+    invocation = compact["invocation_payload"]
+    assert invocation["tool"] == payload["invocation_payload"]["tool"]
+    assert invocation["skill"] == payload["invocation_payload"]["skill"]
+    assert invocation["options"] == payload["invocation_payload"]["options"]
+    assert invocation["inputs"] == {
+        "targetIssueKey": "MM-686",
+        "blockerPreflight": {
+            "targetIssueKey": "MM-686",
+            "linkType": "Blocks",
+        },
+        "linkType": "Blocks",
+    }
+    assert "previousOutputs" not in invocation["inputs"]
+    assert "instructions" not in invocation["inputs"]
+    assert compact["registry_snapshot_ref"] == "art_registry"
+    assert compact["principal"] == "owner-1"
+    assert compact["context"] == payload["context"]
+
+
+def test_jira_blocker_wait_coalesces_unchanged_observations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    published: list[str] = []
+    waiting_rows: list[str] = []
+    metadata_updates: list[str] = []
+    blocked_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "blocked",
+            "blockingIssues": [
+                {"issueKey": "MM-685", "status": "In Progress", "done": False}
+            ],
+            "summary": "MM-686 is blocked by MM-685.",
+        },
+    }
+    changed_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "blocked",
+            "blockingIssues": [
+                {"issueKey": "MM-685", "status": "Review", "done": False}
+            ],
+            "summary": "MM-686 is still blocked by MM-685.",
+        },
+    }
+
+    def fake_set_state(self: MoonMindRunWorkflow, state: str, summary: str) -> None:
+        self._state = state
+        self._summary = summary
+        published.append(summary)
+
+    def fake_mark_waiting(
+        _logical_step_id: str,
+        **kwargs: Any,
+    ) -> None:
+        waiting_rows.append(str(kwargs.get("summary") or ""))
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", fake_set_state)
+    monkeypatch.setattr(workflow, "_mark_step_waiting", fake_mark_waiting)
+    monkeypatch.setattr(
+        workflow,
+        "_update_search_attributes",
+        lambda: metadata_updates.append("search"),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_update_memo",
+        lambda: metadata_updates.append("memo"),
+    )
+
+    workflow._enter_jira_blocker_wait(
+        node_id="check-blockers",
+        execution_result=blocked_result,
+    )
+    workflow._enter_jira_blocker_wait(
+        node_id="check-blockers",
+        execution_result=blocked_result,
+    )
+    workflow._enter_jira_blocker_wait(
+        node_id="check-blockers",
+        execution_result=changed_result,
+    )
+
+    assert published == [
+        "Workflow blocked by plan step: MM-686 is blocked by MM-685.",
+        "Workflow blocked by plan step: MM-686 is still blocked by MM-685.",
+    ]
+    assert waiting_rows == published
+    assert metadata_updates == ["search", "memo", "search", "memo"]
+
+
+@pytest.mark.asyncio
+async def test_jira_blocker_wait_rechecks_with_compact_payload_and_no_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    captured_payloads: list[dict[str, Any]] = []
+    manifest_calls = 0
+    blocked_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "blocked",
+            "blockingIssues": [
+                {"issueKey": "MM-685", "status": "In Progress", "done": False}
+            ],
+            "summary": "MM-686 is blocked by MM-685.",
+        },
+    }
+    continue_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "continue",
+            "blockingIssues": [],
+            "summary": "All Jira blockers are Done.",
+        },
+    }
+    execute_payload = {
+        "registry_snapshot_ref": "art_registry",
+        "principal": "owner-1",
+        "invocation_payload": {
+            "id": "check-blockers",
+            "tool": {
+                "type": "skill",
+                "name": "jira.check_blockers",
+                "version": "1.0",
+            },
+            "skill": {"name": "jira.check_blockers", "version": "1.0"},
+            "inputs": {
+                "targetIssueKey": "MM-686",
+                "blockerPreflight": {
+                    "targetIssueKey": "MM-686",
+                    "linkType": "Blocks",
+                },
+                "instructions": "large prompt" * 100,
+                "previousOutputs": {"summary": "large previous output" * 100},
+            },
+            "options": {},
+        },
+        "context": {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "node_id": "check-blockers",
+        },
+        "idempotency_key": "base-key",
+    }
+    route = TemporalActivityRoute(
+        activity_type="mm.tool.execute",
+        task_queue="mm.activity.integrations",
+        fleet="integrations",
+        capability_class="tools",
+        timeouts=TemporalActivityTimeouts(
+            start_to_close_seconds=30,
+            schedule_to_close_seconds=30,
+        ),
+        retries=TemporalActivityRetries(max_attempts=1, max_interval_seconds=1),
+    )
+
+    async def fake_execute_activity(
+        _activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured_payloads.append(_normalize_payload(payload))
+        return blocked_result if len(captured_payloads) == 1 else continue_result
+
+    async def fake_record_manifest(*_args: Any, **_kwargs: Any) -> None:
+        nonlocal manifest_calls
+        manifest_calls += 1
+
+    async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _timeout_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "info",
+        lambda: type(
+            "WorkflowInfo",
+            (),
+            {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+        )(),
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_record_step_execution_manifest",
+        fake_record_manifest,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_wait_if_paused_at_safe_boundary",
+        fake_noop_async,
+    )
+
+    result, skipped = await workflow._wait_for_jira_blocker_resolution(
+        execution_result=blocked_result,
+        node_id="check-blockers",
+        tool_name="jira.check_blockers",
+        tool_type="skill",
+        failure_mode="FAIL_FAST",
+        route=route,
+        execute_payload=execute_payload,
+    )
+
+    assert skipped is False
+    assert result == continue_result
+    assert manifest_calls == 0
+    assert len(captured_payloads) == 2
+    for index, payload in enumerate(captured_payloads, start=1):
+        inputs = payload["invocation_payload"]["inputs"]
+        assert inputs == {
+            "targetIssueKey": "MM-686",
+            "blockerPreflight": {
+                "targetIssueKey": "MM-686",
+                "linkType": "Blocks",
+            },
+            "linkType": "Blocks",
+        }
+        assert "previousOutputs" not in inputs
+        assert "instructions" not in inputs
+        assert payload["idempotency_key"] == (
+            f"base-key_jira_blocker_recheck_{index}"
+        )
 
 
 @pytest.mark.asyncio

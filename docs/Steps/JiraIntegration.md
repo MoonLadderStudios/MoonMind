@@ -50,6 +50,20 @@ MoonMind should support Jira in three complementary ways:
    - Merge automation may transition or comment on a Jira issue through trusted Jira activities.
    - Publishing and post-merge completion use exact issue references, not fuzzy issue guessing.
 
+### 2.1 Jira blocker wait history
+
+Trusted Jira blocker checks may wait for external Jira state to change for
+minutes or hours. These waits must follow the Temporal history-management policy
+in [`docs/Temporal/TemporalArchitecture.md`](../Temporal/TemporalArchitecture.md#17-continue-as-new-and-history-management).
+
+In particular, repeated `jira.check_blockers` rechecks must use compact inputs
+containing the target issue key and blocker-link options, not the original
+prompt, large previous outputs, or full step context. The workflow should record
+the first blocked observation, meaningful blocker-state changes, operator
+actions, and the final unblocked or terminal outcome. Unchanged "still blocked"
+samples should be coalesced into bounded current-state metadata instead of
+creating a full artifact and step-attempt record every polling cycle.
+
 ---
 
 ## 3. Non-Negotiable Security Rule

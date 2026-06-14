@@ -413,6 +413,18 @@ Continue-As-New must preserve:
 - stable business correlation identifiers
 - any durable request context needed for safe retry/resume
 
+Each workflow type that can wait or poll repeatedly must define:
+
+- the wait-cycle or history threshold that triggers automatic Continue-As-New,
+- the compact carry-forward model used after continuation,
+- which no-op observations are coalesced instead of written as full step
+  attempts,
+- which state changes still require artifacts, memo updates, Search Attribute
+  updates, or step-ledger updates,
+- how the UI and diagnostics show first-observed, latest-observed, and terminal
+  wait evidence without requiring every unchanged poll to remain in workflow
+  history.
+
 ---
 
 ## 9. Timeouts and retry posture
