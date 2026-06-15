@@ -312,6 +312,41 @@ def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["title"] == "First line with spaces"
 
+def test_promote_proposal_rejects_stale_step_graph_metadata(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, execution_service = client
+    proposal = _build_proposal()
+    final_request = {
+        "payload": {
+            "repository": "Moon/Repo",
+            "workflow": {
+                "instructions": "Run ordered steps.",
+                "steps": [
+                    {
+                        "id": "implement",
+                        "instructions": "Implement.",
+                        "dependsOn": ["plan"],
+                    },
+                    {"id": "plan", "instructions": "Plan."},
+                ],
+            },
+        }
+    }
+    service.promote_proposal.return_value = (proposal, final_request)
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/promote",
+        json={"priority": 5},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "invalid_execution_request"
+    assert "workflow.steps[].dependsOn" in detail["message"]
+    assert "ordered by their steps[] position" in detail["message"]
+    execution_service.create_execution.assert_not_awaited()
+
 def test_promote_proposal_rejects_workflow_create_request_override(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
