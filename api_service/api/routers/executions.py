@@ -5707,6 +5707,38 @@ def _resolve_workflow_publish_payload(
     resolved["mode"] = publish_mode
     return resolved
 
+_GENERATED_JIRA_PR_HEAD_BRANCH_RE = re.compile(
+    r"^moonmind/jira-(?:orchestrate|implement)-[a-z][a-z0-9]*-\d+(?:[-_].*)?$",
+    re.IGNORECASE,
+)
+
+
+def _validate_pr_base_branch_submission(
+    *,
+    publish_payload: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+    git_payload: Mapping[str, Any],
+) -> None:
+    if str(publish_payload.get("mode") or "").strip().lower() != "pr":
+        return
+
+    branch = str(
+        git_payload.get("branch")
+        or git_payload.get("startingBranch")
+        or task_payload.get("branch")
+        or task_payload.get("startingBranch")
+        or ""
+    ).strip()
+    if not branch:
+        return
+
+    if _GENERATED_JIRA_PR_HEAD_BRANCH_RE.match(branch):
+        raise _invalid_workflow_request(
+            "payload.workflow.git.branch is the PR base branch for publishMode 'pr', "
+            "but it looks like a generated Jira work/head branch. Use an existing "
+            "base branch such as 'main'; MoonMind creates the PR head branch separately."
+        )
+
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
@@ -7046,6 +7078,11 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             "payload.workflow.targetBranch is not supported; use payload.workflow.git.branch."
         )
+    _validate_pr_base_branch_submission(
+        publish_payload=publish_payload,
+        task_payload=task_payload,
+        git_payload=git_payload,
+    )
     if git_payload:
         normalized_git_payload: dict[str, str] = {}
         for git_key in ("startingBranch", "branch"):
