@@ -2029,7 +2029,7 @@ class ExecutionActionCapabilityModel(BaseModel):
     can_approve: bool = Field(False, alias="canApprove")
     can_pause: bool = Field(False, alias="canPause")
     can_resume: bool = Field(False, alias="canResume")
-    can_recover_from_failed_step: bool = Field(
+    can_failed_step_resume: bool = Field(
         False, alias="canResumeFromFailedStep"
     )
     can_cancel: bool = Field(False, alias="canCancel")
