@@ -814,13 +814,27 @@ def _requires_story_source_reference(
     story_output: Mapping[str, Any],
     fallback_path: str,
 ) -> bool:
-    raw_policy = _string(
-        story_output.get("sourceReferencePolicy")
-        or story_output.get("source_reference_policy")
-        or inputs.get("sourceReferencePolicy")
-        or inputs.get("source_reference_policy")
-    ).lower()
+    raw_value = None
+    policy_provided = False
+    for container in (story_output, inputs):
+        for key in ("sourceReferencePolicy", "source_reference_policy"):
+            if key in container:
+                raw_value = container.get(key)
+                policy_provided = True
+                break
+        if policy_provided:
+            break
+    if raw_value is None:
+        return bool(fallback_path)
+    if isinstance(raw_value, bool):
+        return raw_value
+
+    raw_policy = str(raw_value).strip().lower()
     if raw_policy in {
+        "true",
+        "yes",
+        "1",
+        "on",
         "require",
         "required",
         "source_required",
@@ -829,6 +843,10 @@ def _requires_story_source_reference(
     }:
         return True
     if raw_policy in {
+        "false",
+        "no",
+        "0",
+        "off",
         "allow_missing",
         "inline",
         "optional",
@@ -1951,10 +1969,7 @@ async def create_jira_issues_from_stories(
             )
         raise ValueError(reason)
 
-    story_breakdown_path = _string(
-        inputs.get("storyBreakdownPath") or story_output.get("storyBreakdownPath")
-    )
-    if story_breakdown_path and _requires_story_source_reference(
+    if _requires_story_source_reference(
         inputs=inputs,
         story_output=story_output,
         fallback_path=breakdown_source_path,

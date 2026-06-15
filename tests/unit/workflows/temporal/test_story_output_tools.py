@@ -824,7 +824,6 @@ async def test_create_jira_issues_blocks_story_breakdown_when_source_reference_r
 
     result = await create_jira_issues_from_stories(
         {
-            "storyBreakdownPath": "artifacts/story-breakdowns/example/stories.json",
             "sourceReferencePolicy": "required",
             "storyOutput": {
                 "mode": "jira",
@@ -843,6 +842,28 @@ async def test_create_jira_issues_blocks_story_breakdown_when_source_reference_r
     assert result.outputs["storyOutput"]["status"] == "fallback"
     assert "requires sourceReference.path" in result.outputs["storyOutput"]["reason"]
     assert "STORY-001" in result.outputs["storyOutput"]["reason"]
+
+@pytest.mark.parametrize("policy", [True, "true", "yes", "1", "on"])
+def test_requires_story_source_reference_accepts_truthy_policy_values(policy):
+    assert (
+        story_tools._requires_story_source_reference(
+            inputs={"sourceReferencePolicy": policy},
+            story_output={},
+            fallback_path="",
+        )
+        is True
+    )
+
+@pytest.mark.parametrize("policy", [False, "false", "no", "0", "off"])
+def test_requires_story_source_reference_accepts_falsy_policy_values(policy):
+    assert (
+        story_tools._requires_story_source_reference(
+            inputs={},
+            story_output={"sourceReferencePolicy": policy},
+            fallback_path="docs/Designs/RuntimeTypes.md",
+        )
+        is False
+    )
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_accepts_string_source_reference_from_breakdown():

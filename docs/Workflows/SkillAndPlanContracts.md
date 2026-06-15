@@ -547,7 +547,9 @@ creation. Direct pasted declarative text is also valid input: if no source
 document path exists, Jira creation proceeds and issue mappings report an empty
 `sourceDesignPath`. Callers that require every Jira issue to carry document
 traceability must set `sourceReferencePolicy: "required"` on the tool inputs or
-`storyOutput`.
+`storyOutput`. The policy also accepts booleans and standard truthy/falsy
+strings such as `"true"` and `"false"` for callers that produce typed or form
+encoded payloads.
 
 If Jira output succeeds, workflow PR output is skipped because Jira is the requested output. If Jira output cannot run or fails and fallback is enabled, the tool returns fallback metadata pointing to the existing `artifacts/story-breakdowns/...` handoff so normal branch/PR publishing can expose that docs output.
 
