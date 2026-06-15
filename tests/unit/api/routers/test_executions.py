@@ -11111,6 +11111,35 @@ def test_action_endpoints_reject_requests_when_actions_disabled(
         assert cancel_response.status_code == 403
         assert cancel_response.json()["detail"]["code"] == "actions_disabled"
 
+def test_action_endpoints_reject_non_owner_operator(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id="other-user"
+    )
+    service.describe_cancel_target_execution.return_value = _build_execution_record(
+        owner_id="other-user"
+    )
+
+    update_response = test_client.post(
+        "/api/executions/mm:wf-1/update", json={"updateName": "RequestRerun"}
+    )
+    signal_response = test_client.post(
+        "/api/executions/mm:wf-1/signal", json={"signalName": "pause"}
+    )
+    cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
+
+    for response in (update_response, signal_response, cancel_response):
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "execution_not_found"
+
+    service.update_execution.assert_not_awaited()
+    service.signal_execution.assert_not_awaited()
+    service.cancel_execution.assert_not_awaited()
+
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     """Regression: 'cancelled' (British) must not leak into the Literal('canceled') field."""
     from api_service.db.models import TemporalExecutionCloseStatus
