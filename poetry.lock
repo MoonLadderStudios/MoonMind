@@ -3040,19 +3040,19 @@ files = [
 
 [[package]]
 name = "mem0ai"
-version = "2.0.4"
+version = "2.0.6"
 description = "Long-term memory for AI Agents"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "mem0ai-2.0.4-py3-none-any.whl", hash = "sha256:920a39474bf4c2a5a7d4bb814e237aacd699c435d8e20db257c3b43568e7175e"},
-    {file = "mem0ai-2.0.4.tar.gz", hash = "sha256:0cffdbdaa961aa4371c707e5f90f25961ae0cf170169abf6aaf6adba14c6bca1"},
+    {file = "mem0ai-2.0.6-py3-none-any.whl", hash = "sha256:cc71ba86aa1a94c5d8cea64b79f15574779f083cb75c688a49582d8c0f3cd2f0"},
+    {file = "mem0ai-2.0.6.tar.gz", hash = "sha256:04c47e8ba784034b9e7d9b775cfdac3b212dcba5d90d82783c73f798b687fc74"},
 ]
 
 [package.dependencies]
 openai = ">=1.90.0"
-posthog = ">=4.5.0"
+posthog = ">=7.14.0"
 protobuf = ">=5.29.6,<7.0.0"
 pydantic = ">=2.7.3"
 pytz = ">=2024.1"
