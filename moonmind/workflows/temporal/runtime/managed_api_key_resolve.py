@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from sqlalchemy import select
 
@@ -28,6 +31,7 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
 )
 _MANAGED_GHCR_PULL_USER_SLUGS: tuple[str, ...] = ("GHCR_PULL_USER",)
 _MANAGED_GHCR_PULL_TOKEN_SLUGS: tuple[str, ...] = ("GHCR_PULL_TOKEN",)
+_GITHUB_API_TIMEOUT_SECONDS = 10.0
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +118,40 @@ async def _resolve_first_active_managed_secret_slug(
                 return candidate
     return None
 
+def _github_user_api_url() -> str:
+    api_base = os.environ.get("GITHUB_API_URL", "https://api.github.com").strip()
+    if not api_base:
+        api_base = "https://api.github.com"
+    return api_base.rstrip("/") + "/user"
+
+def _fetch_github_login_for_token(token: str) -> str | None:
+    request = Request(
+        _github_user_api_url(),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "MoonMind-GHCR-Pull-Auth",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urlopen(request, timeout=_GITHUB_API_TIMEOUT_SECONDS) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    login = str(payload.get("login") or "").strip()
+    return login or None
+
+async def _resolve_github_login_for_token(token: str) -> str | None:
+    normalized = str(token or "").strip()
+    if not normalized:
+        return None
+    try:
+        return await asyncio.to_thread(_fetch_github_login_for_token, normalized)
+    except (HTTPError, URLError, TimeoutError, ValueError, OSError):
+        logger.warning(
+            "Failed to resolve GitHub username for GHCR pull authentication",
+            exc_info=True,
+        )
+        return None
+
 async def resolve_ghcr_pull_credentials_for_launch(
     environment: Mapping[str, str] | None = None,
 ) -> tuple[str, str] | None:
@@ -183,10 +221,20 @@ async def resolve_ghcr_pull_credentials_for_launch(
             "Failed to resolve GHCR pull credentials from managed secrets store",
             exc_info=True,
         )
-        return None
+        stored_user, stored_token = None, None
 
     if stored_user and stored_token:
         return stored_user.strip(), stored_token.strip()
+
+    github_token = await resolve_github_token_for_launch(launch_environment)
+    if github_token:
+        github_user = await _resolve_github_login_for_token(github_token)
+        if github_user:
+            return github_user, github_token
+        logger.warning(
+            "GitHub token is configured but could not be converted into GHCR "
+            "pull credentials because the GitHub username could not be resolved"
+        )
     return None
 
 async def resolve_github_token_for_launch(

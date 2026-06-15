@@ -185,6 +185,48 @@ async def test_resolve_ghcr_pull_credentials_uses_complete_env_pair(
         }
     ) == ("pull-user", "pull-token")
 
+async def test_resolve_ghcr_pull_credentials_uses_github_token_when_pair_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
+    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+
+    async def _fake_github_login(_token: str) -> str:
+        return "github-user"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_github_login_for_token",
+        _fake_github_login,
+    )
+
+    assert await resolve_ghcr_pull_credentials_for_launch(
+        {"GITHUB_TOKEN": "github-token"}
+    ) == ("github-user", "github-token")
+
+async def test_resolve_ghcr_pull_credentials_requires_complete_pair_before_github_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
+    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+
+    async def _unexpected_github_login(_token: str) -> str:
+        raise AssertionError("GitHub fallback should not run")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_github_login_for_token",
+        _unexpected_github_login,
+    )
+
+    with pytest.raises(ValueError, match="requires both user and token"):
+        await resolve_ghcr_pull_credentials_for_launch(
+            {
+                "GHCR_PULL_USER": "pull-user",
+                "GITHUB_TOKEN": "github-token",
+            }
+        )
+
 async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -519,8 +519,10 @@ class DockerCodexManagedSessionController:
         request: LaunchCodexManagedSessionRequest,
         session_environment: dict[str, str],
     ) -> dict[str, Any]:
+        credential_environment = dict(request.environment)
+        credential_environment.update(session_environment)
         credentials = await resolve_ghcr_pull_credentials_for_launch(
-            session_environment
+            credential_environment
         )
         diagnostics: dict[str, Any] = {
             "pullAuth": "anonymous",

@@ -216,6 +216,65 @@ async def test_sidecar_bootstrap_uses_anonymous_pull_auth_when_ghcr_secret_absen
 
 
 @pytest.mark.asyncio
+async def test_sidecar_bootstrap_uses_github_token_for_ghcr_when_pull_secret_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = _request(workspace_root).model_copy(
+        update={
+            "environment": {
+                **_request(workspace_root).environment,
+                "GITHUB_TOKEN": "github-token",
+            }
+        }
+    )
+
+    async def _fake_github_login(_token: str) -> str:
+        return "github-user"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_github_login_for_token",
+        _fake_github_login,
+    )
+
+    _controller, store, commands = await _launch_with_fake_docker(
+        request,
+        tmp_path=tmp_path,
+    )
+
+    config_path = Path(request.session_workspace_path) / ".docker" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config["auths"]["ghcr.io"]["auth"] == base64.b64encode(
+        b"github-user:github-token"
+    ).decode("ascii")
+
+    manifest_call = next(
+        item for item in commands if item[0][:3] == ("docker", "manifest", "inspect")
+    )
+    assert manifest_call[1] == {"DOCKER_CONFIG": str(config_path.parent)}
+
+    agent_run = next(
+        command
+        for command, _env in commands
+        if command[:2] == ("docker", "run")
+        and "moonmind-session-sess-1-agent" in command
+    )
+    rendered_agent_run = " ".join(agent_run)
+    assert f"DOCKER_CONFIG={request.session_workspace_path}/.docker" in agent_run
+    assert "GITHUB_TOKEN=github-token" not in rendered_agent_run
+    assert "github-token" not in rendered_agent_run
+
+    record = store.load(request.session_id)
+    assert record is not None
+    docker_pull = record.metadata["capabilities"]["dockerPull"]
+    assert docker_pull["pullAuth"] == "authenticated"
+    assert docker_pull["manifestProbe"]["pullAuth"] == "authenticated"
+    assert "github-token" not in json.dumps(record.metadata)
+
+
+@pytest.mark.asyncio
 async def test_sidecar_bootstrap_scrubs_ghcr_env_credentials_from_agent_container(
     tmp_path: Path,
 ) -> None:
