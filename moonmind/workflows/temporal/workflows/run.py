@@ -11025,7 +11025,6 @@ class MoonMindRunWorkflow:
                 **self._execute_kwargs_for_route(artifact_write_route),
             )
             self._summary_ref = resolved_artifact_id
-            self._update_memo()
         except Exception as exc:
             self._get_logger().warning(f"Failed to generate finish summary: {exc}")
 

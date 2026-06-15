@@ -510,6 +510,7 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
             "pullRequestUrl": "https://github.com/MoonLadderStudios/Tactics/pull/1845",
         },
     }
+    workflow._set_state("failed", summary="blocked")
     assert captured_memo[-1]["summary_artifact_ref"] == "art_summary_1"
 
 
