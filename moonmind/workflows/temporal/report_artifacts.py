@@ -37,6 +37,8 @@ REPORT_METADATA_KEYS = frozenset(
         "finding_counts",
         "severity_counts",
         "counts",
+        "normalization_status",
+        "quarantined_findings_count",
         "step_id",
         "attempt",
         "scope",
