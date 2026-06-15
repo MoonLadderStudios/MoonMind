@@ -55,13 +55,18 @@ def _make_supervisor(
     supervisor = ManagedRunSupervisor(store, streamer)
     return supervisor, store, storage
 
-def _save_record(store: ManagedRunStore, run_id: str) -> ManagedRunRecord:
+def _save_record(
+    store: ManagedRunStore,
+    run_id: str,
+    *,
+    runtime_id: str = "gemini_cli",
+) -> ManagedRunRecord:
     workspace_path = store.store_root.parent / "workspace" / run_id
     workspace_path.mkdir(parents=True, exist_ok=True)
     record = ManagedRunRecord(
         run_id=run_id,
         agent_id="test-agent",
-        runtime_id="gemini_cli",
+        runtime_id=runtime_id,
         status="launching",
         pid=12345,
         started_at=datetime.now(tz=UTC),
@@ -324,6 +329,37 @@ async def test_supervise_terminates_gemini_on_live_rate_limit(tmp_path: Path):
         storage.resolve_storage_path(result.diagnostics_ref).read_text(encoding="utf-8")
     )
     assert diagnostics["parsed_output"]["rate_limited"] is True
+
+@pytest.mark.asyncio
+async def test_supervise_classifies_claude_not_logged_in_as_auth_failure(
+    tmp_path: Path,
+) -> None:
+    """Claude Code login failures should surface as operator auth errors."""
+    supervisor, store, _ = _make_supervisor(tmp_path)
+    run_id = "run-claude-auth"
+    _save_record(store, run_id, runtime_id="claude_code")
+
+    process = await asyncio.create_subprocess_exec(
+        "python3",
+        "-c",
+        "print('Not logged in. Please run /login'); raise SystemExit(1)",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    result = await supervisor.supervise(
+        run_id=run_id,
+        process=process,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "failed"
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "401"
+    assert result.error_message == (
+        "Provider authentication required; reauthenticate the selected provider profile"
+    )
 
 # ---------------------------------------------------------------------------
 # Test 8 — streaming starts during process execution, not after
