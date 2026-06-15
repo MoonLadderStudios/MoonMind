@@ -10657,8 +10657,7 @@ class MoonMindRunWorkflow:
         if (
             "ci" in lowered
             and (
-                "no current-head" in lowered
-                or "current-head" in lowered
+                "current-head" in lowered
                 or "pending" in lowered
                 or "no run evidence" in lowered
             )
@@ -10679,7 +10678,6 @@ class MoonMindRunWorkflow:
         if (
             "environment" in lowered
             or "infrastructure" in lowered
-            or "validation infrastructure" in lowered
             or "docker_registry_unauthorized" in blockers
             or "native_unreal_toolchain_missing" in blockers
         ):
@@ -10698,7 +10696,7 @@ class MoonMindRunWorkflow:
         if classification:
             return (
                 f"MoonSpec verification blocked publication: {verdict}. "
-                f"{classification}."
+                f"{classification.rstrip('.')}."
             )
         if category == "validation_environment_blocked":
             suffix = "validation environment unavailable"

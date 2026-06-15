@@ -409,7 +409,7 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
             "logicalStepId": "tpl:jira-orchestrate:1.0.0:23:ceb64b9f",
             "verdict": "BLOCKED",
             "classification": (
-                "environment failure / validation infrastructure unavailable"
+                "environment failure / validation infrastructure unavailable."
             ),
             "diagnosticsRef": "art_verify_report",
             "summary": (
@@ -491,7 +491,7 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
         "category": "validation_environment_blocked",
         "blockedBy": "moonspec_verify",
         "verdict": "BLOCKED",
-        "classification": "environment failure / validation infrastructure unavailable",
+        "classification": "environment failure / validation infrastructure unavailable.",
         "diagnosticsRef": "art_verify_report",
         "recommendedNextAction": "restore_validation_environment",
         "summary": (
