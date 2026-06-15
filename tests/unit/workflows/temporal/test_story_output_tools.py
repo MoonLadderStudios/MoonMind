@@ -794,7 +794,7 @@ async def test_create_jira_issues_preserves_source_reference_when_description_tr
     assert request.description.endswith("[Truncated by MoonMind before Jira export]")
 
 @pytest.mark.asyncio
-async def test_create_jira_issues_blocks_story_breakdown_without_source_reference():
+async def test_create_jira_issues_accepts_pasted_story_breakdown_without_source_reference():
     service = _FakeJiraService()
 
     result = await create_jira_issues_from_stories(
@@ -813,10 +813,57 @@ async def test_create_jira_issues_blocks_story_breakdown_without_source_referenc
         jira_service_factory=lambda: service,
     )
 
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert result.outputs["jira"]["issueMappings"][0]["sourceDesignPath"] == ""
+    assert len(service.requests) == 1
+    assert not service.requests[0].description.startswith("Source Reference")
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_blocks_story_breakdown_when_source_reference_required():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "sourceReferencePolicy": "required",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "linear_blocker_chain",
+                },
+            },
+            "stories": [{"id": "STORY-001", "summary": "No source"}],
+        },
+        jira_service_factory=lambda: service,
+    )
+
     assert service.requests == []
     assert result.outputs["storyOutput"]["status"] == "fallback"
     assert "requires sourceReference.path" in result.outputs["storyOutput"]["reason"]
     assert "STORY-001" in result.outputs["storyOutput"]["reason"]
+
+@pytest.mark.parametrize("policy", [True, "true", "yes", "1", "on"])
+def test_requires_story_source_reference_accepts_truthy_policy_values(policy):
+    assert (
+        story_tools._requires_story_source_reference(
+            inputs={"sourceReferencePolicy": policy},
+            story_output={},
+            fallback_path="",
+        )
+        is True
+    )
+
+@pytest.mark.parametrize("policy", [False, "false", "no", "0", "off"])
+def test_requires_story_source_reference_accepts_falsy_policy_values(policy):
+    assert (
+        story_tools._requires_story_source_reference(
+            inputs={},
+            story_output={"sourceReferencePolicy": policy},
+            fallback_path="docs/Designs/RuntimeTypes.md",
+        )
+        is False
+    )
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_accepts_string_source_reference_from_breakdown():
