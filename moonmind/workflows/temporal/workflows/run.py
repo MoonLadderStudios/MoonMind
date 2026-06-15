@@ -10566,6 +10566,249 @@ class MoonMindRunWorkflow:
             )
             self._proposals_errors.append(f"submission failed: {str(exc)[:200]}")
 
+    def _finish_summary_failure_summary(self) -> dict[str, Any] | None:
+        moonspec_summary = self._moonspec_gate_failure_summary()
+        if moonspec_summary is not None:
+            return moonspec_summary
+        return self._agent_runtime_failure_summary()
+
+    def _moonspec_gate_failure_summary(self) -> dict[str, Any] | None:
+        gate_context = self._publish_context.get("moonSpecGate")
+        if not isinstance(gate_context, Mapping):
+            return None
+        if self._publish_context.get("publicationBlockedBy") != "moonspec_verify":
+            return None
+
+        verdict = self._coerce_text(gate_context.get("verdict"), max_chars=80)
+        if not verdict:
+            return None
+        classification = self._coerce_text(
+            gate_context.get("classification"), max_chars=200
+        )
+        raw_summary = self._coerce_text(gate_context.get("summary"), max_chars=1000)
+        combined_text = " ".join(
+            part
+            for part in (
+                verdict,
+                classification,
+                raw_summary,
+                self._publish_reason,
+                self._plan_blocked_message,
+            )
+            if isinstance(part, str) and part
+        )
+        blockers = self._validation_blockers_from_text(combined_text)
+        category = self._moonspec_failure_category(
+            classification=classification,
+            blockers=blockers,
+            text=combined_text,
+        )
+        if category == "validation_environment_blocked":
+            recommended_next_action = "restore_validation_environment"
+        elif category == "validation_evidence_missing":
+            recommended_next_action = "provide_current_head_validation_evidence"
+        else:
+            recommended_next_action = "address_verification_gaps"
+
+        compact: dict[str, Any] = {
+            "type": "moonspec_verification_gate",
+            "category": category,
+            "blockedBy": "moonspec_verify",
+            "verdict": verdict,
+            "recommendedNextAction": recommended_next_action,
+            "summary": self._moonspec_failure_headline(
+                verdict=verdict,
+                classification=classification,
+                category=category,
+            ),
+        }
+        if classification:
+            compact["classification"] = classification
+        diagnostics_ref = self._coerce_text(
+            gate_context.get("diagnosticsRef"), max_chars=400
+        )
+        if diagnostics_ref:
+            compact["diagnosticsRef"] = diagnostics_ref
+        if blockers:
+            compact["blockers"] = blockers
+        publish_context = self._compact_publish_failure_context()
+        if publish_context:
+            compact["publishContext"] = publish_context
+        return compact
+
+    def _validation_blockers_from_text(self, text: str) -> list[str]:
+        lowered = text.lower()
+        blockers: list[str] = []
+        if (
+            (
+                "native" in lowered
+                or "windows/wsl" in lowered
+                or "ue/toolchain" in lowered
+            )
+            and (
+                "missing" in lowered
+                or "unavailable" in lowered
+                or "not run" in lowered
+            )
+        ):
+            blockers.append("native_unreal_toolchain_missing")
+        if "unauthorized" in lowered and ("ghcr" in lowered or "docker" in lowered):
+            blockers.append("docker_registry_unauthorized")
+        if (
+            "ci" in lowered
+            and (
+                "current-head" in lowered
+                or "pending" in lowered
+                or "no run evidence" in lowered
+            )
+        ):
+            blockers.append("current_head_ci_evidence_missing")
+        return blockers
+
+    @staticmethod
+    def _moonspec_failure_category(
+        *,
+        classification: str | None,
+        blockers: list[str],
+        text: str,
+    ) -> str:
+        lowered = " ".join(
+            part for part in (classification or "", text) if part
+        ).lower()
+        if (
+            "environment" in lowered
+            or "infrastructure" in lowered
+            or "docker_registry_unauthorized" in blockers
+            or "native_unreal_toolchain_missing" in blockers
+        ):
+            return "validation_environment_blocked"
+        if "ci" in lowered or "evidence" in lowered or "required lane" in lowered:
+            return "validation_evidence_missing"
+        return "verification_gaps_remaining"
+
+    @staticmethod
+    def _moonspec_failure_headline(
+        *,
+        verdict: str,
+        classification: str | None,
+        category: str,
+    ) -> str:
+        if classification:
+            return (
+                f"MoonSpec verification blocked publication: {verdict}. "
+                f"{classification.rstrip('.')}."
+            )
+        if category == "validation_environment_blocked":
+            suffix = "validation environment unavailable"
+        elif category == "validation_evidence_missing":
+            suffix = "required validation evidence missing"
+        else:
+            suffix = "verification gaps remain"
+        return f"MoonSpec verification blocked publication: {verdict}. {suffix}."
+
+    def _compact_publish_failure_context(self) -> dict[str, Any]:
+        compact: dict[str, Any] = {}
+        for key in (
+            "branch",
+            "baseRef",
+            "headSha",
+            "commitCount",
+            "pullRequestUrl",
+        ):
+            value = self._publish_context.get(key)
+            if key == "commitCount":
+                if isinstance(value, int):
+                    compact[key] = value
+                continue
+            text = self._coerce_text(value, max_chars=500)
+            if text:
+                compact[key] = text
+        return compact
+
+    def _agent_runtime_failure_summary(self) -> dict[str, Any] | None:
+        if not isinstance(self._failure_diagnostic, Mapping):
+            return None
+        diagnostic = self._failure_diagnostic
+        message = self._coerce_text(diagnostic.get("message"), max_chars=1000)
+        if not message:
+            return None
+        lowered = message.lower()
+        failure_cause = None
+        if "app_server_protocol_empty_turn" in lowered:
+            failure_cause = "app_server_protocol_empty_turn"
+        retry_action = self._retry_action_from_failure_message(message)
+        diagnostics_ref = self._coerce_text(
+            diagnostic.get("diagnosticsRef"), max_chars=400
+        )
+
+        if failure_cause == "app_server_protocol_empty_turn":
+            category = "transient_agent_runtime"
+            recommended_next_action = (
+                "retry_finalization_after_clear_session"
+                if self._pull_request_url
+                or self._compact_publish_failure_context().get("pullRequestUrl")
+                else "retry_step_after_clear_session"
+            )
+            retry_action = retry_action or "clear_session"
+        else:
+            category = self._coerce_text(diagnostic.get("category"), max_chars=80)
+            if category not in {
+                "user_error",
+                "integration_error",
+                "execution_error",
+                "system_error",
+            }:
+                category = "execution_error"
+            recommended_next_action = "inspect_diagnostics"
+
+        compact: dict[str, Any] = {
+            "type": "agent_runtime_failure",
+            "category": category,
+            "recommendedNextAction": recommended_next_action,
+            "summary": message,
+        }
+        if failure_cause:
+            compact["failureCause"] = failure_cause
+        if retry_action:
+            compact["retryRecommendedAction"] = retry_action
+        if diagnostics_ref:
+            compact["diagnosticsRef"] = diagnostics_ref
+        partial_success = self._partial_success_summary()
+        if partial_success:
+            compact["partialSuccess"] = partial_success
+        return compact
+
+    @staticmethod
+    def _retry_action_from_failure_message(message: str) -> str | None:
+        marker = "retryRecommendedAction:"
+        index = message.find(marker)
+        if index < 0:
+            return None
+        remainder = message[index + len(marker) :].strip()
+        token = remainder.split(";", 1)[0].split(")", 1)[0].strip()
+        return token or None
+
+    def _partial_success_summary(self) -> dict[str, Any]:
+        compact: dict[str, Any] = {}
+        gate_context = self._publish_context.get("moonSpecGate")
+        if isinstance(gate_context, Mapping):
+            verdict = self._coerce_text(gate_context.get("verdict"), max_chars=80)
+            if verdict:
+                compact["moonSpecVerdict"] = verdict
+        pull_request_url = self._coerce_text(
+            self._pull_request_url or self._publish_context.get("pullRequestUrl"),
+            max_chars=500,
+        )
+        if pull_request_url:
+            compact["pullRequestUrl"] = pull_request_url
+        branch = self._coerce_text(self._publish_context.get("branch"), max_chars=500)
+        if branch:
+            compact["branch"] = branch
+        head_sha = self._coerce_text(self._publish_context.get("headSha"), max_chars=80)
+        if head_sha:
+            compact["headSha"] = head_sha
+        return compact
+
     async def _run_finalizing_stage(
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
     ) -> None:
@@ -10705,6 +10948,10 @@ class MoonMindRunWorkflow:
                 merge_automation_summary = self._merge_automation_summary_from_context()
                 if merge_automation_summary:
                     finish_summary["mergeAutomation"] = merge_automation_summary
+            if status == "failed":
+                failure_summary = self._finish_summary_failure_summary()
+                if failure_summary:
+                    finish_summary["failureSummary"] = failure_summary
             last_step_summary = self._last_step_summary
             last_step_id = self._last_step_id
             last_diagnostics_ref = self._last_diagnostics_ref
