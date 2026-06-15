@@ -1980,7 +1980,11 @@ async def test_run_execution_stage_publish_none_blocks_after_failed_agent_child(
         {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
     )
     monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
-    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_workflow_module.RUN_FAILED_RESULT_BLOCKER_PATCH,
+    )
     monkeypatch.setattr(
         run_workflow_module.workflow,
         "wait_condition",

@@ -353,6 +353,7 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
+RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
@@ -4946,9 +4947,9 @@ class MoonMindRunWorkflow:
 
                     route = None
                     execute_payload = None
+                    child_workflow_id: str | None = None
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
-                        child_workflow_id: str | None = None
                         try:
                             resolved_skillset_ref = (
                                 await self._resolve_agent_node_skillset_ref(
@@ -5212,7 +5213,10 @@ class MoonMindRunWorkflow:
 
                         diagnostics_ref = None
                         outputs = self._get_from_result(execution_result, "outputs")
-                        if isinstance(outputs, Mapping):
+                        if (
+                            isinstance(outputs, Mapping)
+                            and workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
+                        ):
                             diagnostics_ref = self._coerce_text(
                                 outputs.get("diagnosticsRef")
                                 or outputs.get("diagnostics_ref"),
@@ -5229,11 +5233,7 @@ class MoonMindRunWorkflow:
                                 step_id=node_id,
                                 step_title=tool_name,
                                 message=step_failure_summary,
-                                child_workflow_id=(
-                                    child_workflow_id
-                                    if tool_type == "agent_runtime"
-                                    else None
-                                ),
+                                child_workflow_id=child_workflow_id,
                                 diagnostics_ref=diagnostics_ref,
                             )
                         self._mark_step_terminal(
@@ -5495,7 +5495,13 @@ class MoonMindRunWorkflow:
                     self._publish_reason = self._plan_blocked_message
                     self._refresh_step_readiness(updated_at=workflow.now())
                     continue
-                if result_status != "COMPLETED":
+                if (
+                    result_status != "COMPLETED"
+                    and (
+                        publish_mode in {"pr", "branch"}
+                        or workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
+                    )
+                ):
                     self._plan_blocked_message = (
                         step_failure_summary
                         or self._activity_result_provider_failure_summary(
