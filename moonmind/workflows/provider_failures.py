@@ -53,6 +53,8 @@ _AUTH_FAILURE_MARKERS = (
     "invalid token",
     "expired token",
     "authentication failed",
+    "not logged in",
+    "please run /login",
 )
 
 @dataclass(frozen=True)
