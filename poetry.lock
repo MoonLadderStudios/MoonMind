@@ -2479,14 +2479,14 @@ pydantic = ">=2.11.5"
 
 [[package]]
 name = "llama-index-llms-anthropic"
-version = "0.11.5"
+version = "0.11.6"
 description = "llama-index llms anthropic integration"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_llms_anthropic-0.11.5-py3-none-any.whl", hash = "sha256:2bc2a645299454c4dba097b563f30cb4881092c4b0d6f9d107c4d1c435d64ade"},
-    {file = "llama_index_llms_anthropic-0.11.5.tar.gz", hash = "sha256:d3020a8896da8c353bb88cf0e6aa9ab0fb59cf187e850592356bc3199fd282af"},
+    {file = "llama_index_llms_anthropic-0.11.6-py3-none-any.whl", hash = "sha256:39a98a4f92504eccac0b23a78b63f3b80357ff6a17e6bf4c210aadc253d64f12"},
+    {file = "llama_index_llms_anthropic-0.11.6.tar.gz", hash = "sha256:5b0f8edaef2c464cd236a3c719b2e99b2e4ddf2172edaed039c3903eef70f014"},
 ]
 
 [package.dependencies]
