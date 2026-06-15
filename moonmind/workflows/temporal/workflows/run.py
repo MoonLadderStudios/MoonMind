@@ -353,6 +353,7 @@ RUN_DEFENSIVE_SLOT_RELEASE_ON_CHILD_TERMINAL_PATCH = "run-defensive-slot-release
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_PATCH = "run-task-scoped-session-termination-v1"
 RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
+RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
@@ -661,6 +662,48 @@ class MoonMindRunWorkflow:
         if self._failure_diagnostic is None:
             self._failure_diagnostic = diagnostic
         return diagnostic
+
+    def _record_result_failure_diagnostic(
+        self,
+        *,
+        stage: str | None,
+        category: str | None,
+        source: str,
+        step_id: str,
+        step_title: str,
+        message: str,
+        child_workflow_id: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture a failure diagnostic from a completed-but-failed step result."""
+
+        normalized_category = self._coerce_text(category, max_chars=80)
+        if normalized_category not in {
+            "user_error",
+            "integration_error",
+            "execution_error",
+            "system_error",
+        }:
+            normalized_category = "execution_error"
+        sanitized = self._sanitize_operator_summary(message) or message
+        diagnostic: dict[str, Any] = {
+            "stage": self._coerce_text(stage or self._state, max_chars=80),
+            "category": normalized_category,
+            "source": self._coerce_text(source, max_chars=40) or "workflow",
+            "stepId": self._coerce_text(step_id, max_chars=120),
+            "stepTitle": self._coerce_text(step_title, max_chars=200),
+            "childWorkflowId": self._coerce_text(child_workflow_id, max_chars=400),
+            "message": self._coerce_text(sanitized, max_chars=1000)
+            or "plan step failed",
+            "rootCauseType": "AgentRunResult"
+            if source == "child_workflow"
+            else "ActivityResult",
+            "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
+        }
+        compact = {key: value for key, value in diagnostic.items() if value is not None}
+        if self._failure_diagnostic is None:
+            self._failure_diagnostic = compact
+        return compact
 
     def __init__(self) -> None:
         self._state = STATE_INITIALIZING
@@ -4904,9 +4947,9 @@ class MoonMindRunWorkflow:
 
                     route = None
                     execute_payload = None
+                    child_workflow_id: str | None = None
                     if tool_type == "agent_runtime":
                         # --- Agent dispatch: child workflow ---
-                        child_workflow_id: str | None = None
                         try:
                             resolved_skillset_ref = (
                                 await self._resolve_agent_node_skillset_ref(
@@ -5168,6 +5211,31 @@ class MoonMindRunWorkflow:
                             attempt_reason = "runtime_recovered"
                             continue
 
+                        diagnostics_ref = None
+                        outputs = self._get_from_result(execution_result, "outputs")
+                        if (
+                            isinstance(outputs, Mapping)
+                            and workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
+                        ):
+                            diagnostics_ref = self._coerce_text(
+                                outputs.get("diagnosticsRef")
+                                or outputs.get("diagnostics_ref"),
+                                max_chars=400,
+                            )
+                            self._record_result_failure_diagnostic(
+                                stage=self._state,
+                                category=failure_message,
+                                source=(
+                                    "child_workflow"
+                                    if tool_type == "agent_runtime"
+                                    else "activity"
+                                ),
+                                step_id=node_id,
+                                step_title=tool_name,
+                                message=step_failure_summary,
+                                child_workflow_id=child_workflow_id,
+                                diagnostics_ref=diagnostics_ref,
+                            )
                         self._mark_step_terminal(
                             node_id,
                             status="failed",
@@ -5428,8 +5496,11 @@ class MoonMindRunWorkflow:
                     self._refresh_step_readiness(updated_at=workflow.now())
                     continue
                 if (
-                    publish_mode in {"pr", "branch"}
-                    and result_status != "COMPLETED"
+                    result_status != "COMPLETED"
+                    and (
+                        publish_mode in {"pr", "branch"}
+                        or workflow.patched(RUN_FAILED_RESULT_BLOCKER_PATCH)
+                    )
                 ):
                     self._plan_blocked_message = (
                         step_failure_summary
