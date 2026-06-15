@@ -1816,7 +1816,7 @@ async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_val
     launch_plan = result["launch_plan"]
     assert launch_plan["profile_id"] == "pentestgpt-safe"
     assert launch_plan["container_name"] == "mm-pentest-run-123-step-pentest-1"
-    assert launch_plan["network_policy"] == "restricted_egress"
+    assert launch_plan["network_policy"] == "bridge_approved_lab"
     assert launch_plan["linux_capabilities"] == []
     assert launch_plan["devices"] == []
     assert launch_plan["labels"]["moonmind.tool_name"] == "security.pentest.run"

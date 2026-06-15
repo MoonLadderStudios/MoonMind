@@ -228,6 +228,15 @@ jobs:
           docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --version
           docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --self-test
 
+      - name: Validate upstream PentestGPT CLI compatibility
+        if: matrix.platform == 'linux/amd64'
+        run: |
+          # Verifies the installed upstream PentestGPT CLI contract (executable
+          # present, --help parses, telemetry default off, wrapper redaction).
+          # Distinct exit codes (30-33) classify upstream-CLI breakage apart
+          # from wrapper/config failures.
+          docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --check-upstream
+
       - name: Build and push runner by digest
         id: build
         uses: docker/build-push-action@v7
@@ -294,7 +303,23 @@ jobs:
             -t "${IMAGE_NAME}:1.0" \
             $(printf "${IMAGE_NAME}@sha256:%s " *)
 
-      - name: Inspect runner image
+      - name: Inspect runner image and surface digest
         run: |
           IMAGE_NAME="${{ needs.metadata.outputs.pentest_image_name }}"
-          docker buildx imagetools inspect "${IMAGE_NAME}:1.0"
+          # Fail if the default configured runner image tag (1.0) was not
+          # published by this workflow. Production should digest-pin, but the
+          # default tag must always resolve to a freshly published manifest.
+          DEFAULT_TAG="1.0"
+          docker buildx imagetools inspect "${IMAGE_NAME}:${DEFAULT_TAG}"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:${DEFAULT_TAG}" --format '{{.Manifest.Digest}}')"
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::Default runner image ${IMAGE_NAME}:${DEFAULT_TAG} is not published" >&2
+            exit 1
+          fi
+          {
+            echo "### PentestGPT runner image published"
+            echo ""
+            echo "- Tag: \`${IMAGE_NAME}:${DEFAULT_TAG}\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo "- Digest-pinned production reference: \`${IMAGE_NAME}@${DIGEST}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
