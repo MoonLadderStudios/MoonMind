@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Optional
 
-from moonmind.schemas import AuthItem, Manifest
+from moonmind.schemas.manifest_models import AuthItem, Manifest
 
 from .secret_providers import (
     EnvSecretProvider,

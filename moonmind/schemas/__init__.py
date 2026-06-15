@@ -294,14 +294,24 @@ from .temporal_signal_contracts import (
     SlotAssignedSignal,
     SyncProfilesSignal,
 )
-from .workflow_models import (
-    CreateWorkflowRunRequest,
-    WorkflowRunModel,
-    WorkflowArtifactModel,
-    WorkflowCredentialAuditModel,
-    WorkflowRunCollectionResponse,
-    WorkflowTaskStateModel,
-)
+_WORKFLOW_MODEL_EXPORTS = {
+    "CreateWorkflowRunRequest",
+    "WorkflowRunModel",
+    "WorkflowArtifactModel",
+    "WorkflowCredentialAuditModel",
+    "WorkflowRunCollectionResponse",
+    "WorkflowTaskStateModel",
+}
+
+
+def __getattr__(name: str):
+    if name in _WORKFLOW_MODEL_EXPORTS:
+        from . import workflow_models
+
+        value = getattr(workflow_models, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "SecretRef",
