@@ -2028,6 +2028,142 @@ class MoonMindRunWorkflow:
         self._recovery_workspace_restored_ref = checkpoint_ref
         return checkpoint_ref
 
+    async def _prepare_recovery_workspace_for_failed_step(
+        self,
+        logical_step_id: str,
+    ) -> str | None:
+        if (
+            not self._recovery_failed_step_id
+            or logical_step_id != self._recovery_failed_step_id
+        ):
+            return None
+        if self._recovery_workspace_restored_ref:
+            return self._recovery_workspace_restored_ref
+        if not isinstance(self._recovery_source, Mapping):
+            return None
+
+        checkpoint_ref = self._recovery_workspace_checkpoint_ref(self._recovery_workspace)
+        if not checkpoint_ref:
+            return None
+
+        checkpoint_payload = self._recovery_workspace.get("checkpoint")
+        if not isinstance(checkpoint_payload, Mapping):
+            checkpoint_payload = self._recovery_workspace.get("checkpointPayload")
+        if not isinstance(checkpoint_payload, Mapping):
+            checkpoint_payload = {
+                key: value
+                for key, value in self._recovery_workspace.items()
+                if key not in {"checkpointRef", "checkpoint_ref"}
+            }
+
+        source_workflow_id = self._recovery_source_text(
+            self._recovery_source,
+            "sourceWorkflowId",
+            "source_workflow_id",
+        )
+        source_run_id = self._recovery_source_text(
+            self._recovery_source,
+            "sourceRunId",
+            "source_run_id",
+        )
+        execution_ordinal = self._recovery_source_int(
+            self._recovery_source,
+            "failedStepExecution",
+            "failed_step_execution",
+            "sourceExecutionOrdinal",
+            "source_execution_ordinal",
+        ) or 1
+        task_input_snapshot_ref = self._recovery_source_text(
+            self._recovery_source,
+            "sourceTaskInputSnapshotRef",
+            "source_task_input_snapshot_ref",
+        )
+        source_plan_ref = self._recovery_source_text(
+            self._recovery_source,
+            "sourcePlanRef",
+            "source_plan_ref",
+        )
+        source_plan_digest = self._recovery_source_text(
+            self._recovery_source,
+            "sourcePlanDigest",
+            "source_plan_digest",
+        )
+        workspace_policy = self._recovery_source_text(
+            self._recovery_workspace,
+            "workspacePolicy",
+            "workspace_policy",
+        ) or "restore_pre_execution"
+
+        validate_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "step_checkpoint.validate"
+        )
+        validate_payload = {
+            "checkpoint": dict(checkpoint_payload),
+            "expectedSource": {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "logicalStepId": logical_step_id,
+                "executionOrdinal": execution_ordinal,
+            },
+            "expectedTaskInputSnapshotRef": task_input_snapshot_ref,
+            "expectedPlanRef": source_plan_ref or None,
+            "expectedPlanDigest": source_plan_digest or None,
+            "workspacePolicy": workspace_policy,
+            "checkpointRef": checkpoint_ref,
+        }
+        validation = await workflow.execute_activity(
+            validate_route.activity_type,
+            validate_payload,
+            **self._execute_kwargs_for_route(validate_route),
+        )
+        if not isinstance(validation, Mapping) or validation.get("valid") is not True:
+            failure_code = "invalid_checkpoint"
+            if isinstance(validation, Mapping):
+                failure_code = str(validation.get("failureCode") or failure_code)
+            raise ValueError(
+                f"recovery checkpoint validation failed: {failure_code}"
+            )
+
+        target_workspace_ref = self._recovery_source_text(
+            self._recovery_workspace,
+            "targetWorkspaceRef",
+            "target_workspace_ref",
+            "workspaceRef",
+            "workspace_ref",
+        ) or checkpoint_ref
+        apply_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("workspace.apply_policy")
+        apply_payload = {
+            "identity": {
+                "workflowId": source_workflow_id,
+                "runId": source_run_id,
+                "logicalStepId": logical_step_id,
+                "executionOrdinal": execution_ordinal,
+            },
+            "workspacePolicy": workspace_policy,
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": dict(checkpoint_payload),
+            "targetWorkspaceRef": target_workspace_ref,
+            "expectedPlanRef": source_plan_ref or None,
+            "expectedPlanDigest": source_plan_digest or None,
+            "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
+        }
+        policy = await workflow.execute_activity(
+            apply_route.activity_type,
+            apply_payload,
+            **self._execute_kwargs_for_route(apply_route),
+        )
+        if not isinstance(policy, Mapping) or policy.get("status") != "prepared":
+            failure_code = "policy_incompatible"
+            if isinstance(policy, Mapping):
+                failure_code = str(policy.get("failureCode") or failure_code)
+            raise ValueError(
+                f"recovery workspace policy application failed: {failure_code}"
+            )
+
+        workspace_ref = str(policy.get("workspaceRef") or target_workspace_ref).strip()
+        self._recovery_workspace_restored_ref = workspace_ref or checkpoint_ref
+        return self._recovery_workspace_restored_ref
+
     def _preserved_outputs_for_step(
         self,
         logical_step_id: str,
@@ -4867,6 +5003,7 @@ class MoonMindRunWorkflow:
                 )
                 self._update_memo()
                 self._refresh_step_readiness(updated_at=workflow.now())
+                await self._prepare_recovery_workspace_for_failed_step(node_id)
                 self._mark_step_running(
                     node_id,
                     updated_at=workflow.now(),
