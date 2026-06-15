@@ -8,7 +8,10 @@ from typing import Any
 
 import pytest
 
-from moonmind.schemas.managed_session_models import LaunchCodexManagedSessionRequest
+from moonmind.schemas.managed_session_models import (
+    LaunchCodexManagedSessionRequest,
+    ManagedGitHubCredentialDescriptor,
+)
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
 )
@@ -122,7 +125,10 @@ async def test_sidecar_bootstrap_writes_session_docker_config_when_ghcr_secret_p
     workspace_root = tmp_path / "agent_jobs"
     request = _request(workspace_root)
 
-    async def _fake_resolver(_environment: dict[str, str]) -> tuple[str, str]:
+    async def _fake_resolver(
+        _environment: dict[str, str],
+        **_kwargs: Any,
+    ) -> tuple[str, str]:
         return "pull-user", "pull-token"
 
     monkeypatch.setattr(
@@ -177,7 +183,7 @@ async def test_sidecar_bootstrap_uses_anonymous_pull_auth_when_ghcr_secret_absen
     workspace_root = tmp_path / "agent_jobs"
     request = _request(workspace_root)
 
-    async def _fake_resolver(_environment: dict[str, str]) -> None:
+    async def _fake_resolver(_environment: dict[str, str], **_kwargs: Any) -> None:
         return None
 
     monkeypatch.setattr(
@@ -275,6 +281,59 @@ async def test_sidecar_bootstrap_uses_github_token_for_ghcr_when_pull_secret_abs
 
 
 @pytest.mark.asyncio
+async def test_sidecar_bootstrap_uses_github_credential_descriptor_for_ghcr(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "agent_jobs"
+    request = _request(workspace_root).model_copy(
+        update={
+            "github_credential": ManagedGitHubCredentialDescriptor(
+                source="environment",
+                envVar="WORKFLOW_GITHUB_TOKEN",
+            )
+        }
+    )
+    monkeypatch.setenv("WORKFLOW_GITHUB_TOKEN", "workflow-github-token")
+
+    async def _fake_github_login(_token: str) -> str:
+        return "github-user"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_github_login_for_token",
+        _fake_github_login,
+    )
+
+    _controller, store, commands = await _launch_with_fake_docker(
+        request,
+        tmp_path=tmp_path,
+    )
+
+    config_path = Path(request.session_workspace_path) / ".docker" / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert config["auths"]["ghcr.io"]["auth"] == base64.b64encode(
+        b"github-user:workflow-github-token"
+    ).decode("ascii")
+
+    agent_run = next(
+        command
+        for command, _env in commands
+        if command[:2] == ("docker", "run")
+        and "moonmind-session-sess-1-agent" in command
+    )
+    rendered_agent_run = " ".join(agent_run)
+    assert f"DOCKER_CONFIG={request.session_workspace_path}/.docker" in agent_run
+    assert "workflow-github-token" not in rendered_agent_run
+
+    record = store.load(request.session_id)
+    assert record is not None
+    docker_pull = record.metadata["capabilities"]["dockerPull"]
+    assert docker_pull["pullAuth"] == "authenticated"
+    assert "workflow-github-token" not in json.dumps(record.metadata)
+
+
+@pytest.mark.asyncio
 async def test_sidecar_bootstrap_scrubs_ghcr_env_credentials_from_agent_container(
     tmp_path: Path,
 ) -> None:
@@ -328,7 +387,10 @@ async def test_sidecar_bootstrap_cleans_docker_config_when_preflight_fails(
     request = _request(workspace_root)
     commands: list[tuple[tuple[str, ...], dict[str, str] | None]] = []
 
-    async def _fake_resolver(_environment: dict[str, str]) -> tuple[str, str]:
+    async def _fake_resolver(
+        _environment: dict[str, str],
+        **_kwargs: Any,
+    ) -> tuple[str, str]:
         return "pull-user", "pull-token"
 
     async def _fake_runner(

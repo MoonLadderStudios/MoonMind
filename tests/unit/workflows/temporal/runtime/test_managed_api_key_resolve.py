@@ -227,6 +227,29 @@ async def test_resolve_ghcr_pull_credentials_requires_complete_pair_before_githu
             }
         )
 
+async def test_resolve_ghcr_pull_credentials_requires_complete_managed_secret_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GHCR_PULL_USER", raising=False)
+    monkeypatch.delenv("GHCR_PULL_TOKEN", raising=False)
+    session = _FakeLookupSession(values={"GHCR_PULL_USER": "pull-user"})
+    session_maker = _FakeSessionMaker(session)
+    monkeypatch.setattr("api_service.db.base.async_session_maker", session_maker)
+
+    async def _unexpected_github_login(_token: str) -> str:
+        raise AssertionError("GitHub fallback should not run")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve."
+        "_resolve_github_login_for_token",
+        _unexpected_github_login,
+    )
+
+    with pytest.raises(ValueError, match="requires both user and token managed secrets"):
+        await resolve_ghcr_pull_credentials_for_launch(
+            {"GITHUB_TOKEN": "github-token"}
+        )
+
 async def test_shape_launch_github_auth_environment_uses_ambient_token_before_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -32,6 +32,7 @@ _MANAGED_GITHUB_TOKEN_SLUGS: tuple[str, ...] = (
 _MANAGED_GHCR_PULL_USER_SLUGS: tuple[str, ...] = ("GHCR_PULL_USER",)
 _MANAGED_GHCR_PULL_TOKEN_SLUGS: tuple[str, ...] = ("GHCR_PULL_TOKEN",)
 _GITHUB_API_TIMEOUT_SECONDS = 10.0
+_GITHUB_USER_RESPONSE_MAX_BYTES = 64 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,9 @@ def _fetch_github_login_for_token(token: str) -> str | None:
         },
     )
     with urlopen(request, timeout=_GITHUB_API_TIMEOUT_SECONDS) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+        payload = json.loads(
+            response.read(_GITHUB_USER_RESPONSE_MAX_BYTES).decode("utf-8")
+        )
     login = str(payload.get("login") or "").strip()
     return login or None
 
@@ -154,6 +157,8 @@ async def _resolve_github_login_for_token(token: str) -> str | None:
 
 async def resolve_ghcr_pull_credentials_for_launch(
     environment: Mapping[str, str] | None = None,
+    *,
+    github_credential: Any | None = None,
 ) -> tuple[str, str] | None:
     """Resolve deployment-scoped GHCR pull credentials for launch boundaries.
 
@@ -223,10 +228,17 @@ async def resolve_ghcr_pull_credentials_for_launch(
         )
         stored_user, stored_token = None, None
 
-    if stored_user and stored_token:
+    if stored_user or stored_token:
+        if not stored_user or not stored_token:
+            raise ValueError(
+                "GHCR pull authentication requires both user and token managed secrets"
+            )
         return stored_user.strip(), stored_token.strip()
 
-    github_token = await resolve_github_token_for_launch(launch_environment)
+    github_token = await resolve_github_token_for_launch(
+        launch_environment,
+        github_credential=github_credential,
+    )
     if github_token:
         github_user = await _resolve_github_login_for_token(github_token)
         if github_user:
