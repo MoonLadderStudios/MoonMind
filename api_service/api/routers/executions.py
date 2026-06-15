@@ -2649,7 +2649,7 @@ def _build_recovery_summary(
         checkpointRef=_recovery_checkpoint_ref_from_record(record),
         failedStepId=_recovery_failed_step_id_from_record(record),
         sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
-        disabledReason=actions.disabled_reasons.get("canRecoverFromFailedStep"),
+        disabledReason=actions.disabled_reasons.get("canResumeFromFailedStep"),
     )
 
 def _related_run_href(workflow_id: str) -> str:
@@ -4584,7 +4584,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     "approve",
                     "pause",
                     "resume",
-                    "canRecoverFromFailedStep",
+                    "canResumeFromFailedStep",
                     "cancel",
                     "reject",
                     "sendMessage",
@@ -4660,7 +4660,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_approve": "canApprove",
         "can_pause": "canPause",
         "can_resume": "canResume",
-        "can_recover_from_failed_step": "canRecoverFromFailedStep",
+        "can_recover_from_failed_step": "canResumeFromFailedStep",
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",

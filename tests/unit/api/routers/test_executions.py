@@ -9664,7 +9664,8 @@ def test_describe_execution_exposes_failed_step_recovery_distinct_from_lifecycle
     assert response.status_code == 200
     body = response.json()
     assert body["actions"]["canResume"] is False
-    assert body["actions"]["canRecoverFromFailedStep"] is True
+    assert body["actions"]["canResumeFromFailedStep"] is True
+    assert "canRecoverFromFailedStep" not in body["actions"]
     assert body["resume"]["available"] is True
     assert (
         body["resume"]["checkpointRef"]
@@ -10150,7 +10151,7 @@ def test_describe_execution_requires_complete_recovery_evidence(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["actions"]["canRecoverFromFailedStep"] is False
+    assert body["actions"]["canResumeFromFailedStep"] is False
     assert body["resume"]["available"] is False
     assert body["resume"]["disabledReason"] == expected_reason
 
@@ -10183,8 +10184,10 @@ def test_describe_execution_rejects_stale_recovery_evidence(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["actions"]["canRecoverFromFailedStep"] is False
-    assert body["actions"]["disabledReasons"]["canRecoverFromFailedStep"] == "stale_recovery_evidence"
+    assert body["actions"]["canResumeFromFailedStep"] is False
+    assert body["actions"]["disabledReasons"]["canResumeFromFailedStep"] == "stale_recovery_evidence"
+    assert "canRecoverFromFailedStep" not in body["actions"]
+    assert "canRecoverFromFailedStep" not in body["actions"]["disabledReasons"]
     assert body["resume"]["available"] is False
     assert body["resume"]["disabledReason"] == "stale_recovery_evidence"
 
