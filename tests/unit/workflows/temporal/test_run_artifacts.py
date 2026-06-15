@@ -1819,6 +1819,11 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
         payload: dict[str, object],
         **_kwargs: object,
     ) -> object:
+        if activity_type == "artifact.create":
+            return (
+                {"artifact_id": f"art_step_execution_{child_calls}"},
+                {"upload_url": "unused"},
+            )
         if activity_type == "artifact.read":
             return json.dumps(
                 {
@@ -1884,6 +1889,139 @@ async def test_run_execution_stage_continue_mode_keeps_running_after_failed_stat
     )
 
     assert child_calls == 2
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_publish_none_blocks_after_failed_agent_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    child_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> object:
+        if activity_type == "artifact.create":
+            return (
+                {"artifact_id": f"art_step_execution_{child_calls}"},
+                {"upload_url": "unused"},
+            )
+        if activity_type == "artifact.read":
+            return json.dumps(
+                {
+                    "plan_version": "1.0",
+                    "metadata": {
+                        "title": "Dry Run Plan",
+                        "created_at": "2026-03-12T00:00:00Z",
+                        "registry_snapshot": {
+                            "digest": "reg:sha256:" + ("a" * 64),
+                            "artifact_ref": "artifact://registry/1",
+                        },
+                    },
+                    "policy": {"failure_mode": "CONTINUE", "max_concurrency": 1},
+                    "nodes": [_agent_runtime_step("step-1")],
+                    "edges": [],
+                }
+            ).encode("utf-8")
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: object,
+        **_kwargs: object,
+    ) -> object:
+        nonlocal child_calls
+        child_calls += 1
+        return {
+            "summary": "Process exited with code 1",
+            "failureClass": "execution_error",
+            "diagnosticsRef": "art_failed_agent_result",
+            "metadata": {
+                "childWorkflowId": "wf-1:agent:step-1",
+                "outputAgentResultRef": "art_failed_agent_result",
+            },
+            "outputRefs": ["run-1/stdout.log", "run-1/stderr.log"],
+        }
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> object:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        return await fake_execute_activity(activity_type, payload, **kwargs)
+
+    async def fake_bind_workflow_scoped_session(
+        _self: MoonMindRunWorkflow,
+        request: object,
+    ) -> object:
+        return request
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1"},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "MoonLadderStudios/MoonMind", "publishMode": "none"},
+        plan_ref="art_plan_1",
+    )
+
+    status, message, publish_failure = workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+
+    assert child_calls == 4
+    assert workflow._publish_status == "not_required"
+    expected_message = (
+        "Agent runtime failed with execution_error: Process exited with code 1 "
+        "(diagnosticsRef: art_failed_agent_result)"
+    )
+    assert workflow._plan_blocked_message == expected_message
+    assert status == "failed"
+    assert message == expected_message
+    assert publish_failure is True
+    assert workflow._failure_diagnostic == {
+        "stage": "executing",
+        "category": "execution_error",
+        "source": "child_workflow",
+        "stepId": "step-1",
+        "stepTitle": "codex_cli",
+        "childWorkflowId": "wf-1:agent:step-1:attempt4:retry3",
+        "message": expected_message,
+        "rootCauseType": "AgentRunResult",
+        "diagnosticsRef": "art_failed_agent_result",
+    }
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_publish_pr_blocks_after_failed_continue_step(

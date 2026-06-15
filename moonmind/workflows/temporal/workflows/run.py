@@ -662,6 +662,48 @@ class MoonMindRunWorkflow:
             self._failure_diagnostic = diagnostic
         return diagnostic
 
+    def _record_result_failure_diagnostic(
+        self,
+        *,
+        stage: str | None,
+        category: str | None,
+        source: str,
+        step_id: str,
+        step_title: str,
+        message: str,
+        child_workflow_id: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture a failure diagnostic from a completed-but-failed step result."""
+
+        normalized_category = self._coerce_text(category, max_chars=80)
+        if normalized_category not in {
+            "user_error",
+            "integration_error",
+            "execution_error",
+            "system_error",
+        }:
+            normalized_category = "execution_error"
+        sanitized = self._sanitize_operator_summary(message) or message
+        diagnostic: dict[str, Any] = {
+            "stage": self._coerce_text(stage or self._state, max_chars=80),
+            "category": normalized_category,
+            "source": self._coerce_text(source, max_chars=40) or "workflow",
+            "stepId": self._coerce_text(step_id, max_chars=120),
+            "stepTitle": self._coerce_text(step_title, max_chars=200),
+            "childWorkflowId": self._coerce_text(child_workflow_id, max_chars=400),
+            "message": self._coerce_text(sanitized, max_chars=1000)
+            or "plan step failed",
+            "rootCauseType": "AgentRunResult"
+            if source == "child_workflow"
+            else "ActivityResult",
+            "diagnosticsRef": self._coerce_text(diagnostics_ref, max_chars=400),
+        }
+        compact = {key: value for key, value in diagnostic.items() if value is not None}
+        if self._failure_diagnostic is None:
+            self._failure_diagnostic = compact
+        return compact
+
     def __init__(self) -> None:
         self._state = STATE_INITIALIZING
         self._owner_type: Optional[str] = None
@@ -5168,6 +5210,32 @@ class MoonMindRunWorkflow:
                             attempt_reason = "runtime_recovered"
                             continue
 
+                        diagnostics_ref = None
+                        outputs = self._get_from_result(execution_result, "outputs")
+                        if isinstance(outputs, Mapping):
+                            diagnostics_ref = self._coerce_text(
+                                outputs.get("diagnosticsRef")
+                                or outputs.get("diagnostics_ref"),
+                                max_chars=400,
+                            )
+                            self._record_result_failure_diagnostic(
+                                stage=self._state,
+                                category=failure_message,
+                                source=(
+                                    "child_workflow"
+                                    if tool_type == "agent_runtime"
+                                    else "activity"
+                                ),
+                                step_id=node_id,
+                                step_title=tool_name,
+                                message=step_failure_summary,
+                                child_workflow_id=(
+                                    child_workflow_id
+                                    if tool_type == "agent_runtime"
+                                    else None
+                                ),
+                                diagnostics_ref=diagnostics_ref,
+                            )
                         self._mark_step_terminal(
                             node_id,
                             status="failed",
@@ -5427,10 +5495,7 @@ class MoonMindRunWorkflow:
                     self._publish_reason = self._plan_blocked_message
                     self._refresh_step_readiness(updated_at=workflow.now())
                     continue
-                if (
-                    publish_mode in {"pr", "branch"}
-                    and result_status != "COMPLETED"
-                ):
+                if result_status != "COMPLETED":
                     self._plan_blocked_message = (
                         step_failure_summary
                         or self._activity_result_provider_failure_summary(
