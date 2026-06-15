@@ -227,7 +227,12 @@ Workflows that include MoonSpec verification gates must use the latest structure
 
 Non-retryable blocking verdicts, including `NO_DETERMINATION`, `BLOCKED`, and `FAILED_UNRECOVERABLE`, block publication without waiting for additional remediation attempts unless the workflow explicitly models the missing evidence as recoverable work inside the same bounded plan.
 
-When MoonSpec verification blocks publication, the workflow records `publicationBlockedBy: "moonspec_verify"` in publish context, preserves the latest verification report and evidence refs, and marks downstream publication or Jira handoff steps skipped rather than creating a pull request with known incomplete work.
+When MoonSpec verification blocks publication, the workflow records
+`publicationBlockedBy: "moonspec_verify"` in publish context, preserves the
+latest verification report and evidence refs, writes a compact
+`failureSummary.type = "moonspec_verification_gate"` block in
+`reports/run_summary.json`, and marks downstream publication or Jira handoff
+steps skipped rather than creating a pull request with known incomplete work.
 
 ### Agent Instructions
 
