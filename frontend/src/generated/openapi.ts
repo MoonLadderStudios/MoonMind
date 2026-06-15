@@ -4168,10 +4168,10 @@ export interface components {
              */
             canResume: boolean;
             /**
-             * Canrecoverfromfailedstep
+             * Canresumefromfailedstep
              * @default false
              */
-            canRecoverFromFailedStep: boolean;
+            canResumeFromFailedStep: boolean;
             /**
              * Cancancel
              * @default false

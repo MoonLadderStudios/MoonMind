@@ -1,24 +1,10 @@
 {
   "action": "no_update_required",
-  "docPaths": [
-    "docs/tmp/StepExecutionsCheckpointingGapPlan.md"
-  ],
-  "gateRationale": "No canonical source document exists for this reconciliation step. The relevant specs reference docs/tmp/StepExecutionsCheckpointingGapPlan.md, an imperative working document under docs/tmp/. Per the document model and Constitution XII, docs/tmp migration or execution notes are not canonical desired-state documents and must not be reconciled into canonical docs. The available verification and discovery evidence identifies no durable canonical docs drift.",
+  "docPaths": [],
+  "gateRationale": "Doc reconciliation skipped because the latest controlling moonspec-verify verdict for MM-841 is ADDITIONAL_WORK_NEEDED, not FULLY_IMPLEMENTED. Publication is already blocked by the verifier, so the moonspec-doc-reconcile update gate does not allow canonical doc edits.",
   "evidence": [
-    "specs/001-final-docs-cleanup/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md",
-    "specs/001-final-docs-cleanup/spec.md describes that source as an imperative working document per docs/Workflows/MoonSpecDocumentModel.md",
-    "specs/001-bounded-story-loops/spec.md:17 records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md (imperative working document; runtime source requirements for this selected story only)",
-    "specs/001-checkpoint-activity-substrate/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md and labels it an imperative working document used only as bounded source context",
-    "specs/001-use-conformance-gate/spec.md records Source Document: docs/tmp/StepExecutionsCheckpointingGapPlan.md (imperative working document)",
-    "docs/Workflows/MoonSpecDocumentModel.md classifies docs/tmp/ as imperative working documents and canonical declarative documents as long-lived files under docs/ plus the constitution",
-    ".specify/memory/constitution.md Principle XII classifies migration narratives, phased implementation plans, rollout sequencing, and implementation backlogs as docs/tmp or local-only material, not canonical docs",
-    "active moonspec-doc-reconcile SKILL.md requires immediate NO_UPDATE_REQUIRED when no canonical source document exists",
-    "/work/agent_jobs/mm:fff3123a-815e-44d1-a9f6-af38c17b5dd1/artifacts/stdout.log latest MoonSpec Verification Report records Verdict: FULLY_IMPLEMENTED",
-    "/work/agent_jobs/mm:fff3123a-815e-44d1-a9f6-af38c17b5dd1/artifacts/stdout.log verification report states: No canonical source-document drift was found; the source document is the disposable docs/tmp/StepExecutionsCheckpointingGapPlan.md",
-    "specs/001-checkpoint-activity-substrate/quickstart.md Documentation Drift section states no canonical documentation reconciliation is required because the source document is an imperative working document and no durable desired-state drift was found",
-    "Repository search found no artifacts/doc-discoveries/001-bounded-story-loops.json or other doc-discoveries ledger in the workspace",
-    "No artifacts/doc-discoveries ledger was present in this workspace",
-    "No canonical docs/ source document was identified for these features",
-    "Workspace artifact search found only stdout.log and stderr.log under the current run artifacts and no standalone latest moonspec-verify report with a Source Document Drift section"
+    "/work/agent_jobs/mm:d2eed411-8337-4b8a-bf25-845b5960fde1/artifacts/moonspec-verify/001-workflow-actions-menu-report.md records Verdict: ADDITIONAL_WORK_NEEDED",
+    "/work/agent_jobs/mm:d2eed411-8337-4b8a-bf25-845b5960fde1/artifacts/moonspec-verify/001-workflow-actions-menu-report.md Source Document Drift says no source design document was provided and no doc-only drift blocks the verdict",
+    "specs/001-workflow-actions-menu/spec.md has no **Source Document** entry under docs/"
   ]
 }

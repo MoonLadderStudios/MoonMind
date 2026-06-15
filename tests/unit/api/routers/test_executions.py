@@ -9664,7 +9664,8 @@ def test_describe_execution_exposes_failed_step_recovery_distinct_from_lifecycle
     assert response.status_code == 200
     body = response.json()
     assert body["actions"]["canResume"] is False
-    assert body["actions"]["canRecoverFromFailedStep"] is True
+    assert body["actions"]["canResumeFromFailedStep"] is True
+    assert "canRecoverFromFailedStep" not in body["actions"]
     assert body["resume"]["available"] is True
     assert (
         body["resume"]["checkpointRef"]
@@ -10150,7 +10151,7 @@ def test_describe_execution_requires_complete_recovery_evidence(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["actions"]["canRecoverFromFailedStep"] is False
+    assert body["actions"]["canResumeFromFailedStep"] is False
     assert body["resume"]["available"] is False
     assert body["resume"]["disabledReason"] == expected_reason
 
@@ -10183,8 +10184,10 @@ def test_describe_execution_rejects_stale_recovery_evidence(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["actions"]["canRecoverFromFailedStep"] is False
-    assert body["actions"]["disabledReasons"]["canRecoverFromFailedStep"] == "stale_recovery_evidence"
+    assert body["actions"]["canResumeFromFailedStep"] is False
+    assert body["actions"]["disabledReasons"]["canResumeFromFailedStep"] == "stale_recovery_evidence"
+    assert "canRecoverFromFailedStep" not in body["actions"]
+    assert "canRecoverFromFailedStep" not in body["actions"]["disabledReasons"]
     assert body["resume"]["available"] is False
     assert body["resume"]["disabledReason"] == "stale_recovery_evidence"
 
@@ -11110,6 +11113,35 @@ def test_action_endpoints_reject_requests_when_actions_disabled(
         cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
         assert cancel_response.status_code == 403
         assert cancel_response.json()["detail"]["code"] == "actions_disabled"
+
+def test_action_endpoints_reject_non_owner_operator(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, _user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    service.describe_execution.return_value = _build_execution_record(
+        owner_id="other-user"
+    )
+    service.describe_cancel_target_execution.return_value = _build_execution_record(
+        owner_id="other-user"
+    )
+
+    update_response = test_client.post(
+        "/api/executions/mm:wf-1/update", json={"updateName": "RequestRerun"}
+    )
+    signal_response = test_client.post(
+        "/api/executions/mm:wf-1/signal", json={"signalName": "pause"}
+    )
+    cancel_response = test_client.post("/api/executions/mm:wf-1/cancel", json={})
+
+    for response in (update_response, signal_response, cancel_response):
+        assert response.status_code == 404
+        assert response.json()["detail"]["code"] == "execution_not_found"
+
+    service.update_execution.assert_not_awaited()
+    service.signal_execution.assert_not_awaited()
+    service.cancel_execution.assert_not_awaited()
 
 def test_serialize_execution_canceled_state_uses_correct_spelling() -> None:
     """Regression: 'cancelled' (British) must not leak into the Literal('canceled') field."""

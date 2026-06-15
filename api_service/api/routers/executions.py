@@ -2645,11 +2645,11 @@ def _build_recovery_summary(
     if _enum_value(getattr(record, "workflow_type", None)) != "MoonMind.UserWorkflow":
         return None
     return ExecutionResumeSummaryModel(
-        available=actions.can_recover_from_failed_step,
+        available=actions.can_failed_step_resume,
         checkpointRef=_recovery_checkpoint_ref_from_record(record),
         failedStepId=_recovery_failed_step_id_from_record(record),
         sourceRunId=str(getattr(record, "run_id", "") or "").strip() or None,
-        disabledReason=actions.disabled_reasons.get("canRecoverFromFailedStep"),
+        disabledReason=actions.disabled_reasons.get("canResumeFromFailedStep"),
     )
 
 def _related_run_href(workflow_id: str) -> str:
@@ -4584,7 +4584,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                     "approve",
                     "pause",
                     "resume",
-                    "canRecoverFromFailedStep",
+                    "canResumeFromFailedStep",
                     "cancel",
                     "reject",
                     "sendMessage",
@@ -4651,7 +4651,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         and has_workflow_input_snapshot
         and resume_evidence_disabled_reason is None
     ):
-        enabled = enabled | {"can_recover_from_failed_step"}
+        enabled = enabled | {"can_failed_step_resume"}
     capability_values = {
         "can_set_title": "canSetTitle",
         "can_update_inputs": "canUpdateInputs",
@@ -4660,7 +4660,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "can_approve": "canApprove",
         "can_pause": "canPause",
         "can_resume": "canResume",
-        "can_recover_from_failed_step": "canRecoverFromFailedStep",
+        "can_failed_step_resume": "canResumeFromFailedStep",
         "can_cancel": "canCancel",
         "can_reject": "canReject",
         "can_send_message": "canSendMessage",
@@ -4674,7 +4674,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_update_inputs",
             "can_edit_for_rerun",
             "can_rerun",
-            "can_recover_from_failed_step",
+            "can_failed_step_resume",
         }:
             if workflow_type_value != "MoonMind.UserWorkflow":
                 disabled_reasons[alias] = "unsupported_workflow_type"
@@ -4682,7 +4682,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             if not temporal_workflow_editing_enabled:
                 disabled_reasons[alias] = "temporal_workflow_editing_disabled"
                 continue
-            if field_name == "can_recover_from_failed_step":
+            if field_name == "can_failed_step_resume":
                 if raw_state != "failed":
                     disabled_reasons[alias] = "state_not_eligible"
                     continue
@@ -4708,7 +4708,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         can_approve="can_approve" in enabled,
         can_pause="can_pause" in enabled,
         can_resume="can_resume" in enabled,
-        can_recover_from_failed_step="can_recover_from_failed_step" in enabled,
+        can_failed_step_resume="can_failed_step_resume" in enabled,
         can_cancel="can_cancel" in enabled,
         can_reject="can_reject" in enabled,
         can_send_message="can_send_message" in enabled,
