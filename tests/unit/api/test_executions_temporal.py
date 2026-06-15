@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.routing import NoMatchFound
 
 import api_service.api.routers.executions as executions_module
 from api_service.auth_providers import get_current_user
@@ -28,6 +29,17 @@ BANNED_EXECUTION_RESPONSE_KEYS = {
     "taskPayload",
     "taskHref",
 }
+
+
+def _iter_test_routes(routes) -> Iterator[object]:
+    for route in routes:
+        yield route
+        original_router = getattr(route, "original_router", None)
+        child_routes = getattr(original_router, "routes", None)
+        if child_routes is None:
+            child_routes = getattr(route, "routes", None)
+        if child_routes:
+            yield from _iter_test_routes(child_routes)
 
 
 def _assert_no_banned_execution_keys(value) -> None:
@@ -48,7 +60,7 @@ def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMoc
     mock_user.id = "user-123"
     mock_user.is_superuser = is_superuser
     app.dependency_overrides[get_current_user()] = lambda: mock_user
-    for route in app.routes:
+    for route in _iter_test_routes(app.routes):
         if hasattr(route, "dependant"):
             for dep in route.dependant.dependencies:
                 if dep.call.__name__ == "_current_user_fallback":
@@ -455,11 +467,16 @@ def test_execution_router_exposes_recover_route_without_recovery_alias() -> None
     app = FastAPI()
     app.include_router(executions_module.router)
 
-    route_paths = {getattr(route, "path", "") for route in app.routes}
+    route_paths = {getattr(route, "path", "") for route in _iter_test_routes(app.routes)}
 
-    assert "/api/executions/{workflow_id}/recover-from-failed-step" in route_paths
+    assert (
+        app.url_path_for("recover_execution_from_failed_step", workflow_id="wf-1")
+        == "/api/executions/wf-1/recover-from-failed-step"
+    )
     assert "/api/executions/{workflow_id}/resume-from-failed-step" not in route_paths
     assert "/api/workflows" not in route_paths
+    with pytest.raises(NoMatchFound):
+        app.url_path_for("resume_execution_from_failed_step", workflow_id="wf-1")
 
 
 def test_task_detail_instructions_include_task_and_step_text() -> None:
