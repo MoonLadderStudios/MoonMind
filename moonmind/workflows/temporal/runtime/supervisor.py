@@ -443,6 +443,11 @@ class ManagedRunSupervisor:
                     )
                 elif exit_result.provider_error_code == "429":
                     error_message = "Provider API rate limit exceeded"
+                elif exit_result.provider_error_code == "401":
+                    error_message = (
+                        "Provider authentication required; reauthenticate the "
+                        "selected provider profile"
+                    )
                 else:
                     error_message = f"Process exited with code {exit_code}"
                     if parsed_output.error_messages:

@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.runtime.strategies.base import (
     ManagedRuntimeExitResult,
     ManagedRuntimeStrategy,
 )
+from moonmind.workflows.provider_failures import classify_provider_failure
 
 class ClaudeCodeStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``claude`` CLI runs."""
@@ -104,6 +105,14 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
                 failure_class="integration_error",
                 provider_error_code="429",
             )
+        if exit_code != 0:
+            provider_failure = classify_provider_failure(f"{stdout}\n{stderr}")
+            if provider_failure is not None:
+                return ManagedRuntimeExitResult(
+                    status="failed",
+                    failure_class=provider_failure.failure_class,
+                    provider_error_code=provider_failure.provider_error_code,
+                )
         # Defer the default exit-code mapping to the base classify_exit.
         # Calling super().classify_result here would recurse via self.classify_exit.
         status, failure_class = super().classify_exit(

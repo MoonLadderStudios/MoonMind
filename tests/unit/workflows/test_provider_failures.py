@@ -80,6 +80,14 @@ def test_classifies_http_401_as_auth_user_error() -> None:
     assert result.provider_error_code == "401"
     assert result.retry_recommendation == "reauthenticate"
 
+def test_classifies_claude_not_logged_in_as_auth_user_error() -> None:
+    result = classify_provider_failure("Not logged in. Please run /login")
+
+    assert result is not None
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "401"
+    assert result.retry_recommendation == "reauthenticate"
+
 def test_provider_cooldown_accepts_capacity_code_or_retry_recommendation() -> None:
     assert provider_error_requires_cooldown(
         provider_error_code="provider_capacity",
