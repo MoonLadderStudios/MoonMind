@@ -5735,6 +5735,45 @@ def _resolve_workflow_publish_payload(
     resolved["mode"] = publish_mode
     return resolved
 
+_GENERATED_JIRA_PR_HEAD_BRANCH_RE = re.compile(
+    r"^(?:moonmind/jira-(?:orchestrate|implement)-[a-z][a-z0-9]*-\d+(?:[-_].*)?|"
+    r"(?:run-)?jira-(?:orchestrate|implement)(?:-[a-z0-9]+)*-mm-\d+"
+    r"(?:-[a-z0-9]+)*(?:-[0-9a-f]{8})?)$",
+    re.IGNORECASE,
+)
+
+
+def _validate_pr_base_branch_submission(
+    *,
+    publish_payload: Mapping[str, Any] | None,
+    task_payload: Mapping[str, Any] | None,
+    git_payload: Mapping[str, Any] | None,
+) -> None:
+    publish = publish_payload or {}
+    task = task_payload or {}
+    git = git_payload or {}
+    if str(publish.get("mode") or "").strip().lower() != "pr":
+        return
+
+    for field_name, value in (
+        ("payload.workflow.publish.prBaseBranch", publish.get("prBaseBranch")),
+        ("payload.workflow.publish.baseBranch", publish.get("baseBranch")),
+        ("payload.workflow.git.branch", git.get("branch")),
+        ("payload.workflow.git.startingBranch", git.get("startingBranch")),
+        ("payload.workflow.branch", task.get("branch")),
+        ("payload.workflow.startingBranch", task.get("startingBranch")),
+    ):
+        branch = str(value or "").strip()
+        if not branch:
+            continue
+        if _GENERATED_JIRA_PR_HEAD_BRANCH_RE.match(branch):
+            raise _invalid_workflow_request(
+                f"{field_name} is the PR base branch for publishMode 'pr', "
+                "but it looks like a generated Jira work/head branch. Use an existing "
+                "base branch such as 'main'; MoonMind creates the PR head branch separately."
+            )
+
+
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
@@ -7074,6 +7113,11 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             "payload.workflow.targetBranch is not supported; use payload.workflow.git.branch."
         )
+    _validate_pr_base_branch_submission(
+        publish_payload=publish_payload,
+        task_payload=task_payload,
+        git_payload=git_payload,
+    )
     if git_payload:
         normalized_git_payload: dict[str, str] = {}
         for git_key in ("startingBranch", "branch"):
