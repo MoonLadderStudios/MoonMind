@@ -808,6 +808,55 @@ def _missing_source_reference_story_ids(
             missing.append(_story_id(story, index=index))
     return missing
 
+def _requires_story_source_reference(
+    *,
+    inputs: Mapping[str, Any],
+    story_output: Mapping[str, Any],
+    fallback_path: str,
+) -> bool:
+    raw_value = None
+    policy_provided = False
+    for container in (story_output, inputs):
+        for key in ("sourceReferencePolicy", "source_reference_policy"):
+            if key in container:
+                raw_value = container.get(key)
+                policy_provided = True
+                break
+        if policy_provided:
+            break
+    if raw_value is None:
+        return bool(fallback_path)
+    if isinstance(raw_value, bool):
+        return raw_value
+
+    raw_policy = str(raw_value).strip().lower()
+    if raw_policy in {
+        "true",
+        "yes",
+        "1",
+        "on",
+        "require",
+        "required",
+        "source_required",
+        "source-reference-required",
+        "source_reference_required",
+    }:
+        return True
+    if raw_policy in {
+        "false",
+        "no",
+        "0",
+        "off",
+        "allow_missing",
+        "inline",
+        "optional",
+        "source_optional",
+        "source-reference-optional",
+        "source_reference_optional",
+    }:
+        return False
+    return bool(fallback_path)
+
 def _story_description_with_source(
     story: Mapping[str, Any],
     *,
@@ -1920,10 +1969,11 @@ async def create_jira_issues_from_stories(
             )
         raise ValueError(reason)
 
-    story_breakdown_path = _string(
-        inputs.get("storyBreakdownPath") or story_output.get("storyBreakdownPath")
-    )
-    if story_breakdown_path:
+    if _requires_story_source_reference(
+        inputs=inputs,
+        story_output=story_output,
+        fallback_path=breakdown_source_path,
+    ):
         missing_source_ids = _missing_source_reference_story_ids(
             stories,
             fallback_path=breakdown_source_path,
