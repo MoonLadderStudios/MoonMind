@@ -62,6 +62,9 @@ from moonmind.integrations.pentest.models import (
     redact_pentest_human_text,
     resolve_pentest_provider_profile,
 )
+from moonmind.workflows.temporal.activities.pentest_activities import (
+    PentestActivities,
+)
 from moonmind.jules.status import JulesStatusSnapshot, normalize_jules_status
 from moonmind.schemas.manifest_ingest_models import CompiledManifestPlanModel
 from moonmind.schemas.temporal_activity_models import (
@@ -5144,6 +5147,20 @@ class TemporalAgentRuntimeActivities:
             or TemporalPentestProviderLeaseManager(client_adapter)
         )
         self._supervision_tasks: set[asyncio.Task] = set()
+        self._pentest_activities: "PentestActivities | None" = None
+
+    @property
+    def pentest_activities(self) -> "PentestActivities":
+        """Dedicated PentestGPT activity surface bound to this runtime.
+
+        The orchestration entrypoint and trusted/untrusted dispatch live in the
+        dedicated :class:`PentestActivities` module; this runtime only retains
+        the thin public binding plus the shared per-step helpers it reuses.
+        """
+
+        if self._pentest_activities is None:
+            self._pentest_activities = PentestActivities(self)
+        return self._pentest_activities
 
     @staticmethod
     def _pentest_scope_artifact_id(scope_artifact_ref: object) -> str:
@@ -6257,9 +6274,12 @@ class TemporalAgentRuntimeActivities:
         an inline ``approved_scope`` is rejected and the scope is always loaded
         from the artifact store. Trusted internal callers must use
         :meth:`_security_pentest_execute_trusted_internal` instead.
+
+        This is a thin delegate to the dedicated :class:`PentestActivities`
+        module so the public worker binding stays stable.
         """
 
-        return await self._run_security_pentest(payload, trusted_internal=False)
+        return await self.pentest_activities.security_pentest_execute(payload)
 
     async def _security_pentest_execute_trusted_internal(
         self,
@@ -6273,9 +6293,13 @@ class TemporalAgentRuntimeActivities:
         registry/plan dispatch. The trusted decision comes from the fact that
         only trusted workflow-internal code can call this entrypoint, never
         from a ``trusted_internal_execution`` flag in the request payload.
+
+        Thin delegate to the dedicated :class:`PentestActivities` module.
         """
 
-        return await self._run_security_pentest(payload, trusted_internal=True)
+        return await self.pentest_activities._security_pentest_execute_trusted_internal(
+            payload
+        )
 
     async def _run_security_pentest(
         self,

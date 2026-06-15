@@ -228,6 +228,15 @@ jobs:
           docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --version
           docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --self-test
 
+      - name: Verify upstream PentestGPT CLI contract
+        if: matrix.platform == 'linux/amd64'
+        run: |
+          # Validates the *installed upstream* CLI contract, redaction, and the
+          # telemetry-disabled default -- not just the wrapper self-test stub.
+          # Exit codes: 30 = upstream CLI missing, 31 = upstream contract probe
+          # failed, 32 = wrapper invariant (redaction/telemetry) failed.
+          docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --upstream-check
+
       - name: Build and push runner by digest
         id: build
         uses: docker/build-push-action@v7
@@ -298,3 +307,26 @@ jobs:
         run: |
           IMAGE_NAME="${{ needs.metadata.outputs.pentest_image_name }}"
           docker buildx imagetools inspect "${IMAGE_NAME}:1.0"
+
+      - name: Gate on configured default runner image tag being published
+        run: |
+          # Fail the pipeline if the runner image tag that production defaults to
+          # (settings.pentest.runner_image / config/workloads/default-runner-profiles.yaml)
+          # was not actually published by this workflow. Keep this in sync with the
+          # `1.0` stable tag created above.
+          IMAGE_NAME="${{ needs.metadata.outputs.pentest_image_name }}"
+          CONFIGURED_DEFAULT_TAG="1.0"
+          echo "Verifying ${IMAGE_NAME}:${CONFIGURED_DEFAULT_TAG} is published..."
+          if ! docker buildx imagetools inspect "${IMAGE_NAME}:${CONFIGURED_DEFAULT_TAG}" >/dev/null 2>&1; then
+            echo "::error::Configured default runner image ${IMAGE_NAME}:${CONFIGURED_DEFAULT_TAG} was not published by this workflow." >&2
+            exit 1
+          fi
+          # Record the published multi-arch digest so production configs can pin it.
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:${CONFIGURED_DEFAULT_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          echo "Published runner image digest: ${IMAGE_NAME}@${DIGEST}"
+          {
+            echo "### MoonMind PentestGPT runner image"
+            echo ""
+            echo "- Tag: \`${IMAGE_NAME}:${CONFIGURED_DEFAULT_TAG}\`"
+            echo "- Digest-pinned: \`${IMAGE_NAME}@${DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
