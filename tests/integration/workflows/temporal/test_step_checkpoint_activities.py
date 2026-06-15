@@ -20,6 +20,8 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalCheckpointActivities,
     TemporalSandboxActivities,
 )
+from moonmind.workflows.temporal.workflows import run as run_module
+from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 
@@ -57,6 +59,47 @@ def _assert_secret_absent(payload: object) -> None:
     assert "GHCR_PULL_USER" not in rendered
     assert "GHCR_PULL_TOKEN" not in rendered
     assert "secret-token" not in rendered
+
+
+def _recovery_source_with_checkpoint_payload() -> dict[str, object]:
+    return {
+        "sourceWorkflowId": "source-workflow",
+        "sourceRunId": "source-run",
+        "sourceTaskInputSnapshotRef": "artifact-input",
+        "sourcePlanDigest": "sha256:plan",
+        "failedStepId": "implement",
+        "failedStepExecution": 2,
+        "recoveryCheckpointRef": "artifact-checkpoint",
+        "recoveryWorkspace": {
+            "checkpointRef": "artifact-checkpoint",
+            "targetWorkspaceRef": "workspace-target",
+            "workspacePolicy": "apply_previous_execution_diff_to_clean_baseline",
+            "checkpoint": {
+                "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+                "schemaVersion": "v1",
+                "checkpointId": (
+                    "source-workflow:source-run:implement:execution:2:"
+                    "checkpoint:before_execution"
+                ),
+                "checkpointKind": "step_boundary",
+                "boundary": "before_execution",
+                "source": {
+                    "workflowId": "source-workflow",
+                    "runId": "source-run",
+                    "logicalStepId": "implement",
+                    "executionOrdinal": 2,
+                },
+                "taskInputSnapshotRef": "artifact-input",
+                "planDigest": "sha256:plan",
+                "workspace": {
+                    "kind": "git_patch",
+                    "baseCommit": "abc123",
+                    "patchRef": "artifact-patch",
+                },
+                "createdAt": "2026-06-13T12:00:00+00:00",
+            },
+        },
+    }
 
 
 async def test_capture_git_patch_and_create_checkpoint_write_compact_artifacts(
@@ -409,6 +452,100 @@ async def test_checkpoint_activity_failures_are_typed_and_secret_safe(
     )
     assert policy["status"] == "rejected"
     assert policy["failureCode"] == "policy_incompatible"
+
+
+async def test_workflow_recovery_routes_checkpoint_validation_before_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        calls.append((activity_type, payload))
+        if activity_type == "step_checkpoint.validate":
+            return {
+                "valid": True,
+                "failureCode": None,
+                "message": "checkpoint validation passed",
+                "checkpointId": payload["checkpoint"]["checkpointId"],
+                "checkpointRef": payload["checkpointRef"],
+            }
+        if activity_type == "workspace.apply_policy":
+            return {
+                "status": "prepared",
+                "workspaceRef": "workspace-target",
+                "appliedCheckpointRef": payload["checkpointRef"],
+                "providerLeaseRefs": [],
+                "summary": "workspace policy prepared",
+                "failureCode": None,
+            }
+        raise AssertionError(f"unexpected activity {activity_type}")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    workflow = MoonMindRunWorkflow()
+    workflow._recovery_source = _recovery_source_with_checkpoint_payload()
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "title": "Implement"}],
+        dependency_map={"implement": []},
+        updated_at=datetime(2026, 6, 13, 12, 0, tzinfo=UTC),
+    )
+
+    restored_ref = await workflow._prepare_recovery_workspace_for_failed_step(
+        "implement"
+    )
+
+    assert restored_ref == "workspace-target"
+    assert [activity_type for activity_type, _payload in calls] == [
+        "step_checkpoint.validate",
+        "workspace.apply_policy",
+    ]
+    validate_payload = calls[0][1]
+    assert validate_payload["checkpointRef"] == "artifact-checkpoint"
+    assert validate_payload["workspacePolicy"] == (
+        "apply_previous_execution_diff_to_clean_baseline"
+    )
+    policy_payload = calls[1][1]
+    assert policy_payload["checkpointRef"] == "artifact-checkpoint"
+    assert policy_payload["targetWorkspaceRef"] == "workspace-target"
+
+
+async def test_workflow_recovery_validation_failure_blocks_policy_application(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        calls.append(activity_type)
+        if activity_type == "step_checkpoint.validate":
+            return {
+                "valid": False,
+                "failureCode": "artifact_unauthorized",
+                "message": "unauthorized",
+                "checkpointId": payload["checkpoint"]["checkpointId"],
+                "checkpointRef": payload["checkpointRef"],
+            }
+        raise AssertionError("workspace policy must not run after failed validation")
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    workflow = MoonMindRunWorkflow()
+    workflow._recovery_source = _recovery_source_with_checkpoint_payload()
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "title": "Implement"}],
+        dependency_map={"implement": []},
+        updated_at=datetime(2026, 6, 13, 12, 0, tzinfo=UTC),
+    )
+
+    with pytest.raises(ValueError, match="artifact_unauthorized"):
+        await workflow._prepare_recovery_workspace_for_failed_step("implement")
+
+    assert calls == ["step_checkpoint.validate"]
 
 
 async def test_checkpoint_validate_activity_reports_boundary_failure_classes(
