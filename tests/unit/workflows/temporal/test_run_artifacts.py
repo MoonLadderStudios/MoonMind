@@ -385,6 +385,244 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     }
 
 @pytest.mark.asyncio
+async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._state = "finalizing"
+    workflow._publish_status = "not_required"
+    workflow._publish_reason = (
+        "MoonSpec verification did not approve publication. verdict BLOCKED. "
+        "Classification: environment failure / validation infrastructure unavailable. "
+        "Docker UE image access failed: GHCR returned `unauthorized`; native UE "
+        "paths missing."
+    )
+    workflow._publish_context = {
+        "publicationBlockedBy": "moonspec_verify",
+        "branch": "jira-orchestrate-thor-509-c173f338",
+        "baseRef": "origin/main",
+        "headSha": "2c6584dc4487629eaee43bd4a9bcb8974e7e8dae",
+        "commitCount": 6,
+        "pullRequestUrl": "https://github.com/MoonLadderStudios/Tactics/pull/1845",
+        "moonSpecGate": {
+            "logicalStepId": "tpl:jira-orchestrate:1.0.0:23:ceb64b9f",
+            "verdict": "BLOCKED",
+            "classification": (
+                "environment failure / validation infrastructure unavailable"
+            ),
+            "diagnosticsRef": "art_verify_report",
+            "summary": (
+                "Native UE/toolchain NOT RUN; all required native Windows/WSL "
+                "paths missing. Docker UE image access FAIL: GHCR returned "
+                "`unauthorized`; Docker fallback cannot start Unreal."
+            ),
+        },
+    }
+
+    written_payloads: list[dict[str, Any]] = []
+    captured_memo: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, bool]:
+        assert activity_type == "artifact.write_complete"
+        written_payloads.append(json.loads(payload.payload.decode("utf-8")))
+        return {"ok": True}
+
+    start_time = datetime(2026, 6, 15, 2, 41, tzinfo=timezone.utc)
+    finish_time = datetime(2026, 6, 15, 9, 7, tzinfo=timezone.utc)
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "mm:wf-1",
+            "run_id": "run-1",
+            "start_time": start_time,
+        },
+    )
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda memo: captured_memo.append(dict(memo)),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+
+    await workflow._run_finalizing_stage(
+        parameters={"runtime": {"mode": "codex"}, "publishMode": "pr"},
+        status="failed",
+        error=workflow._publish_reason,
+    )
+
+    assert written_payloads
+    failure_summary = written_payloads[-1]["failureSummary"]
+    assert failure_summary == {
+        "type": "moonspec_verification_gate",
+        "category": "validation_environment_blocked",
+        "blockedBy": "moonspec_verify",
+        "verdict": "BLOCKED",
+        "classification": "environment failure / validation infrastructure unavailable",
+        "diagnosticsRef": "art_verify_report",
+        "recommendedNextAction": "restore_validation_environment",
+        "summary": (
+            "MoonSpec verification blocked publication: BLOCKED. "
+            "environment failure / validation infrastructure unavailable."
+        ),
+        "blockers": [
+            "native_unreal_toolchain_missing",
+            "docker_registry_unauthorized",
+        ],
+        "publishContext": {
+            "branch": "jira-orchestrate-thor-509-c173f338",
+            "baseRef": "origin/main",
+            "headSha": "2c6584dc4487629eaee43bd4a9bcb8974e7e8dae",
+            "commitCount": 6,
+            "pullRequestUrl": "https://github.com/MoonLadderStudios/Tactics/pull/1845",
+        },
+    }
+    assert captured_memo[-1]["summary_artifact_ref"] == "art_summary_1"
+
+
+@pytest.mark.asyncio
+async def test_run_finalizing_stage_writes_transient_codex_failure_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._state = "finalizing"
+    workflow._pull_request_url = "https://github.com/MoonLadderStudios/Tactics/pull/1844"
+    workflow._publish_context = {
+        "branch": "jira-orchestrate-thor-508-ab3bfbd4",
+        "baseRef": "origin/main",
+        "headSha": "e35729fa58541d0eeca33f4f91015c9d06fc0569",
+        "commitCount": 4,
+        "pullRequestUrl": "https://github.com/MoonLadderStudios/Tactics/pull/1844",
+        "moonSpecGate": {
+            "logicalStepId": "tpl:jira-orchestrate:1.0.0:21:6e2de025",
+            "verdict": "FULLY_IMPLEMENTED",
+            "diagnosticsRef": "art_verify_pass",
+        },
+    }
+    workflow._failure_diagnostic = {
+        "stage": "finalizing",
+        "category": "execution_error",
+        "source": "child_workflow",
+        "stepId": "tpl:jira-orchestrate:1.0.0:22:6e2de025",
+        "message": (
+            "Agent runtime failed with execution_error for profile codex_default "
+            "due to app_server_protocol_empty_turn: codex app-server "
+            "turn/completed produced no assistant output "
+            "(retryRecommendedAction: clear_session; diagnosticsRef: art_empty_turn)"
+        ),
+        "diagnosticsRef": "art_empty_turn",
+    }
+
+    written_payloads: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "art_summary_2"}, {"upload_url": "unused"})
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, bool]:
+        assert activity_type == "artifact.write_complete"
+        written_payloads.append(json.loads(payload.payload.decode("utf-8")))
+        return {"ok": True}
+
+    start_time = datetime(2026, 6, 15, 2, 41, tzinfo=timezone.utc)
+    finish_time = datetime(2026, 6, 15, 8, 46, tzinfo=timezone.utc)
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "mm:wf-2",
+            "run_id": "run-2",
+            "start_time": start_time,
+        },
+    )
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: finish_time)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+
+    await workflow._run_finalizing_stage(
+        parameters={"runtime": {"mode": "codex"}, "publishMode": "pr"},
+        status="failed",
+        error=workflow._failure_diagnostic["message"],
+    )
+
+    failure_summary = written_payloads[-1]["failureSummary"]
+    assert failure_summary["type"] == "agent_runtime_failure"
+    assert failure_summary["category"] == "transient_agent_runtime"
+    assert failure_summary["failureCause"] == "app_server_protocol_empty_turn"
+    assert failure_summary["retryRecommendedAction"] == "clear_session"
+    assert failure_summary["diagnosticsRef"] == "art_empty_turn"
+    assert failure_summary["recommendedNextAction"] == (
+        "retry_finalization_after_clear_session"
+    )
+    assert failure_summary["partialSuccess"] == {
+        "moonSpecVerdict": "FULLY_IMPLEMENTED",
+        "pullRequestUrl": "https://github.com/MoonLadderStudios/Tactics/pull/1844",
+        "branch": "jira-orchestrate-thor-508-ab3bfbd4",
+        "headSha": "e35729fa58541d0eeca33f4f91015c9d06fc0569",
+    }
+
+@pytest.mark.asyncio
 async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

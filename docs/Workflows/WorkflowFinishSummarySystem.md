@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-05-17  
+Last Updated: 2026-06-15
 Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowProposalSystem.md`,
 `docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
 
@@ -128,6 +128,76 @@ Field semantics:
   diagnostics. Large diagnostic payloads MUST NOT be embedded inline — they
   belong in artifacts. See `docs/Temporal/StepLedgerAndProgressModel.md` for
   the same rule applied to per-step `lastError`.
+
+Failed runs MAY also include a `failureSummary` object. `failure` remains the
+low-level diagnostic captured at the failure boundary; `failureSummary` is the
+compact operator classification that Mission Control can render without parsing
+Markdown reports or long failure strings.
+
+For MoonSpec publication gates, `failureSummary` uses this shape:
+
+```json
+{
+  "failureSummary": {
+    "type": "moonspec_verification_gate",
+    "category": "validation_environment_blocked",
+    "blockedBy": "moonspec_verify",
+    "verdict": "BLOCKED",
+    "classification": "environment failure / validation infrastructure unavailable",
+    "diagnosticsRef": "art_...",
+    "recommendedNextAction": "restore_validation_environment",
+    "summary": "MoonSpec verification blocked publication: BLOCKED. environment failure / validation infrastructure unavailable.",
+    "blockers": [
+      "native_unreal_toolchain_missing",
+      "docker_registry_unauthorized"
+    ],
+    "publishContext": {
+      "branch": "jira-orchestrate-example",
+      "baseRef": "origin/main",
+      "headSha": "abc123",
+      "commitCount": 6,
+      "pullRequestUrl": "https://github.com/org/repo/pull/123"
+    }
+  }
+}
+```
+
+Allowed MoonSpec summary categories are:
+
+* `validation_environment_blocked`: required local/CI validation
+  infrastructure is unavailable, for example native Unreal tooling is missing
+  or a required Docker registry pull is unauthorized.
+* `validation_evidence_missing`: implementation may be present, but required
+  current-head CI or lane evidence is missing.
+* `verification_gaps_remaining`: the verifier reported concrete remaining
+  implementation or validation gaps.
+
+For managed agent runtime failures, `failureSummary` uses:
+
+```json
+{
+  "failureSummary": {
+    "type": "agent_runtime_failure",
+    "category": "transient_agent_runtime",
+    "failureCause": "app_server_protocol_empty_turn",
+    "retryRecommendedAction": "clear_session",
+    "diagnosticsRef": "art_...",
+    "recommendedNextAction": "retry_finalization_after_clear_session",
+    "summary": "Agent runtime failed with execution_error ...",
+    "partialSuccess": {
+      "moonSpecVerdict": "FULLY_IMPLEMENTED",
+      "pullRequestUrl": "https://github.com/org/repo/pull/123",
+      "branch": "jira-orchestrate-example",
+      "headSha": "abc123"
+    }
+  }
+}
+```
+
+When a managed-runtime failure occurs after a publishable verification result or
+after a pull request has already been created, `partialSuccess` MUST preserve
+that evidence so the UI can distinguish "implementation verified but final
+runtime turn failed" from "implementation failed".
 
 When a structured `failure` is present, the `lastStep` block SHOULD reflect
 the failure so operators see the failing tool, not a stale prior step:
