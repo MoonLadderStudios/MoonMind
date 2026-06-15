@@ -2432,6 +2432,143 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_pr_publish(
     assert initial_parameters["workflow"]["publish"]["mode"] == "pr"
 
 
+def test_create_task_shaped_execution_preserves_pr_base_branch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+                "workflow": {
+                    "instructions": "Run Jira Orchestrate for MM-825.",
+                    "tool": {"type": "skill", "name": "jira-orchestrate"},
+                    "runtime": {"mode": "codex"},
+                    "git": {"branch": "main"},
+                    "publish": {"mode": "pr"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    service.create_execution.assert_awaited_once()
+    initial_parameters = service.create_execution.call_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["publishMode"] == "pr"
+    assert initial_parameters["workflow"]["git"] == {"branch": "main"}
+
+
+def test_create_task_shaped_execution_rejects_generated_jira_pr_head_as_base_branch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+                "workflow": {
+                    "instructions": "Run Jira Orchestrate for MM-825.",
+                    "tool": {"type": "skill", "name": "jira-orchestrate"},
+                    "runtime": {"mode": "codex"},
+                    "git": {"branch": "moonmind/jira-orchestrate-mm-825"},
+                    "publish": {"mode": "pr"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    assert "PR base branch" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_task_shaped_execution_rejects_generated_jira_pr_head_in_publish_base(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+                "workflow": {
+                    "instructions": "Run Jira Orchestrate for MM-825.",
+                    "tool": {"type": "skill", "name": "jira-orchestrate"},
+                    "runtime": {"mode": "codex"},
+                    "git": {"branch": "main"},
+                    "publish": {
+                        "mode": "pr",
+                        "prBaseBranch": "moonmind/jira-orchestrate-mm-825",
+                    },
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    assert (
+        "payload.workflow.publish.prBaseBranch"
+        in response.json()["detail"]["message"]
+    )
+    service.create_execution.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "run-jira-orchestrate-for-mm-824-complete-8ad823ae",
+        "jira-implement-mm-697",
+    ],
+)
+def test_create_task_shaped_execution_rejects_runtime_generated_jira_pr_head_names(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    branch: str,
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "repository": "MoonLadderStudios/MoonMind",
+                "publishMode": "pr",
+                "workflow": {
+                    "instructions": "Run Jira Orchestrate for MM-824.",
+                    "tool": {"type": "skill", "name": "jira-orchestrate"},
+                    "runtime": {"mode": "codex"},
+                    "git": {"branch": branch},
+                    "publish": {"mode": "pr"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_request"
+    assert "payload.workflow.git.branch" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_pr_publish(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
