@@ -808,6 +808,37 @@ def _missing_source_reference_story_ids(
             missing.append(_story_id(story, index=index))
     return missing
 
+def _requires_story_source_reference(
+    *,
+    inputs: Mapping[str, Any],
+    story_output: Mapping[str, Any],
+    fallback_path: str,
+) -> bool:
+    raw_policy = _string(
+        story_output.get("sourceReferencePolicy")
+        or story_output.get("source_reference_policy")
+        or inputs.get("sourceReferencePolicy")
+        or inputs.get("source_reference_policy")
+    ).lower()
+    if raw_policy in {
+        "require",
+        "required",
+        "source_required",
+        "source-reference-required",
+        "source_reference_required",
+    }:
+        return True
+    if raw_policy in {
+        "allow_missing",
+        "inline",
+        "optional",
+        "source_optional",
+        "source-reference-optional",
+        "source_reference_optional",
+    }:
+        return False
+    return bool(fallback_path)
+
 def _story_description_with_source(
     story: Mapping[str, Any],
     *,
@@ -1923,7 +1954,11 @@ async def create_jira_issues_from_stories(
     story_breakdown_path = _string(
         inputs.get("storyBreakdownPath") or story_output.get("storyBreakdownPath")
     )
-    if story_breakdown_path:
+    if story_breakdown_path and _requires_story_source_reference(
+        inputs=inputs,
+        story_output=story_output,
+        fallback_path=breakdown_source_path,
+    ):
         missing_source_ids = _missing_source_reference_story_ids(
             stories,
             fallback_path=breakdown_source_path,
