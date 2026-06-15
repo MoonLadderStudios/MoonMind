@@ -5708,36 +5708,43 @@ def _resolve_workflow_publish_payload(
     return resolved
 
 _GENERATED_JIRA_PR_HEAD_BRANCH_RE = re.compile(
-    r"^moonmind/jira-(?:orchestrate|implement)-[a-z][a-z0-9]*-\d+(?:[-_].*)?$",
+    r"^(?:moonmind/jira-(?:orchestrate|implement)-[a-z][a-z0-9]*-\d+(?:[-_].*)?|"
+    r"(?:run-)?jira-(?:orchestrate|implement)(?:-[a-z0-9]+)*-mm-\d+"
+    r"(?:-[a-z0-9]+)*(?:-[0-9a-f]{8})?)$",
     re.IGNORECASE,
 )
 
 
 def _validate_pr_base_branch_submission(
     *,
-    publish_payload: Mapping[str, Any],
-    task_payload: Mapping[str, Any],
-    git_payload: Mapping[str, Any],
+    publish_payload: Mapping[str, Any] | None,
+    task_payload: Mapping[str, Any] | None,
+    git_payload: Mapping[str, Any] | None,
 ) -> None:
-    if str(publish_payload.get("mode") or "").strip().lower() != "pr":
+    publish = publish_payload or {}
+    task = task_payload or {}
+    git = git_payload or {}
+    if str(publish.get("mode") or "").strip().lower() != "pr":
         return
 
-    branch = str(
-        git_payload.get("branch")
-        or git_payload.get("startingBranch")
-        or task_payload.get("branch")
-        or task_payload.get("startingBranch")
-        or ""
-    ).strip()
-    if not branch:
-        return
+    for field_name, value in (
+        ("payload.workflow.publish.prBaseBranch", publish.get("prBaseBranch")),
+        ("payload.workflow.publish.baseBranch", publish.get("baseBranch")),
+        ("payload.workflow.git.branch", git.get("branch")),
+        ("payload.workflow.git.startingBranch", git.get("startingBranch")),
+        ("payload.workflow.branch", task.get("branch")),
+        ("payload.workflow.startingBranch", task.get("startingBranch")),
+    ):
+        branch = str(value or "").strip()
+        if not branch:
+            continue
+        if _GENERATED_JIRA_PR_HEAD_BRANCH_RE.match(branch):
+            raise _invalid_workflow_request(
+                f"{field_name} is the PR base branch for publishMode 'pr', "
+                "but it looks like a generated Jira work/head branch. Use an existing "
+                "base branch such as 'main'; MoonMind creates the PR head branch separately."
+            )
 
-    if _GENERATED_JIRA_PR_HEAD_BRANCH_RE.match(branch):
-        raise _invalid_workflow_request(
-            "payload.workflow.git.branch is the PR base branch for publishMode 'pr', "
-            "but it looks like a generated Jira work/head branch. Use an existing "
-            "base branch such as 'main'; MoonMind creates the PR head branch separately."
-        )
 
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
