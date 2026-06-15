@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user, get_current_user_optional
@@ -39,6 +40,10 @@ from moonmind.workflows.proposals.service import (
     WorkflowProposalValidationError,
 )
 from moonmind.workflows.proposals.delivery import ProviderDecisionEvent
+from moonmind.workflows.executions.execution_contract import (
+    CanonicalWorkflowExecutionPayload,
+    WorkflowContractError,
+)
 
 router = APIRouter(prefix="/api/proposals", tags=["workflow-proposals"])
 
@@ -487,6 +492,16 @@ async def _create_promoted_execution(
     idempotency_key: str,
 ) -> str:
     initial_parameters = dict(final_request.get("payload") or {})
+    try:
+        CanonicalWorkflowExecutionPayload.model_validate(initial_parameters)
+    except (ValidationError, WorkflowContractError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "code": "invalid_execution_request",
+                "message": str(exc),
+            },
+        ) from exc
     execution_record = await execution_service.create_execution(
         workflow_type="MoonMind.UserWorkflow",
         owner_id=getattr(user, "id"),

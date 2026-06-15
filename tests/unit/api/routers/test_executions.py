@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, Mock, call, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -336,6 +336,90 @@ def test_step_execution_detail_payload_exposes_environment_fix_guidance() -> Non
     assert recovery["operatorGuidance"] == "fix_environment"
     assert diagnostic_kinds == {"provider_lease", "sidecar", "ghcr", "preflight"}
     assert "source-code" not in json.dumps(payload, default=str).lower()
+
+
+def test_mm842_task_steps_accept_ordered_steps_without_graph_metadata() -> None:
+    task_payload = {
+        "steps": [
+            {"id": "plan", "instructions": "Plan the work."},
+            {"id": "implement", "instructions": "Implement the work."},
+        ]
+    }
+
+    steps = _normalize_task_steps(task_payload)
+
+    assert [step["id"] for step in steps] == ["plan", "implement"]
+    assert all("dependsOn" not in step for step in steps)
+    assert all("depends_on" not in step for step in steps)
+    assert all("dependencies" not in step for step in steps)
+
+
+@pytest.mark.parametrize("field_name", ["dependsOn", "depends_on", "dependencies"])
+def test_mm842_task_steps_reject_non_empty_step_graph_metadata(field_name: str) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        _normalize_task_steps(
+            {
+                "steps": [
+                    {"id": "plan", "instructions": "Plan."},
+                    {
+                        "id": "implement",
+                        "instructions": "Implement.",
+                        field_name: ["plan"],
+                    },
+                ]
+            }
+        )
+
+    detail = exc_info.value.detail
+    assert detail["code"] == "invalid_execution_request"
+    assert f"payload.workflow.steps[1].{field_name}" in detail["message"]
+    assert "ordered by their steps[] position" in detail["message"]
+
+
+@pytest.mark.parametrize("field_name", ["dependsOn", "depends_on", "dependencies"])
+def test_mm842_task_steps_strip_empty_step_graph_metadata(field_name: str) -> None:
+    task_payload = {
+        "steps": [
+            {
+                "id": "plan",
+                "instructions": "Plan.",
+                field_name: [],
+            }
+        ]
+    }
+
+    steps = _normalize_task_steps(task_payload)
+
+    assert field_name not in steps[0]
+    assert "dependsOn" not in steps[0]
+    assert "depends_on" not in steps[0]
+    assert "dependencies" not in steps[0]
+
+
+def test_mm842_task_steps_reject_non_empty_active_edges() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        _normalize_task_steps(
+            {
+                "steps": [{"id": "plan", "instructions": "Plan."}],
+                "edges": [{"from": "plan", "to": "implement"}],
+            }
+        )
+
+    detail = exc_info.value.detail
+    assert detail["code"] == "invalid_execution_request"
+    assert "payload.workflow.edges" in detail["message"]
+    assert "ordered by their steps[] position" in detail["message"]
+
+
+def test_mm842_task_steps_strip_empty_active_edges() -> None:
+    task_payload = {
+        "steps": [{"id": "plan", "instructions": "Plan."}],
+        "edges": [],
+    }
+
+    _normalize_task_steps(task_payload)
+
+    assert "edges" not in task_payload
 
 
 @pytest.mark.asyncio
