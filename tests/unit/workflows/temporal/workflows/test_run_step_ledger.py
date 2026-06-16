@@ -148,6 +148,28 @@ def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
     assert source.index(guard) < source.index(start_manifest_call)
 
 
+def test_canonical_step_checkpoint_writes_keep_replay_patch_guard() -> None:
+    source = Path(run_module.__file__).read_text()
+
+    assert run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH == (
+        "run-canonical-step-checkpoints-v1"
+    )
+    guard = "if not workflow.patched(RUN_CANONICAL_STEP_CHECKPOINTS_PATCH):"
+    activity_call = "result = await self._create_step_checkpoint_via_activity("
+
+    assert source.index(guard) < source.index(activity_call)
+
+
+def test_recovery_workspace_prepares_before_marking_failed_step_running() -> None:
+    source = Path(run_module.__file__).read_text()
+
+    prepare_call = (
+        "await self._prepare_recovery_workspace_for_failed_step(node_id)\n"
+        "                self._mark_step_running("
+    )
+    assert prepare_call in source
+
+
 def _registry_payload() -> dict[str, Any]:
     return {
         "skills": [
@@ -1486,6 +1508,15 @@ async def test_run_records_canonical_boundary_checkpoint_and_manifest_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_STEP_EXECUTION_MANIFEST_PATCH,
+        },
+    )
     workflow = MoonMindRunWorkflow()
     now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
     workflow._input_ref = "artifact://task-input"
@@ -1588,6 +1619,46 @@ async def test_run_records_canonical_boundary_checkpoint_and_manifest_refs(
         [call["payload"] for call in captured],
         sort_keys=True,
     ).lower()
+
+
+@pytest.mark.asyncio
+async def test_run_skips_canonical_boundary_checkpoint_when_unpatched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    captured: list[str] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append(activity)
+        return {}
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_execution",
+        updated_at=now,
+    )
+
+    assert result is None
+    assert captured == []
 
 
 def test_run_marks_completed_step_without_checkpoint_ineligible(

@@ -406,6 +406,7 @@ RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
 RUN_STEP_EXECUTION_MANIFEST_PATCH = "run-step-" + "attempt-manifest-v1"
+RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_STEP_EXECUTION_NAMING_PATCH = "run-step-execution-naming-v1"
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
@@ -2982,7 +2983,7 @@ class MoonMindRunWorkflow:
         checkpoint_ref = (
             self._step_checkpoint_refs.get(logical_step_id)
             or self._previous_step_checkpoint_refs.get(logical_step_id)
-            or self._recovery_workspace_restored_ref
+            or getattr(self, "_recovery_workspace_restored_ref", None)
         )
         workspace_ref = checkpoint_ref or (
             "temporal://"
@@ -3004,6 +3005,8 @@ class MoonMindRunWorkflow:
         step_outputs: Mapping[str, Any] | None = None,
         diagnostic_refs: Sequence[str] = (),
     ) -> str | None:
+        if not workflow.patched(RUN_CANONICAL_STEP_CHECKPOINTS_PATCH):
+            return None
         identity = self._canonical_step_checkpoint_identity(logical_step_id)
         if identity is None:
             return None
@@ -5105,6 +5108,13 @@ class MoonMindRunWorkflow:
                 )
                 self._update_memo()
                 self._refresh_step_readiness(updated_at=workflow.now())
+                if node_id == self._recovery_failed_step_id:
+                    await self._record_canonical_step_checkpoint(
+                        node_id,
+                        boundary="before_recovery_restoration",
+                        updated_at=workflow.now(),
+                    )
+                await self._prepare_recovery_workspace_for_failed_step(node_id)
                 self._mark_step_running(
                     node_id,
                     updated_at=workflow.now(),
@@ -5124,13 +5134,6 @@ class MoonMindRunWorkflow:
                         )
                     )
                 )
-                if node_id == self._recovery_failed_step_id:
-                    await self._record_canonical_step_checkpoint(
-                        node_id,
-                        boundary="before_recovery_restoration",
-                        updated_at=workflow.now(),
-                    )
-                await self._prepare_recovery_workspace_for_failed_step(node_id)
                 await self._record_canonical_step_checkpoint(
                     node_id,
                     boundary="after_prepare",
