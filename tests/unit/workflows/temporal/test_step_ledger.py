@@ -52,6 +52,9 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[1]["tool"] == {"type": "skill", "name": "repo.test", "version": "1"}
     assert rows[0]["refs"]["latestStepExecutionManifestRef"] is None
     assert rows[0]["refs"]["stepExecutionManifestRefs"] == []
+    assert rows[0]["refs"]["latestStepExecutionCheckpointRef"] is None
+    assert rows[0]["refs"]["stepExecutionCheckpointRefs"] == []
+    assert rows[0]["refs"]["checkpointRefsByBoundary"] == {}
 
 
 def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests() -> None:
@@ -62,6 +65,15 @@ def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests()
             "agentRunId": "agent-run",
             "latestStepExecutionManifestRef": "artifact-attempt-2",
             "stepExecutionManifestRefs": ["artifact-attempt-1", "artifact-attempt-2"],
+            "latestStepExecutionCheckpointRef": "artifact-checkpoint-2",
+            "stepExecutionCheckpointRefs": [
+                "artifact-checkpoint-1",
+                "artifact-checkpoint-2",
+            ],
+            "checkpointRefsByBoundary": {
+                "before_execution": "artifact-checkpoint-1",
+                "after_execution": "artifact-checkpoint-2",
+            },
         }
     )
 
@@ -70,6 +82,15 @@ def test_step_ledger_refs_track_latest_and_historical_step_execution_manifests()
         "artifact-attempt-1",
         "artifact-attempt-2",
     ]
+    assert refs.latest_step_execution_checkpoint_ref == "artifact-checkpoint-2"
+    assert refs.step_execution_checkpoint_refs == [
+        "artifact-checkpoint-1",
+        "artifact-checkpoint-2",
+    ]
+    assert refs.checkpoint_refs_by_boundary == {
+        "before_execution": "artifact-checkpoint-1",
+        "after_execution": "artifact-checkpoint-2",
+    }
     assert refs.model_dump(by_alias=True)["latestStepExecutionManifestRef"] == (
         "artifact-attempt-2"
     )
@@ -115,6 +136,9 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
                 "agentRunId": None,
                 "latestStepExecutionManifestRef": None,
                 "stepExecutionManifestRefs": [],
+                "latestStepExecutionCheckpointRef": None,
+                "stepExecutionCheckpointRefs": [],
+                "checkpointRefsByBoundary": {},
             },
             "artifacts": {
                 "outputSummary": None,
@@ -349,6 +373,9 @@ def test_row_defaults_remain_bounded_and_structured() -> None:
         "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
+        "latestStepExecutionCheckpointRef": None,
+        "stepExecutionCheckpointRefs": [],
+        "checkpointRefsByBoundary": {},
     }
     assert artifacts.model_dump(by_alias=True) == {
         "outputSummary": None,
@@ -387,12 +414,22 @@ def test_mark_step_checkpoint_evidence_marks_completed_step_eligible() -> None:
         state_checkpoint_ref="artifact://checkpoint/implement/1",
         workspace_checkpoint_ref="artifact://workspace/implement/1",
         step_checkpoint_ref="artifact://step/implement/1",
+        boundary="after_execution",
     )
 
     row = StepLedgerRowModel.model_validate(rows[0])
     assert row.state_checkpoint_ref == "artifact://checkpoint/implement/1"
     assert row.workspace_checkpoint_ref == "artifact://workspace/implement/1"
     assert row.step_checkpoint_ref == "artifact://step/implement/1"
+    assert row.refs.latest_step_execution_checkpoint_ref == (
+        "artifact://step/implement/1"
+    )
+    assert row.refs.step_execution_checkpoint_refs == [
+        "artifact://step/implement/1"
+    ]
+    assert row.refs.checkpoint_refs_by_boundary == {
+        "after_execution": "artifact://step/implement/1"
+    }
     assert row.resume_preservation is not None
     assert row.resume_preservation.eligible is True
     assert row.resume_preservation.reason == "complete"
@@ -534,6 +571,9 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
+        "latestStepExecutionCheckpointRef": None,
+        "stepExecutionCheckpointRefs": [],
+        "checkpointRefsByBoundary": {},
     }
     assert row["artifacts"] == {
         "outputSummary": "art_summary_1",

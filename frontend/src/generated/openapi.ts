@@ -7779,6 +7779,14 @@ export interface components {
             latestStepExecutionManifestRef?: string | null;
             /** Stepexecutionmanifestrefs */
             stepExecutionManifestRefs?: string[];
+            /** Lateststepexecutioncheckpointref */
+            latestStepExecutionCheckpointRef?: string | null;
+            /** Stepexecutioncheckpointrefs */
+            stepExecutionCheckpointRefs?: string[];
+            /** Checkpointrefsbyboundary */
+            checkpointRefsByBoundary?: {
+                [key: string]: string;
+            };
         };
         /**
          * StepLedgerResumePreservationModel
