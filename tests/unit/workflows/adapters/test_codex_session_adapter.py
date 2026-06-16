@@ -7,7 +7,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import (
+    ActivityError,
+    ApplicationError,
+    TimeoutError as TemporalTimeoutError,
+    TimeoutType,
+)
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -71,6 +76,29 @@ def _raise_activity_error_from_application_error(error: ApplicationError) -> Non
             activity_id="activity-1",
             retry_state=None,
         ) from exc
+
+def _raise_activity_error_from_timeout(
+    timeout_type: TimeoutType = TimeoutType.SCHEDULE_TO_CLOSE,
+) -> None:
+    """Mimic a Temporal activity timeout: ActivityError whose cause is a
+    temporalio TimeoutError (not an ApplicationError turn error)."""
+    try:
+        raise TemporalTimeoutError(
+            "activity ScheduleToClose timeout",
+            type=timeout_type,
+            last_heartbeat_details=[],
+        )
+    except TemporalTimeoutError as exc:
+        raise ActivityError(
+            "activity failed",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test-worker",
+            activity_type="agent_runtime.send_turn",
+            activity_id="activity-1",
+            retry_state=None,
+        ) from exc
+
 
 def _binding() -> CodexManagedSessionBinding:
     return CodexManagedSessionBinding(
@@ -1770,6 +1798,81 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
     assert persisted_record.stdout_artifact_ref == "artifact:stdout"
     assert persisted_record.stderr_artifact_ref == "artifact:stderr"
     assert persisted_record.diagnostics_ref == "artifact:diagnostics"
+
+async def test_start_classifies_send_turn_timeout_with_actionable_summary(
+    tmp_path: Path,
+) -> None:
+    """A Temporal activity timeout on send_turn must surface a descriptive,
+    operator-actionable failed result instead of an empty/bare-token summary.
+
+    Regression for mm:4b897068, where a timed-out codex turn produced
+    failure_class="execution_error" with summary=null.
+    """
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        _raise_activity_error_from_timeout()
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(),
+        publish_remote_artifacts=AsyncMock(),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    with pytest.raises(CodexSessionRunFailedError) as excinfo:
+        await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+
+    result = excinfo.value.agent_run_result
+    assert result.failure_class == "execution_error"
+    assert result.summary
+    assert result.summary not in {
+        "user_error",
+        "integration_error",
+        "execution_error",
+        "system_error",
+    }
+    assert "timed out" in result.summary.lower()
+    assert "schedule to close" in result.summary.lower()
+    assert result.metadata.get("turnStatus") == "timed_out"
+
+    persisted_record = run_store.load(binding.agent_run_id)
+    assert persisted_record is not None
+    assert persisted_record.failure_class == "execution_error"
+
 
 async def test_start_classifies_codex_auth_failure_as_user_error(
     tmp_path: Path,
