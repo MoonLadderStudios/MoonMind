@@ -319,6 +319,8 @@ Key diagnostics:
 - Python 3.12 + Pydantic v2, Temporal Python SDK, FastAPI, SQLAlchemy async service fixtures, pytest, existing workload launcher/registry, Docker Buildx, GitHub Actions (001-finish-pentestgpt)
 - Existing Temporal workflow history and artifact store; existing provider-profile/secret configuration; no new persistent storage. (001-finish-pentestgpt)
 - Python 3.12 + Pydantic v2, Temporal Python SDK activity boundaries, SQLAlchemy async artifact repository, existing `TemporalArtifactService`, existing report-bundle helpers (001-close-pentest-publication)
+- TypeScript/React for Mission Control UI; Python 3.12 for FastAPI/Pydantic backend surfaces + React, TanStack Query, Zod, FastAPI, Pydantic v2, SQLAlchemy async ORM, Temporal Python SDK service layer (001-workflow-actions-menu)
+- Existing Temporal execution records, memo/search attributes, artifact refs, and related-run/remediation links; no new storage (001-workflow-actions-menu)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
