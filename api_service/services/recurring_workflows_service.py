@@ -183,6 +183,15 @@ def _catchup_mode_from_temporal_window(catchup_window: object | None) -> str:
         return "last"
     return "all"
 
+def _first_mapping_value(
+    source: Mapping[str, Any],
+    keys: tuple[str, ...],
+) -> Any:
+    for key in keys:
+        if key in source:
+            return source[key]
+    return None
+
 def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     target = dict(target_payload)
     workflow_type = str(
@@ -209,16 +218,36 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
     target.pop("workflow_type", None)
     target.pop("initial_parameters", None)
 
+    for camel_key, aliases in (
+        ("inputArtifactRef", ("inputArtifactRef", "input_artifact_ref")),
+        ("planArtifactRef", ("planArtifactRef", "plan_artifact_ref")),
+        ("failurePolicy", ("failurePolicy", "failure_policy")),
+    ):
+        value = _first_mapping_value(target, aliases)
+        if value is not None:
+            target[camel_key] = value
+        for alias in aliases:
+            if alias != camel_key:
+                target.pop(alias, None)
+
     if workflow_type == "MoonMind.ManifestIngest":
         manifest_ref = str(
-            target.get("manifestArtifactRef") or target.get("manifest_ref") or ""
+            _first_mapping_value(
+                target,
+                ("manifestArtifactRef", "manifest_ref", "manifest_artifact_ref"),
+            )
+            or ""
         ).strip()
         if not manifest_ref:
             raise RecurringWorkflowValidationError(
                 "target.manifestArtifactRef is required for MoonMind.ManifestIngest"
             )
         target["manifestArtifactRef"] = manifest_ref
+        target.pop("manifest_ref", None)
+        target.pop("manifest_artifact_ref", None)
         options = target.get("options")
+        if options is None:
+            options = target["initialParameters"].get("options")
         if options is None:
             options = {}
         if not isinstance(options, Mapping):
@@ -226,6 +255,11 @@ def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
                 "target.options must be an object when provided"
             )
         target["options"] = dict(options)
+        action = target.get("action")
+        if action is None:
+            action = target["initialParameters"].get("action")
+        if action is not None:
+            target["action"] = str(action).strip() or "apply"
 
     return target
 
@@ -342,6 +376,14 @@ class RecurringWorkflowsService:
             "failurePolicy": target_payload.get("failurePolicy"),
         }
 
+    def _owner_search_attributes(self, owner_user_id: UUID | None) -> dict[str, str]:
+        if owner_user_id is None:
+            return {}
+        return {
+            "mm_owner_type": "user",
+            "mm_owner_id": str(owner_user_id),
+        }
+
     async def create_definition(
         self,
         *,
@@ -425,6 +467,7 @@ class RecurringWorkflowsService:
                 workflow_type=workflow_type,
                 workflow_input=workflow_input,
                 memo={"definitionId": str(definition_id)},
+                search_attributes=self._owner_search_attributes(owner_user_id),
             )
         except Exception as exc:
             logger.error(f"Failed to create temporal schedule for {definition_id}: {exc}")
@@ -588,6 +631,7 @@ class RecurringWorkflowsService:
                 workflow_type=workflow_type,
                 workflow_input=workflow_input,
                 memo={"definitionId": str(dfn.id)},
+                search_attributes=self._owner_search_attributes(dfn.owner_user_id),
             )
         except ScheduleAlreadyExistsError:
             await self._adapter.update_schedule(

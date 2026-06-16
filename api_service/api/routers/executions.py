@@ -7450,6 +7450,15 @@ def _compute_schedule_delay(
         )
     return delay
 
+def _first_mapping_value(
+    source: Mapping[str, Any],
+    keys: tuple[str, ...],
+) -> Any:
+    for key in keys:
+        if key in source:
+            return source[key]
+    return None
+
 def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
     """Transform a workflow request payload into a RecurringWorkflowsService target.
 
@@ -7477,14 +7486,17 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
                 else initial_parameters
             ),
         }
-        for source_key, target_key in (
-            ("title", "title"),
-            ("inputArtifactRef", "inputArtifactRef"),
-            ("planArtifactRef", "planArtifactRef"),
-            ("manifestArtifactRef", "manifestArtifactRef"),
-            ("failurePolicy", "failurePolicy"),
+        for source_keys, target_key in (
+            (("title",), "title"),
+            (("inputArtifactRef", "input_artifact_ref"), "inputArtifactRef"),
+            (("planArtifactRef", "plan_artifact_ref"), "planArtifactRef"),
+            (
+                ("manifestArtifactRef", "manifest_ref", "manifest_artifact_ref"),
+                "manifestArtifactRef",
+            ),
+            (("failurePolicy", "failure_policy"), "failurePolicy"),
         ):
-            value = target_payload.get(source_key)
+            value = _first_mapping_value(target_payload, source_keys)
             if value is not None:
                 target[target_key] = value
         return target
@@ -7520,10 +7532,22 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
         "workflowType": workflow_type,
         "title": str(target_payload.get("title") or "").strip() or None,
         "initialParameters": target_payload,
-        "inputArtifactRef": target_payload.get("inputArtifactRef"),
-        "planArtifactRef": target_payload.get("planArtifactRef"),
-        "manifestArtifactRef": target_payload.get("manifestArtifactRef"),
-        "failurePolicy": target_payload.get("failurePolicy"),
+        "inputArtifactRef": _first_mapping_value(
+            target_payload,
+            ("inputArtifactRef", "input_artifact_ref"),
+        ),
+        "planArtifactRef": _first_mapping_value(
+            target_payload,
+            ("planArtifactRef", "plan_artifact_ref"),
+        ),
+        "manifestArtifactRef": _first_mapping_value(
+            target_payload,
+            ("manifestArtifactRef", "manifest_ref", "manifest_artifact_ref"),
+        ),
+        "failurePolicy": _first_mapping_value(
+            target_payload,
+            ("failurePolicy", "failure_policy"),
+        ),
     }
 
 async def _handle_recurring_schedule(

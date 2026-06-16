@@ -107,6 +107,103 @@ async def test_create_definition_creates_temporal_schedule(
             assert call_kwargs["workflow_input"]["initialParameters"]["system"][
                 "recurrence"
             ]["definitionId"] == str(definition.id)
+            assert call_kwargs["search_attributes"] == {
+                "mm_owner_type": "user",
+                "mm_owner_id": str(definition.owner_user_id),
+            }
+
+async def test_create_definition_normalizes_snake_case_target_aliases(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Daily Demo",
+                description="Nightly schedule",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {
+                        "task": {
+                            "instructions": "Queue job",
+                        },
+                    },
+                    "input_artifact_ref": "artifact://input/1",
+                    "plan_artifact_ref": "artifact://plan/1",
+                    "failure_policy": "fail_fast",
+                },
+                policy={},
+            )
+
+            assert definition.target["workflowType"] == "MoonMind.UserWorkflow"
+            assert definition.target["initialParameters"]["task"][
+                "instructions"
+            ] == "Queue job"
+            assert definition.target["inputArtifactRef"] == "artifact://input/1"
+            assert definition.target["planArtifactRef"] == "artifact://plan/1"
+            assert definition.target["failurePolicy"] == "fail_fast"
+            assert "workflow_type" not in definition.target
+            assert "initial_parameters" not in definition.target
+            assert "input_artifact_ref" not in definition.target
+            call_kwargs = mock_temporal_adapter.create_schedule.call_args.kwargs
+            assert call_kwargs["workflow_input"]["inputArtifactRef"] == (
+                "artifact://input/1"
+            )
+            assert call_kwargs["workflow_input"]["planArtifactRef"] == (
+                "artifact://plan/1"
+            )
+            assert call_kwargs["workflow_input"]["failurePolicy"] == "fail_fast"
+
+async def test_create_definition_manifest_reads_action_options_from_initial_parameters(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Manifest Plan",
+                description=None,
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.ManifestIngest",
+                    "manifest_ref": "artifact://manifest/1",
+                    "initialParameters": {
+                        "action": "plan",
+                        "options": {"dryRun": True, "maxDocs": 3},
+                    },
+                },
+                policy={},
+            )
+
+            assert definition.target["manifestArtifactRef"] == "artifact://manifest/1"
+            assert definition.target["action"] == "plan"
+            assert definition.target["options"] == {"dryRun": True, "maxDocs": 3}
+            assert "manifest_ref" not in definition.target
+            call_kwargs = mock_temporal_adapter.create_schedule.call_args.kwargs
+            assert call_kwargs["workflow_type"] == "MoonMind.ManifestIngest"
+            assert call_kwargs["workflow_input"] == {
+                "workflow_type": "MoonMind.ManifestIngest",
+                "manifest_ref": "artifact://manifest/1",
+                "action": "plan",
+                "options": {"dryRun": True, "maxDocs": 3},
+            }
 
 async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:
