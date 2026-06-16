@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
@@ -15,6 +15,17 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import { navigateTo } from '../lib/navigation';
+import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
+import {
+  buildRemediationRuntimeRequestFields,
+  buildWorkflowActionMenuItems,
+  DEFAULT_REMEDIATION_ACTION_POLICY,
+  DEFAULT_REMEDIATION_AUTHORITY,
+  DEFAULT_REMEDIATION_MODE,
+  ExecutionActionsSchema,
+  isRemediationEligibleTarget,
+  type WorkflowActionMenuItem,
+} from '../lib/workflowActions';
 
 type DashboardConfig = {
   pollIntervalsMs?: { list?: number; detail?: number; events?: number };
@@ -577,24 +588,7 @@ const ExecutionDetailSchema = z
       .passthrough()
       .nullable()
       .optional(),
-    actions: z
-      .object({
-        canSetTitle: z.boolean().optional(),
-        canUpdateInputs: z.boolean().optional(),
-        canEditForRerun: z.boolean().optional(),
-        canRerun: z.boolean().optional(),
-        canApprove: z.boolean().optional(),
-        canPause: z.boolean().optional(),
-        canResume: z.boolean().optional(),
-        canResumeFromFailedStep: z.boolean().optional(),
-        canCancel: z.boolean().optional(),
-        canReject: z.boolean().optional(),
-        canSendMessage: z.boolean().optional(),
-        canBypassDependencies: z.boolean().optional(),
-        disabledReasons: z.record(z.string(), z.string()).optional(),
-      })
-      .passthrough()
-      .optional(),
+    actions: ExecutionActionsSchema.optional(),
     resume: z
       .object({
         available: z.boolean().optional(),
@@ -644,28 +638,6 @@ const ExecutionDetailSchema = z
   .passthrough();
 
 type ExecutionDetail = z.infer<typeof ExecutionDetailSchema>;
-
-function buildRemediationRuntimeRequestFields(
-  execution: ExecutionDetail | null | undefined,
-): Record<string, unknown> {
-  const mode = detailStringValue(execution?.targetRuntime);
-  const profileId = detailStringValue(execution?.profileId);
-  const model = detailStringValue(
-    execution?.model,
-    execution?.resolvedModel,
-    execution?.requestedModel,
-  );
-  const effort = detailStringValue(execution?.effort);
-  const runtime: Record<string, string> = {};
-  if (mode) runtime.mode = mode;
-  if (model) runtime.model = model;
-  if (effort) runtime.effort = effort;
-  if (profileId) runtime.profileId = profileId;
-
-  return {
-    ...(Object.keys(runtime).length > 0 ? { runtime } : {}),
-  };
-}
 
 const RemediationApprovalStateSchema = z
   .object({
@@ -3271,214 +3243,6 @@ function InterventionPanel({
   );
 }
 
-type WorkflowActionMenuItem = {
-  id: string;
-  label: string;
-  href?: string;
-  danger?: boolean;
-  disabledReason?: string | null;
-  onSelect?: () => void;
-};
-
-function WorkflowActionsMenu({
-  items,
-}: {
-  items: WorkflowActionMenuItem[];
-}) {
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const itemRefs = useRef<Array<HTMLButtonElement | HTMLAnchorElement | null>>([]);
-  const availableIndexes = useMemo(
-    () => items
-      .map((item, index) => (item.disabledReason ? -1 : index))
-      .filter((index) => index >= 0),
-    [items],
-  );
-
-  const closeMenu = () => {
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
-  const focusItem = (index: number) => {
-    const nextIndex = items[index] ? index : availableIndexes[0] ?? 0;
-    setActiveIndex(nextIndex);
-  };
-  const selectItem = (item: WorkflowActionMenuItem) => {
-    if (item.disabledReason) return;
-    item.onSelect?.();
-    setOpen(false);
-    triggerRef.current?.focus();
-  };
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => document.removeEventListener('pointerdown', onPointerDown);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const preferredIndex = availableIndexes.includes(activeIndex)
-      ? activeIndex
-      : availableIndexes[0] ?? 0;
-    setActiveIndex(preferredIndex);
-  }, [activeIndex, availableIndexes, open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const activeItem = itemRefs.current[activeIndex];
-    if (activeItem && document.activeElement !== activeItem) {
-      activeItem.focus();
-    }
-  }, [activeIndex, open]);
-
-  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      setOpen(true);
-      focusItem(availableIndexes[0] ?? 0);
-    }
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setOpen(true);
-      focusItem(availableIndexes[0] ?? 0);
-    }
-  };
-  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeMenu();
-      return;
-    }
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (availableIndexes.length === 0) return;
-      const currentAvailableIndex = Math.max(0, availableIndexes.indexOf(activeIndex));
-      const direction = event.key === 'ArrowDown' ? 1 : -1;
-      const next =
-        availableIndexes[
-          (currentAvailableIndex + direction + availableIndexes.length) % availableIndexes.length
-        ] ?? availableIndexes[0] ?? 0;
-      focusItem(next);
-      return;
-    }
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      itemRefs.current[activeIndex]?.click();
-    }
-  };
-
-  return (
-    <div
-      className="td-workflow-actions-menu"
-      ref={rootRef}
-      onBlur={(event) => {
-        if (open && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setOpen(false);
-        }
-      }}
-    >
-      <button
-        type="button"
-        ref={triggerRef}
-        className="secondary td-workflow-actions-trigger"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => {
-          const nextOpen = !open;
-          setOpen(nextOpen);
-          if (nextOpen) {
-            const firstAvailable = availableIndexes[0] ?? 0;
-            setActiveIndex(firstAvailable);
-          }
-        }}
-        onKeyDown={onTriggerKeyDown}
-      >
-        Workflow actions
-      </button>
-      {open ? (
-        <div
-          className="td-workflow-actions-popover"
-          role="menu"
-          aria-label="Workflow actions"
-          onKeyDown={onMenuKeyDown}
-        >
-          {items.length === 0 ? (
-            <p className="td-workflow-actions-empty">No workflow actions are currently available.</p>
-          ) : (
-            items.map((item, index) => {
-              const disabledReasonId = item.disabledReason
-                ? `workflow-action-${item.id}-disabled-reason`
-                : undefined;
-              const commonProps = {
-                role: 'menuitem',
-                tabIndex: index === activeIndex ? 0 : -1,
-                'aria-label': item.label,
-                'aria-disabled': item.disabledReason ? true : undefined,
-                'aria-describedby': disabledReasonId,
-                className: [
-                  'td-workflow-actions-item',
-                  item.danger ? 'td-workflow-actions-item-danger' : '',
-                  item.disabledReason ? 'td-workflow-actions-item-disabled' : '',
-                ].filter(Boolean).join(' '),
-                ref: (node: HTMLButtonElement | HTMLAnchorElement | null) => {
-                  itemRefs.current[index] = node;
-                },
-                onFocus: () => setActiveIndex(index),
-              };
-              const content = (
-                <>
-                  <span>{item.label}</span>
-                  {item.disabledReason ? (
-                    <span
-                      id={disabledReasonId}
-                      className="td-workflow-actions-disabled-reason"
-                    >
-                      {item.label} unavailable: {item.disabledReason}
-                    </span>
-                  ) : null}
-                </>
-              );
-              if (item.href && !item.disabledReason) {
-                return (
-                  <a
-                    key={item.id}
-                    {...commonProps}
-                    href={item.href}
-                    onClick={() => {
-                      item.onSelect?.();
-                      setOpen(false);
-                    }}
-                  >
-                    {content}
-                  </a>
-                );
-              }
-              return (
-                <button
-                  key={item.id}
-                  {...commonProps}
-                  type="button"
-                  onClick={() => selectItem(item)}
-                >
-                  {content}
-                </button>
-              );
-            })
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function StaticLogPanel({
   apiBase,
   agentRunId,
@@ -4098,17 +3862,6 @@ function renderMissingAgentRunCopy(state: MissingAgentRunState): string {
     return 'This execution is running but has not received its managed runtime binding yet.';
   }
   return 'Waiting for managed runtime launch to create live logs.';
-}
-
-function isRemediationEligibleTarget(execution: z.infer<typeof ExecutionDetailSchema>): boolean {
-  const state = (execution.rawState || execution.state || execution.status || '').toLowerCase();
-  return (
-    execution.attentionRequired === true ||
-    Boolean(execution.waitingReason) ||
-    state.includes('failed') ||
-    state.includes('stuck') ||
-    state === 'awaiting_external'
-  );
 }
 
 function remediationArtifactType(artifact: z.infer<typeof ArtifactSummarySchema>): string | null {
@@ -4783,9 +4536,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const [liveUpdates, setLiveUpdates] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
-  const [remediationMode, setRemediationMode] = useState('snapshot_then_follow');
-  const [remediationAuthority, setRemediationAuthority] = useState('approval_gated');
-  const [remediationActionPolicy, setRemediationActionPolicy] = useState('admin_healer_default');
+  const [remediationMode, setRemediationMode] = useState(DEFAULT_REMEDIATION_MODE);
+  const [remediationAuthority, setRemediationAuthority] = useState(DEFAULT_REMEDIATION_AUTHORITY);
+  const [remediationActionPolicy, setRemediationActionPolicy] = useState(
+    DEFAULT_REMEDIATION_ACTION_POLICY,
+  );
   const [selectedRecoveryStepId, setSelectedRecoveryStepId] = useState('');
 
   const detailQuery = useQuery({
@@ -5407,207 +5162,62 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     const reason = actions?.disabledReasons?.[key];
     return reason ? formatStatusLabel(reason) : null;
   };
-  const workflowActionMenuItems = (() => {
-    if (!actionsOn || !actions) return [];
-    const items: WorkflowActionMenuItem[] = [];
-    const pendingActionReason = busy ? 'action pending' : null;
-    const addButton = ({
-      id,
-      label,
-      available,
-      disabledReason,
-      danger,
-      onSelect,
-    }: {
-      id: string;
-      label: string;
-      available: boolean;
-      disabledReason?: string | null;
-      danger?: boolean;
-      onSelect: () => void;
-    }) => {
-      const effectiveDisabledReason = available ? pendingActionReason : disabledReason ?? null;
-      if (available) {
-        items.push({
-          id,
-          label,
-          ...(danger ? { danger: true } : {}),
-          onSelect,
-          ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+  const workflowActionMenuItems: WorkflowActionMenuItem[] = buildWorkflowActionMenuItems({
+    actionsOn,
+    actions,
+    busy,
+    taskEditingOn,
+    disabledReason: actionDisabledReason,
+    editHref,
+    compareHref,
+    canShowEditWorkflow,
+    editTaskDisabledReason: editTaskUnavailableReason
+      ? formatStatusLabel(editTaskUnavailableReason)
+      : null,
+    rerunDisabledReason: rerunUnavailableReason ? formatStatusLabel(rerunUnavailableReason) : null,
+    selectedRecoveryOptionCount: selectedRecoveryOptions.length,
+    selectedRecoveryStepEligible: Boolean(selectedRecoveryStep?.eligible),
+    selectedRecoveryStepDisabledReason: selectedRecoveryStep?.reason
+      ? formatStatusLabel(selectedRecoveryStep.reason)
+      : 'selected step is not eligible',
+    canCreateRemediation,
+    handlers: {
+      onRename,
+      onEditTask: () => {
+        if (busy) return;
+        recordTemporalTaskEditingClientEvent({
+          event: 'detail_edit_click',
+          mode: 'detail',
+          workflowId,
         });
-      } else if (effectiveDisabledReason) {
-        items.push({
-          id,
-          label,
-          ...(danger ? { danger: true } : {}),
-          disabledReason: effectiveDisabledReason,
+      },
+      onCompareRun: () => {
+        if (busy) return;
+        recordTemporalTaskEditingClientEvent({
+          event: 'detail_compare_click',
+          mode: 'detail',
+          workflowId,
         });
-      }
-    };
-    const addLink = ({
-      id,
-      label,
-      href,
-      available,
-      disabledReason,
-      onSelect,
-    }: {
-      id: string;
-      label: string;
-      href: string;
-      available: boolean;
-      disabledReason?: string | null;
-      onSelect: () => void;
-    }) => {
-      const effectiveDisabledReason = available ? pendingActionReason : disabledReason ?? null;
-      if (available && href) {
-        items.push({
-          id,
-          label,
-          href,
-          onSelect,
-          ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
-        });
-      } else if (effectiveDisabledReason) {
-        items.push({
-          id,
-          label,
-          disabledReason: effectiveDisabledReason,
-        });
-      }
-    };
-
-    addButton({
-      id: 'rename',
-      label: 'Rename',
-      available: Boolean(actions.canSetTitle),
-      disabledReason: actionDisabledReason('canSetTitle'),
-      onSelect: onRename,
-    });
-    if (taskEditingOn) {
-      addLink({
-        id: 'edit-task',
-        label: 'Edit task',
-        href: editHref,
-        available: Boolean(canShowEditWorkflow && editHref),
-        disabledReason: editTaskUnavailableReason ? formatStatusLabel(editTaskUnavailableReason) : null,
-        onSelect: () => {
-          if (busy) return;
-          recordTemporalTaskEditingClientEvent({
-            event: 'detail_edit_click',
-            mode: 'detail',
-            workflowId,
-          });
-        },
-      });
-      addLink({
-        id: 'compare-run',
-        label: 'Compare run',
-        href: compareHref,
-        available: Boolean(compareHref),
-        disabledReason: actionDisabledReason('canEditForRerun'),
-        onSelect: () => {
-          if (busy) return;
-          recordTemporalTaskEditingClientEvent({
-            event: 'detail_compare_click',
-            mode: 'detail',
-            workflowId,
-          });
-        },
-      });
-      addButton({
-        id: 'rerun',
-        label: 'Rerun',
-        available: Boolean(actions.canRerun),
-        disabledReason: rerunUnavailableReason ? formatStatusLabel(rerunUnavailableReason) : null,
-        onSelect: onRerun,
-      });
-      addButton({
-        id: 'resume-from-failed-step',
-        label: 'Resume from failed step',
-        available: Boolean(actions.canResumeFromFailedStep),
-        disabledReason: actionDisabledReason('canResumeFromFailedStep'),
-        onSelect: onResumeFromFailedStep,
-      });
-      if (actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0) {
-        addButton({
-          id: 'recover-from-selected-step',
-          label: 'Recover from selected step',
-          available: Boolean(selectedRecoveryStep?.eligible),
-          disabledReason: selectedRecoveryStep?.reason
-            ? formatStatusLabel(selectedRecoveryStep.reason)
-            : 'selected step is not eligible',
-          onSelect: onRecoverFromSelectedStep,
-        });
-      }
-    }
-    addButton({
-      id: 'pause',
-      label: 'Pause',
-      available: Boolean(actions.canPause),
-      disabledReason: actionDisabledReason('canPause'),
-      onSelect: onPause,
-    });
-    addButton({
-      id: 'resume',
-      label: 'Resume',
-      available: Boolean(actions.canResume),
-      disabledReason: actionDisabledReason('canResume'),
-      onSelect: onResume,
-    });
-    addButton({
-      id: 'approve',
-      label: 'Approve',
-      available: Boolean(actions.canApprove),
-      disabledReason: actionDisabledReason('canApprove'),
-      onSelect: onApprove,
-    });
-    addButton({
-      id: 'reject',
-      label: 'Reject',
-      available: Boolean(actions.canReject),
-      disabledReason: actionDisabledReason('canReject'),
-      danger: true,
-      onSelect: onReject,
-    });
-    addButton({
-      id: 'cancel',
-      label: 'Cancel',
-      available: Boolean(actions.canCancel),
-      disabledReason: actionDisabledReason('canCancel'),
-      danger: true,
-      onSelect: onCancel,
-    });
-    addButton({
-      id: 'send-message',
-      label: 'Send Message',
-      available: Boolean(actions.canSendMessage),
-      disabledReason: actionDisabledReason('canSendMessage'),
-      onSelect: () => {
+      },
+      onRerun,
+      onResumeFromFailedStep,
+      onRecoverFromSelectedStep,
+      onPause,
+      onResume,
+      onApprove,
+      onReject,
+      onCancel,
+      onSendMessage: () => {
         const message = window.prompt('Operator message', '');
         if (message?.trim()) onSendMessage(message.trim());
       },
-    });
-    addButton({
-      id: 'bypass-dependency-wait',
-      label: 'Bypass Dependency Wait',
-      available: Boolean(actions.canBypassDependencies),
-      disabledReason: actionDisabledReason('canBypassDependencies'),
-      danger: true,
-      onSelect: onBypassDependencies,
-    });
-    addButton({
-      id: 'create-remediation-task',
-      label: 'Create remediation task',
-      available: canCreateRemediation,
-      disabledReason: null,
-      onSelect: () => {
+      onBypassDependencies,
+      onCreateRemediation: () => {
         setActionError(null);
         createRemediationMutation.mutate();
       },
-    });
-    return items;
-  })();
+    },
+  });
   const toggleStep = (logicalStepId: string) => {
     setExpandedSteps((prev) => ({
       ...prev,
