@@ -37,6 +37,25 @@ def _step_execution_artifact_create_result(
         {"upload_url": "unused"},
     )
 
+def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
+    normalized = _normalize_payload(payload)
+    boundary = str(normalized.get("boundary") or "unknown")
+    checkpoint_id = str(normalized.get("idempotencyKey") or f"checkpoint:{boundary}")
+    workspace = normalized.get("workspace")
+    workspace_kind = (
+        workspace.get("kind")
+        if isinstance(workspace, dict)
+        else "ephemeral_workspace_ref"
+    )
+    return {
+        "checkpointRef": f"artifact://checkpoint/{boundary}",
+        "checkpointId": checkpoint_id,
+        "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+        "workspaceKind": workspace_kind,
+        "diagnosticRefs": [],
+        "idempotencyKey": checkpoint_id,
+    }
+
 async def _immediate_wait_condition(
     predicate: Callable[[], bool],
     **_kwargs: Any,
@@ -202,6 +221,8 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "provider_profile.list":
             return {"profiles": []}
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         if activity_type == "artifact.read":
             if (
                 payload.get("artifact_ref")
@@ -289,16 +310,21 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         plan_ref="art_plan_1",
     )
 
-    # provider_profile.list calls (3) happen first, then artifact.read for plan,
-    # then the step execution manifest artifact.create is recorded before
-    # child workflow dispatch.
+    # provider_profile.list calls (3) happen first, then artifact.read for plan.
+    # Canonical checkpoint writes may occur before the manifest artifact create.
     assert captured[3][0] == "artifact.read"
     assert captured[3][1]["artifact_ref"] == "art_plan_1"
-    assert captured[4][0] == "artifact.create"
-    assert captured[4][1]["content_type"] == (
+    manifest_create = next(
+        payload
+        for activity_type, payload in captured[4:]
+        if activity_type == "artifact.create"
+        and payload.get("content_type")
+        == "application/vnd.moonmind.step-execution+json;version=1"
+    )
+    assert manifest_create["content_type"] == (
         "application/vnd.moonmind.step-execution+json;version=1"
     )
-    assert captured[4][1]["metadata_json"]["artifact_kind"] == (
+    assert manifest_create["metadata_json"]["artifact_kind"] == (
         "step_execution_manifest"
     )
     assert not any(
@@ -329,6 +355,8 @@ async def test_run_finalizing_stage_writes_dependency_summary_metadata(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_typed_activity(
@@ -430,6 +458,8 @@ async def test_run_finalizing_stage_writes_structured_moonspec_failure_summary(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_1"}, {"upload_url": "unused"})
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_typed_activity(
@@ -557,6 +587,8 @@ async def test_run_finalizing_stage_writes_transient_codex_failure_summary(
     ) -> Any:
         if activity_type == "artifact.create":
             return ({"artifact_id": "art_summary_2"}, {"upload_url": "unused"})
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_typed_activity(
@@ -907,6 +939,8 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
                     "edges": [{"from": "check-blockers", "to": "implement"}],
                 }
             ).encode("utf-8")
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity {activity_type}")
 
     async def fake_execute_child_workflow(
@@ -1152,6 +1186,8 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
                     },
                 }
             return {"status": "COMPLETED", "outputs": {"summary": "Implemented."}}
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity {activity_type}")
 
     async def fake_execute_typed_activity(
@@ -3130,6 +3166,8 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
         return json.dumps(
             {
@@ -3277,6 +3315,8 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
         return json.dumps(
             {
