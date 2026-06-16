@@ -934,6 +934,22 @@ def test_contract_run_fix_next_step_returns_reenter_gate(
 
     assert disposition == "reenter_gate"
 
+def test_contract_finalize_retry_next_step_returns_reenter_gate(
+    pr_resolve_contract_module: dict[str, Any],
+) -> None:
+    disposition_for_result = pr_resolve_contract_module[
+        "merge_automation_disposition_for_result"
+    ]
+
+    disposition = disposition_for_result(
+        status="blocked",
+        merge_outcome="blocked",
+        final_reason="ci_running",
+        next_step="retry_finalize_after_backoff",
+    )
+
+    assert disposition == "reenter_gate"
+
 def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     pr_resolve_finalize_module: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -975,7 +991,7 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
     payload = result_path.read_text(encoding="utf-8")
     assert '"status": "blocked"' in payload
     assert '"reason": "snapshot_refresh_failed"' in payload
-    assert '"mergeAutomationDisposition": "manual_review"' in payload
+    assert '"mergeAutomationDisposition": "reenter_gate"' in payload
 
     monkeypatch.setattr(
         "sys.argv",
