@@ -108,7 +108,9 @@ def test_executions_recurring_schedule_validation_contract() -> None:
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
-            side_effect=RecurringWorkflowValidationError("target.kind is required")
+            side_effect=RecurringWorkflowValidationError(
+                "target.workflowType is required"
+            )
         )
 
         response = client.post(
@@ -128,5 +130,5 @@ def test_executions_recurring_schedule_validation_contract() -> None:
     assert response.status_code == 422
     assert response.json()["detail"] == {
         "code": "invalid_recurring_workflow",
-        "message": "target.kind is required",
+        "message": "target.workflowType is required",
     }

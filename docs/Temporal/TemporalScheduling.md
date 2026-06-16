@@ -212,15 +212,18 @@ The `misfireGraceSeconds` concept is subsumed by `catchup_window`. The `jitterSe
 
 ### 5.7 Target Resolution
 
-Temporal Schedules start workflows. The workflow input payload carries the target specification. Target resolution (expanding templates, resolving manifests) happens **inside the workflow**, not at schedule evaluation time:
+Temporal Schedules start workflows directly. The schedule definition stores a
+Temporal workflow-start target with `target.workflowType` and
+`target.initialParameters`, plus artifact refs when needed. When the schedule
+fires, MoonMind passes that target through as the workflow input:
 
-1. Schedule fires → starts `MoonMind.UserWorkflow` or `MoonMind.ManifestIngest` with the target payload in the workflow input.
-2. The workflow's initialization phase resolves the target:
- - `queue_task` → use payload directly
- - `queue_task_template` → expand the template via an Activity
- - `manifest_run` → resolve the manifest via an Activity
+1. `MoonMind.UserWorkflow` receives `workflowType`,
+   `initialParameters`, and optional input or plan artifact refs.
+2. `MoonMind.ManifestIngest` receives the manifest artifact ref, action, and
+   options required by the manifest workflow.
 
-This avoids needing the Temporal Schedule to know about MoonMind's template or manifest systems.
+Queue-dispatch target kinds are not part of the Temporal-managed recurring
+schedule contract.
 
 ### 5.8 Schedule ID Convention
 

@@ -36,7 +36,10 @@ def _definition(**overrides):
         "owner_user_id": uuid4(),
         "scope_type": RecurringWorkflowScopeType.PERSONAL,
         "scope_ref": None,
-        "target": {"kind": "queue_task", "job": {"type": "task", "payload": {}}},
+        "target": {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {},
+        },
         "policy": {},
         "version": 1,
         "created_at": now,
@@ -69,13 +72,13 @@ def _run(**overrides):
 
 def test_recurring_workflow_validation_error_maps_to_422() -> None:
     exc = recurring_router._map_error(
-        RecurringWorkflowValidationError("target.kind is required")
+        RecurringWorkflowValidationError("target.workflowType is required")
     )
 
     assert exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     assert exc.detail == {
         "code": "invalid_recurring_workflow",
-        "message": "target.kind is required",
+        "message": "target.workflowType is required",
     }
 
 @pytest.mark.asyncio
@@ -106,16 +109,13 @@ async def test_create_recurring_workflow_returns_serialized_definition() -> None
             cron="0 9 * * *",
             timezone="UTC",
             target={
-                "kind": "queue_task",
-                "job": {
-                    "type": "task",
-                    "payload": {
-                        "repository": "MoonLadderStudios/MoonMind",
-                        "task": {
-                            "instructions": "Queue job",
-                            "publish": {"mode": "none"},
-                            "skill": {"id": "auto", "args": {}},
-                        },
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "task": {
+                        "instructions": "Queue job",
+                        "publish": {"mode": "none"},
+                        "skill": {"id": "auto", "args": {}},
                     },
                 },
             },
