@@ -74,19 +74,14 @@ async def test_create_definition_creates_temporal_schedule(
                 scope_ref=None,
                 owner_user_id=uuid4(),
                 target={
-                    "kind": "queue_task",
-                    "job": {
-                        "type": "task",
-                        "priority": 0,
-                        "maxAttempts": 3,
-                        "payload": {
-                            "repository": "MoonLadderStudios/MoonMind",
-                            "targetRuntime": "codex",
-                            "task": {
-                                "instructions": "Queue job",
-                                "publish": {"mode": "none"},
-                                "skill": {"id": "auto", "args": {}},
-                            },
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "targetRuntime": "codex",
+                        "task": {
+                            "instructions": "Queue job",
+                            "publish": {"mode": "none"},
+                            "skill": {"id": "auto", "args": {}},
                         },
                     },
                 },
@@ -105,6 +100,13 @@ async def test_create_definition_creates_temporal_schedule(
             assert call_kwargs["cron_expression"] == "0 6 * * *"
             assert call_kwargs["timezone"] == "UTC"
             assert call_kwargs["workflow_type"] == "MoonMind.UserWorkflow"
+            assert call_kwargs["workflow_input"]["workflowType"] == "MoonMind.UserWorkflow"
+            assert call_kwargs["workflow_input"]["initialParameters"]["task"][
+                "instructions"
+            ] == "Queue job"
+            assert call_kwargs["workflow_input"]["initialParameters"]["system"][
+                "recurrence"
+            ]["definitionId"] == str(definition.id)
 
 async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_temporal_adapter) -> None:
     async with recurring_db(tmp_path) as session_maker:
@@ -122,24 +124,23 @@ async def test_create_definition_rejects_invalid_policy(tmp_path: Path, mock_tem
                     scope_ref=None,
                     owner_user_id=uuid4(),
                     target={
-                        "kind": "queue_task",
-                        "job": {
-                            "type": "task",
-                            "payload": {
-                                "repository": "MoonLadderStudios/MoonMind",
-                                "targetRuntime": "codex",
-                                "task": {
-                                    "instructions": "Queue job",
-                                    "publish": {"mode": "none"},
-                                    "skill": {"id": "auto", "args": {}},
-                                },
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": {
+                            "repository": "MoonLadderStudios/MoonMind",
+                            "targetRuntime": "codex",
+                            "task": {
+                                "instructions": "Queue job",
+                                "publish": {"mode": "none"},
+                                "skill": {"id": "auto", "args": {}},
                             },
                         },
                     },
                     policy={"catchup": {"mode": "invalid"}},
                 )
 
-async def test_target_kind_housekeeping_is_rejected(tmp_path: Path, mock_temporal_adapter) -> None:
+async def test_target_workflow_type_housekeeping_is_rejected(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
     async with recurring_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = RecurringWorkflowsService(session, temporal_client_adapter=mock_temporal_adapter)
@@ -154,7 +155,10 @@ async def test_target_kind_housekeeping_is_rejected(tmp_path: Path, mock_tempora
                     scope_type="personal",
                     scope_ref=None,
                     owner_user_id=uuid4(),
-                    target={"kind": "housekeeping", "action": "prune_artifacts"},
+                    target={
+                        "workflowType": "MoonMind.Housekeeping",
+                        "initialParameters": {"action": "prune_artifacts"},
+                    },
                     policy={},
                 )
 
@@ -177,13 +181,10 @@ async def test_update_definition_updates_temporal_schedule(
                 scope_ref=None,
                 owner_user_id=uuid4(),
                 target={
-                    "kind": "queue_task",
-                    "job": {
-                        "type": "task",
-                        "payload": {
-                            "task": {
-                                "instructions": "Queue job",
-                            },
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "task": {
+                            "instructions": "Queue job",
                         },
                     },
                 },
@@ -231,13 +232,10 @@ async def test_create_manual_run_triggers_temporal_schedule(
                 scope_ref=None,
                 owner_user_id=uuid4(),
                 target={
-                    "kind": "queue_task",
-                    "job": {
-                        "type": "task",
-                        "payload": {
-                            "task": {
-                                "instructions": "Queue job",
-                            },
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "task": {
+                            "instructions": "Queue job",
                         },
                     },
                 },

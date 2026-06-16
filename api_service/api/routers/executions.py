@@ -7453,10 +7453,42 @@ def _compute_schedule_delay(
 def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
     """Transform a workflow request payload into a RecurringWorkflowsService target.
 
-    Constructs the ``kind=workflow_execution`` envelope expected by
+    Constructs the Temporal workflow-start target expected by
     ``RecurringWorkflowsService.create_definition()``.
     """
     target_payload = dict(request_payload)
+    target_payload.pop("schedule", None)
+    workflow_type = str(
+        target_payload.get("workflowType")
+        or target_payload.get("workflow_type")
+        or "MoonMind.UserWorkflow"
+    ).strip()
+    if "initialParameters" in target_payload or "initial_parameters" in target_payload:
+        initial_parameters = (
+            target_payload.get("initialParameters")
+            if "initialParameters" in target_payload
+            else target_payload.get("initial_parameters")
+        )
+        target: dict[str, Any] = {
+            "workflowType": workflow_type,
+            "initialParameters": (
+                dict(initial_parameters)
+                if isinstance(initial_parameters, Mapping)
+                else initial_parameters
+            ),
+        }
+        for source_key, target_key in (
+            ("title", "title"),
+            ("inputArtifactRef", "inputArtifactRef"),
+            ("planArtifactRef", "planArtifactRef"),
+            ("manifestArtifactRef", "manifestArtifactRef"),
+            ("failurePolicy", "failurePolicy"),
+        ):
+            value = target_payload.get(source_key)
+            if value is not None:
+                target[target_key] = value
+        return target
+
     root_propose_tasks = target_payload.pop("proposeTasks", None)
     root_proposal_policy = target_payload.pop("proposalPolicy", None)
     task_node = target_payload.get("workflow")
@@ -7485,11 +7517,13 @@ def _build_recurring_target(request_payload: dict[str, Any]) -> dict[str, Any]:
             task_payload.pop("proposalPolicy", None)
         target_payload["workflow"] = task_payload
     return {
-        "kind": "workflow_execution",
-        "job": {
-            "type": "workflow",
-            "payload": target_payload,
-        },
+        "workflowType": workflow_type,
+        "title": str(target_payload.get("title") or "").strip() or None,
+        "initialParameters": target_payload,
+        "inputArtifactRef": target_payload.get("inputArtifactRef"),
+        "planArtifactRef": target_payload.get("planArtifactRef"),
+        "manifestArtifactRef": target_payload.get("manifestArtifactRef"),
+        "failurePolicy": target_payload.get("failurePolicy"),
     }
 
 async def _handle_recurring_schedule(

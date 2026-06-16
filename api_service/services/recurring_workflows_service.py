@@ -19,7 +19,6 @@ from api_service.db.models import (
     RecurringWorkflowRunTrigger,
     RecurringWorkflowScopeType,
 )
-from moonmind.workflows.executions.job_types import CANONICAL_WORKFLOW_JOB_TYPE
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
     parse_cron_expression,
@@ -36,6 +35,10 @@ from moonmind.workflows.temporal.schedule_errors import (
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SCHEDULER_MAX_BACKFILL = 3
+_SUPPORTED_RECURRING_WORKFLOW_TYPES = (
+    "MoonMind.UserWorkflow",
+    "MoonMind.ManifestIngest",
+)
 
 class RecurringWorkflowValidationError(ValueError):
     """Raised when recurring workflow inputs are invalid."""
@@ -181,79 +184,49 @@ def _catchup_mode_from_temporal_window(catchup_window: object | None) -> str:
     return "all"
 
 def _normalize_target(target_payload: Mapping[str, Any]) -> dict[str, Any]:
-    # legacy_run contract: target.kind values "queue_task" / "queue_task_template" and
-    # target.job.type "task" are persisted in DB rows and Temporal schedule actions;
-    # they rename at the MoonMind.UserWorkflow v2 cutover, not before.
     target = dict(target_payload)
-    kind = str(target.get("kind") or "").strip().lower()
-    if kind not in {
-        "queue_task",
-        "queue_task_template",
-        "manifest_run",
-    }:
+    workflow_type = str(
+        target.get("workflowType") or target.get("workflow_type") or ""
+    ).strip()
+    if workflow_type not in _SUPPORTED_RECURRING_WORKFLOW_TYPES:
         raise RecurringWorkflowValidationError(
-            "target.kind must be one of: queue_task, queue_task_template, manifest_run"
+            "target.workflowType must be one of: "
+            + ", ".join(_SUPPORTED_RECURRING_WORKFLOW_TYPES)
         )
 
-    if kind == "queue_task":
-        job_payload = target.get("job")
-        if not isinstance(job_payload, Mapping):
-            raise RecurringWorkflowValidationError("target.job is required for queue_task")
-        job = dict(job_payload)
-        workflow_type = str(job.get("type") or "").strip().lower() or CANONICAL_WORKFLOW_JOB_TYPE
-        if workflow_type != CANONICAL_WORKFLOW_JOB_TYPE:
-            raise RecurringWorkflowValidationError(
-                "target.job.type must be 'task' for queue_task"
-            )
-        payload = job.get("payload")
-        if not isinstance(payload, Mapping):
-            raise RecurringWorkflowValidationError(
-                "target.job.payload must be an object for queue_task"
-            )
-        job["type"] = CANONICAL_WORKFLOW_JOB_TYPE
-        target["job"] = job
+    initial_parameters = target.get("initialParameters")
+    if initial_parameters is None:
+        initial_parameters = target.get("initial_parameters")
+    if initial_parameters is None:
+        initial_parameters = {}
+    if not isinstance(initial_parameters, Mapping):
+        raise RecurringWorkflowValidationError(
+            "target.initialParameters must be an object when provided"
+        )
 
-    if kind == "queue_task_template":
-        template_payload = target.get("template")
-        if not isinstance(template_payload, Mapping):
-            raise RecurringWorkflowValidationError(
-                "target.template is required for queue_task_template"
-            )
-        template = dict(template_payload)
-        slug = str(template.get("slug") or "").strip()
-        version = str(template.get("version") or "").strip()
-        if not slug or not version:
-            raise RecurringWorkflowValidationError(
-                "target.template.slug and target.template.version are required"
-            )
-        inputs_payload = template.get("inputs")
-        if inputs_payload is None:
-            template["inputs"] = {}
-        elif not isinstance(inputs_payload, Mapping):
-            raise RecurringWorkflowValidationError(
-                "target.template.inputs must be an object when provided"
-            )
-        target["template"] = template
+    target["workflowType"] = workflow_type
+    target["initialParameters"] = dict(initial_parameters)
+    target.pop("workflow_type", None)
+    target.pop("initial_parameters", None)
 
-    if kind == "manifest_run":
-        manifest_name = str(target.get("name") or "").strip()
-        if not manifest_name:
+    if workflow_type == "MoonMind.ManifestIngest":
+        manifest_ref = str(
+            target.get("manifestArtifactRef") or target.get("manifest_ref") or ""
+        ).strip()
+        if not manifest_ref:
             raise RecurringWorkflowValidationError(
-                "target.name is required for manifest_run"
+                "target.manifestArtifactRef is required for MoonMind.ManifestIngest"
             )
-        action = str(target.get("action") or "run").strip().lower() or "run"
-        if action not in {"run", "plan"}:
+        target["manifestArtifactRef"] = manifest_ref
+        options = target.get("options")
+        if options is None:
+            options = {}
+        if not isinstance(options, Mapping):
             raise RecurringWorkflowValidationError(
-                "target.action for manifest_run must be run or plan"
+                "target.options must be an object when provided"
             )
-        options_payload = target.get("options")
-        if options_payload is not None and not isinstance(options_payload, Mapping):
-            raise RecurringWorkflowValidationError(
-                "target.options for manifest_run must be an object"
-            )
-        target["action"] = action
+        target["options"] = dict(options)
 
-    target["kind"] = kind
     return target
 
 def _coerce_utc(value: datetime) -> datetime:
@@ -334,12 +307,40 @@ class RecurringWorkflowsService:
             )
         return definition
 
-    def _expected_workflow_type_for_target_kind(self, kind: str) -> str:
-        if kind in {"workflow_execution", "workflow_template", "queue_task", "queue_task_template"}:
-            return "MoonMind.UserWorkflow"
-        elif kind == "manifest_run":
-            return "MoonMind.ManifestIngest"
-        return "MoonMind.UserWorkflow"
+    def _workflow_bundle_for_target(
+        self,
+        *,
+        definition_id: UUID,
+        name: str,
+        owner_user_id: UUID | None,
+        target_payload: Mapping[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        workflow_type = str(target_payload["workflowType"])
+        if workflow_type == "MoonMind.ManifestIngest":
+            return workflow_type, {
+                "workflow_type": workflow_type,
+                "manifest_ref": str(target_payload["manifestArtifactRef"]),
+                "action": str(target_payload.get("action") or "apply").strip()
+                or "apply",
+                "options": dict(target_payload.get("options") or {}),
+            }
+
+        initial_parameters = dict(target_payload.get("initialParameters") or {})
+        system_payload = initial_parameters.get("system")
+        system = dict(system_payload) if isinstance(system_payload, Mapping) else {}
+        recurrence = dict(system.get("recurrence") or {})
+        recurrence["definitionId"] = str(definition_id)
+        system["recurrence"] = recurrence
+        initial_parameters["system"] = system
+        return workflow_type, {
+            "workflowType": workflow_type,
+            "title": str(target_payload.get("title") or name),
+            "ownerUserId": str(owner_user_id) if owner_user_id else None,
+            "initialParameters": initial_parameters,
+            "inputArtifactRef": target_payload.get("inputArtifactRef"),
+            "planArtifactRef": target_payload.get("planArtifactRef"),
+            "failurePolicy": target_payload.get("failurePolicy"),
+        }
 
     async def create_definition(
         self,
@@ -404,18 +405,13 @@ class RecurringWorkflowsService:
         self._session.add(definition)
         await self._session.flush()
 
-        workflow_type = self._expected_workflow_type_for_target_kind(target_payload.get("kind", ""))
-        workflow_input = {
-            "title": name_text,
-            "ownerUserId": str(owner_user_id) if owner_user_id else None,
-            "system": {
-                "recurrence": {
-                    "definitionId": str(definition_id)
-                }
-            },
-            "recurringTarget": target_payload,
-        }
-        
+        workflow_type, workflow_input = self._workflow_bundle_for_target(
+            definition_id=definition_id,
+            name=name_text,
+            owner_user_id=owner_user_id,
+            target_payload=target_payload,
+        )
+
         try:
             await self._adapter.create_schedule(
                 definition_id=definition_id,
@@ -568,16 +564,12 @@ class RecurringWorkflowsService:
         target_payload = (
             dict(dfn.target) if isinstance(dfn.target, Mapping) else {}
         )
-        kind = str(target_payload.get("kind") or "")
-        workflow_type = self._expected_workflow_type_for_target_kind(kind)
-        name_text = dfn.name or ""
-        workflow_input: dict[str, Any] = {
-            "title": name_text,
-            "ownerUserId": str(dfn.owner_user_id) if dfn.owner_user_id else None,
-            "system": {"recurrence": {"definitionId": str(dfn.id)}},
-            "recurringTarget": target_payload,
-        }
-        return workflow_type, workflow_input
+        return self._workflow_bundle_for_target(
+            definition_id=dfn.id,
+            name=dfn.name or "",
+            owner_user_id=dfn.owner_user_id,
+            target_payload=_normalize_target(target_payload),
+        )
 
     async def _recreate_temporal_schedule(
         self, dfn: RecurringWorkflowDefinition, policy_obj: RecurringPolicy

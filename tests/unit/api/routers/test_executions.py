@@ -5786,7 +5786,9 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
 
     assert response.status_code == 201, response.json()
     target = service.create_definition.await_args.kwargs["target"]
-    stored_payload = target["job"]["payload"]
+    assert target["workflowType"] == "MoonMind.UserWorkflow"
+    stored_payload = target["initialParameters"]
+    assert "schedule" not in stored_payload
     assert "proposeTasks" not in stored_payload
     assert "proposalPolicy" not in stored_payload
     assert stored_payload["workflow"]["proposeTasks"] is True
@@ -5836,7 +5838,9 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
 
     assert response.status_code == 201, response.json()
     target = service.create_definition.await_args.kwargs["target"]
-    stored_payload = target["job"]["payload"]
+    assert target["workflowType"] == "MoonMind.UserWorkflow"
+    stored_payload = target["initialParameters"]
+    assert "schedule" not in stored_payload
     assert "proposeTasks" not in stored_payload
     assert "proposalPolicy" not in stored_payload
     assert stored_payload["workflow"]["proposeTasks"] is True
@@ -5992,7 +5996,9 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
-            side_effect=RecurringWorkflowValidationError("target.kind is required")
+            side_effect=RecurringWorkflowValidationError(
+                "target.workflowType is required"
+            )
         )
 
         response = test_client.post(
@@ -6014,7 +6020,7 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     assert response.status_code == 422
     assert response.json()["detail"] == {
         "code": "invalid_recurring_workflow",
-        "message": "target.kind is required",
+        "message": "target.workflowType is required",
     }
 
 def test_create_execution_surfaces_domain_validation_errors(
