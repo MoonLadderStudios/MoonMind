@@ -21,7 +21,7 @@ describe('WorkflowRowActionsMenu', () => {
   beforeEach(() => {
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.endsWith('/executions/wf-123')) {
+      if (url === '/api/executions/wf-123?source=temporal') {
         return Promise.resolve({
           ok: true,
           json: async () => detailResponse,
@@ -57,8 +57,26 @@ describe('WorkflowRowActionsMenu', () => {
     expect(await screen.findByRole('menuitem', { name: 'Pause' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
     expect(
-      fetchSpy.mock.calls.filter(([url]) => String(url) === '/api/executions/wf-123'),
+      fetchSpy.mock.calls.filter(
+        ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
+      ),
     ).toHaveLength(1);
+  });
+
+  it('requests the lazy detail with the Temporal source so projection reads sync', async () => {
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+
+    await screen.findByRole('menuitem', { name: 'Pause' });
+    // Match only the detail request (path ends at wf-123, optionally followed by
+    // a query string) and not nested action endpoints like /signal or /cancel.
+    const detailUrls = fetchSpy.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => /\/executions\/wf-123(\?|$)/.test(url));
+    expect(detailUrls.length).toBeGreaterThan(0);
+    // The Workflows table reads `source=temporal`; the lazy detail request must
+    // carry it too so orphaned/Temporal-only projections still resolve actions.
+    expect(detailUrls.every((url) => url === '/api/executions/wf-123?source=temporal')).toBe(true);
   });
 
   it('invokes the signal endpoint when a lifecycle action is selected', async () => {

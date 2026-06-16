@@ -99,7 +99,9 @@ export function WorkflowRowActionsMenu({
     enabled: actionsEnabled && hasOpened && Boolean(workflowId),
     staleTime: 5000,
     queryFn: async () => {
-      const response = await fetch(`${apiBase}/executions/${encodeURIComponent(workflowId)}`);
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}?source=temporal`,
+      );
       if (!response.ok) {
         throw new Error(`Workflow actions: ${response.statusText}`);
       }
@@ -311,10 +313,13 @@ export function WorkflowRowActionsMenu({
             { updateName: 'RequestRerun' },
             {
               onSuccess: (result: unknown) => {
-                const payloadResult = result as {
-                  execution?: { workflowId?: string | null };
-                  workflow_id?: string | null;
-                };
+                const payloadResult =
+                  result && typeof result === 'object'
+                    ? (result as {
+                        execution?: { workflowId?: string | null };
+                        workflow_id?: string | null;
+                      })
+                    : {};
                 const redirectWorkflowId =
                   String(payloadResult.execution?.workflowId || '').trim() ||
                   String(payloadResult.workflow_id || '').trim() ||

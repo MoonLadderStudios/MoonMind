@@ -67,8 +67,20 @@ export function WorkflowActionsMenu({
   };
 
   useEffect(() => {
-    onOpenChange?.(open);
-  }, [onOpenChange, open]);
+    itemRefs.current = itemRefs.current.slice(0, items.length);
+  }, [items]);
+
+  // Keep the latest onOpenChange in a ref so the open/close notification effect
+  // does not re-run (and re-fire) whenever the parent passes a new inline
+  // callback identity on every render.
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  }, [onOpenChange]);
+
+  useEffect(() => {
+    onOpenChangeRef.current?.(open);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return undefined;
