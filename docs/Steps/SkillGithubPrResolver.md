@@ -102,6 +102,18 @@ lines before sleeping. These lines are part of the operational contract: they ke
 managed-runtime observability fresh and avoid treating a healthy CI poll loop as
 a silent stuck agent.
 
+The orchestration command MUST run in the foreground for the lifetime of the
+managed run. It polls long-running states (notably `ci_running`) internally up to
+its elapsed budget and finalizes the merge when CI passes. The agent MUST NOT
+background the command or rely on notifications/scheduled wakeups to finish the
+merge after it exits — in a one-shot managed run there is no callback, so exiting
+while CI is still running abandons the merge and leaves the PR unresolved.
+
+A standalone `pr-resolver` run (one not launched by `MoonMind.MergeAutomation`)
+that ends in the continuation state `reenter_gate` has no gate to re-enter, so it
+is not a successful PR resolution; the owning workflow fails such a run terminally
+rather than reporting success. See `docs/Workflows/PrMergeAutomation.md` §13.4.
+
 ---
 
 ## 5. Data Collection (Snapshot)

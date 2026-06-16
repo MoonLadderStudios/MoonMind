@@ -383,6 +383,14 @@ RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
     "run-stop-on-publish-handoff-failure-v1"
 )
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
+RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
+    "run-ungated-continuation-disposition-v1"
+)
+# Merge-automation dispositions that are *continuations*: they only have meaning
+# when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
+# standalone (ungated) resolver run that ends in one of these states has not
+# resolved the PR and must not be reported as a success.
+MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS = frozenset({"reenter_gate"})
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
@@ -4492,11 +4500,25 @@ class MoonMindRunWorkflow:
             elif output_status == "no_changes":
                 finalizing_error = self._publish_reason or output_message
 
+        continuation_failure = False
+        if not publish_failure and workflow.patched(
+            RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH
+        ):
+            continuation_message = self._continuation_disposition_failure_message(
+                parameters
+            )
+            if continuation_message:
+                continuation_failure = True
+                output_status = "needs_continuation"
+                output_message = continuation_message
+                finalizing_status = "failed"
+                finalizing_error = continuation_message
+
         await self._run_finalizing_stage(
             parameters=parameters, status=finalizing_status, error=finalizing_error
         )
 
-        if publish_failure:
+        if publish_failure or continuation_failure:
             self._close_status = CLOSE_STATUS_FAILED
             self._set_state(STATE_FAILED, summary=output_message)
             await self._record_terminal_state(
@@ -8378,6 +8400,53 @@ class MoonMindRunWorkflow:
             return parts[0]
         message = ". ".join(part.rstrip(".") for part in parts if part)
         return f"{message}." if message else "Workflow completed successfully"
+
+    def _is_merge_automation_gated(self, parameters: Mapping[str, Any]) -> bool:
+        """Return True when this run was launched by a MoonMind.MergeAutomation gate.
+
+        Merge automation tags the resolver child's parameters with a ``mergeGate``
+        block carrying the owning ``parentWorkflowId`` (see
+        ``build_resolver_run_request``). A standalone resolver submission has no such
+        block, so its continuation dispositions have no gate to re-enter.
+        """
+
+        merge_gate = self._mapping_value(parameters, "mergeGate", "merge_gate")
+        if not merge_gate:
+            return False
+        parent = self._coerce_text(
+            merge_gate.get("parentWorkflowId")
+            or merge_gate.get("parent_workflow_id"),
+            max_chars=200,
+        )
+        return bool(parent)
+
+    def _continuation_disposition_failure_message(
+        self, parameters: Mapping[str, Any]
+    ) -> str | None:
+        """Return a failure message for an ungated continuation disposition.
+
+        ``reenter_gate`` (and any future continuation disposition) tells
+        ``MoonMind.MergeAutomation`` to re-open the readiness gate, poll CI, and
+        finalize the merge on a later cycle. When the resolver runs as a standalone
+        top-level ``MoonMind.UserWorkflow`` there is no owning gate, so the
+        continuation is dropped: CI/merge finalization never happens and the pull
+        request is left unresolved. Reporting such a run as ``success`` is a
+        false-green outcome, so we surface it as an actionable failure instead.
+        """
+
+        disposition = (self._merge_automation_disposition or "").strip()
+        if disposition not in MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS:
+            return None
+        if self._is_merge_automation_gated(parameters):
+            return None
+        return (
+            "pr-resolver reported mergeAutomationDisposition="
+            f"'{disposition}', a continuation state that requires a "
+            "MoonMind.MergeAutomation gate to re-enter, poll CI, and finalize the "
+            "merge. This run is not owned by merge automation, so the pull request "
+            "was not resolved. Re-submit the resolution under merge automation or "
+            "finalize the merge manually."
+        )
 
     def _determine_publish_completion(
         self,

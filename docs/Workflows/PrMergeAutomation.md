@@ -548,6 +548,24 @@ as `ci_running`, resolver tooling SHOULD emit periodic progress output before
 sleeping so managed-runtime stuck detection can distinguish healthy waiting from
 a silent stalled agent.
 
+### 13.4 Ungated resolver runs MUST NOT report continuation as success
+
+A continuation disposition (`reenter_gate`) only has meaning when a
+`MoonMind.MergeAutomation` gate owns the next cycle: re-enter `awaiting_external`,
+poll CI on the new head, and finalize the merge. Merge automation marks the
+resolver child it launches by injecting a `mergeGate` block
+(`mergeGate.parentWorkflowId`) into the resolver's `initial_parameters`.
+
+When `pr-resolver` is instead submitted as a **standalone top-level
+`MoonMind.UserWorkflow`** (no `mergeGate` owner), there is no gate to re-enter. A
+run that ends with `mergeAutomationDisposition = "reenter_gate"` in that case has
+**not** resolved the PR — CI/merge finalization never happens — so the parent
+workflow MUST NOT report `status: success`. It MUST fail the run terminally with
+an actionable summary directing the operator to re-submit under merge automation
+or finalize manually. This prevents a false-green completion where the PR is left
+open and unmerged. Terminal dispositions (`merged`, `already_merged`) and
+gated continuation runs are unaffected.
+
 ---
 
 ## 14. Post-Resolver Re-Gating
