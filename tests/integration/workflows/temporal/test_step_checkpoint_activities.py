@@ -512,6 +512,109 @@ async def test_workflow_recovery_routes_checkpoint_validation_before_policy(
     assert policy_payload["targetWorkspaceRef"] == "workspace-target"
 
 
+async def test_workflow_checkpoint_boundary_orchestration_requests_all_applicable_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        calls.append((activity_type, payload))
+        boundary = str(payload["boundary"])
+        identity = payload["identity"]
+        checkpoint_id = (
+            f"{identity['workflowId']}:{identity['runId']}:"
+            f"{identity['logicalStepId']}:execution:{identity['executionOrdinal']}:"
+            f"checkpoint:{boundary}"
+        )
+        return {
+            "checkpointRef": f"artifact://checkpoint/{boundary}",
+            "checkpointId": checkpoint_id,
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": payload["workspace"]["kind"],
+            "summary": f"{boundary} checkpoint written",
+            "diagnosticRefs": [],
+            "idempotencyKey": payload["idempotencyKey"],
+        }
+
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="workflow-1",
+        run_id="run-1",
+        task_queue="mm.workflow",
+        search_attributes={"mm_owner_type": ["user"], "mm_owner_id": ["owner-1"]},
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    workflow = MoonMindRunWorkflow()
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "checkpoint-story", "title": "Checkpoint story"}],
+        dependency_map={"checkpoint-story": []},
+        updated_at=datetime(2026, 6, 13, 12, 0, tzinfo=UTC),
+    )
+
+    refs = await workflow._capture_step_checkpoints_for_boundaries(
+        "checkpoint-story",
+        boundaries=(
+            "after_prepare",
+            "before_execution",
+            "after_execution",
+            "after_gate",
+            "before_publication",
+            "before_recovery_restoration",
+        ),
+        task_input_snapshot_ref="artifact://task/input",
+        workspace={
+            "kind": "git_patch",
+            "baseCommit": "abc123",
+            "patchRef": "artifact://workspace/patch",
+        },
+        created_at=datetime(2026, 6, 13, 12, 0, tzinfo=UTC),
+        plan_digest="sha256:plan",
+        prepared_input_refs=["artifact://prepared/context"],
+    )
+
+    assert [activity for activity, _payload in calls] == [
+        "step_checkpoint.create",
+        "step_checkpoint.create",
+        "step_checkpoint.create",
+        "step_checkpoint.create",
+        "step_checkpoint.create",
+        "step_checkpoint.create",
+    ]
+    assert [payload["boundary"] for _activity, payload in calls] == [
+        "after_prepare",
+        "before_execution",
+        "after_execution",
+        "after_gate",
+        "before_publication",
+        "before_recovery_restoration",
+    ]
+    assert refs["before_execution"] == "artifact://checkpoint/before_execution"
+    assert refs["before_recovery_restoration"] == (
+        "artifact://checkpoint/before_recovery_restoration"
+    )
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["checkpointRefsByBoundary"]["after_prepare"]["artifactRef"] == (
+        "artifact://checkpoint/after_prepare"
+    )
+    assert step["checkpointRefsByBoundary"]["before_publication"]["artifactRef"] == (
+        "artifact://checkpoint/before_publication"
+    )
+    rendered_payloads = json.dumps([payload for _activity, payload in calls])
+    assert "checkpointPayload" not in rendered_payloads
+    assert "diff --git" not in rendered_payloads
+
+
 async def test_workflow_recovery_validation_failure_blocks_policy_application(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

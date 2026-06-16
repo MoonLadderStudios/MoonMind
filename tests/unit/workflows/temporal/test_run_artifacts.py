@@ -37,6 +37,26 @@ def _step_execution_artifact_create_result(
         {"upload_url": "unused"},
     )
 
+
+def _step_checkpoint_create_result(payload: Any) -> dict[str, Any]:
+    normalized = _normalize_payload(payload)
+    identity = normalized["identity"]
+    boundary = str(normalized["boundary"])
+    checkpoint_id = (
+        f"{identity['workflowId']}:{identity['runId']}:"
+        f"{identity['logicalStepId']}:execution:{identity['executionOrdinal']}:"
+        f"checkpoint:{boundary}"
+    )
+    return {
+        "checkpointRef": f"artifact://checkpoint/{identity['logicalStepId']}/{boundary}",
+        "checkpointId": checkpoint_id,
+        "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+        "workspaceKind": normalized["workspace"]["kind"],
+        "diagnosticRefs": [],
+        "idempotencyKey": normalized["idempotencyKey"],
+    }
+
+
 async def _immediate_wait_condition(
     predicate: Callable[[], bool],
     **_kwargs: Any,
@@ -289,18 +309,20 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
         plan_ref="art_plan_1",
     )
 
-    # provider_profile.list calls (3) happen first, then artifact.read for plan,
-    # then the step execution manifest artifact.create is recorded before
-    # child workflow dispatch.
+    # provider_profile.list calls (3) happen first, then artifact.read for plan.
+    # New histories may also create step checkpoints before the manifest write,
+    # so locate the manifest artifact create by content type instead of fixed
+    # position.
     assert captured[3][0] == "artifact.read"
     assert captured[3][1]["artifact_ref"] == "art_plan_1"
-    assert captured[4][0] == "artifact.create"
-    assert captured[4][1]["content_type"] == (
-        "application/vnd.moonmind.step-execution+json;version=1"
+    manifest_create = next(
+        payload
+        for activity_type, payload in captured
+        if activity_type == "artifact.create"
+        and payload.get("content_type")
+        == "application/vnd.moonmind.step-execution+json;version=1"
     )
-    assert captured[4][1]["metadata_json"]["artifact_kind"] == (
-        "step_execution_manifest"
-    )
+    assert manifest_create["metadata_json"]["artifact_kind"] == "step_execution_manifest"
     assert not any(
         payload.get("artifact_ref") == "artifact://registry/1"
         for activity_type, payload in captured
@@ -3130,6 +3152,8 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "step_checkpoint.create":
+            return _step_checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
         return json.dumps(
             {
@@ -3277,6 +3301,8 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
             )
             if artifact_create_result is not None:
                 return artifact_create_result
+        if activity_type == "step_checkpoint.create":
+            return _step_checkpoint_create_result(payload)
         assert activity_type == "artifact.read"
         return json.dumps(
             {

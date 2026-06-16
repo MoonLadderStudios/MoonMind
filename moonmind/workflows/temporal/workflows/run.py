@@ -2905,6 +2905,186 @@ class MoonMindRunWorkflow:
         self._sync_progress_snapshot(updated_at=updated_at)
         return self._step_checkpoint_refs.get(logical_step_id)
 
+    def _canonical_step_checkpoint_input(
+        self,
+        logical_step_id: str,
+        *,
+        boundary: StepExecutionCheckpointBoundary,
+        task_input_snapshot_ref: str,
+        workspace: Mapping[str, Any],
+        created_at: datetime,
+        plan_ref: str | None = None,
+        plan_digest: str | None = None,
+        prepared_input_refs: Sequence[str] = (),
+        step_outputs: Mapping[str, Any] | None = None,
+        diagnostic_refs: Sequence[str] = (),
+        identity: StepExecutionIdentityModel | None = None,
+    ) -> dict[str, Any]:
+        if identity is None:
+            attempt = self._step_execution_for(logical_step_id)
+            if attempt is None or attempt <= 0:
+                attempt = 1
+            identity = StepExecutionIdentityModel(
+                workflowId=workflow.info().workflow_id,
+                runId=workflow.info().run_id,
+                logicalStepId=logical_step_id,
+                executionOrdinal=attempt,
+            )
+        resolved_prepared_refs = [
+            str(ref).strip() for ref in prepared_input_refs if str(ref).strip()
+        ]
+        if not resolved_prepared_refs:
+            resolved_prepared_refs = list(self._prepared_artifact_refs)
+        checkpoint_id = build_step_checkpoint_id(identity, boundary)
+        idempotency_key = build_step_checkpoint_idempotency_key(identity, boundary)
+        return {
+            "identity": identity.model_dump(by_alias=True, mode="json"),
+            "boundary": boundary,
+            "checkpointId": checkpoint_id,
+            "taskInputSnapshotRef": task_input_snapshot_ref,
+            "workspace": dict(workspace),
+            "createdAt": created_at.isoformat(),
+            "planRef": plan_ref,
+            "planDigest": plan_digest,
+            "preparedInputRefs": resolved_prepared_refs,
+            "stepOutputs": dict(step_outputs or {}),
+            "diagnosticRefs": [
+                str(ref).strip() for ref in diagnostic_refs if str(ref).strip()
+            ],
+            "idempotencyKey": idempotency_key,
+        }
+
+    async def _capture_step_checkpoints_for_boundaries(
+        self,
+        logical_step_id: str,
+        *,
+        boundaries: Sequence[StepExecutionCheckpointBoundary],
+        task_input_snapshot_ref: str,
+        workspace: Mapping[str, Any],
+        created_at: datetime,
+        plan_ref: str | None = None,
+        plan_digest: str | None = None,
+        prepared_input_refs: Sequence[str] = (),
+        step_outputs: Mapping[str, Any] | None = None,
+        diagnostic_refs: Sequence[str] = (),
+    ) -> dict[str, str]:
+        refs_by_boundary: dict[str, str] = {}
+        attempt = self._step_execution_for(logical_step_id)
+        if attempt is None or attempt <= 0:
+            attempt = 1
+        identity = StepExecutionIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            executionOrdinal=attempt,
+        )
+        for boundary in boundaries:
+            result = await self._create_step_checkpoint_via_activity(
+                identity=identity,
+                boundary=boundary,
+                task_input_snapshot_ref=task_input_snapshot_ref,
+                workspace=workspace,
+                created_at=created_at,
+                plan_ref=plan_ref,
+                plan_digest=plan_digest,
+                prepared_input_refs=prepared_input_refs,
+                step_outputs=step_outputs,
+                diagnostic_refs=diagnostic_refs,
+            )
+            checkpoint_ref = str(result.get("checkpointRef") or "").strip()
+            if checkpoint_ref:
+                refs_by_boundary[str(boundary)] = checkpoint_ref
+        return refs_by_boundary
+
+    def _step_checkpoint_task_input_snapshot_ref(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> str:
+        task_payload = parameters.get("task")
+        if isinstance(task_payload, Mapping):
+            for key in (
+                "taskInputSnapshotRef",
+                "task_input_snapshot_ref",
+                "inputSnapshotRef",
+                "input_snapshot_ref",
+                "originalTaskInputSnapshotRef",
+                "original_task_input_snapshot_ref",
+            ):
+                value = task_payload.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        if self._input_ref:
+            return self._input_ref
+        return f"workflow://{workflow.info().workflow_id}/task-input"
+
+    def _step_checkpoint_workspace_evidence(
+        self,
+        logical_step_id: str,
+        *,
+        boundary: StepExecutionCheckpointBoundary,
+    ) -> dict[str, Any]:
+        row = self._step_ledger_row_for(logical_step_id)
+        if isinstance(row, Mapping):
+            by_boundary = row.get("checkpointRefsByBoundary")
+            if isinstance(by_boundary, Mapping):
+                evidence = by_boundary.get(str(boundary))
+                if isinstance(evidence, Mapping):
+                    artifact_ref = evidence.get("artifactRef")
+                    if isinstance(artifact_ref, str) and artifact_ref.strip():
+                        return {
+                            "kind": "external_state_ref",
+                            "externalStateRef": artifact_ref.strip(),
+                        }
+            for key in (
+                "workspaceCheckpointRef",
+                "stepCheckpointRef",
+                "latestStepExecutionCheckpointRef",
+                "stateCheckpointRef",
+            ):
+                value = row.get(key)
+                if isinstance(value, str) and value.strip():
+                    return {
+                        "kind": "external_state_ref",
+                        "externalStateRef": value.strip(),
+                    }
+        attempt = self._step_execution_for(logical_step_id) or 1
+        return {
+            "kind": "external_state_ref",
+            "externalStateRef": (
+                f"workflow://{workflow.info().workflow_id}/"
+                f"steps/{logical_step_id}/execution/{attempt}/{boundary}"
+            ),
+        }
+
+    async def _capture_step_checkpoint_boundary(
+        self,
+        logical_step_id: str,
+        *,
+        boundary: StepExecutionCheckpointBoundary,
+        parameters: Mapping[str, Any],
+        plan_ref: str | None,
+        created_at: datetime,
+        step_outputs: Mapping[str, Any] | None = None,
+    ) -> str | None:
+        if not workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
+            return None
+        refs = await self._capture_step_checkpoints_for_boundaries(
+            logical_step_id,
+            boundaries=(boundary,),
+            task_input_snapshot_ref=self._step_checkpoint_task_input_snapshot_ref(
+                parameters
+            ),
+            workspace=self._step_checkpoint_workspace_evidence(
+                logical_step_id,
+                boundary=boundary,
+            ),
+            created_at=created_at,
+            plan_ref=plan_ref,
+            prepared_input_refs=self._prepared_artifact_refs,
+            step_outputs=step_outputs,
+        )
+        return refs.get(str(boundary))
+
     async def _create_step_checkpoint_via_activity(
         self,
         *,
@@ -2926,21 +3106,20 @@ class MoonMindRunWorkflow:
         """
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step_checkpoint.create")
-        checkpoint_id = build_step_checkpoint_id(identity, boundary)
-        idempotency_key = build_step_checkpoint_idempotency_key(identity, boundary)
-        payload = {
-            "identity": identity.model_dump(by_alias=True, mode="json"),
-            "boundary": boundary,
-            "taskInputSnapshotRef": task_input_snapshot_ref,
-            "workspace": dict(workspace),
-            "createdAt": created_at.isoformat(),
-            "planRef": plan_ref,
-            "planDigest": plan_digest,
-            "preparedInputRefs": list(prepared_input_refs),
-            "stepOutputs": dict(step_outputs or {}),
-            "diagnosticRefs": list(diagnostic_refs),
-            "idempotencyKey": idempotency_key,
-        }
+        payload = self._canonical_step_checkpoint_input(
+            identity.logical_step_id,
+            boundary=boundary,
+            task_input_snapshot_ref=task_input_snapshot_ref,
+            workspace=workspace,
+            created_at=created_at,
+            plan_ref=plan_ref,
+            plan_digest=plan_digest,
+            prepared_input_refs=prepared_input_refs,
+            step_outputs=step_outputs,
+            diagnostic_refs=diagnostic_refs,
+            identity=identity,
+        )
+        payload.pop("checkpointId", None)
         result = await workflow.execute_activity(
             route.activity_type,
             payload,
@@ -5036,13 +5215,35 @@ class MoonMindRunWorkflow:
                 )
                 self._update_memo()
                 self._refresh_step_readiness(updated_at=workflow.now())
+                if node_id == self._recovery_failed_step_id:
+                    await self._capture_step_checkpoint_boundary(
+                        node_id,
+                        boundary="before_recovery_restoration",
+                        parameters=parameters,
+                        plan_ref=plan_ref,
+                        created_at=workflow.now(),
+                    )
                 await self._prepare_recovery_workspace_for_failed_step(node_id)
+                await self._capture_step_checkpoint_boundary(
+                    node_id,
+                    boundary="after_prepare",
+                    parameters=parameters,
+                    plan_ref=plan_ref,
+                    created_at=workflow.now(),
+                )
                 self._mark_step_running(
                     node_id,
                     updated_at=workflow.now(),
                     summary=self._summary,
                 )
                 current_step_execution = self._step_execution_for(node_id) or 1
+                await self._capture_step_checkpoint_boundary(
+                    node_id,
+                    boundary="before_execution",
+                    parameters=parameters,
+                    plan_ref=plan_ref,
+                    created_at=workflow.now(),
+                )
                 attempt_reason = (
                     "quality_gate_failed"
                     if previous_review_feedback
@@ -5288,6 +5489,14 @@ class MoonMindRunWorkflow:
                         node_id,
                         execution_result=execution_result,
                         updated_at=workflow.now(),
+                    )
+                    await self._capture_step_checkpoint_boundary(
+                        node_id,
+                        boundary="after_execution",
+                        parameters=parameters,
+                        plan_ref=plan_ref,
+                        created_at=workflow.now(),
+                        step_outputs=self._step_execution_compact_output_refs(node_id),
                     )
                     if (
                         result_status == "COMPLETED"
@@ -5653,6 +5862,14 @@ class MoonMindRunWorkflow:
                     artifact_ref=review_artifact_ref,
                 )
                 accepted_execution = True
+                await self._capture_step_checkpoint_boundary(
+                    node_id,
+                    boundary="after_gate",
+                    parameters=parameters,
+                    plan_ref=plan_ref,
+                    created_at=workflow.now(),
+                    step_outputs=self._step_execution_compact_output_refs(node_id),
+                )
                 break
 
             if not accepted_execution:
@@ -5758,6 +5975,14 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
+            await self._capture_step_checkpoint_boundary(
+                node_id,
+                boundary="before_publication",
+                parameters=parameters,
+                plan_ref=plan_ref,
+                created_at=workflow.now(),
+                step_outputs=self._step_execution_compact_output_refs(node_id),
+            )
             self._record_publish_result(
                 parameters=parameters,
                 execution_result=execution_result,
