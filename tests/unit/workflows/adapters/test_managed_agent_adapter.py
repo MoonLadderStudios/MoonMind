@@ -1400,6 +1400,58 @@ async def test_fetch_result_derives_pr_resolver_reenter_gate_from_next_step(
     assert result.failure_class is None
     assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
 
+async def test_fetch_result_normalizes_pr_resolver_reenter_values(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "blocked",\n'
+            '  "mergeAutomationDisposition": "Reenter_Gate",\n'
+            '  "final_reason": "actionable_comments",\n'
+            '  "next_step": "RUN_FIX_COMMENTS_SKILL"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-mixed-case",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="failed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+            failure_class="execution_error",
+            error_message="Process exited with code 3",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-mixed-case",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-mixed-case", pr_resolver_expected=True
+    )
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
+
 async def test_fetch_result_prefers_terminal_status_over_skipped_merge_outcome(
     tmp_path: Path,
 ):

@@ -871,7 +871,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     )
                     resolver_disposition = str(
                         metadata.get("mergeAutomationDisposition") or ""
-                    ).strip()
+                    ).strip().lower()
                     updated_result = False
                     if derived_failure_class is not None:
                         should_apply_derived = False

@@ -239,7 +239,7 @@ def _pr_resolver_disposition(payload: dict[str, Any]) -> str:
         final.get("merge_automation_disposition"),
     )
     if explicit:
-        return explicit
+        return explicit.lower()
 
     status = _pr_resolver_status(payload)
     reason = _first_stripped_text(
@@ -247,12 +247,12 @@ def _pr_resolver_disposition(payload: dict[str, Any]) -> str:
         payload.get("reason"),
         final.get("final_reason"),
         final.get("reason"),
-    )
+    ).lower()
     if status in _PR_RESOLVER_MERGED_STATUSES:
         return "already_merged" if reason == "already_merged" else "merged"
 
-    next_step = _pr_resolver_next_step(payload)
-    if next_step in _PR_RESOLVER_REENTER_NEXT_STEPS:
+    next_step = _pr_resolver_next_step(payload).lower()
+    if next_step in _PR_RESOLVER_REENTER_NEXT_STEPS or next_step.startswith("run_fix_"):
         return "reenter_gate"
     return ""
 
@@ -796,7 +796,7 @@ class ManagedAgentAdapter:
                     )
                     resolver_disposition = str(
                         metadata.get("mergeAutomationDisposition") or ""
-                    ).strip()
+                    ).strip().lower()
                     if derived_failure_class is not None:
                         should_apply_derived = False
                         if record.status == "completed" and failure_class is None:
