@@ -11,12 +11,21 @@ so the run must not be treated as a successful PR resolution.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+from temporalio import client, exceptions
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from moonmind.workflows.temporal.workflows.merge_gate import (
     build_resolver_run_request,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows import run as run_workflow_module
+from moonmind.workflows.temporal.workflows.run import (
+    MoonMindRunWorkflow,
+    MoonMindUserWorkflow,
+)
 
 
 def _ungated_resolver_parameters() -> dict[str, object]:
@@ -60,7 +69,17 @@ def _gated_resolver_parameters() -> dict[str, object]:
     return request["initial_parameters"]
 
 
-def test_gated_parameters_are_recognized_as_merge_automation_owned() -> None:
+def test_gated_parameters_are_recognized_as_merge_automation_owned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_info = type(
+        "ParentInfo",
+        (),
+        {"workflow_id": "mm:parent-merge-automation"},
+    )
+    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
     workflow = MoonMindRunWorkflow()
     assert workflow._is_merge_automation_gated(_gated_resolver_parameters()) is True
 
@@ -77,6 +96,29 @@ def test_empty_merge_gate_without_parent_is_not_gated() -> None:
     assert workflow._is_merge_automation_gated(params) is False
 
 
+def test_stale_merge_gate_payload_without_temporal_parent_is_not_gated() -> None:
+    workflow = MoonMindRunWorkflow()
+    params = _ungated_resolver_parameters()
+    params["mergeGate"] = {
+        "parentWorkflowId": "mm:parent-merge-automation",
+        "pullRequestUrl": "https://example/pr/1",
+    }
+
+    assert workflow._is_merge_automation_gated(params) is False
+
+
+def test_mismatched_temporal_parent_is_not_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_info = type("ParentInfo", (), {"workflow_id": "mm:other-parent"})
+    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._is_merge_automation_gated(_gated_resolver_parameters()) is False
+
+
 def test_ungated_reenter_gate_disposition_blocks_success() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._merge_automation_disposition = "reenter_gate"
@@ -90,7 +132,17 @@ def test_ungated_reenter_gate_disposition_blocks_success() -> None:
     assert "MergeAutomation" in message
 
 
-def test_gated_reenter_gate_disposition_is_allowed() -> None:
+def test_gated_reenter_gate_disposition_is_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent_info = type(
+        "ParentInfo",
+        (),
+        {"workflow_id": "mm:parent-merge-automation"},
+    )
+    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
     workflow = MoonMindRunWorkflow()
     workflow._merge_automation_disposition = "reenter_gate"
 
@@ -100,6 +152,89 @@ def test_gated_reenter_gate_disposition_is_allowed() -> None:
         )
         is None
     )
+
+
+@pytest.fixture
+def ungated_continuation_workflow_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_trusted_owner_metadata", lambda self: ("user", "user-1")
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+
+    async def fake_planning_stage(self: MoonMindUserWorkflow, **_kwargs: Any) -> str:
+        return "artifact://plan/ungated-continuation"
+
+    async def fake_execution_stage(self: MoonMindUserWorkflow, **_kwargs: Any) -> None:
+        self._merge_automation_disposition = "reenter_gate"
+
+    async def fake_finalizing_stage(
+        self: MoonMindUserWorkflow,
+        *,
+        parameters: dict[str, Any],
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        self._finish_summary = {
+            "finishOutcome": {
+                "code": "FAILED" if status == "failed" else "PUBLISH_DISABLED",
+                "reason": error or status,
+            },
+            "publish": {"mode": self._publish_mode(parameters), "status": status},
+        }
+
+    async def fake_record_terminal_state(
+        self: MoonMindUserWorkflow, **_kwargs: Any
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage
+    )
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_run_finalizing_stage", fake_finalizing_stage
+    )
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_record_terminal_state", fake_record_terminal_state
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_workflow_ungated_reenter_gate_disposition_fails_at_boundary(
+    ungated_continuation_workflow_environment: None,
+) -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-ungated-continuation-disposition",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            with pytest.raises(client.WorkflowFailureError) as exc_info:
+                await env.client.execute_workflow(
+                    MoonMindUserWorkflow.run,
+                    {
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": _ungated_resolver_parameters(),
+                    },
+                    id="test-user-workflow-ungated-continuation",
+                    task_queue="test-ungated-continuation-disposition",
+                )
+
+            assert isinstance(exc_info.value.cause, exceptions.ApplicationError)
+            assert exc_info.value.cause.non_retryable is True
+            assert (
+                "mergeAutomationDisposition='reenter_gate'"
+                in exc_info.value.cause.message
+            )
+            assert "not owned by merge automation" in exc_info.value.cause.message
 
 
 @pytest.mark.parametrize("disposition", ["merged", "already_merged"])

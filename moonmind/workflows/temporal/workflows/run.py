@@ -8401,13 +8401,23 @@ class MoonMindRunWorkflow:
         message = ". ".join(part.rstrip(".") for part in parts if part)
         return f"{message}." if message else "Workflow completed successfully"
 
+    def _actual_parent_workflow_id(self) -> str | None:
+        try:
+            parent_info = workflow.info().parent
+        except Exception:
+            return None
+        if parent_info is None:
+            return None
+        return self._coerce_text(parent_info.workflow_id, max_chars=200)
+
     def _is_merge_automation_gated(self, parameters: Mapping[str, Any]) -> bool:
         """Return True when this run was launched by a MoonMind.MergeAutomation gate.
 
         Merge automation tags the resolver child's parameters with a ``mergeGate``
         block carrying the owning ``parentWorkflowId`` (see
-        ``build_resolver_run_request``). A standalone resolver submission has no such
-        block, so its continuation dispositions have no gate to re-enter.
+        ``build_resolver_run_request``). The payload is user-controlled for
+        standalone runs, so ownership is trusted only when the tagged parent matches
+        Temporal's actual parent workflow id.
         """
 
         merge_gate = self._mapping_value(parameters, "mergeGate", "merge_gate")
@@ -8418,7 +8428,9 @@ class MoonMindRunWorkflow:
             or merge_gate.get("parent_workflow_id"),
             max_chars=200,
         )
-        return bool(parent)
+        if not parent:
+            return False
+        return parent == self._actual_parent_workflow_id()
 
     def _continuation_disposition_failure_message(
         self, parameters: Mapping[str, Any]
