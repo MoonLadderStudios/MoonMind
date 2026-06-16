@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 import moonmind.config as settings_module
 from moonmind.config.settings import AppSettings
-from moonmind.schemas import Manifest
+from moonmind.schemas.manifest_models import Manifest
 
 class ManifestLoader:
     """Load a YAML manifest and merge defaults with application settings."""
