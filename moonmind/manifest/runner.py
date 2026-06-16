@@ -4,7 +4,7 @@ import logging
 from importlib import import_module
 from typing import Any, Dict, List, Optional
 
-from moonmind.schemas import Manifest
+from moonmind.schemas.manifest_models import Manifest
 
 def download_loader(type_name: str):
     """Resolve a llama-index reader class without hard-importing legacy helpers."""

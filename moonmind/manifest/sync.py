@@ -6,7 +6,7 @@ from typing import Optional
 
 import yaml
 
-from moonmind.schemas import Manifest
+from moonmind.schemas.manifest_models import Manifest
 
 class ManifestChange(str, Enum):
     NEW = "new"
