@@ -1395,4 +1395,37 @@ describe('Workflows Entrypoint', () => {
     const idCell = table?.querySelector('td.queue-table-cell-id');
     expect(idCell?.textContent).toBe(longWorkflowId);
   });
+
+  it('does not render an Actions column when workflow actions are disabled', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(screen.queryByRole('columnheader', { name: 'Actions' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Actions' })).toBeNull();
+  });
+
+  it('renders a per-row Actions menu trigger when workflow actions are enabled', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+        },
+      },
+    };
+
+    renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(screen.getByRole('columnheader', { name: 'Actions' })).toBeTruthy();
+    const triggers = screen.getAllByRole('button', { name: 'Actions' });
+    expect(triggers.length).toBeGreaterThanOrEqual(1);
+
+    // Opening the menu lazily fetches the workflow's action capabilities.
+    const detailCallsBefore = fetchSpy.mock.calls.filter(([url]) =>
+      String(url).endsWith('/executions/task-123'),
+    );
+    expect(detailCallsBefore).toHaveLength(0);
+  });
 });
