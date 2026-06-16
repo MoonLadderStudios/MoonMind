@@ -1816,7 +1816,7 @@ async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_val
     launch_plan = result["launch_plan"]
     assert launch_plan["profile_id"] == "pentestgpt-safe"
     assert launch_plan["container_name"] == "mm-pentest-run-123-step-pentest-1"
-    assert launch_plan["network_policy"] == "restricted_egress"
+    assert launch_plan["network_policy"] == "bridge_approved_lab"
     assert launch_plan["linux_capabilities"] == []
     assert launch_plan["devices"] == []
     assert launch_plan["labels"]["moonmind.tool_name"] == "security.pentest.run"
@@ -2143,25 +2143,43 @@ async def test_security_pentest_execute_includes_instruction_materialization_met
     assert "make connect" not in str(result).lower()
     assert "docker attach" not in str(result).lower()
 
-async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts():
+async def test_security_pentest_execute_includes_publication_metadata_without_session_artifacts(
+    tmp_path: Path,
+):
+    # The runner's structured findings file is authoritative for the published
+    # normalized findings, so the launcher writes it rather than relying on
+    # caller-supplied publication-time findings.
     activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
+        workload_launcher=_FakePentestLauncher(
+            findings_payload={
+                "target": "https://lab.example.test",
+                "operation_mode": "validate_hypothesis",
+                "runner_profile_id": "pentestgpt-safe",
+                "findings": [
+                    {
+                        "finding_id": "finding-1",
+                        "title": "Supported issue",
+                        "severity": "high",
+                        "confidence": "supported",
+                        "target": "https://lab.example.test",
+                        "summary": "Evidence supports issue",
+                    }
+                ],
+                "summary": {
+                    "findings_count": 1,
+                    "confirmed_findings_count": 0,
+                    "high_or_critical_count": 1,
+                },
+            }
+        ),
         workload_registry=_RecordingPentestRegistry(),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
+            artifacts_dir=str(tmp_path / "artifacts"),
             summary_text="Pentest finished with password=hunter2",
-            findings=[
-                {
-                    "finding_id": "finding-1",
-                    "title": "Supported issue",
-                    "severity": "high",
-                    "confidence": "supported",
-                    "target": "https://lab.example.test",
-                    "summary": "Evidence supports issue",
-                }
-            ],
+            findings=[],
             provider_snapshot_available=True,
             wrapper_log_available=True,
         )
@@ -2207,6 +2225,9 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
         "high_or_critical_count": 1,
     }
     assert finding_set["findings"][0]["confidence"] == "supported"
+    assert finding_set["normalization_status"] == "ok"
+    assert result["normalization_status"] == "ok"
+    assert result["quarantined_findings_count"] == 0
     assert result["heartbeat_phases"] == [
         "validating_scope",
         "waiting_for_profile_slot",
@@ -2939,29 +2960,17 @@ async def test_security_pentest_execute_sources_publication_payload_from_nested_
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
     )
+    # Publication inputs (here ``summary_text``) must be sourced from the nested
+    # ``request`` envelope, not from the top-level payload. ``summary_text``
+    # flows into the publication diagnostics/preview, which survive the
+    # runner-file overwrite of ``normalized_findings``.
     nested_request = _pentest_activity_payload(
-        findings=[
-            {
-                "finding_id": "nested-finding",
-                "title": "Nested finding",
-                "severity": "high",
-                "confidence": "supported",
-                "summary": "Nested request metadata",
-            }
-        ],
+        summary_text="nested-source-marker",
         provider_snapshot_available=False,
     )["request"]
     payload = {
         "request": nested_request,
-        "findings": [
-            {
-                "finding_id": "raw-finding",
-                "title": "Raw finding",
-                "severity": "critical",
-                "confidence": "confirmed",
-                "summary": "Raw payload metadata",
-            }
-        ],
+        "summary_text": "top-source-marker",
         "provider_snapshot_available": True,
     }
 
@@ -2969,8 +2978,8 @@ async def test_security_pentest_execute_sources_publication_payload_from_nested_
 
     publication = result["artifact_publication"]
     artifact_names = {item["name"] for item in publication["artifacts"]}
-    findings = result["normalized_findings"]["findings"]
-    assert [item["finding_id"] for item in findings] == ["nested-finding"]
+    assert "nested-source-marker" in result["diagnostics"]["summary"]
+    assert "top-source-marker" not in str(result)
     assert "output.provider_snapshot" in artifact_names
 
 async def test_security_pentest_execute_uses_runner_normalized_findings_after_launch(
@@ -3021,6 +3030,64 @@ async def test_security_pentest_execute_uses_runner_normalized_findings_after_la
     assert [
         item["finding_id"] for item in result["normalized_findings"]["findings"]
     ] == ["runner-finding"]
+
+
+async def test_successful_workload_missing_structured_findings_is_not_clean(
+    tmp_path: Path,
+):
+    # The launcher writes no structured findings file. A succeeded workload with
+    # no machine-readable findings must NOT be reported as a clean run.
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(artifacts_dir=str(tmp_path / "artifacts"))
+    )
+
+    assert result["status"] == "completed"
+    assert (
+        result["normalized_findings"]["normalization_status"] == "normalizer_error"
+    )
+    assert result["normalization_status"] == "normalizer_error"
+    assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
+
+
+async def test_provider_cooldown_does_not_return_clean_findings():
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=_FakePentestLeaseManager(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload(
+            execution_profile_ref="pentestgpt_openrouter_default",
+            provider_failure={"category": "provider_429"},
+        )
+    )
+
+    assert result["status"] == "provider_cooldown"
+    assert (
+        result["normalized_findings"]["normalization_status"] == "provider_failed"
+    )
+    assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
+
+
+async def test_workload_failure_does_not_return_clean_findings():
+    activities = TemporalAgentRuntimeActivities(
+        workload_launcher=_FakePentestLauncher(status="failed"),
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    result = await activities._security_pentest_execute_trusted_internal(
+        _pentest_activity_payload()
+    )
+
+    assert result["status"] in {"failed", "timed-out", "canceled"}
+    assert result["normalized_findings"]["normalization_status"] == "runner_failed"
+    assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
 
 async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval(
     monkeypatch: pytest.MonkeyPatch,
