@@ -89,6 +89,19 @@ Result should include:
 * `mergeAutomationDisposition` for merge automation consumers:
   `merged`, `already_merged`, `reenter_gate`, `manual_review`, or `failed`
 
+Continuation blockers use `reenter_gate`, not generic failure. This includes
+resolver-owned remediation steps (`run_fix_comments_skill`, `run_fix_ci_skill`,
+`run_fix_merge_conflicts_skill`) and transient finalize-only waits
+(`retry_finalize_after_backoff`, `wait_for_ci_and_retry_finalize`). Managed
+runtime adapters preserve that disposition even when the resolver command exits
+non-zero, so `MoonMind.MergeAutomation` can re-enter the gate instead of failing
+the parent workflow.
+
+During long waits, especially `ci_running`, the resolver emits concise progress
+lines before sleeping. These lines are part of the operational contract: they keep
+managed-runtime observability fresh and avoid treating a healthy CI poll loop as
+a silent stuck agent.
+
 ---
 
 ## 5. Data Collection (Snapshot)

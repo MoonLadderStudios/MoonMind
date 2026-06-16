@@ -115,6 +115,11 @@ def merge_automation_disposition_for_result(
     normalized_next_step = normalize_text(next_step).lower()
     if normalized_next_step.startswith("run_fix_"):
         return MERGE_AUTOMATION_DISPOSITION_REENTER_GATE
+    if normalized_next_step in {
+        "retry_finalize_after_backoff",
+        "wait_for_ci_and_retry_finalize",
+    }:
+        return MERGE_AUTOMATION_DISPOSITION_REENTER_GATE
     if normalized_status == "merged" and normalized_outcome == "merged":
         if normalized_reason == "already_merged":
             return MERGE_AUTOMATION_DISPOSITION_ALREADY_MERGED

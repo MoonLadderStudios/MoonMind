@@ -77,6 +77,15 @@ _PR_RESOLVER_MERGED_STATUSES: frozenset[str] = frozenset({"merged"})
 _PR_RESOLVER_TERMINAL_STATUSES: frozenset[str] = (
     _PR_RESOLVER_FAILURE_STATUSES | _PR_RESOLVER_MERGED_STATUSES
 )
+_PR_RESOLVER_REENTER_NEXT_STEPS: frozenset[str] = frozenset(
+    {
+        "run_fix_comments_skill",
+        "run_fix_ci_skill",
+        "run_fix_merge_conflicts_skill",
+        "retry_finalize_after_backoff",
+        "wait_for_ci_and_retry_finalize",
+    }
+)
 _PR_RESOLVER_RESULT_PATH_LIST = ", ".join(
     str(path) for path in _PR_RESOLVER_RESULT_PATHS
 )
@@ -201,6 +210,51 @@ def _pr_resolver_final_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(merge, dict):
         return merge
     return {}
+
+
+def _pr_resolver_next_step(payload: dict[str, Any]) -> str:
+    """Return the resolver's normalized next-step action when present."""
+
+    final = _pr_resolver_final_payload(payload)
+    return _first_stripped_text(
+        payload.get("next_step"),
+        payload.get("nextStep"),
+        payload.get("retryRecommendedAction"),
+        payload.get("retry_recommended_action"),
+        final.get("next_step"),
+        final.get("nextStep"),
+        final.get("retryRecommendedAction"),
+        final.get("retry_recommended_action"),
+    )
+
+
+def _pr_resolver_disposition(payload: dict[str, Any]) -> str:
+    """Return explicit or derived merge-automation disposition for a resolver result."""
+
+    final = _pr_resolver_final_payload(payload)
+    explicit = _first_stripped_text(
+        payload.get("mergeAutomationDisposition"),
+        payload.get("merge_automation_disposition"),
+        final.get("mergeAutomationDisposition"),
+        final.get("merge_automation_disposition"),
+    )
+    if explicit:
+        return explicit
+
+    status = _pr_resolver_status(payload)
+    reason = _first_stripped_text(
+        payload.get("final_reason"),
+        payload.get("reason"),
+        final.get("final_reason"),
+        final.get("reason"),
+    )
+    if status in _PR_RESOLVER_MERGED_STATUSES:
+        return "already_merged" if reason == "already_merged" else "merged"
+
+    next_step = _pr_resolver_next_step(payload)
+    if next_step in _PR_RESOLVER_REENTER_NEXT_STEPS:
+        return "reenter_gate"
+    return ""
 
 
 def _first_stripped_text(*values: Any) -> str:
@@ -421,11 +475,13 @@ def _derive_pr_resolver_failure(
         )
 
     status = _pr_resolver_status(payload)
+    if _pr_resolver_disposition(payload) == "reenter_gate":
+        return None, None
     if status not in _PR_RESOLVER_FAILURE_STATUSES:
         return None, None
 
     reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
-    next_step = str(payload.get("next_step") or "").strip()
+    next_step = _pr_resolver_next_step(payload)
     summary_parts = [f"pr-resolver reported status '{status}'"]
     if reason:
         summary_parts.append(reason)
@@ -445,13 +501,9 @@ def _derive_pr_resolver_metadata(workspace_path: str | None) -> dict[str, Any]:
     status = _pr_resolver_status(payload)
     reason = str(payload.get("final_reason") or payload.get("reason") or "").strip()
     metadata: dict[str, Any] = {}
-    explicit_disposition = str(payload.get("mergeAutomationDisposition") or "").strip()
-    if explicit_disposition:
-        metadata["mergeAutomationDisposition"] = explicit_disposition
-    elif status in _PR_RESOLVER_MERGED_STATUSES:
-        metadata["mergeAutomationDisposition"] = (
-            "already_merged" if reason == "already_merged" else "merged"
-        )
+    disposition = _pr_resolver_disposition(payload)
+    if disposition:
+        metadata["mergeAutomationDisposition"] = disposition
     final = _pr_resolver_final_payload(payload)
     head_sha = _first_stripped_text(
         payload.get("headSha"),
@@ -742,6 +794,9 @@ class ManagedAgentAdapter:
                     derived_failure_class, derived_summary = _derive_pr_resolver_failure(
                         record.workspace_path
                     )
+                    resolver_disposition = str(
+                        metadata.get("mergeAutomationDisposition") or ""
+                    ).strip()
                     if derived_failure_class is not None:
                         should_apply_derived = False
                         if record.status == "completed" and failure_class is None:
@@ -756,6 +811,14 @@ class ManagedAgentAdapter:
                             failure_class = derived_failure_class
                             if derived_summary:
                                 summary = derived_summary
+                    elif (
+                        resolver_disposition == "reenter_gate"
+                        and record.status == "failed"
+                        and failure_class in {None, "execution_error"}
+                        and _is_generic_process_exit_summary(summary)
+                    ):
+                        failure_class = None
+                        summary = "pr-resolver requested merge automation re-entry."
                 return AgentRunResult(
                     summary=summary,
                     output_refs=output_refs,

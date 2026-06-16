@@ -1301,7 +1301,7 @@ async def test_fetch_result_marks_failed_pr_resolver_artifact_as_failure(
     assert "pr-resolver reported status 'failed'" in result.summary
     assert "manual_review" in result.summary
 
-async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
+async def test_fetch_result_treats_pr_resolver_reenter_gate_as_continuation(
     tmp_path: Path,
 ):
     from datetime import UTC, datetime
@@ -1316,6 +1316,7 @@ async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
         (
             "{\n"
             '  "status": "attempts_exhausted",\n'
+            '  "mergeAutomationDisposition": "reenter_gate",\n'
             '  "final_reason": "actionable_comments",\n'
             '  "next_step": "run_fix_comments_skill"\n'
             "}\n"
@@ -1347,10 +1348,57 @@ async def test_fetch_result_maps_blocked_pr_resolver_result_to_user_error(
     result = await adapter.fetch_result(
         "run-result-pr-blocked", pr_resolver_expected=True
     )
-    assert result.failure_class == "user_error"
-    assert result.summary is not None
-    assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
-    assert "run_fix_comments_skill" in result.summary
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
+
+async def test_fetch_result_derives_pr_resolver_reenter_gate_from_next_step(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "blocked",\n'
+            '  "final_reason": "ci_running",\n'
+            '  "next_step": "retry_finalize_after_backoff"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-ci-wait",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="completed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-ci-wait",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-ci-wait", pr_resolver_expected=True
+    )
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
 
 async def test_fetch_result_prefers_terminal_status_over_skipped_merge_outcome(
     tmp_path: Path,
@@ -1399,10 +1447,8 @@ async def test_fetch_result_prefers_terminal_status_over_skipped_merge_outcome(
     result = await adapter.fetch_result(
         "run-result-pr-blocked-skipped", pr_resolver_expected=True
     )
-    assert result.failure_class == "user_error"
-    assert result.summary is not None
-    assert "pr-resolver reported status 'blocked'" in result.summary
-    assert "run_fix_comments_skill" in result.summary
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
 
 async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     tmp_path: Path,
@@ -1420,7 +1466,7 @@ async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
             "{\n"
             '  "status": "attempts_exhausted",\n'
             '  "final_reason": "actionable_comments",\n'
-            '  "next_step": "run_fix_comments_skill"\n'
+            '  "next_step": "manual_review"\n'
             "}\n"
         ),
         encoding="utf-8",
@@ -1455,7 +1501,60 @@ async def test_fetch_result_upgrades_generic_failed_exit_with_pr_result(
     assert result.failure_class == "user_error"
     assert result.summary is not None
     assert "pr-resolver reported status 'attempts_exhausted'" in result.summary
-    assert "run_fix_comments_skill" in result.summary
+    assert "manual_review" in result.summary
+
+async def test_fetch_result_clears_generic_failed_exit_for_reenter_gate(
+    tmp_path: Path,
+):
+    from datetime import UTC, datetime
+
+    from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+    from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+    workspace_path = tmp_path / "workspace"
+    result_dir = workspace_path / "var" / "pr_resolver"
+    result_dir.mkdir(parents=True)
+    (result_dir / "result.json").write_text(
+        (
+            "{\n"
+            '  "status": "attempts_exhausted",\n'
+            '  "mergeAutomationDisposition": "reenter_gate",\n'
+            '  "final_reason": "actionable_comments",\n'
+            '  "next_step": "run_fix_comments_skill"\n'
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(tmp_path / "run_store")
+    store.save(
+        ManagedRunRecord(
+            run_id="run-result-pr-generic-reenter",
+            agent_id="gemini_cli",
+            runtime_id="gemini_cli",
+            status="failed",
+            started_at=datetime.now(tz=UTC),
+            workspace_path=str(workspace_path),
+            failure_class="execution_error",
+            error_message="Process exited with code 3",
+        )
+    )
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles([]),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-result-pr-generic-reenter",
+        run_store=store,
+    )
+
+    result = await adapter.fetch_result(
+        "run-result-pr-generic-reenter", pr_resolver_expected=True
+    )
+    assert result.failure_class is None
+    assert result.summary == "pr-resolver requested merge automation re-entry."
+    assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
 
 async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
     tmp_path: Path,
@@ -1516,11 +1615,8 @@ async def test_fetch_result_prefers_newer_pr_resolver_attempt_over_stale_result(
     result = await adapter.fetch_result(
         "run-result-pr-latest-attempt", pr_resolver_expected=True
     )
-    assert result.failure_class == "user_error"
-    assert result.summary is not None
-    assert "pr-resolver reported status 'blocked'" in result.summary
-    assert "ci_running" in result.summary
-    assert "merge_conflicts" not in result.summary
+    assert result.failure_class is None
+    assert result.metadata["mergeAutomationDisposition"] == "reenter_gate"
 
 async def test_fetch_result_ignores_stale_failure_when_newer_attempt_is_merged(
     tmp_path: Path,

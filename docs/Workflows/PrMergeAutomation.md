@@ -532,6 +532,22 @@ MUST include this field. A resolver run that is explicitly launched by
 `MoonMind.MergeAutomation` but does not write a parseable resolver result is a
 resolver failure, not a generic successful child run.
 
+Resolver adapter boundaries MUST preserve continuation dispositions. When a
+resolver artifact reports `mergeAutomationDisposition = "reenter_gate"`, or when
+older artifacts encode the same intent through a continuation `next_step` such
+as `run_fix_comments_skill`, `run_fix_ci_skill`,
+`run_fix_merge_conflicts_skill`, `retry_finalize_after_backoff`, or
+`wait_for_ci_and_retry_finalize`, the managed-agent adapter returns a successful
+child result carrying `mergeAutomationDisposition = "reenter_gate"`. It MUST NOT
+convert that state into an agent failure merely because the resolver process used
+a non-zero exit code such as `attempts_exhausted`; merge automation owns the next
+gate cycle.
+
+Long resolver waits also remain observable. While polling transient states such
+as `ci_running`, resolver tooling SHOULD emit periodic progress output before
+sleeping so managed-runtime stuck detection can distinguish healthy waiting from
+a silent stalled agent.
+
 ---
 
 ## 14. Post-Resolver Re-Gating

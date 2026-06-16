@@ -869,6 +869,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     derived_failure_class, derived_summary = (
                         _derive_pr_resolver_failure(record.workspace_path)
                     )
+                    resolver_disposition = str(
+                        metadata.get("mergeAutomationDisposition") or ""
+                    ).strip()
+                    updated_result = False
                     if derived_failure_class is not None:
                         should_apply_derived = False
                         if record.status == "completed" and failure_class is None:
@@ -887,9 +891,24 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                                     "metadata": metadata,
                                 }
                             )
-                        elif metadata != result.metadata:
-                            result = result.model_copy(update={"metadata": metadata})
-                    elif metadata != result.metadata:
+                            updated_result = True
+                    elif (
+                        resolver_disposition == "reenter_gate"
+                        and record.status == "failed"
+                        and failure_class in {None, "execution_error"}
+                        and _is_generic_process_exit_summary(summary)
+                    ):
+                        result = result.model_copy(
+                            update={
+                                "failure_class": None,
+                                "summary": (
+                                    "pr-resolver requested merge automation re-entry."
+                                ),
+                                "metadata": metadata,
+                            }
+                        )
+                        updated_result = True
+                    if not updated_result and metadata != result.metadata:
                         result = result.model_copy(update={"metadata": metadata})
             return result
         return AgentRunResult(

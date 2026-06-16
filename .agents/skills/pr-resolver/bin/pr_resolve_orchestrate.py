@@ -331,12 +331,28 @@ def run_orchestration(
                     "timestamp": now_utc_iso(),
                 }
             )
+            print(
+                (
+                    "pr-resolver waiting: "
+                    f"attempt={attempt} reason={reason or 'unknown'} "
+                    f"sleep_seconds={sleep_seconds}"
+                ),
+                flush=True,
+            )
             if sleep_seconds > 0:
                 sleep_fn(sleep_seconds)
             continue
 
         escalations += 1
         pending_progress_reason = reason
+        print(
+            (
+                "pr-resolver remediation: "
+                f"attempt={attempt} reason={reason or 'unknown'} "
+                f"escalation={escalations}"
+            ),
+            flush=True,
+        )
         full_payload = full_runner(attempt, escalations, reason)
         full_status = _normalize_full_status(full_payload)
         full_reason = parse_reason(full_payload) or reason
