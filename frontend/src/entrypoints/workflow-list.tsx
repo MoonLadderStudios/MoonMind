@@ -6,6 +6,7 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { formatRuntimeLabel, formatStatusLabel, formatTaskSkills } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
+import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 
 const POLL_MS_DEFAULT = 5000;
 
@@ -14,6 +15,9 @@ type ListDashboardConfig = {
   features?: {
     temporalDashboard?: {
       listEnabled?: boolean;
+      actionsEnabled?: boolean;
+      temporalWorkflowEditing?: boolean;
+      temporalTaskEditing?: boolean;
     };
   };
 };
@@ -598,6 +602,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return typeof candidate === 'number' && candidate > 0 ? candidate : POLL_MS_DEFAULT;
   }, [dashboardCfg]);
   const listEnabled = dashboardCfg?.features?.temporalDashboard?.listEnabled !== false;
+  const actionsEnabled = Boolean(dashboardCfg?.features?.temporalDashboard?.actionsEnabled);
+  const taskEditingEnabled = Boolean(
+    dashboardCfg?.features?.temporalDashboard?.temporalWorkflowEditing ??
+      dashboardCfg?.features?.temporalDashboard?.temporalTaskEditing,
+  );
 
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
@@ -1471,6 +1480,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                     <col className="queue-table-column-date" />
                     <col className="queue-table-column-date" />
                     <col className="queue-table-column-date" />
+                    {actionsEnabled ? <col className="queue-table-column-actions" /> : null}
                   </colgroup>
                   <thead>
                     <tr>
@@ -1530,6 +1540,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           </th>
                         );
                       })}
+                      {actionsEnabled ? (
+                        <th scope="col" className="queue-table-actions-header">
+                          Actions
+                        </th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -1563,6 +1578,16 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           <td className="queue-table-cell-date">{formatWhen(row.scheduledFor)}</td>
                           <td className="queue-table-cell-date">{formatWhen(row.createdAt)}</td>
                           <td className="queue-table-cell-date">{formatWhen(row.closedAt)}</td>
+                          {actionsEnabled ? (
+                            <td className="queue-table-cell-actions">
+                              <WorkflowRowActionsMenu
+                                workflowId={rowWorkflowId(row)}
+                                apiBase={payload.apiBase}
+                                actionsEnabled={actionsEnabled}
+                                taskEditingEnabled={taskEditingEnabled}
+                              />
+                            </td>
+                          ) : null}
                         </tr>
                       );
                     })}
@@ -1648,6 +1673,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       >
                         View details
                       </a>
+                      {actionsEnabled ? (
+                        <WorkflowRowActionsMenu
+                          workflowId={rowWorkflowId(row)}
+                          apiBase={payload.apiBase}
+                          actionsEnabled={actionsEnabled}
+                          taskEditingEnabled={taskEditingEnabled}
+                        />
+                      ) : null}
                     </div>
                   </li>
                       );
