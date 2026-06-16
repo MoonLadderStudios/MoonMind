@@ -45,6 +45,27 @@ This writes:
 
 If this command does not run, does not write `var/pr_resolver/result.json`, or exits before producing a parseable result, stop as blocked with the command output and do not report success.
 
+## Foreground Execution Contract (no backgrounding)
+This skill runs inside a one-shot managed agent run. When your process exits, the
+run is over — there is no event loop that will "notify you on completion" and no
+scheduled wakeup that will resume you later. Those are interactive-harness concepts
+that do not exist here.
+
+Therefore:
+- You MUST run the orchestration command in the **foreground** and block on it until
+  it returns. Do NOT launch it with `&`, `nohup`, a background job, a detached
+  process, or any "run in background and notify me" mechanism.
+- The orchestration command already polls long-running states (especially
+  `ci_running`) internally up to its elapsed budget (`--max-elapsed-seconds`,
+  default 7200s) and finalizes the merge when CI passes. Let it run to completion;
+  do not exit while it is still polling.
+- Do NOT end your turn expecting a callback, notification, or fallback wakeup to
+  finish the merge for you. If you exit while CI is still running, the merge is
+  abandoned and the PR is left unresolved even though your local work succeeded.
+- A run that stops at `ci_running` (or any other non-terminal state) because you
+  backgrounded the orchestrator or returned early is **not** a successful PR
+  resolution.
+
 ## Terminal Success Contract
 Allowed successful terminal states:
 - `var/pr_resolver/result.json` has `status=merged`, `merge_outcome=merged`, and `mergeAutomationDisposition=merged`.
@@ -131,3 +152,4 @@ python3 .agents/skills/pr-resolver/bin/pr_resolve_full.py --pr <pr_number_or_bra
 - Respect retry caps; if retries are exhausted, return `attempts_exhausted` and stop.
 - This skill is allowed to commit/push and merge (task.publish.mode MUST be none).
 - A failed push, missing GitHub auth, or missing remote branch update is an unresolved PR blocker, even if all code changes are committed locally.
+- Never background the orchestration command or rely on notifications/scheduled wakeups to finish the merge; run it in the foreground and wait for it to return (see Foreground Execution Contract).
