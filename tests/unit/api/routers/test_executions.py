@@ -24,6 +24,7 @@ from api_service.api.routers.executions import (
     _get_service,
     _artifact_id_from_ref,
     _build_original_workflow_input_snapshot_payload,
+    _build_recurring_target,
     _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
     _effective_user_roles,
@@ -5786,7 +5787,9 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
 
     assert response.status_code == 201, response.json()
     target = service.create_definition.await_args.kwargs["target"]
-    stored_payload = target["job"]["payload"]
+    assert target["workflowType"] == "MoonMind.UserWorkflow"
+    stored_payload = target["initialParameters"]
+    assert "schedule" not in stored_payload
     assert "proposeTasks" not in stored_payload
     assert "proposalPolicy" not in stored_payload
     assert stored_payload["workflow"]["proposeTasks"] is True
@@ -5836,7 +5839,9 @@ def test_create_task_shaped_recurring_schedule_uses_root_proposal_fallbacks(
 
     assert response.status_code == 201, response.json()
     target = service.create_definition.await_args.kwargs["target"]
-    stored_payload = target["job"]["payload"]
+    assert target["workflowType"] == "MoonMind.UserWorkflow"
+    stored_payload = target["initialParameters"]
+    assert "schedule" not in stored_payload
     assert "proposeTasks" not in stored_payload
     assert "proposalPolicy" not in stored_payload
     assert stored_payload["workflow"]["proposeTasks"] is True
@@ -5901,6 +5906,77 @@ def test_create_task_shaped_recurring_schedule_passes_metadata_and_response(
     assert called_kwargs["enabled"] is False
     assert called_kwargs["scope_type"] == "personal"
     assert called_kwargs["policy"] == policy
+
+
+def test_create_recurring_schedule_accepts_snake_case_target_aliases() -> None:
+    target = _build_recurring_target(
+        {
+            "workflow_type": "MoonMind.ManifestIngest",
+            "schedule": {
+                "mode": "recurring",
+                "cron": "0 * * * *",
+            },
+            "manifest_ref": "artifact://manifest/1",
+            "failure_policy": "best_effort",
+            "initial_parameters": {
+                "action": "plan",
+                "options": {"dryRun": True},
+            },
+        }
+    )
+
+    assert target["workflowType"] == "MoonMind.ManifestIngest"
+    assert target["manifestArtifactRef"] == "artifact://manifest/1"
+    assert target["failurePolicy"] == "best_effort"
+    assert target["initialParameters"] == {
+        "action": "plan",
+        "options": {"dryRun": True},
+    }
+
+
+def test_create_task_shaped_recurring_schedule_lifts_snake_case_artifact_aliases(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, _user = client
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    next_run_at = datetime.now(UTC) + timedelta(hours=1)
+
+    with patch(
+        "api_service.services.recurring_workflows_service.RecurringWorkflowsService"
+    ) as service_cls:
+        service = service_cls.return_value
+        service.create_definition = AsyncMock(
+            return_value=SimpleNamespace(
+                id=uuid4(),
+                name="Inline schedule",
+                cron="0 * * * *",
+                timezone="UTC",
+                next_run_at=next_run_at,
+            )
+        )
+
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "input_artifact_ref": "artifact://input/1",
+                    "plan_artifact_ref": "artifact://plan/1",
+                    "failure_policy": "fail_fast",
+                    "schedule": {
+                        "mode": "recurring",
+                        "cron": "0 * * * *",
+                    },
+                    "workflow": {"instructions": "Run this on a schedule"},
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.json()
+    target = service.create_definition.await_args.kwargs["target"]
+    assert target["inputArtifactRef"] == "artifact://input/1"
+    assert target["planArtifactRef"] == "artifact://plan/1"
+    assert target["failurePolicy"] == "fail_fast"
 
 
 def test_create_task_shaped_recurring_schedule_preserves_missing_policy(
@@ -5992,7 +6068,9 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     ) as service_cls:
         service = service_cls.return_value
         service.create_definition = AsyncMock(
-            side_effect=RecurringWorkflowValidationError("target.kind is required")
+            side_effect=RecurringWorkflowValidationError(
+                "target.workflowType is required"
+            )
         )
 
         response = test_client.post(
@@ -6014,7 +6092,7 @@ def test_create_task_shaped_recurring_schedule_validation_maps_to_422(
     assert response.status_code == 422
     assert response.json()["detail"] == {
         "code": "invalid_recurring_workflow",
-        "message": "target.kind is required",
+        "message": "target.workflowType is required",
     }
 
 def test_create_execution_surfaces_domain_validation_errors(
