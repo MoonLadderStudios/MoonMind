@@ -79,6 +79,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.step_checkpoints import (
         StepExecutionCheckpointBoundary,
         build_step_checkpoint_id,
+        build_step_checkpoint_idempotency_key,
     )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
@@ -1531,6 +1532,33 @@ class MoonMindRunWorkflow:
         checkpoint_ref = self._step_checkpoint_refs.get(
             logical_step_id
         ) or self._previous_step_checkpoint_refs.get(logical_step_id)
+        row = self._step_ledger_row_for(logical_step_id)
+        checkpoint_projection: dict[str, Any] = {}
+        if isinstance(row, Mapping):
+            for key in (
+                "latestStepExecutionCheckpointRef",
+                "stepExecutionCheckpointRefs",
+                "checkpointRefsByBoundary",
+                "stepCheckpointRef",
+                "workspaceCheckpointRef",
+            ):
+                value = row.get(key)
+                if value:
+                    checkpoint_projection[key] = value
+            by_boundary = row.get("checkpointRefsByBoundary")
+            if isinstance(by_boundary, Mapping):
+                before = by_boundary.get("before_execution")
+                if isinstance(before, Mapping):
+                    before_ref = before.get("artifactRef")
+                    if isinstance(before_ref, str) and before_ref.strip():
+                        checkpoint_projection["checkpointBeforeRef"] = (
+                            before_ref.strip()
+                        )
+                after = by_boundary.get("after_execution")
+                if isinstance(after, Mapping):
+                    after_ref = after.get("artifactRef")
+                    if isinstance(after_ref, str) and after_ref.strip():
+                        checkpoint_projection["checkpointAfterRef"] = after_ref.strip()
         if attempt > 1:
             workspace = workspace_policy_metadata(
                 policy="continue_from_previous_execution",
@@ -1538,12 +1566,15 @@ class MoonMindRunWorkflow:
                 checkpoint_valid=bool(checkpoint_ref) if checkpoint_ref else None,
             )
             workspace["sourceExecutionOrdinal"] = dict(source_execution_ordinal) if source_execution_ordinal else None
+            workspace.update(checkpoint_projection)
             return workspace
-        return workspace_policy_metadata(
+        workspace = workspace_policy_metadata(
             policy="fresh_branch_from_source",
             checkpoint_ref=checkpoint_ref,
             checkpoint_valid=None,
         )
+        workspace.update(checkpoint_projection)
+        return workspace
 
     def _step_execution_git_effect(
         self,
@@ -2896,6 +2927,7 @@ class MoonMindRunWorkflow:
 
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step_checkpoint.create")
         checkpoint_id = build_step_checkpoint_id(identity, boundary)
+        idempotency_key = build_step_checkpoint_idempotency_key(identity, boundary)
         payload = {
             "identity": identity.model_dump(by_alias=True, mode="json"),
             "boundary": boundary,
@@ -2907,7 +2939,7 @@ class MoonMindRunWorkflow:
             "preparedInputRefs": list(prepared_input_refs),
             "stepOutputs": dict(step_outputs or {}),
             "diagnosticRefs": list(diagnostic_refs),
-            "idempotencyKey": checkpoint_id,
+            "idempotencyKey": idempotency_key,
         }
         result = await workflow.execute_activity(
             route.activity_type,
@@ -2923,6 +2955,7 @@ class MoonMindRunWorkflow:
                         identity.logical_step_id,
                         updated_at=created_at,
                         step_checkpoint_ref=checkpoint_ref,
+                        checkpoint_boundary=boundary,
                     )
                 except KeyError:
                     pass

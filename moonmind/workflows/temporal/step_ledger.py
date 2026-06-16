@@ -13,6 +13,15 @@ TERMINAL_STEP_STATUSES = {"succeeded", "failed", "skipped", "canceled"}
 READY_DEPENDENCY_STATUSES = {"succeeded", "skipped"}
 _UNSET = object()
 
+_CHECKPOINT_BOUNDARY_LABELS = {
+    "after_prepare": "After prepare checkpoint",
+    "before_execution": "Before execution checkpoint",
+    "after_execution": "After execution checkpoint",
+    "after_gate": "After gate checkpoint",
+    "before_publication": "Before publication checkpoint",
+    "before_recovery_restoration": "Before recovery restoration checkpoint",
+}
+
 def default_step_refs() -> dict[str, Any]:
     return {
         "childWorkflowId": None,
@@ -482,6 +491,38 @@ def materialize_preserved_steps(
             or preserved.get("step_checkpoint_ref")
             or ""
         ).strip()
+        latest_step_execution_checkpoint_ref = str(
+            preserved.get("latestStepExecutionCheckpointRef")
+            or preserved.get("latest_step_execution_checkpoint_ref")
+            or step_checkpoint_ref
+            or ""
+        ).strip()
+        raw_step_execution_checkpoint_refs = preserved.get("stepExecutionCheckpointRefs")
+        if raw_step_execution_checkpoint_refs is None:
+            raw_step_execution_checkpoint_refs = preserved.get(
+                "step_execution_checkpoint_refs"
+            )
+        step_execution_checkpoint_refs = [
+            str(item).strip()
+            for item in (
+                raw_step_execution_checkpoint_refs
+                if isinstance(raw_step_execution_checkpoint_refs, list)
+                else []
+            )
+            if str(item).strip()
+        ]
+        if latest_step_execution_checkpoint_ref and (
+            latest_step_execution_checkpoint_ref not in step_execution_checkpoint_refs
+        ):
+            step_execution_checkpoint_refs.append(latest_step_execution_checkpoint_ref)
+        raw_checkpoint_refs_by_boundary = preserved.get("checkpointRefsByBoundary")
+        if raw_checkpoint_refs_by_boundary is None:
+            raw_checkpoint_refs_by_boundary = preserved.get("checkpoint_refs_by_boundary")
+        checkpoint_refs_by_boundary = (
+            dict(raw_checkpoint_refs_by_boundary)
+            if isinstance(raw_checkpoint_refs_by_boundary, Mapping)
+            else {}
+        )
         if not state_checkpoint_ref:
             raise ValueError(
                 f"preserved step {logical_step_id} requires a state checkpoint ref"
@@ -517,6 +558,18 @@ def materialize_preserved_steps(
             row["stepCheckpointRef"] = step_checkpoint_ref
         else:
             row.pop("stepCheckpointRef", None)
+        if latest_step_execution_checkpoint_ref:
+            row["latestStepExecutionCheckpointRef"] = latest_step_execution_checkpoint_ref
+        else:
+            row.pop("latestStepExecutionCheckpointRef", None)
+        if step_execution_checkpoint_refs:
+            row["stepExecutionCheckpointRefs"] = step_execution_checkpoint_refs
+        else:
+            row.pop("stepExecutionCheckpointRefs", None)
+        if checkpoint_refs_by_boundary:
+            row["checkpointRefsByBoundary"] = checkpoint_refs_by_boundary
+        else:
+            row.pop("checkpointRefsByBoundary", None)
         row["recoveryPreservation"] = _recovery_preservation(
             eligible=True,
             reason="complete",
@@ -544,6 +597,7 @@ def mark_step_checkpoint_evidence(
     state_checkpoint_ref: str | None = None,
     workspace_checkpoint_ref: str | None = None,
     step_checkpoint_ref: str | None = None,
+    checkpoint_boundary: str | None = None,
 ) -> dict[str, Any]:
     """Attach checkpoint evidence and preservation eligibility to a step row."""
 
@@ -556,6 +610,37 @@ def mark_step_checkpoint_evidence(
             row["workspaceCheckpointRef"] = workspace_checkpoint_ref
         if step_checkpoint_ref is not None:
             row["stepCheckpointRef"] = step_checkpoint_ref
+            boundary = str(checkpoint_boundary or "after_execution").strip()
+            history = row.get("stepExecutionCheckpointRefs")
+            if not isinstance(history, list):
+                history = []
+            normalized_history = [
+                item.strip()
+                for item in history
+                if isinstance(item, str) and item.strip()
+            ]
+            if step_checkpoint_ref not in normalized_history:
+                normalized_history.append(step_checkpoint_ref)
+            row["latestStepExecutionCheckpointRef"] = step_checkpoint_ref
+            row["stepExecutionCheckpointRefs"] = normalized_history
+            by_boundary = row.get("checkpointRefsByBoundary")
+            if not isinstance(by_boundary, Mapping):
+                by_boundary = {}
+            else:
+                by_boundary = dict(by_boundary)
+            by_boundary[boundary] = {
+                "category": "checkpoint",
+                "status": "available",
+                "artifactRef": step_checkpoint_ref,
+                "boundary": boundary,
+                "reasonCode": None,
+                "label": _CHECKPOINT_BOUNDARY_LABELS.get(
+                    boundary,
+                    f"{boundary.replace('_', ' ').title()} checkpoint",
+                ),
+                "summary": None,
+            }
+            row["checkpointRefsByBoundary"] = by_boundary
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
         status = str(row.get("status") or "").strip()
         if status not in {"succeeded", "skipped"}:
@@ -639,6 +724,9 @@ def clear_step_checkpoint_evidence(
         row.pop("stateCheckpointRef", None)
         row.pop("workspaceCheckpointRef", None)
         row.pop("stepCheckpointRef", None)
+        row.pop("latestStepExecutionCheckpointRef", None)
+        row.pop("stepExecutionCheckpointRefs", None)
+        row.pop("checkpointRefsByBoundary", None)
         row.pop("recoveryPreservation", None)
         row["updatedAt"] = updated_at.isoformat()
         return row

@@ -4142,6 +4142,23 @@ def _checkpoint_evidence_by_boundary(
 ) -> dict[str, dict[str, Any]]:
     if not workspace:
         return {}
+    raw_by_boundary = _field_value(workspace, "checkpointRefsByBoundary")
+    refs: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_by_boundary, Mapping):
+        for raw_boundary, raw_evidence in raw_by_boundary.items():
+            boundary = str(raw_boundary or "").strip()
+            if not boundary or not isinstance(raw_evidence, (Mapping, BaseModel)):
+                continue
+            artifact_ref = _first_text(_field_value(raw_evidence, "artifactRef"))
+            if not artifact_ref:
+                continue
+            refs[boundary] = _evidence_ref_status(
+                category="checkpoint",
+                status="available",
+                artifact_ref=artifact_ref,
+                boundary=boundary,
+                label=_first_text(_field_value(raw_evidence, "label")),
+            )
     boundaries = {
         "before_execution": ("checkpointBeforeRef", "Before execution checkpoint"),
         "after_execution": ("checkpointAfterRef", "After execution checkpoint"),
@@ -4149,8 +4166,9 @@ def _checkpoint_evidence_by_boundary(
         "workspace": ("workspaceCheckpointRef", "Workspace checkpoint"),
         "step": ("stepCheckpointRef", "Step checkpoint"),
     }
-    refs: dict[str, dict[str, Any]] = {}
     for boundary, (key, label) in boundaries.items():
+        if boundary in refs:
+            continue
         artifact_ref = _first_text(_field_value(workspace, key))
         if artifact_ref:
             refs[boundary] = _evidence_ref_status(
@@ -4303,11 +4321,16 @@ def _is_environment_blocked_manifest(manifest: StepExecutionManifestModel) -> bo
 
 def _recovery_eligibility_payload(manifest: StepExecutionManifestModel) -> dict[str, Any]:
     required_boundary = "before_execution"
-    checkpoint_ref = (
-        _first_text(_field_value(manifest.workspace, "checkpointBeforeRef"))
-        if manifest.workspace
-        else None
-    )
+    checkpoint_ref = None
+    if manifest.workspace:
+        by_boundary = _field_value(manifest.workspace, "checkpointRefsByBoundary")
+        if isinstance(by_boundary, Mapping):
+            before = by_boundary.get(required_boundary)
+            if isinstance(before, (Mapping, BaseModel)):
+                checkpoint_ref = _first_text(_field_value(before, "artifactRef"))
+        checkpoint_ref = checkpoint_ref or _first_text(
+            _field_value(manifest.workspace, "checkpointBeforeRef")
+        )
     diagnostics = _environment_diagnostic_refs(
         manifest.workspace,
         manifest.execution,

@@ -393,9 +393,70 @@ def test_mark_step_checkpoint_evidence_marks_completed_step_eligible() -> None:
     assert row.state_checkpoint_ref == "artifact://checkpoint/implement/1"
     assert row.workspace_checkpoint_ref == "artifact://workspace/implement/1"
     assert row.step_checkpoint_ref == "artifact://step/implement/1"
+    assert row.latest_step_execution_checkpoint_ref == "artifact://step/implement/1"
+    assert row.step_execution_checkpoint_refs == ["artifact://step/implement/1"]
+    assert row.checkpoint_refs_by_boundary["after_execution"].artifact_ref == (
+        "artifact://step/implement/1"
+    )
+    assert row.checkpoint_refs_by_boundary["after_execution"].boundary == (
+        "after_execution"
+    )
     assert row.resume_preservation is not None
     assert row.resume_preservation.eligible is True
     assert row.resume_preservation.reason == "complete"
+
+
+def test_mark_step_checkpoint_evidence_dedupes_boundary_refs_and_keeps_latest() -> None:
+    updated_at = datetime(2026, 4, 7, 12, 15, tzinfo=UTC)
+    rows = build_initial_step_rows(
+        ordered_nodes=[
+            {"id": "implement", "inputs": {"title": "Implement"}},
+        ],
+        dependency_map={"implement": []},
+        updated_at=updated_at,
+    )
+    update_step_row(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        status="succeeded",
+        artifacts={"outputPrimary": "artifact://output"},
+    )
+
+    mark_step_checkpoint_evidence(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        state_checkpoint_ref="artifact://legacy/state",
+        step_checkpoint_ref="artifact://step/before",
+        checkpoint_boundary="before_execution",
+    )
+    mark_step_checkpoint_evidence(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        step_checkpoint_ref="artifact://step/before",
+        checkpoint_boundary="before_execution",
+    )
+    mark_step_checkpoint_evidence(
+        rows,
+        "implement",
+        updated_at=updated_at,
+        step_checkpoint_ref="artifact://step/after",
+        checkpoint_boundary="after_execution",
+    )
+
+    row = StepLedgerRowModel.model_validate(rows[0])
+    assert row.latest_step_execution_checkpoint_ref == "artifact://step/after"
+    assert row.step_execution_checkpoint_refs == [
+        "artifact://step/before",
+        "artifact://step/after",
+    ]
+    assert sorted(row.checkpoint_refs_by_boundary) == [
+        "after_execution",
+        "before_execution",
+    ]
+    assert row.state_checkpoint_ref == "artifact://legacy/state"
 
 
 def test_mark_step_checkpoint_evidence_records_bounded_ineligible_reason() -> None:

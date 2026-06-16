@@ -1434,11 +1434,16 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
     assert result["checkpointRef"] == "artifact://checkpoint/created"
     assert captured["activity"] == "step_checkpoint.create"
     assert captured["payload"]["workspace"]["patchRef"] == "artifact://patch"
-    assert captured["payload"]["idempotencyKey"].endswith(
-        ":checkpoint:after_execution"
+    assert captured["payload"]["idempotencyKey"] == (
+        "wf-run-1:run-1:implement:execution:1:checkpoint:after_execution:write"
     )
     step = workflow.get_step_ledger()["steps"][0]
     assert step["stepCheckpointRef"] == "artifact://checkpoint/created"
+    assert step["latestStepExecutionCheckpointRef"] == "artifact://checkpoint/created"
+    assert step["stepExecutionCheckpointRefs"] == ["artifact://checkpoint/created"]
+    assert step["checkpointRefsByBoundary"]["after_execution"]["artifactRef"] == (
+        "artifact://checkpoint/created"
+    )
     assert step.get("stateCheckpointRef") is None
     assert "implement" not in workflow._step_checkpoint_refs
     assert "workspacePath" not in captured["payload"]

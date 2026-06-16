@@ -20,6 +20,7 @@ from moonmind.schemas.temporal_models import (
     EvidenceRefStatusModel,
     RecoveryEligibilityDiagnosticModel,
     StepEvidenceSummaryModel,
+    StepLedgerRowModel,
 )
 
 
@@ -286,6 +287,48 @@ def test_step_evidence_summary_groups_ref_only_categories_and_diagnostics() -> N
     assert dumped["retrievalManifestRef"]["status"] == "skipped"
     assert dumped["diagnosticRefs"][0]["kind"] == "provider_lease"
     assert "raw" not in json.dumps(dumped).lower()
+
+
+def test_step_ledger_row_accepts_canonical_checkpoint_ref_projection() -> None:
+    row = StepLedgerRowModel.model_validate(
+        {
+            "logicalStepId": "implement",
+            "order": 1,
+            "title": "Implement",
+            "status": "succeeded",
+            "updatedAt": datetime(2026, 6, 16, 12, 0, tzinfo=UTC),
+            "latestStepExecutionCheckpointRef": "artifact://checkpoint/after",
+            "stepExecutionCheckpointRefs": [
+                "artifact://checkpoint/before",
+                "artifact://checkpoint/after",
+            ],
+            "checkpointRefsByBoundary": {
+                "before_execution": {
+                    "category": "checkpoint",
+                    "status": "available",
+                    "artifactRef": "artifact://checkpoint/before",
+                    "boundary": "before_execution",
+                },
+                "after_execution": {
+                    "category": "checkpoint",
+                    "status": "available",
+                    "artifactRef": "artifact://checkpoint/after",
+                    "boundary": "after_execution",
+                },
+            },
+        }
+    )
+
+    dumped = row.model_dump(by_alias=True)
+
+    assert row.latest_step_execution_checkpoint_ref == "artifact://checkpoint/after"
+    assert row.step_execution_checkpoint_refs == [
+        "artifact://checkpoint/before",
+        "artifact://checkpoint/after",
+    ]
+    assert dumped["checkpointRefsByBoundary"]["before_execution"]["artifactRef"] == (
+        "artifact://checkpoint/before"
+    )
 
 
 def test_environment_diagnostic_reference_requires_typed_guidance_without_raw_payload() -> None:

@@ -226,6 +226,46 @@ def test_step_execution_detail_payload_exposes_phase_11_ref_only_evidence_summar
         assert forbidden not in rendered
 
 
+def test_step_execution_detail_payload_prefers_canonical_checkpoint_boundary_map() -> None:
+    payload = _step_execution_detail_payload(
+        _phase_11_manifest(
+            workspace={
+                "checkpointBeforeRef": "artifact://checkpoint/legacy-before",
+                "checkpointRefsByBoundary": {
+                    "before_execution": {
+                        "category": "checkpoint",
+                        "status": "available",
+                        "artifactRef": "artifact://checkpoint/canonical-before",
+                        "boundary": "before_execution",
+                        "label": "Before execution checkpoint",
+                    },
+                    "after_execution": {
+                        "category": "checkpoint",
+                        "status": "available",
+                        "artifactRef": "artifact://checkpoint/canonical-after",
+                        "boundary": "after_execution",
+                    },
+                },
+            },
+        ),
+        manifest_artifact_ref="artifact://manifest/implement-2",
+    )
+
+    evidence = payload["stepEvidence"]["checkpointRefsByBoundary"]
+
+    assert evidence["before_execution"]["artifactRef"] == (
+        "artifact://checkpoint/canonical-before"
+    )
+    assert evidence["after_execution"]["artifactRef"] == (
+        "artifact://checkpoint/canonical-after"
+    )
+    assert payload["recoveryEligibility"]["checkpointRef"] == (
+        "artifact://checkpoint/canonical-before"
+    )
+    rendered = json.dumps(payload, default=str)
+    assert "checkpoint payload" not in rendered
+
+
 def test_step_execution_detail_payload_exposes_typed_recovery_eligibility() -> None:
     eligible = _step_execution_detail_payload(
         _phase_11_manifest(),

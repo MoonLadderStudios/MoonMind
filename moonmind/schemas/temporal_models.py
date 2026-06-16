@@ -2427,6 +2427,15 @@ class StepLedgerRowModel(BaseModel):
     state_checkpoint_ref: str | None = Field(None, alias="stateCheckpointRef")
     workspace_checkpoint_ref: str | None = Field(None, alias="workspaceCheckpointRef")
     step_checkpoint_ref: str | None = Field(None, alias="stepCheckpointRef")
+    latest_step_execution_checkpoint_ref: str | None = Field(
+        None, alias="latestStepExecutionCheckpointRef"
+    )
+    step_execution_checkpoint_refs: list[str] = Field(
+        default_factory=list, alias="stepExecutionCheckpointRefs"
+    )
+    checkpoint_refs_by_boundary: dict[str, EvidenceRefStatusModel] = Field(
+        default_factory=dict, alias="checkpointRefsByBoundary"
+    )
     resume_preservation: StepLedgerResumePreservationModel | None = Field(
         None, alias="recoveryPreservation"
     )
