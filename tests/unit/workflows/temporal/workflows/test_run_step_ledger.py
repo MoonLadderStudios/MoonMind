@@ -66,6 +66,24 @@ def _ordered_nodes() -> list[dict]:
 def _dependency_map() -> dict[str, list[str]]:
     return {"prepare": [], "run-tests": ["prepare"]}
 
+def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
+    boundary = str(payload.get("boundary") or "unknown")
+    checkpoint_id = str(payload.get("idempotencyKey") or f"checkpoint:{boundary}")
+    workspace = payload.get("workspace")
+    workspace_kind = (
+        workspace.get("kind")
+        if isinstance(workspace, dict)
+        else "ephemeral_workspace_ref"
+    )
+    return {
+        "checkpointRef": f"artifact://checkpoint/{boundary}",
+        "checkpointId": checkpoint_id,
+        "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        "workspaceKind": workspace_kind,
+        "diagnosticRefs": [],
+        "idempotencyKey": checkpoint_id,
+    }
+
 def _approval_policy_plan_payload() -> dict[str, Any]:
     return {
         "plan_version": "1.0",
@@ -561,6 +579,9 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "agentRunId": "550e8400-e29b-41d4-a716-446655440000",
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
+        "latestStepExecutionCheckpointRef": None,
+        "stepExecutionCheckpointRefs": [],
+        "checkpointRefsByBoundary": {},
     }
     assert step["artifacts"] == {
         "outputSummary": "art_summary_1",
@@ -615,6 +636,9 @@ def test_run_waiting_state_captures_child_workflow_lineage(
         "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
+        "latestStepExecutionCheckpointRef": None,
+        "stepExecutionCheckpointRefs": [],
+        "checkpointRefsByBoundary": {},
     }
 
 
@@ -1440,9 +1464,130 @@ async def test_run_routes_step_checkpoint_create_through_activity_boundary(
     step = workflow.get_step_ledger()["steps"][0]
     assert step["stepCheckpointRef"] == "artifact://checkpoint/created"
     assert step.get("stateCheckpointRef") is None
+    assert step["refs"]["latestStepExecutionCheckpointRef"] == (
+        "artifact://checkpoint/created"
+    )
+    assert step["refs"]["stepExecutionCheckpointRefs"] == [
+        "artifact://checkpoint/created"
+    ]
+    assert step["refs"]["checkpointRefsByBoundary"] == {
+        "after_execution": "artifact://checkpoint/created"
+    }
+    assert workflow._step_checkpoint_refs_by_boundary["implement"] == {
+        "after_execution": "artifact://checkpoint/created"
+    }
     assert "implement" not in workflow._step_checkpoint_refs
     assert "workspacePath" not in captured["payload"]
     assert "diff" not in json.dumps(captured["payload"], sort_keys=True)
+
+
+@pytest.mark.asyncio
+async def test_run_records_canonical_boundary_checkpoint_and_manifest_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    workflow._input_ref = "artifact://task-input"
+    workflow._plan_ref = "artifact://plan"
+    workflow._prepared_artifact_refs = ["artifact://prepared"]
+    captured: list[dict[str, Any]] = []
+    manifest_writes: list[dict[str, Any]] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload, "kwargs": kwargs})
+        boundary = payload["boundary"]
+        return {
+            "checkpointRef": f"artifact://checkpoint/{boundary}",
+            "checkpointId": payload["idempotencyKey"],
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": payload["workspace"]["kind"],
+            "diagnosticRefs": [],
+            "idempotencyKey": payload["idempotencyKey"],
+        }
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        manifest_writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact://manifest/{len(manifest_writes)}"
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_execution",
+        updated_at=now,
+    )
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_execution",
+        updated_at=now,
+        step_outputs={"summaryRef": "artifact://summary"},
+    )
+    await workflow._record_step_execution_manifest(
+        "implement",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    assert [call["payload"]["boundary"] for call in captured] == [
+        "before_execution",
+        "after_execution",
+    ]
+    assert captured[0]["payload"]["taskInputSnapshotRef"] == "artifact://task-input"
+    assert captured[0]["payload"]["planRef"] == "artifact://plan"
+    assert captured[0]["payload"]["preparedInputRefs"] == ["artifact://prepared"]
+    assert captured[0]["payload"]["workspace"]["kind"] == "ephemeral_workspace_ref"
+    step = workflow.get_step_ledger()["steps"][0]
+    assert step["refs"]["latestStepExecutionCheckpointRef"] == (
+        "artifact://checkpoint/after_execution"
+    )
+    assert step["refs"]["stepExecutionCheckpointRefs"] == [
+        "artifact://checkpoint/before_execution",
+        "artifact://checkpoint/after_execution",
+    ]
+    assert step["refs"]["checkpointRefsByBoundary"] == {
+        "before_execution": "artifact://checkpoint/before_execution",
+        "after_execution": "artifact://checkpoint/after_execution",
+    }
+    workspace = manifest_writes[-1]["payload"]["workspace"]
+    assert workspace["checkpointBeforeRef"] == (
+        "artifact://checkpoint/before_execution"
+    )
+    assert workspace["checkpointAfterRef"] == "artifact://checkpoint/after_execution"
+    assert "diff" not in json.dumps(
+        [call["payload"] for call in captured],
+        sort_keys=True,
+    ).lower()
 
 
 def test_run_marks_completed_step_without_checkpoint_ineligible(
@@ -1622,6 +1767,8 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
                 "feedback": None,
                 "issues": [],
             }
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_child_workflow(
@@ -1790,6 +1937,8 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_child_workflow(
@@ -1952,6 +2101,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_child_workflow(
@@ -2106,6 +2257,8 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_child_workflow(
@@ -2251,6 +2404,8 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
                 "remainingWorkRef": "art_remaining_work_1",
                 "recommendedNextAction": "needs_human",
             }
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_child_workflow(
@@ -2393,6 +2548,8 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
             return ({"artifact_id": next(review_artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return next(review_verdicts)
+        if activity_type == "step_checkpoint.create":
+            return _checkpoint_create_result(payload)
         raise AssertionError(f"unexpected activity: {activity_type}")
 
     async def fake_execute_typed_activity(

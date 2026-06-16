@@ -2312,6 +2312,15 @@ class StepLedgerRefsModel(BaseModel):
     step_execution_manifest_refs: list[str] = Field(
         default_factory=list, alias="stepExecutionManifestRefs"
     )
+    latest_step_execution_checkpoint_ref: str | None = Field(
+        None, alias="latestStepExecutionCheckpointRef"
+    )
+    step_execution_checkpoint_refs: list[str] = Field(
+        default_factory=list, alias="stepExecutionCheckpointRefs"
+    )
+    checkpoint_refs_by_boundary: dict[str, str] = Field(
+        default_factory=dict, alias="checkpointRefsByBoundary"
+    )
 
 class StepLedgerArtifactsModel(BaseModel):
     """Stable semantic artifact slots for step evidence."""

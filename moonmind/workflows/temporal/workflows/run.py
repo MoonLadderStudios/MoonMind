@@ -771,6 +771,7 @@ class MoonMindRunWorkflow:
         self._prepared_artifact_refs: list[str] = []
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
+        self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
@@ -1527,10 +1528,15 @@ class MoonMindRunWorkflow:
                     "sourceExecutionOrdinal": dict(source_execution_ordinal),
                 }
             )
+            self._apply_step_checkpoint_manifest_refs(
+                workspace,
+                self._step_checkpoint_refs_by_boundary.get(logical_step_id, {}),
+            )
             return workspace
         checkpoint_ref = self._step_checkpoint_refs.get(
             logical_step_id
         ) or self._previous_step_checkpoint_refs.get(logical_step_id)
+        boundary_refs = self._step_checkpoint_refs_by_boundary.get(logical_step_id, {})
         if attempt > 1:
             workspace = workspace_policy_metadata(
                 policy="continue_from_previous_execution",
@@ -1538,12 +1544,27 @@ class MoonMindRunWorkflow:
                 checkpoint_valid=bool(checkpoint_ref) if checkpoint_ref else None,
             )
             workspace["sourceExecutionOrdinal"] = dict(source_execution_ordinal) if source_execution_ordinal else None
+            self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
             return workspace
-        return workspace_policy_metadata(
+        workspace = workspace_policy_metadata(
             policy="fresh_branch_from_source",
             checkpoint_ref=checkpoint_ref,
             checkpoint_valid=None,
         )
+        self._apply_step_checkpoint_manifest_refs(workspace, boundary_refs)
+        return workspace
+
+    @staticmethod
+    def _apply_step_checkpoint_manifest_refs(
+        workspace: dict[str, Any],
+        boundary_refs: Mapping[str, str],
+    ) -> None:
+        before_ref = str(boundary_refs.get("before_execution") or "").strip()
+        after_ref = str(boundary_refs.get("after_execution") or "").strip()
+        if before_ref:
+            workspace["checkpointBeforeRef"] = before_ref
+        if after_ref:
+            workspace["checkpointAfterRef"] = after_ref
 
     def _step_execution_git_effect(
         self,
@@ -2364,6 +2385,7 @@ class MoonMindRunWorkflow:
                 previous_checkpoint_ref
             )
         self._step_checkpoint_refs.pop(logical_step_id, None)
+        self._step_checkpoint_refs_by_boundary.pop(logical_step_id, None)
         try:
             clear_step_checkpoint_evidence(
                 self._step_ledger_rows,
@@ -2917,19 +2939,99 @@ class MoonMindRunWorkflow:
         if isinstance(result, Mapping):
             checkpoint_ref = str(result.get("checkpointRef") or "").strip()
             if checkpoint_ref:
+                boundary_key = str(boundary)
                 try:
                     mark_step_checkpoint_evidence(
                         self._step_ledger_rows,
                         identity.logical_step_id,
                         updated_at=created_at,
                         step_checkpoint_ref=checkpoint_ref,
+                        boundary=boundary_key,
                     )
                 except KeyError:
                     pass
                 else:
+                    refs_by_boundary = self._step_checkpoint_refs_by_boundary.setdefault(
+                        identity.logical_step_id,
+                        {},
+                    )
+                    refs_by_boundary[boundary_key] = checkpoint_ref
                     self._sync_progress_snapshot(updated_at=created_at)
             return dict(result)
         raise ValueError("step_checkpoint.create returned a non-mapping result")
+
+    def _canonical_step_checkpoint_identity(
+        self,
+        logical_step_id: str,
+    ) -> StepExecutionIdentityModel | None:
+        attempt = self._step_execution_for(logical_step_id)
+        if attempt is None or attempt <= 0:
+            return None
+        return StepExecutionIdentityModel(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            logicalStepId=logical_step_id,
+            executionOrdinal=attempt,
+        )
+
+    def _canonical_step_checkpoint_workspace(
+        self,
+        logical_step_id: str,
+        boundary: StepExecutionCheckpointBoundary,
+    ) -> dict[str, Any]:
+        checkpoint_ref = (
+            self._step_checkpoint_refs.get(logical_step_id)
+            or self._previous_step_checkpoint_refs.get(logical_step_id)
+            or self._recovery_workspace_restored_ref
+        )
+        workspace_ref = checkpoint_ref or (
+            "temporal://"
+            f"{workflow.info().workflow_id}/{workflow.info().run_id}/"
+            f"{logical_step_id}/{boundary}"
+        )
+        return {
+            "kind": "ephemeral_workspace_ref",
+            "workspaceRef": workspace_ref,
+            "createdAt": workflow.now().isoformat(),
+        }
+
+    async def _record_canonical_step_checkpoint(
+        self,
+        logical_step_id: str,
+        *,
+        boundary: StepExecutionCheckpointBoundary,
+        updated_at: datetime,
+        step_outputs: Mapping[str, Any] | None = None,
+        diagnostic_refs: Sequence[str] = (),
+    ) -> str | None:
+        identity = self._canonical_step_checkpoint_identity(logical_step_id)
+        if identity is None:
+            return None
+        task_input_snapshot_ref = (
+            self._input_ref
+            or f"temporal://{identity.workflow_id}/{identity.run_id}/task-input"
+        )
+        result = await self._create_step_checkpoint_via_activity(
+            identity=identity,
+            boundary=boundary,
+            task_input_snapshot_ref=task_input_snapshot_ref,
+            workspace=self._canonical_step_checkpoint_workspace(
+                logical_step_id,
+                boundary,
+            ),
+            created_at=updated_at,
+            plan_ref=self._plan_ref
+            or f"temporal://{identity.workflow_id}/{identity.run_id}/plan",
+            prepared_input_refs=self._prepared_artifact_refs,
+            step_outputs=step_outputs or self._step_execution_compact_output_refs(
+                logical_step_id
+            ),
+            diagnostic_refs=diagnostic_refs,
+        )
+        checkpoint_ref = str(result.get("checkpointRef") or "").strip()
+        if checkpoint_ref:
+            self._step_checkpoint_refs[logical_step_id] = checkpoint_ref
+        return checkpoint_ref or None
 
     def _refresh_step_readiness(self, *, updated_at: datetime) -> None:
         refresh_ready_steps(self._step_ledger_rows, updated_at=updated_at)
@@ -5003,7 +5105,6 @@ class MoonMindRunWorkflow:
                 )
                 self._update_memo()
                 self._refresh_step_readiness(updated_at=workflow.now())
-                await self._prepare_recovery_workspace_for_failed_step(node_id)
                 self._mark_step_running(
                     node_id,
                     updated_at=workflow.now(),
@@ -5023,6 +5124,18 @@ class MoonMindRunWorkflow:
                         )
                     )
                 )
+                if node_id == self._recovery_failed_step_id:
+                    await self._record_canonical_step_checkpoint(
+                        node_id,
+                        boundary="before_recovery_restoration",
+                        updated_at=workflow.now(),
+                    )
+                await self._prepare_recovery_workspace_for_failed_step(node_id)
+                await self._record_canonical_step_checkpoint(
+                    node_id,
+                    boundary="after_prepare",
+                    updated_at=workflow.now(),
+                )
 
                 system_retries = 0
                 while system_retries <= 3:
@@ -5031,6 +5144,11 @@ class MoonMindRunWorkflow:
                     await self._wait_if_paused_at_safe_boundary()
                     if self._cancel_requested:
                         return
+                    await self._record_canonical_step_checkpoint(
+                        node_id,
+                        boundary="before_execution",
+                        updated_at=workflow.now(),
+                    )
 
                     if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
                         await self._record_step_execution_manifest(
@@ -5254,6 +5372,11 @@ class MoonMindRunWorkflow:
                     self._record_step_result_evidence(
                         node_id,
                         execution_result=execution_result,
+                        updated_at=workflow.now(),
+                    )
+                    await self._record_canonical_step_checkpoint(
+                        node_id,
+                        boundary="after_execution",
                         updated_at=workflow.now(),
                     )
                     if (
@@ -5527,6 +5650,11 @@ class MoonMindRunWorkflow:
                         summary=failed_review_summary,
                         last_error="review_failed",
                     )
+                    await self._record_canonical_step_checkpoint(
+                        node_id,
+                        boundary="after_gate",
+                        updated_at=workflow.now(),
+                    )
                     await self._record_step_execution_manifest(
                         node_id,
                         phase="terminal",
@@ -5583,6 +5711,11 @@ class MoonMindRunWorkflow:
                         summary=missing_evidence_summary,
                         last_error="missing_accepted_output_evidence",
                     )
+                    await self._record_canonical_step_checkpoint(
+                        node_id,
+                        boundary="after_gate",
+                        updated_at=workflow.now(),
+                    )
                     await self._record_step_execution_manifest(
                         node_id,
                         phase="terminal",
@@ -5618,6 +5751,11 @@ class MoonMindRunWorkflow:
                     ),
                     retry_count=review_retry_count,
                     artifact_ref=review_artifact_ref,
+                )
+                await self._record_canonical_step_checkpoint(
+                    node_id,
+                    boundary="after_gate",
+                    updated_at=workflow.now(),
                 )
                 accepted_execution = True
                 break
@@ -5725,6 +5863,11 @@ class MoonMindRunWorkflow:
                 self._update_memo()
                 break
             publish_status_before = self._publish_status
+            await self._record_canonical_step_checkpoint(
+                node_id,
+                boundary="before_publication",
+                updated_at=workflow.now(),
+            )
             self._record_publish_result(
                 parameters=parameters,
                 execution_result=execution_result,

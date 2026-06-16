@@ -20,6 +20,9 @@ def default_step_refs() -> dict[str, Any]:
         "agentRunId": None,
         "latestStepExecutionManifestRef": None,
         "stepExecutionManifestRefs": [],
+        "latestStepExecutionCheckpointRef": None,
+        "stepExecutionCheckpointRefs": [],
+        "checkpointRefsByBoundary": {},
     }
 
 def default_step_artifacts() -> dict[str, Any]:
@@ -544,6 +547,7 @@ def mark_step_checkpoint_evidence(
     state_checkpoint_ref: str | None = None,
     workspace_checkpoint_ref: str | None = None,
     step_checkpoint_ref: str | None = None,
+    boundary: str | None = None,
 ) -> dict[str, Any]:
     """Attach checkpoint evidence and preservation eligibility to a step row."""
 
@@ -556,6 +560,39 @@ def mark_step_checkpoint_evidence(
             row["workspaceCheckpointRef"] = workspace_checkpoint_ref
         if step_checkpoint_ref is not None:
             row["stepCheckpointRef"] = step_checkpoint_ref
+        canonical_ref = str(step_checkpoint_ref or "").strip()
+        canonical_boundary = str(boundary or "").strip()
+        if canonical_ref:
+            refs = default_step_refs()
+            current_refs = row.get("refs")
+            if isinstance(current_refs, Mapping):
+                refs.update(current_refs)
+            history = refs.get("stepExecutionCheckpointRefs")
+            if not isinstance(history, list):
+                history = []
+            normalized_history = [
+                item.strip()
+                for item in history
+                if isinstance(item, str) and item.strip()
+            ]
+            if canonical_ref not in normalized_history:
+                normalized_history.append(canonical_ref)
+            refs["latestStepExecutionCheckpointRef"] = canonical_ref
+            refs["stepExecutionCheckpointRefs"] = normalized_history
+            by_boundary = refs.get("checkpointRefsByBoundary")
+            if not isinstance(by_boundary, Mapping):
+                by_boundary = {}
+            normalized_by_boundary = {
+                str(key): str(value).strip()
+                for key, value in by_boundary.items()
+                if str(key).strip()
+                and isinstance(value, str)
+                and str(value).strip()
+            }
+            if canonical_boundary:
+                normalized_by_boundary[canonical_boundary] = canonical_ref
+            refs["checkpointRefsByBoundary"] = normalized_by_boundary
+            row["refs"] = refs
         existing_checkpoint = str(row.get("stateCheckpointRef") or "").strip()
         status = str(row.get("status") or "").strip()
         if status not in {"succeeded", "skipped"}:
@@ -639,6 +676,11 @@ def clear_step_checkpoint_evidence(
         row.pop("stateCheckpointRef", None)
         row.pop("workspaceCheckpointRef", None)
         row.pop("stepCheckpointRef", None)
+        refs = row.get("refs")
+        if isinstance(refs, dict):
+            refs["latestStepExecutionCheckpointRef"] = None
+            refs["stepExecutionCheckpointRefs"] = []
+            refs["checkpointRefsByBoundary"] = {}
         row.pop("recoveryPreservation", None)
         row["updatedAt"] = updated_at.isoformat()
         return row
@@ -723,6 +765,10 @@ def update_step_row(
                 for key, value in refs.items():
                     if key in merged_refs:
                         merged_refs[key] = value
+            if not isinstance(merged_refs.get("stepExecutionCheckpointRefs"), list):
+                merged_refs["stepExecutionCheckpointRefs"] = []
+            if not isinstance(merged_refs.get("checkpointRefsByBoundary"), Mapping):
+                merged_refs["checkpointRefsByBoundary"] = {}
             row["refs"] = merged_refs
         if artifacts is not _UNSET:
             merged_artifacts = default_step_artifacts()

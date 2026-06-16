@@ -770,6 +770,44 @@ async def test_run_execution_stage_honors_pause_between_managed_session_steps(
     async def fake_bind_workflow_scoped_session(request: Any) -> Any:
         return request
 
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "artifact://manifest"}, {"upload_url": "unused"})
+        if activity_type == "step_checkpoint.create":
+            normalized = _normalize_payload(payload)
+            boundary = str(normalized.get("boundary") or "unknown")
+            checkpoint_id = str(
+                normalized.get("idempotencyKey") or f"checkpoint:{boundary}"
+            )
+            workspace = normalized.get("workspace")
+            workspace_kind = (
+                workspace.get("kind")
+                if isinstance(workspace, dict)
+                else "ephemeral_workspace_ref"
+            )
+            return {
+                "checkpointRef": f"artifact://checkpoint/{boundary}",
+                "checkpointId": checkpoint_id,
+                "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+                "workspaceKind": workspace_kind,
+                "diagnosticRefs": [],
+                "idempotencyKey": checkpoint_id,
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_write_manifest_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        return await fake_execute_typed_activity(activity_type, payload, **_kwargs)
+
     workflow_info = type(
         "WorkflowInfo",
         (),
@@ -807,7 +845,12 @@ async def test_run_execution_stage_honors_pause_between_managed_session_steps(
     monkeypatch.setattr(
         run_workflow_module,
         "execute_typed_activity",
-        fake_execute_typed_activity,
+        fake_write_manifest_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
