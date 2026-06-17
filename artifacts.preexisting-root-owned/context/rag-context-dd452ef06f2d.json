@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/utils/insert_text_file.py (score: 1.000, trust: canonical)\n    line 6: file_path, text, line_number, blank_lines_before=0, blank_lines_after=0\n2. moonmind/utils/metrics.py (score: 1.000, trust: canonical)\n    line 104: self._socket.sendto(metric.encode(\"utf-8\"), self._address)\n3. docs/Artifacts/ArtifactPresentationContract.md (score: 1.000, trust: canonical)\n    line 29: - `docs/ManagedAgents/CodexCliManagedSessions.md`\n4. docs/tmp/JiraOrchestrateMM821Submission.md (score: 1.000, trust: canonical)\n    line 1: # Jira Orchestrate MM-821 Submission\n5. docs/MoonMindArchitecture.md (score: 1.000, trust: canonical)\n    line 6: **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtime runs, Codex CLI managed sessions, Claude Code managed runs, external agents, artifacts, provider profiles, and workload containers.\n6. docs/tmp/StepExecutionsCheckpointingGapPlan.md (score: 1.000, trust: canonical)\n    line 23: The 2026-06-10 gap assessment is still directionally correct, but more related\n7. docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md (score: 1.000, trust: canonical)\n    line 1: # Jira Implement Workflow Batch - 2026-06-02\n8. moonmind/workloads/docker_launcher.py (score: 1.000, trust: canonical)\n    line 118: def _decode_stream(data: bytes) -> str:",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/insert_text_file.py",
+      "text": "line 6: file_path, text, line_number, blank_lines_before=0, blank_lines_after=0",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/metrics.py",
+      "text": "line 104: self._socket.sendto(metric.encode(\"utf-8\"), self._address)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 104,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ArtifactPresentationContract.md",
+      "text": "line 29: - `docs/ManagedAgents/CodexCliManagedSessions.md`",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 29,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/tmp/JiraOrchestrateMM821Submission.md",
+      "text": "line 1: # Jira Orchestrate MM-821 Submission",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindArchitecture.md",
+      "text": "line 6: **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtime runs, Codex CLI managed sessions, Claude Code managed runs, external agents, artifacts, provider profiles, and workload containers.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/tmp/StepExecutionsCheckpointingGapPlan.md",
+      "text": "line 23: The 2026-06-10 gap assessment is still directionally correct, but more related",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 23,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md",
+      "text": "line 1: # Jira Implement Workflow Batch - 2026-06-02",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/workloads/docker_launcher.py",
+      "text": "line 118: def _decode_stream(data: bytes) -> str:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 118,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-17T02:24:34Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
