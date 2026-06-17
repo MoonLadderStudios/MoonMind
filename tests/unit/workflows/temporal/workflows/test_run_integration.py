@@ -2786,6 +2786,40 @@ def test_humanize_step_failure_summary_preserves_real_provider_summary() -> None
     assert summary == provider_summary
 
 
+def test_step_failure_summary_preserves_timed_out_child_output_summary() -> None:
+    workflow = MoonMindRunWorkflow()
+    timeout_summary = (
+        "Managed session turn exceeded execution budget 3600s after 9932s; "
+        "request intervention or rerun with a larger budget."
+    )
+    execution_result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "summary": timeout_summary,
+        },
+    }
+
+    failure_message = workflow._activity_result_failure_message(execution_result)
+    provider_failure_summary = workflow._activity_result_provider_failure_summary(
+        execution_result
+    )
+    operator_failure_summary = (
+        provider_failure_summary
+        or workflow._activity_result_operator_summary(execution_result)
+        or failure_message
+    )
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary=operator_failure_summary,
+        tool_name="codex_cli",
+        failure_message=failure_message,
+    )
+
+    assert failure_message == "execution_error"
+    assert provider_failure_summary is None
+    assert summary == timeout_summary
+
+
 def test_humanize_step_failure_summary_blank_inputs_fall_back_to_tool_failed() -> None:
     summary = MoonMindRunWorkflow._humanize_step_failure_summary(
         summary=None,

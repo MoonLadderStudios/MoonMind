@@ -20,11 +20,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from temporalio.exceptions import ApplicationError
 
-import moonmind.workflows.temporal.workflows.agent_run as agent_run_mod
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.temporal.workflows.agent_run import (
     _MIN_MANAGED_TURN_DEADLINE_SECONDS,
     MoonMindAgentRun,
+    workflow as agent_run_workflow,
 )
 
 pytestmark = [pytest.mark.asyncio]
@@ -95,11 +95,11 @@ def _patch_workflow_primitives(
     wait_condition,
 ) -> None:
     monkeypatch.setattr(
-        agent_run_mod.workflow, "patched", lambda _id: patched, raising=True
+        agent_run_workflow, "patched", lambda _id: patched, raising=True
     )
-    monkeypatch.setattr(agent_run_mod.workflow, "now", lambda: now, raising=True)
+    monkeypatch.setattr(agent_run_workflow, "now", lambda: now, raising=True)
     monkeypatch.setattr(
-        agent_run_mod.workflow, "wait_condition", wait_condition, raising=True
+        agent_run_workflow, "wait_condition", wait_condition, raising=True
     )
 
 
@@ -114,7 +114,7 @@ async def test_send_turn_within_budget_passthrough_when_patch_disabled(
 
     # Patch disabled -> no race, just await the activity directly.
     monkeypatch.setattr(
-        agent_run_mod.workflow, "patched", lambda _id: False, raising=True
+        agent_run_workflow, "patched", lambda _id: False, raising=True
     )
     monkeypatch.setattr(
         workflow, "_execute_routed_activity", _fake_activity, raising=True
@@ -138,7 +138,7 @@ async def test_send_turn_within_budget_returns_completed_turn(
         return sentinel
 
     async def _wait_condition(_predicate, *, timeout):
-        # Turn finishes within budget: let the scheduled task run to completion.
+        # The turn finishes within budget: let the scheduled coroutine complete.
         await asyncio.sleep(0)
         return True
 

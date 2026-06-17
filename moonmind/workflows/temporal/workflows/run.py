@@ -5338,7 +5338,9 @@ class MoonMindRunWorkflow:
                             )
                         )
                         operator_failure_summary = (
-                            provider_failure_summary or failure_message
+                            provider_failure_summary
+                            or self._activity_result_operator_summary(execution_result)
+                            or failure_message
                         )
                         step_failure_summary = self._humanize_step_failure_summary(
                             summary=operator_failure_summary,
@@ -6170,6 +6172,17 @@ class MoonMindRunWorkflow:
             if isinstance(details, str) and details.strip():
                 return details.strip()
         return ""
+
+    def _activity_result_operator_summary(self, result: Any) -> str | None:
+        outputs = self._get_from_result(result, "outputs")
+        if isinstance(outputs, Mapping):
+            summary = outputs.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                return summary.strip()
+        summary = self._get_from_result(result, "summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+        return None
 
     def _activity_result_provider_failure_summary(self, result: Any) -> str | None:
         outputs = self._get_from_result(result, "outputs")
