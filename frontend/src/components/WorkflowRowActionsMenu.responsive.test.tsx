@@ -9,7 +9,7 @@ import { renderWithClient } from '../utils/test-utils';
 import { WorkflowRowActionsMenu } from './WorkflowRowActionsMenu';
 
 const missionControlCss = readFileSync(
-  `${process.cwd()}/frontend/src/styles/mission-control.css`,
+  new URL('../styles/mission-control.css', import.meta.url),
   'utf8',
 );
 
@@ -91,7 +91,7 @@ describe('WorkflowRowActionsMenu card markup', () => {
   });
 
   it('keeps the open popover nested inside .queue-card-actions so the mobile rules apply', () => {
-    renderWithClient(
+    const { container } = renderWithClient(
       <div className="queue-card-actions">
         <WorkflowRowActionsMenu
           workflowId="wf-123"
@@ -106,7 +106,7 @@ describe('WorkflowRowActionsMenu card markup', () => {
 
     // The mobile media query targets `.queue-card-actions .td-workflow-actions-popover`,
     // so the rendered popover must actually live under that ancestor chain.
-    const popover = document.querySelector(
+    const popover = container.querySelector(
       '.queue-card-actions .workflow-row-actions .td-workflow-actions-popover',
     );
     expect(popover).not.toBeNull();
