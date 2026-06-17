@@ -687,3 +687,57 @@ def test_external_handoff_gate_blocked_reason_is_sanitized() -> None:
     serialized = str(decision["record"])
     assert "ghp_leakedsecret" not in serialized
     assert "hunter2" not in serialized
+
+
+def test_external_handoff_gate_classifies_jira_comment_by_effect_class() -> None:
+    # Transition-vs-comment conflict (spec source-vs-request note): the canonical
+    # source gates Jira *transitions* and completion/publication-class comments.
+    # A benign idempotent status-notification comment is NOT a gated handoff and
+    # must stay allowed so failed/blocked runs can still post status updates.
+    completion_comment = external_handoff_gate_decision(
+        operation="jira.comment",
+        effect_class="publication",
+        producing_step_terminal_disposition="failed_with_remaining_work",
+        gate_approved=True,
+        target="MM-826",
+    )
+    assert completion_comment["blocked"] is True
+    assert "producing_step_not_accepted" in completion_comment["reason"]
+    assert completion_comment["record"]["disposition"] == "blocked"
+
+    # A non-idempotent completion comment is also gated by class.
+    non_idempotent_comment = external_handoff_gate_decision(
+        operation="jira.comment",
+        effect_class="external_non_idempotent",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=True,
+        target="MM-826",
+        idempotency_key="wf:run:step:execution:jira-completion-comment",
+    )
+    assert non_idempotent_comment["blocked"] is True
+    assert non_idempotent_comment["reason"] == "non_idempotent_without_policy"
+
+    # Benign idempotent status-notification comment: not gated, stays allowed even
+    # when the producing step is not accepted.
+    status_comment = external_handoff_gate_decision(
+        operation="jira.comment",
+        effect_class="external_idempotent",
+        producing_step_terminal_disposition="failed_with_remaining_work",
+        gate_approved=False,
+        target="MM-826",
+        idempotency_key="wf:run:step:execution:jira-status-comment",
+    )
+    assert status_comment["allowed"] is True
+    assert status_comment["record"]["disposition"] == "accepted"
+
+    # By contrast, a Jira *transition* is gated even as an idempotent class
+    # (gated by operation prefix), confirming the transition/comment distinction.
+    transition = external_handoff_gate_decision(
+        operation="jira.transition_issue",
+        effect_class="external_idempotent",
+        producing_step_terminal_disposition="failed_with_remaining_work",
+        gate_approved=False,
+        target="MM-826",
+        idempotency_key="wf:run:step:execution:jira-transition",
+    )
+    assert transition["blocked"] is True

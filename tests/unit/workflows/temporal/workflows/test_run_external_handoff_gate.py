@@ -21,11 +21,23 @@ from types import SimpleNamespace
 
 import pytest
 
+from moonmind.workflows.temporal.step_executions import git_effect_metadata
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import (
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     MoonMindRunWorkflow,
 )
+
+_EIGHT_SIDE_EFFECT_CATEGORIES = {
+    "git",
+    "external",
+    "artifact",
+    "publication",
+    "compensation",
+    "memory",
+    "retrieval",
+    "record",
+}
 
 
 def _configure_workflow_runtime(
@@ -254,3 +266,92 @@ def test_structured_review_handoff_still_blocks_failed_verdict_under_patch(
     reason = wf._jira_orchestrate_external_handoff_block_reason(_HANDOFF_NODE)
     assert reason is not None
     assert "ADDITIONAL_WORK_NEEDED" in reason
+
+
+# ---------------------------------------------------------------------------
+# Terminal manifest aggregation: 8 categories + blocked denials (AC5/AC6)
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_accepted_manifest_aggregates_categories_and_blocked_denials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # AC5 / FR-001 / DESIGN-REQ-005: a terminal `accepted` manifest carries an
+    # accepted git disposition with accepted output evidence and aggregates all
+    # eight side-effect categories, including `blocked` handoff denials.
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._step_terminal_dispositions["code-review"] = "accepted"
+    wf._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    # An allowed publication handoff -> accepted side-effect record.
+    allowed = wf._external_handoff_gate(
+        "code-review",
+        operation="repo.create_pr",
+        effect_class="publication",
+        target="PR-1",
+    )
+    assert allowed["allowed"] is True
+
+    # A denied non-idempotent handoff (no explicit policy) -> blocked record,
+    # recorded at the boundary so it reaches the terminal manifest.
+    denied = wf._external_handoff_gate(
+        "code-review",
+        operation="deployment.apply",
+        effect_class="external_non_idempotent",
+        target="prod",
+        idempotency_key="wf-826:run-826:code-review:execution:1:deploy",
+    )
+    assert denied["blocked"] is True
+
+    git_effect = git_effect_metadata(disposition="accepted", head_commit="abc123")
+    assert git_effect["disposition"] == "accepted"
+    assert git_effect["acceptedOutputPresent"] is True
+
+    payload = wf._step_execution_side_effects("code-review", git_effect=git_effect)
+    summary = payload["summary"]
+
+    # All eight categories are present and the accepted git effect is aggregated.
+    assert set(summary["categories"]) == _EIGHT_SIDE_EFFECT_CATEGORIES
+    assert summary["categories"]["git"] == 1
+    assert summary["categories"]["publication"] == 1
+    assert summary["categories"]["external"] == 1
+    assert summary["categories"]["record"] == 2
+    # The blocked denial is aggregated into the manifest alongside the accepted
+    # git disposition and the accepted publication handoff.
+    assert summary["byDisposition"]["blocked"] == 1
+    assert summary["byDisposition"]["accepted"] == 2
+    dispositions = [record["disposition"] for record in payload["records"]]
+    assert dispositions.count("blocked") == 1
+    assert dispositions.count("accepted") == 1
+
+
+@pytest.mark.parametrize("disposition", ["candidate", "discarded", "superseded"])
+def test_failed_or_partial_attempt_carries_records_but_opens_no_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+) -> None:
+    # AC6 / FR-007: a failed/partial attempt retains its side-effect records but
+    # does not open any external handoff gate.
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._step_terminal_dispositions["code-review"] = disposition
+    wf._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    decision = wf._external_handoff_gate(
+        "code-review",
+        operation="repo.create_pr",
+        effect_class="publication",
+        target="PR-1",
+    )
+    assert decision["allowed"] is False
+
+    # The git disposition for a non-accepted terminal attempt is never accepted.
+    git_effect = git_effect_metadata(disposition="candidate")
+    assert git_effect["disposition"] != "accepted"
+
+    payload = wf._step_execution_side_effects("code-review", git_effect=git_effect)
+    # The attempt carries its (blocked) record but no gated handoff was opened.
+    assert payload["records"], "failed/partial attempt should still carry records"
+    assert all(record["disposition"] != "accepted" for record in payload["records"])
+    assert "accepted" not in payload["summary"]["byDisposition"]
