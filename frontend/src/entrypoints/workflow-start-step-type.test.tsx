@@ -585,7 +585,7 @@ describe("Task Create Step Type authoring", () => {
   it("renders PentestGPT schema fields and blocks missing required inputs", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    let step = (await screen.findByText("Step 1")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Tool");
@@ -612,7 +612,7 @@ describe("Task Create Step Type authoring", () => {
   it("generates and attaches a Pentest scope artifact before canonical tool submit", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    let step = (await screen.findByText("Step 1")).closest(
+    const step = (await screen.findByText("Step 1")).closest(
       "section",
     ) as HTMLElement;
     selectStepType(step, "Tool");
