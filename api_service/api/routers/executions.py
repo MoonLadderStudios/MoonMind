@@ -1899,8 +1899,9 @@ def _serialize_execution(
 
     task_skills = _skill_selector_names(task_payload.get("skills"))
     if task_skills is None:
-        if preset_primary_skill:
-            task_skills = [preset_primary_skill]
+        template_primary_skill = _preset_primary_skill_name(task_payload)
+        if template_primary_skill:
+            task_skills = [template_primary_skill]
     skill_runtime = _skill_runtime_evidence(
         params=params,
         task_payload=task_payload,
