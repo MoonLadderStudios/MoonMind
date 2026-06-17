@@ -1629,45 +1629,66 @@ class RecoverFromFailedStepRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=128)
+    source_workflow_id: Optional[str] = Field(None, alias="sourceWorkflowId", min_length=1)
+    source_run_id: Optional[str] = Field(None, alias="sourceRunId", min_length=1)
+    logical_step_id: Optional[str] = Field(None, alias="logicalStepId", min_length=1)
+    source_execution_ordinal: Optional[int] = Field(
+        None, alias="sourceExecutionOrdinal", ge=1
+    )
     recovery_checkpoint_ref: Optional[str] = Field(None, alias="recoveryCheckpointRef")
+    checkpoint_boundary: Optional[StepExecutionCheckpointBoundary] = Field(
+        None, alias="checkpointBoundary"
+    )
+    task_input_snapshot_ref: Optional[str] = Field(
+        None, alias="taskInputSnapshotRef", min_length=1
+    )
+    plan_ref: Optional[str] = Field(None, alias="planRef", min_length=1)
+    plan_digest: Optional[str] = Field(None, alias="planDigest", min_length=1)
+    preserved_step_refs: list[str] = Field(default_factory=list, alias="preservedStepRefs")
+    dependency_signatures: dict[str, Any] = Field(
+        default_factory=dict, alias="dependencySignatures"
+    )
+    workspace_policy: Optional[WorkspacePolicy] = Field(None, alias="workspacePolicy")
     operator_metadata: dict[str, Any] = Field(
         default_factory=dict, alias="operatorMetadata"
     )
 
-    @model_validator(mode="before")
+    @field_validator(
+        "source_workflow_id",
+        "source_run_id",
+        "logical_step_id",
+        "recovery_checkpoint_ref",
+        "task_input_snapshot_ref",
+        "plan_ref",
+        "plan_digest",
+        mode="before",
+    )
     @classmethod
-    def _reject_task_payload_edits(cls, value: Any) -> Any:
-        if not isinstance(value, dict):
-            return value
-        forbidden = {
-            "task",
-            "instructions",
-            "steps",
-            "attachments",
-            "inputAttachments",
-            "runtime",
-            "targetRuntime",
-            "publishMode",
-            "branch",
-            "startingBranch",
-            "targetBranch",
-            "presets",
-            "dependencies",
-            "model",
-            "requestedModel",
-            "effort",
-            "parametersPatch",
-            "inputArtifactRef",
-            "planArtifactRef",
-            "manifestArtifactRef",
-        }
-        present = sorted(key for key in value if key in forbidden)
-        if present:
-            raise ValueError(
-                "Resume does not accept edited task payload fields: "
-                + ", ".join(present)
-            )
-        return value
+    def _normalize_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("preserved_step_refs")
+    @classmethod
+    def _normalize_preserved_step_refs(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            candidate = str(item).strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        return normalized
+
+    @field_validator("dependency_signatures", mode="before")
+    @classmethod
+    def _validate_dependency_signatures(cls, value: Any) -> dict[str, Any]:
+        return validate_compact_temporal_mapping(
+            value or {}, field_name="dependencySignatures"
+        )
 
 
 class RecoverFromSelectedStepRequest(RecoverFromFailedStepRequest):

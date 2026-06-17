@@ -25,6 +25,7 @@ from api_service.api.routers.executions import (
     _artifact_id_from_ref,
     _build_original_workflow_input_snapshot_payload,
     _build_recurring_target,
+    _checkpoint_failed_step_execution,
     _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
     _effective_user_roles,
@@ -10442,9 +10443,30 @@ def test_failed_step_recovery_request_rejects_edited_task_payload_fields(
         )
 
     assert response.status_code == 400
-    body = response.json()["detail"]
-    assert body["code"] == "recovery_payload_not_allowed"
-    assert body["fields"] == expected_fields
+    detail = response.json()["detail"]
+    assert detail["code"] == "recovery_payload_not_allowed"
+    assert detail["fields"] == expected_fields
+
+
+def test_checkpoint_failed_step_execution_rejects_boolean_ordinals() -> None:
+    assert (
+        _checkpoint_failed_step_execution(
+            {"failedStep": {"logicalStepId": "implement", "executionOrdinal": True}}
+        )
+        is None
+    )
+    assert (
+        _checkpoint_failed_step_execution(
+            {"failedStep": {"logicalStepId": "implement", "attempt": False}}
+        )
+        is None
+    )
+    assert (
+        _checkpoint_failed_step_execution(
+            {"failedStep": {"logicalStepId": "implement", "executionOrdinal": "2"}}
+        )
+        == 2
+    )
 
 
 def test_mm773_serialize_execution_surfaces_comparison_source_related_run() -> None:

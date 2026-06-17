@@ -2677,9 +2677,16 @@ async def test_failed_step_recovery_creates_linked_execution_with_source_identit
             "failedStepId": "implement",
             "failedStepExecution": 1,
             "recoveryCheckpointRef": "artifact://checkpoint/source",
+            "checkpointBoundary": "before_recovery_restoration",
             "taskInputSnapshotRef": "artifact://snapshot/source",
             "planRef": "artifact://plan/source",
             "planDigest": "sha256:plan",
+            "preservedStepRefs": [
+                "artifact://workspace/before-plan",
+                "artifact://summary",
+            ],
+            "dependencySignatures": {},
+            "workspacePolicy": "restore_pre_execution",
         }
         assert "agentRunId" not in resumed.parameters
 
