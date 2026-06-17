@@ -578,6 +578,7 @@ interface SkillCapabilityDetail {
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
+  requiredCapabilities?: string[];
 }
 
 interface SkillCatalogResult {
@@ -1834,6 +1835,17 @@ function parseCapabilitiesCsv(value: string): string[] {
       value
         .split(",")
         .map((item) => item.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function mergeCapabilities(...groups: Array<string[] | undefined | null>): string[] {
+  return Array.from(
+    new Set(
+      groups
+        .flatMap((group) => group || [])
+        .map((item) => String(item || "").trim().toLowerCase())
         .filter(Boolean),
     ),
   );
@@ -4893,6 +4905,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           ...(item.inputSchema ? { inputSchema: item.inputSchema } : {}),
           ...(item.uiSchema ? { uiSchema: item.uiSchema } : {}),
           ...(item.defaults ? { defaults: item.defaults } : {}),
+          ...(Array.isArray(item.requiredCapabilities)
+            ? {
+                requiredCapabilities: item.requiredCapabilities
+                  .map((capability) => String(capability || "").trim().toLowerCase())
+                  .filter(Boolean),
+              }
+            : {}),
         };
       }
       return {
@@ -7842,12 +7861,17 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const primarySkillArgsRaw = primaryStepIsSkill && showAdvancedStepOptions
       ? String(primaryStep?.skillArgs || "").trim()
       : "";
-    const taskSkillRequiredCapabilities = primaryStepIsSkill && showAdvancedStepOptions
-      ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
-      : [];
     const primarySkillDetail = primaryStepIsSkill
       ? skillsQuery.data?.detailsById[primaryValidation.value.skillId.trim()] || null
       : null;
+    const taskSkillRequiredCapabilities = primaryStepIsSkill
+      ? mergeCapabilities(
+          primarySkillDetail?.requiredCapabilities,
+          showAdvancedStepOptions
+            ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
+            : [],
+        )
+      : [];
     const primarySchemaInputs = primaryStep
       ? schemaSkillInputs(primarySkillDetail, primaryStep.presetInputValues)
       : { values: {}, errors: {} };
@@ -7974,12 +7998,17 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       const stepSkillArgsRaw = stepIsSkill && showAdvancedStepOptions
         ? step.skillArgs.trim()
         : "";
-      const stepSkillCaps = stepIsSkill && showAdvancedStepOptions
-        ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
-        : [];
       const stepSkillDetail = stepIsSkill
         ? skillsQuery.data?.detailsById[stepSkillId] || null
         : null;
+      const stepSkillCaps = stepIsSkill
+        ? mergeCapabilities(
+            stepSkillDetail?.requiredCapabilities,
+            showAdvancedStepOptions
+              ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
+              : [],
+          )
+        : [];
       const stepToolDefinition =
         stepIsTool
           ? (trustedToolsQuery.data || []).find(

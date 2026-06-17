@@ -10,6 +10,8 @@ tags:
   - pull-request
 requiredCapabilities:
   - git
+  - jira
+  - gh
 annotations:
   sourceSkill: moonspec-orchestrate
   jiraWorkflow: implementation-to-code-review
@@ -75,6 +77,8 @@ steps:
       Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
     skill:
       id: jira-issue-updater
+      requiredCapabilities:
+        - jira
       args: {}
   - title: Check Jira blockers before implementation
     type: tool
@@ -96,6 +100,8 @@ steps:
       linkType: Blocks
     tool:
       id: jira.check_blockers
+      requiredCapabilities:
+        - jira
       args:
         targetIssueKey: "{{ inputs.jira_issue_key }}"
         blockerPreflight:
@@ -111,6 +117,8 @@ steps:
       Preserve the issue key in the brief so downstream spec artifacts and the pull request can reference {{ inputs.jira_issue_key }}.
     tool:
       id: jira.load_preset_brief
+      requiredCapabilities:
+        - jira
       args: {}
       inputs:
         issueKey: "{{ inputs.jira_issue_key }}"
@@ -493,4 +501,6 @@ steps:
       Use the trusted Jira issue updater workflow and Jira transition tools. Match Code Review against the issue's available transitions or target statuses; do not guess transition IDs. Add or preserve a Jira-visible reference to the pull request when supported by the trusted tools. Re-fetch the issue when possible and report the confirmed status.
     skill:
       id: jira-issue-updater
+      requiredCapabilities:
+        - jira
       args: {}

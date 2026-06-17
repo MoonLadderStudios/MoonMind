@@ -1,6 +1,9 @@
 ---
 name: moonspec-orchestrate
 description: Orchestrate the full Moon Spec lifecycle from a preselected single-story feature request or active feature directory through specification, planning, TDD task generation, artifact alignment, implementation, and final verification. Use when the user asks for an end-to-end Moon Spec run and the input has already been routed to one independently testable story, or when Codex needs to coordinate `moonspec-specify`, `moonspec-plan`, `moonspec-tasks`, `moonspec-align`, `moonspec-implement`, and `moonspec-verify` without manual analyze/remediation prompts.
+metadata:
+  requiredCapabilities:
+    - git
 ---
 
 # MoonSpec Orchestrate

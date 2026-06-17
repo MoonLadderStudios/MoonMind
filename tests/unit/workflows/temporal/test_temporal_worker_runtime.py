@@ -20,6 +20,7 @@ from api_service.db.models import (
     TemporalExecutionRecord,
     TemporalWorkflowType,
 )
+from moonmind.workflows.temporal import worker_runtime
 from moonmind.workflows.temporal.worker_runtime import (
     MoonMindAgentRun,
     MoonMindManifestIngest,
@@ -34,6 +35,7 @@ from moonmind.workflows.temporal.worker_runtime import (
     _build_runtime_planner,
     _build_runtime_activities,
     _configure_worker_logging,
+    _required_capability_blockers,
     main_async,
     resolve_adapter_metadata,
     get_activity_route,
@@ -150,6 +152,68 @@ def test_opentelemetry_logging_filter_injects_bounded_managed_session_fields(
     assert "instructions" not in record.managed_session
     assert "rawLog" not in record.managed_session
     assert "token" not in record.managed_session
+
+
+def test_required_capability_readiness_blocks_missing_jira(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        worker_runtime.settings.atlassian.jira,
+        "jira_tool_enabled",
+        False,
+    )
+    monkeypatch.setattr(
+        worker_runtime.settings.atlassian.jira,
+        "jira_enabled",
+        False,
+    )
+
+    blockers = _required_capability_blockers(
+        parameters={
+            "repository": "MoonLadderStudios/MoonMind",
+            "requiredCapabilities": ["git", "jira"],
+        },
+        task_payload={"instructions": "Verify Jira issue."},
+    )
+
+    assert blockers == [
+        {
+            "capability": "jira",
+            "source": "requiredCapabilities",
+            "target": "workflow",
+            "check": "trusted_jira_readiness",
+            "reason": (
+                "Trusted Jira tool access or prefetched Jira context is required "
+                "before launch."
+            ),
+            "remediation": (
+                "Enable the Jira tool integration or attach a trusted Jira issue artifact."
+            ),
+        }
+    ]
+
+
+def test_required_capability_readiness_accepts_prefetched_jira_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        worker_runtime.settings.atlassian.jira,
+        "jira_tool_enabled",
+        False,
+    )
+    monkeypatch.setattr(
+        worker_runtime.settings.atlassian.jira,
+        "jira_enabled",
+        False,
+    )
+
+    blockers = _required_capability_blockers(
+        parameters={
+            "repository": "MoonLadderStudios/MoonMind",
+            "requiredCapabilities": ["jira"],
+        },
+        task_payload={"jiraIssue": {"key": "MM-1"}},
+    )
+
+    assert blockers == []
 
 
 def test_opentelemetry_logging_filter_caches_default_env_fields(monkeypatch) -> None:

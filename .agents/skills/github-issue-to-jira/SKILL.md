@@ -1,6 +1,11 @@
 ---
 name: github-issue-to-jira
 description: Review an open GitHub issue for a selected repository against the current codebase, then either close it as already implemented with an evidence comment, label it needs clarification with an explanatory comment, or create a fleshed-out Jira story in the requested board/project when the remaining work is clear. Use when triaging GitHub issues into Jira backlog work or closing stale implemented GitHub issues.
+metadata:
+  requiredCapabilities:
+    - git
+    - gh
+    - jira
 ---
 
 # GitHub Issue to Jira

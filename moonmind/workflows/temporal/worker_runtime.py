@@ -22,6 +22,7 @@ from copy import deepcopy
 import json
 import logging
 import os
+import shutil
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from pathlib import Path
@@ -768,6 +769,145 @@ _STORY_OUTPUT_TASK_TOOLS = frozenset(
 )
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
 
+def _normalize_required_capability_tokens(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in value:
+        token = str(raw or "").strip().lower()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        result.append(token)
+    return result
+
+
+def _has_jira_prefetch_context(task_payload: Mapping[str, Any]) -> bool:
+    if task_payload.get("jiraIssueKey") or task_payload.get("jira_issue_key"):
+        return True
+    for key in ("jira", "jiraIssue", "jira_issue", "jiraPresetBrief", "jira_preset_brief"):
+        if isinstance(task_payload.get(key), Mapping):
+            return True
+    steps = task_payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, Mapping):
+                continue
+            tool = _coerce_mapping(step.get("tool")) or _coerce_mapping(step.get("skill"))
+            tool_id = str(tool.get("id") or tool.get("name") or "").strip().lower()
+            if tool_id.startswith("jira.") or tool_id.startswith("story.create_jira"):
+                return True
+    return False
+
+
+def _required_capability_blockers(
+    *,
+    parameters: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    blockers: list[dict[str, str]] = []
+    capabilities = _normalize_required_capability_tokens(
+        parameters.get("requiredCapabilities")
+    )
+    if not capabilities:
+        return blockers
+
+    repository = str(parameters.get("repository") or "").strip()
+
+    def add(
+        capability: str,
+        *,
+        check: str,
+        reason: str,
+        remediation: str,
+        target: str = "workflow",
+    ) -> None:
+        blockers.append(
+            {
+                "capability": capability,
+                "source": "requiredCapabilities",
+                "target": target,
+                "check": check,
+                "reason": reason,
+                "remediation": remediation,
+            }
+        )
+
+    if "git" in capabilities and not repository:
+        add(
+            "git",
+            check="repository_target",
+            reason="A repository target is required before git-backed execution can launch.",
+            remediation="Select an allowed repository for this workflow.",
+        )
+
+    if "gh" in capabilities:
+        has_token = bool(
+            os.getenv("GH_TOKEN")
+            or os.getenv("GITHUB_TOKEN")
+            or os.getenv("MOONMIND_GITHUB_TOKEN_SECRET_REF")
+        )
+        if not has_token and shutil.which("gh") is None:
+            add(
+                "gh",
+                check="github_cli_or_token",
+                reason="GitHub CLI access or a GitHub token reference is required before launch.",
+                remediation="Configure a GitHub token/provider profile with repository and pull-request access.",
+            )
+
+    if "jira" in capabilities:
+        atlassian_settings = getattr(settings, "atlassian", None)
+        jira_settings = getattr(settings, "jira", None) or getattr(
+            atlassian_settings,
+            "jira",
+            None,
+        )
+        jira_ready = bool(
+            getattr(jira_settings, "jira_tool_enabled", False)
+            or getattr(jira_settings, "jira_enabled", False)
+            or getattr(settings, "jira_tool_enabled", False)
+            or getattr(settings, "jira_enabled", False)
+            or _has_jira_prefetch_context(task_payload)
+        )
+        if not jira_ready:
+            add(
+                "jira",
+                check="trusted_jira_readiness",
+                reason="Trusted Jira tool access or prefetched Jira context is required before launch.",
+                remediation="Enable the Jira tool integration or attach a trusted Jira issue artifact.",
+            )
+
+    if "docker" in capabilities:
+        docker_host = os.getenv("DOCKER_HOST")
+        default_socket = Path("/var/run/docker.sock")
+        if not docker_host and not default_socket.exists():
+            add(
+                "docker",
+                check="docker_runtime",
+                reason="Docker capability is required but no Docker endpoint is visible to this worker.",
+                remediation="Run on a Docker-capable worker fleet or disable Docker-required execution.",
+            )
+
+    return blockers
+
+
+def _enforce_required_capability_readiness(
+    *,
+    parameters: Mapping[str, Any],
+    task_payload: Mapping[str, Any],
+) -> None:
+    blockers = _required_capability_blockers(
+        parameters=parameters,
+        task_payload=task_payload,
+    )
+    if not blockers:
+        return
+    raise RuntimeError(
+        "requiredCapabilities readiness blocked launch: "
+        + json.dumps({"blockers": blockers}, sort_keys=True)
+    )
+
 def _requires_branch_publish_for_story_output(value: Any) -> bool:
     return str(value or "").strip().lower() not in {"branch", "pr"}
 
@@ -1022,6 +1162,10 @@ def _build_runtime_planner():
             task_payload = _coerce_mapping(
                 parameter_payload.get("workflow") or parameter_payload.get("task")
             )
+        _enforce_required_capability_readiness(
+            parameters=parameter_payload,
+            task_payload=task_payload,
+        )
         git_payload = _coerce_mapping(task_payload.get("git"))
         selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
             task_payload.get("skill")

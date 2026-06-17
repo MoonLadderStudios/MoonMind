@@ -507,8 +507,8 @@ def test_skills_api_returns_available_skill_ids(
             "worker": ["speckit", "speckit-orchestrate"],
         },
         "legacyItems": [
-            {"id": "speckit", "markdown": None},
-            {"id": "speckit-orchestrate", "markdown": None},
+            {"id": "speckit", "requiredCapabilities": [], "markdown": None},
+            {"id": "speckit-orchestrate", "requiredCapabilities": [], "markdown": None},
         ],
     }
 
@@ -519,7 +519,15 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
     legacy_root = tmp_path / "legacy"
     skill_dir = legacy_root / "speckit-orchestrate"
     skill_dir.mkdir(parents=True)
-    skill_markdown = "# Speckit Orchestrate\n\nRun the full Moon Spec lifecycle."
+    skill_markdown = (
+        "---\n"
+        "name: speckit-orchestrate\n"
+        "metadata:\n"
+        "  requiredCapabilities:\n"
+        "    - git\n"
+        "---\n"
+        "# Speckit Orchestrate\n\nRun the full Moon Spec lifecycle."
+    )
     (skill_dir / "SKILL.md").write_text(skill_markdown, encoding="utf-8")
 
     monkeypatch.setattr(
@@ -539,7 +547,11 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
 
     assert response.status_code == 200
     assert response.json()["legacyItems"] == [
-        {"id": "speckit-orchestrate", "markdown": skill_markdown},
+        {
+            "id": "speckit-orchestrate",
+            "requiredCapabilities": ["git"],
+            "markdown": skill_markdown,
+        },
     ]
 
 def test_create_dashboard_skill_success(

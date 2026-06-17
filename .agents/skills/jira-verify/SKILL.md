@@ -8,6 +8,10 @@ description: >-
   current default branch (typical for stories that have already merged). Use
   when a user asks whether a branch or merged change completes a Jira ticket,
   or needs a Jira-visible verification comment.
+metadata:
+  requiredCapabilities:
+    - jira
+    - git
 ---
 
 # Jira Verify

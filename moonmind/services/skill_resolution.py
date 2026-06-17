@@ -22,7 +22,9 @@ from moonmind.schemas.agent_skill_models import (
 )
 
 _REQUIRED_SKILLS_METADATA_KEY = "required-skills"
+_REQUIRED_CAPABILITIES_METADATA_KEY = "requiredCapabilities"
 _AGENT_SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
+_CAPABILITY_TOKEN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.:-]{0,126}[a-z0-9])?$")
 
 class SkillResolutionContext:
     """Contextual parameters for skill resolution (e.g. paths, run ID)."""
@@ -175,6 +177,10 @@ class DeploymentSkillLoader(SkillLoader):
                     metadata,
                     owner=definition.slug,
                 )
+                required_capabilities = _required_capabilities_from_artifact_metadata(
+                    metadata,
+                    owner=definition.slug,
+                )
                 results.append(
                     ResolvedSkillEntry(
                         skill_name=definition.slug,
@@ -183,6 +189,7 @@ class DeploymentSkillLoader(SkillLoader):
                         content_ref=latest_version.artifact_ref,
                         content_digest=latest_version.content_digest,
                         required_skills=list(required_skills),
+                        required_capabilities=list(required_capabilities),
                         provenance=AgentSkillProvenance(
                             source_kind=AgentSkillSourceKind.DEPLOYMENT
                         ),
@@ -355,6 +362,70 @@ def _required_skill_names_from_frontmatter(
     )
 
 
+def _validate_required_capability_token(value: str, *, owner: str) -> str:
+    normalized = value.strip().lower()
+    if not normalized or _CAPABILITY_TOKEN_RE.fullmatch(normalized) is None:
+        raise ValueError(
+            f"skill '{owner}' metadata.{_REQUIRED_CAPABILITIES_METADATA_KEY} "
+            f"contains invalid required capability '{value}'"
+        )
+    return normalized
+
+
+def _required_capabilities_from_metadata(
+    raw_required: typing.Any,
+    *,
+    owner: str,
+) -> tuple[str, ...]:
+    if raw_required is None:
+        return ()
+    if not isinstance(raw_required, list) or not all(
+        isinstance(item, str) for item in raw_required
+    ):
+        raise ValueError(
+            f"skill '{owner}' metadata.{_REQUIRED_CAPABILITIES_METADATA_KEY} "
+            "must be a list of strings"
+        )
+    required: list[str] = []
+    seen: set[str] = set()
+    for raw_capability in raw_required:
+        capability = _validate_required_capability_token(raw_capability, owner=owner)
+        if capability in seen:
+            continue
+        seen.add(capability)
+        required.append(capability)
+    return tuple(required)
+
+
+def _required_capabilities_from_frontmatter(
+    frontmatter: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> tuple[str, ...]:
+    metadata = frontmatter.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"skill '{owner}' metadata must be a mapping")
+    return _required_capabilities_from_metadata(
+        metadata.get(_REQUIRED_CAPABILITIES_METADATA_KEY),
+        owner=owner,
+    )
+
+
+def extract_required_capabilities_from_skill_markdown(
+    markdown: str,
+    *,
+    skill_name: str,
+    source_label: str | None = None,
+) -> tuple[str, ...]:
+    """Return required capability metadata from a skill markdown payload."""
+
+    frontmatter = _load_skill_frontmatter_from_markdown(
+        markdown,
+        source_label=source_label or skill_name,
+    )
+    return _required_capabilities_from_frontmatter(frontmatter, owner=skill_name)
+
+
 async def _required_skill_names_for_entry(entry: ResolvedSkillEntry) -> tuple[str, ...]:
     if entry.required_skills:
         required: list[str] = []
@@ -374,6 +445,28 @@ async def _required_skill_names_for_entry(entry: ResolvedSkillEntry) -> tuple[st
         return ()
     frontmatter = await asyncio.to_thread(_load_skill_frontmatter, Path(source_path))
     return _required_skill_names_from_frontmatter(frontmatter, owner=entry.skill_name)
+
+
+async def _required_capabilities_for_entry(entry: ResolvedSkillEntry) -> tuple[str, ...]:
+    if entry.required_capabilities:
+        capabilities: list[str] = []
+        seen: set[str] = set()
+        for raw_capability in entry.required_capabilities:
+            capability = _validate_required_capability_token(
+                str(raw_capability),
+                owner=entry.skill_name,
+            )
+            if capability in seen:
+                continue
+            seen.add(capability)
+            capabilities.append(capability)
+        return tuple(capabilities)
+
+    source_path = entry.provenance.source_path
+    if not source_path:
+        return ()
+    frontmatter = await asyncio.to_thread(_load_skill_frontmatter, Path(source_path))
+    return _required_capabilities_from_frontmatter(frontmatter, owner=entry.skill_name)
 
 
 def _required_skill_names_from_artifact_metadata(
@@ -401,6 +494,24 @@ def _required_skill_names_from_artifact_metadata(
         seen.add(name)
         required.append(name)
     return tuple(required)
+
+
+def _required_capabilities_from_artifact_metadata(
+    metadata: dict[str, typing.Any],
+    *,
+    owner: str,
+) -> tuple[str, ...]:
+    raw_required = metadata.get("required_capabilities")
+    if raw_required is None:
+        return ()
+    if not isinstance(raw_required, list) or not all(
+        isinstance(item, str) for item in raw_required
+    ):
+        raise ValueError(
+            f"skill '{owner}' artifact metadata.required_capabilities "
+            "must be a list of strings"
+        )
+    return _required_capabilities_from_metadata(raw_required, owner=owner)
 
 
 class RepoSkillLoader(SkillLoader):
@@ -536,9 +647,11 @@ class AgentSkillResolver:
             for name in closure_names:
                 entry = resolved_map[name]
                 reason = "selected" if name in requested_names else "required"
+                required_capabilities = await _required_capabilities_for_entry(entry)
                 final_skills.append(
                     entry.model_copy(
                         update={
+                            "required_capabilities": list(required_capabilities),
                             "selection_reason": reason,
                             "required_by": sorted(required_by.get(name, set())),
                         }
@@ -574,6 +687,14 @@ class AgentSkillResolver:
                     }
                     for entry in final_skills
                     for required_by in entry.required_by
+                ],
+                "requiredCapabilitySources": [
+                    {
+                        "skill": entry.skill_name,
+                        "capabilities": list(entry.required_capabilities),
+                    }
+                    for entry in final_skills
+                    if entry.required_capabilities
                 ],
             },
         )

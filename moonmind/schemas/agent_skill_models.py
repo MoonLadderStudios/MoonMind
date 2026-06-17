@@ -64,6 +64,7 @@ class ResolvedSkillEntry(BaseModel):
     content_digest: str | None = None
     provenance: AgentSkillProvenance
     required_skills: list[str] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(default_factory=list)
     selection_reason: str | None = None
     required_by: list[str] = Field(default_factory=list)
     
@@ -181,6 +182,7 @@ class SkillCatalogSearchResult(BaseModel):
     latest_version: str | None = None
     source_kind: AgentSkillSourceKind
     supported_runtimes: list[str] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(default_factory=list)
     eligible: bool
     in_current_snapshot: bool = False
     eligibility_summary: str | None = None

@@ -982,6 +982,42 @@ def test_mm569_tool_step_required_capabilities_aggregate_into_canonical_required
     assert "jira" in result["requiredCapabilities"]
 
 
+def test_skill_metadata_required_capabilities_aggregate_into_canonical_required() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Verify PR against Jira.",
+                "skill": {"id": "jira-pr-verify"},
+            },
+        },
+    )
+
+    assert result["workflow"]["skill"]["id"] == "jira-pr-verify"
+    assert set(result["requiredCapabilities"]) >= {"git", "gh", "jira"}
+
+
+def test_step_skill_metadata_required_capabilities_aggregate_into_canonical_required() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Run a step skill.",
+                "steps": [
+                    {
+                        "instructions": "Verify PR against Jira.",
+                        "skill": {"id": "jira-pr-verify"},
+                    }
+                ],
+            },
+        },
+    )
+
+    assert set(result["requiredCapabilities"]) >= {"git", "gh", "jira"}
+
+
 def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
     invalid = tool_step()
     invalid["tool"].pop("id")

@@ -41,6 +41,9 @@ from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from api_service.services.settings_catalog import settings_permissions_for_user
 from moonmind.config.settings import settings
+from moonmind.services.skill_resolution import (
+    extract_required_capabilities_from_skill_markdown,
+)
 from moonmind.workflows.skills.resolver import (
     SkillResolutionError,
     list_available_skill_names,
@@ -99,6 +102,11 @@ class DashboardSkillOption(BaseModel):
     """Serializable skill option exposed to dashboard clients."""
 
     id: str = Field(description="Skill identifier")
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        alias="requiredCapabilities",
+        description="Default required capabilities declared by Skill metadata",
+    )
     markdown: str | None = Field(None, description="Markdown content of the skill, if requested")
 
 class DashboardSkillListResponse(BaseModel):
@@ -839,11 +847,27 @@ async def list_dashboard_skills(
 
     async def _get_skill_option(skill_id: str) -> DashboardSkillOption:
         markdown_content = None
-        if include_content:
-            skill_file = resolve_skill_markdown_path(skill_id)
-            if skill_file is not None:
-                markdown_content = await asyncio.to_thread(skill_file.read_text, encoding="utf-8")
-        return DashboardSkillOption(id=skill_id, markdown=markdown_content)
+        required_capabilities: list[str] = []
+        skill_file = resolve_skill_markdown_path(skill_id)
+        if skill_file is not None:
+            skill_markdown = await asyncio.to_thread(
+                skill_file.read_text,
+                encoding="utf-8",
+            )
+            required_capabilities = list(
+                extract_required_capabilities_from_skill_markdown(
+                    skill_markdown,
+                    skill_name=skill_id,
+                    source_label=str(skill_file),
+                )
+            )
+            if include_content:
+                markdown_content = skill_markdown
+        return DashboardSkillOption(
+            id=skill_id,
+            requiredCapabilities=required_capabilities,
+            markdown=markdown_content,
+        )
 
     legacy_items = await asyncio.gather(
         *(_get_skill_option(skill_id) for skill_id in legacy_sorted)

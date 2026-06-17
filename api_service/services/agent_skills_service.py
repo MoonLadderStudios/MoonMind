@@ -17,6 +17,7 @@ from api_service.db.models import (
     SkillSet,
 )
 from moonmind.services.skill_resolution import (
+    extract_required_capabilities_from_skill_markdown,
     extract_required_skill_names_from_skill_markdown,
 )
 from moonmind.workflows.temporal import TemporalArtifactService
@@ -109,6 +110,11 @@ class AgentSkillsService:
             skill_name=skill_slug,
             source_label=f"deployment skill '{skill_slug}' version '{version_string}'",
         )
+        required_capabilities = extract_required_capabilities_from_skill_markdown(
+            content,
+            skill_name=skill_slug,
+            source_label=f"deployment skill '{skill_slug}' version '{version_string}'",
+        )
 
         # Check for duplicate version early if possible
         stmt = select(AgentSkillVersion).where(
@@ -137,6 +143,7 @@ class AgentSkillsService:
                 "version_string": version_string,
                 "format": format_str,
                 "required_skills": list(required_skills),
+                "required_capabilities": list(required_capabilities),
             },
         )
         artifact = await self._artifact_service.write_complete(

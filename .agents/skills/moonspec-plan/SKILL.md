@@ -1,6 +1,9 @@
 ---
 name: moonspec-plan
 description: Generate a Moon Spec implementation plan and design artifacts from a single-story spec. Use when the user asks to run or reproduce `/speckit.plan`, create or update `plan.md`, produce `research.md`, `data-model.md`, `contracts/`, or `quickstart.md`, validate constitution gates, define separate unit and integration test strategies, and perform repo-aware gap analysis before `/speckit.tasks`.
+metadata:
+  requiredCapabilities:
+    - git
 ---
 
 # MoonSpec Plan

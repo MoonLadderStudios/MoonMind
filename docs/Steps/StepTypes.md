@@ -3,7 +3,7 @@
 Status: Desired-state architecture
 Owners: MoonMind Engineering (Workflow Platform + UI)
 Last Updated: 2026-05-05
-Related: `docs/Workflows/WorkflowPresetsSystem.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
+Related: `docs/Workflows/WorkflowPresetsSystem.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/UI/CreatePage.md`, `docs/Steps/SkillSystem.md`, `docs/Steps/JiraIntegration.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/Tools/DockerComposeUpdateSystem.md`
 
 ---
 
@@ -72,6 +72,8 @@ Product surfaces may expose friendly shortcuts such as **Instructions**, **Manag
 | **Activity** | A Temporal implementation detail for side-effecting work. It is not a user-facing Step Type. |
 
 The term **Capability** should not be used as the umbrella product label in the step picker. The product-facing label is **Step Type**.
+
+This catalog-selector meaning is separate from `requiredCapabilities`, which are hard execution requirements compiled from selected Tools, Skills, Presets, runtime modes, and publish modes. See `docs/Workflows/RequiredCapabilities.md` for declaration, normalization, readiness checks, and launch-blocking semantics.
 
 ---
 
