@@ -2793,3 +2793,91 @@ def test_determine_publish_completion_fails_for_unknown_branch_publish_outcome(
     assert status == "failed"
     assert message == "branch publish outcome unknown"
     assert publish_failure is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: a failed step result that carries only a bare error-category
+# token (e.g. a managed runtime that timed out and emitted "execution_error"
+# with no provider detail) must never surface that token as the operator
+# summary. Otherwise the terminal summary, finish-outcome reason, and the
+# workflow's ApplicationError message all collapse to "execution_error" — with
+# nothing actionable for an operator. See mm:4b897068 troubleshooting.
+# ---------------------------------------------------------------------------
+
+def test_humanize_step_failure_summary_replaces_bare_category_token() -> None:
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary="execution_error",
+        tool_name="jira-orchestrate",
+        failure_message="execution_error",
+    )
+    assert summary not in MoonMindRunWorkflow._ERROR_CATEGORY_TOKENS
+    assert "jira-orchestrate failed" in summary
+    assert "(execution_error)" in summary
+    assert "diagnostic" in summary.lower()
+
+
+def test_humanize_step_failure_summary_preserves_real_provider_summary() -> None:
+    provider_summary = (
+        "pr-resolver reported status 'blocked'; ci_running; "
+        "next_step=retry_finalize_after_backoff"
+    )
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary=provider_summary,
+        tool_name="pr-resolver",
+        failure_message="user_error",
+    )
+    assert summary == provider_summary
+
+
+def test_step_failure_summary_preserves_timed_out_child_output_summary() -> None:
+    workflow = MoonMindRunWorkflow()
+    timeout_summary = (
+        "Managed session turn exceeded execution budget 3600s after 9932s; "
+        "request intervention or rerun with a larger budget."
+    )
+    execution_result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "summary": timeout_summary,
+        },
+    }
+
+    failure_message = workflow._activity_result_failure_message(execution_result)
+    provider_failure_summary = workflow._activity_result_provider_failure_summary(
+        execution_result
+    )
+    operator_failure_summary = (
+        provider_failure_summary
+        or workflow._activity_result_operator_summary(execution_result)
+        or failure_message
+    )
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary=operator_failure_summary,
+        tool_name="codex_cli",
+        failure_message=failure_message,
+    )
+
+    assert failure_message == "execution_error"
+    assert provider_failure_summary is None
+    assert summary == timeout_summary
+
+
+def test_humanize_step_failure_summary_blank_inputs_fall_back_to_tool_failed() -> None:
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary=None,
+        tool_name="codex-runtime",
+        failure_message=None,
+    )
+    assert summary == "codex-runtime failed"
+
+
+def test_humanize_step_failure_summary_handles_all_category_tokens() -> None:
+    for token in ("user_error", "integration_error", "execution_error", "system_error"):
+        summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+            summary=token,
+            tool_name="agent_runtime",
+            failure_message=token,
+        )
+        assert summary not in MoonMindRunWorkflow._ERROR_CATEGORY_TOKENS
+        assert f"({token})" in summary

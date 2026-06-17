@@ -602,6 +602,42 @@ class MoonMindRunWorkflow:
             return "integration_error"
         return "execution_error"
 
+    # Canonical errorCategory tokens. These are machine classifications, not
+    # operator-readable messages, so they must never be surfaced verbatim as a
+    # step/plan summary.
+    _ERROR_CATEGORY_TOKENS = frozenset(
+        {"user_error", "integration_error", "execution_error", "system_error"}
+    )
+
+    @classmethod
+    def _humanize_step_failure_summary(
+        cls,
+        *,
+        summary: str | None,
+        tool_name: str,
+        failure_message: str | None,
+    ) -> str:
+        """Return an operator-actionable step-failure summary.
+
+        When the only text a failed step result carries is a bare error-category
+        token (e.g. a runtime that timed out and emitted ``execution_error`` with
+        no provider detail), surface a descriptive line instead of propagating
+        the token. Otherwise the token would become the terminal summary, the
+        finish-outcome reason, and the workflow's ApplicationError message —
+        leaving operators with nothing actionable. The raw category is preserved
+        separately via ``errorCategory``.
+        """
+        text = (summary or "").strip()
+        if text and text not in cls._ERROR_CATEGORY_TOKENS:
+            return text
+        category = (failure_message or "").strip()
+        if category in cls._ERROR_CATEGORY_TOKENS:
+            return (
+                f"{tool_name} failed ({category}); the runtime reported no "
+                "diagnostic detail — inspect step diagnostics/artifacts."
+            )
+        return f"{tool_name} failed"
+
     def _failure_diagnostic_from_exception(
         self,
         exc: BaseException,
@@ -5450,11 +5486,14 @@ class MoonMindRunWorkflow:
                             )
                         )
                         operator_failure_summary = (
-                            provider_failure_summary or failure_message
+                            provider_failure_summary
+                            or self._activity_result_operator_summary(execution_result)
+                            or failure_message
                         )
-                        step_failure_summary = (
-                            operator_failure_summary
-                            or f"{tool_name} failed"
+                        step_failure_summary = self._humanize_step_failure_summary(
+                            summary=operator_failure_summary,
+                            tool_name=tool_name,
+                            failure_message=failure_message,
                         )
 
                         retryable = failure_message == "system_error" or (
@@ -6301,6 +6340,17 @@ class MoonMindRunWorkflow:
             if isinstance(details, str) and details.strip():
                 return details.strip()
         return ""
+
+    def _activity_result_operator_summary(self, result: Any) -> str | None:
+        outputs = self._get_from_result(result, "outputs")
+        if isinstance(outputs, Mapping):
+            summary = outputs.get("summary")
+            if isinstance(summary, str) and summary.strip():
+                return summary.strip()
+        summary = self._get_from_result(result, "summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+        return None
 
     def _activity_result_provider_failure_summary(self, result: Any) -> str | None:
         outputs = self._get_from_result(result, "outputs")
