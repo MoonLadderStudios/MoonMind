@@ -1705,6 +1705,52 @@ def test_sc001_well_formed_recovery_payload_accepted() -> None:
     assert result["workflow"]["resume"]["taskInputSnapshotRef"] == "art_snap_abc"
 
 
+def test_mm825_recovery_resume_contract_preserves_checkpoint_restoration_fields() -> None:
+    """MM-825: Resume contract carries checkpoint-backed recovery evidence refs."""
+    resume = {
+        **_VALID_RESUME_BLOCK,
+        "failedStepExecution": 2,
+        "checkpointBoundary": "before_recovery_restoration",
+        "planRef": "artifact://plan/source",
+        "planDigest": "sha256:plan",
+        "preservedStepRefs": [
+            "artifact://workspace/before-plan",
+            "artifact://completed/plan",
+        ],
+        "dependencySignatures": {
+            "plan": {
+                "logicalStepId": "plan",
+                "executionOrdinal": 1,
+                "outputDigest": "sha256:output",
+            }
+        },
+        "workspacePolicy": "restore_pre_execution",
+    }
+
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "recovery": {
+                "kind": "recover_from_failed_step",
+                "sourceWorkflowId": "mm:abc123",
+                "sourceRunId": "run-1",
+            },
+            "resume": resume,
+        }),
+    )
+
+    normalized = result["workflow"]["resume"]
+    assert normalized["checkpointBoundary"] == "before_recovery_restoration"
+    assert normalized["planRef"] == "artifact://plan/source"
+    assert normalized["planDigest"] == "sha256:plan"
+    assert normalized["preservedStepRefs"] == [
+        "artifact://workspace/before-plan",
+        "artifact://completed/plan",
+    ]
+    assert normalized["dependencySignatures"]["plan"]["outputDigest"] == "sha256:output"
+    assert normalized["workspacePolicy"] == "restore_pre_execution"
+
+
 def test_sc001_recovery_source_workflow_id_must_match_recovery() -> None:
     """MM-638: recovery and resume must pin the same source workflow."""
     with pytest.raises(WorkflowContractError, match="sourceWorkflowId"):

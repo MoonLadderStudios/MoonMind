@@ -9604,6 +9604,122 @@ async def rerun_execution(
         await session.commit()
     return execution
 
+
+_RECOVERY_PAYLOAD_FORBIDDEN_FIELDS = {
+    "task",
+    "instructions",
+    "steps",
+    "attachments",
+    "inputAttachments",
+    "runtime",
+    "targetRuntime",
+    "publishMode",
+    "branch",
+    "startingBranch",
+    "targetBranch",
+    "presets",
+    "dependencies",
+    "model",
+    "requestedModel",
+    "effort",
+    "parametersPatch",
+    "inputArtifactRef",
+    "planArtifactRef",
+    "manifestArtifactRef",
+}
+
+
+def _reject_recovery_task_payload_edits(
+    request: RecoverFromFailedStepRequest,
+    *,
+    action: str,
+) -> None:
+    extras = request.model_extra or {}
+    forbidden = sorted(key for key in extras if key in _RECOVERY_PAYLOAD_FORBIDDEN_FIELDS)
+    if forbidden:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "recovery_payload_not_allowed",
+                "message": (
+                    f"{action} does not accept edited workflow payload fields. "
+                    "Use an execution update for changes."
+                ),
+                "fields": forbidden,
+            },
+        )
+
+
+def _checkpoint_failed_step_execution(checkpoint_payload: Mapping[str, Any]) -> int | None:
+    failed_step = checkpoint_payload.get("failedStep")
+    if not isinstance(failed_step, Mapping):
+        return None
+    value = failed_step.get("executionOrdinal")
+    if value is None:
+        value = failed_step.get("attempt")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _reject_recovery_contract_mismatch(
+    request: RecoverFromFailedStepRequest,
+    *,
+    canonical: TemporalExecutionCanonicalRecord,
+    checkpoint_payload: Mapping[str, Any],
+) -> None:
+    expected_run_id = str(canonical.run_id or "")
+    mismatches: list[str] = []
+    if request.source_workflow_id and request.source_workflow_id != canonical.workflow_id:
+        mismatches.append("sourceWorkflowId")
+    if request.source_run_id and request.source_run_id != expected_run_id:
+        mismatches.append("sourceRunId")
+
+    source = checkpoint_payload.get("source")
+    if isinstance(source, Mapping):
+        if (
+            request.source_workflow_id
+            and request.source_workflow_id != source.get("workflowId")
+        ):
+            mismatches.append("sourceWorkflowId")
+        if request.source_run_id and request.source_run_id != source.get("runId"):
+            mismatches.append("sourceRunId")
+
+    failed_step = checkpoint_payload.get("failedStep")
+    if isinstance(failed_step, Mapping):
+        if (
+            request.logical_step_id
+            and request.logical_step_id != failed_step.get("logicalStepId")
+        ):
+            mismatches.append("logicalStepId")
+        if request.source_execution_ordinal is not None:
+            checkpoint_execution = _checkpoint_failed_step_execution(checkpoint_payload)
+            if checkpoint_execution != request.source_execution_ordinal:
+                mismatches.append("sourceExecutionOrdinal")
+
+    if (
+        request.task_input_snapshot_ref
+        and request.task_input_snapshot_ref != checkpoint_payload.get("taskInputSnapshotRef")
+    ):
+        mismatches.append("taskInputSnapshotRef")
+    if request.plan_ref and request.plan_ref != checkpoint_payload.get("planRef"):
+        mismatches.append("planRef")
+    if request.plan_digest and request.plan_digest != checkpoint_payload.get("planDigest"):
+        mismatches.append("planDigest")
+
+    if mismatches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "resume_not_available",
+                "message": "Recovery request fields do not match checkpoint evidence.",
+                "reason": "checkpoint_inconsistent",
+                "fields": sorted(set(mismatches)),
+            },
+        )
+
+
 @router.post(
     "/{workflow_id}/recover-from-failed-step",
     response_model=RecoverFromFailedStepResponse,
@@ -9612,58 +9728,13 @@ async def rerun_execution(
 )
 async def recover_execution_from_failed_step(
     workflow_id: str,
-    payload: dict[str, Any] = Body(default_factory=dict),
+    request: RecoverFromFailedStepRequest = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> RecoverFromFailedStepResponse:
-    forbidden = sorted(
-        key
-        for key in payload
-        if key
-        in {
-            "task",
-            "instructions",
-            "steps",
-            "attachments",
-            "inputAttachments",
-            "runtime",
-            "targetRuntime",
-            "publishMode",
-            "branch",
-            "startingBranch",
-            "targetBranch",
-            "presets",
-            "dependencies",
-            "model",
-            "requestedModel",
-            "effort",
-            "parametersPatch",
-            "inputArtifactRef",
-            "planArtifactRef",
-            "manifestArtifactRef",
-        }
-    )
-    if forbidden:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "recovery_payload_not_allowed",
-                "message": "Recover from failed step does not accept edited workflow payload fields. Use an execution update for changes.",
-                "fields": forbidden,
-            },
-        )
-    try:
-        request = RecoverFromFailedStepRequest.model_validate(payload)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "invalid_recovery_request",
-                "message": str(exc),
-            },
-        ) from exc
+    _reject_recovery_task_payload_edits(request, action="Recover from failed step")
 
     await _get_owned_execution(service=service, workflow_id=workflow_id, user=user)
     canonical = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
@@ -9691,6 +9762,11 @@ async def recover_execution_from_failed_step(
         session=session,
         user=user,
         checkpoint_ref=checkpoint_ref,
+    )
+    _reject_recovery_contract_mismatch(
+        request,
+        canonical=canonical,
+        checkpoint_payload=checkpoint_payload,
     )
     try:
         result = await service.create_failed_step_recovery_execution(
@@ -9728,22 +9804,13 @@ async def recover_execution_from_failed_step(
 )
 async def recover_execution_from_selected_step(
     workflow_id: str,
-    payload: dict[str, Any] = Body(default_factory=dict),
+    request: RecoverFromSelectedStepRequest = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
 ) -> RecoverFromFailedStepResponse:
-    try:
-        request = RecoverFromSelectedStepRequest.model_validate(payload)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "code": "invalid_recovery_request",
-                "message": str(exc),
-            },
-        ) from exc
+    _reject_recovery_task_payload_edits(request, action="Recover from selected step")
 
     canonical = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
@@ -9791,6 +9858,11 @@ async def recover_execution_from_selected_step(
         session=session,
         user=user,
         checkpoint_ref=checkpoint_ref,
+    )
+    _reject_recovery_contract_mismatch(
+        request,
+        canonical=canonical,
+        checkpoint_payload=checkpoint_payload,
     )
     try:
         result = await service.create_failed_step_recovery_execution(

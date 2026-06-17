@@ -1522,7 +1522,22 @@ def test_recover_from_failed_step_route_contract_is_registered() -> None:
     route = schema["paths"]["/api/executions/{workflow_id}/recover-from-failed-step"]["post"]
     assert route["responses"]["201"]["description"]
     request_schema = route["requestBody"]["content"]["application/json"]["schema"]
-    assert request_schema["type"] == "object"
+    ref = request_schema["$ref"].removeprefix("#/components/schemas/")
+    properties = schema["components"]["schemas"][ref]["properties"]
+    assert {
+        "sourceWorkflowId",
+        "sourceRunId",
+        "logicalStepId",
+        "sourceExecutionOrdinal",
+        "recoveryCheckpointRef",
+        "checkpointBoundary",
+        "taskInputSnapshotRef",
+        "planRef",
+        "planDigest",
+        "preservedStepRefs",
+        "dependencySignatures",
+        "workspacePolicy",
+    }.issubset(properties)
 
 
 def test_recover_from_selected_step_route_contract_is_registered() -> None:
@@ -1530,4 +1545,24 @@ def test_recover_from_selected_step_route_contract_is_registered() -> None:
     route = schema["paths"]["/api/executions/{workflow_id}/recover-from-selected-step"]["post"]
     assert route["responses"]["201"]["description"]
     request_schema = route["requestBody"]["content"]["application/json"]["schema"]
-    assert request_schema["type"] == "object"
+    ref = request_schema["$ref"].removeprefix("#/components/schemas/")
+    request_contract = schema["components"]["schemas"][ref]
+    properties = request_contract["properties"]
+    assert {
+        "sourceWorkflowId",
+        "sourceRunId",
+        "selectedStartStepId",
+        "logicalStepId",
+        "sourceExecutionOrdinal",
+        "recoveryCheckpointRef",
+        "checkpointBoundary",
+        "taskInputSnapshotRef",
+        "planRef",
+        "planDigest",
+        "preservedStepRefs",
+        "dependencySignatures",
+        "workspacePolicy",
+    }.issubset(properties)
+    assert {"sourceWorkflowId", "sourceRunId", "selectedStartStepId"}.issubset(
+        set(request_contract["required"])
+    )
