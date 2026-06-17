@@ -15784,8 +15784,8 @@ describe("Task Create governed Tool authoring", () => {
     fireEvent.click(
       await within(step).findByRole("button", { name: /jira.transition_issue/ }),
     );
-    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
-      target: { value: '{"issueKey":"MM-576"}' },
+    fireEvent.change(within(step).getByLabelText("issueKey"), {
+      target: { value: "MM-576" },
     });
     fireEvent.click(
       within(step).getByRole("button", { name: "Load Jira target statuses" }),
@@ -15801,9 +15801,8 @@ describe("Task Create governed Tool authoring", () => {
     });
     fireEvent.change(statusSelect, { target: { value: "51" } });
     expect(
-      (within(step).getByLabelText("Tool Inputs (JSON object)") as HTMLTextAreaElement)
-        .value,
-    ).toContain('"transitionId": "51"');
+      (within(step).getByLabelText("transitionId") as HTMLInputElement).value,
+    ).toBe("51");
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
