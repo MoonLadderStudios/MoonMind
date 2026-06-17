@@ -107,6 +107,7 @@ from moonmind.workflows.temporal.step_ledger import (
     validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.step_executions import (
+    external_handoff_gate_decision,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
@@ -423,6 +424,14 @@ RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
 )
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
+)
+# MM-826: external handoffs (PR creation, Jira transition/comment, merge,
+# deploy/publish, provider-account) require the producing Step Execution to have
+# reached an `accepted` terminal disposition in addition to a passing MoonSpec
+# gate verdict. Gated behind a replay-stable patch so in-flight runs already past
+# the prior verdict-only gate keep their original behavior.
+RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = (
+    "run-handoff-accepted-disposition-gate-v1"
 )
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
@@ -2496,6 +2505,68 @@ class MoonMindRunWorkflow:
         self._step_side_effect_records.setdefault(logical_step_id, []).append(record)
         return record
 
+    def _external_handoff_gate(
+        self,
+        logical_step_id: str,
+        *,
+        operation: str,
+        effect_class: str,
+        target: str | None = None,
+        idempotency_key: str | None = None,
+        policy_permits_non_idempotent: bool = False,
+        effect_kind: str = "normal",
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Assert a producing Step Execution is accepted and gate-approved before
+        an external handoff, recording the decision as a side effect.
+
+        Implements the MM-826 producing-step accepted assertion (DESIGN-REQ-022):
+        gated handoffs (PR creation, Jira transition/comment, merge, deploy/publish,
+        provider-account) are permitted only when the producing step's terminal
+        disposition is ``accepted`` AND the controlling MoonSpec gate verdict
+        passes. Denials -- including non-idempotent external actions without
+        explicit policy -- are recorded as ``blocked`` side effects so they are
+        aggregated into the terminal Step Execution manifest.
+        """
+
+        gate_approved = (
+            self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+            in _MOONSPEC_GATE_PASSING_VERDICTS
+        )
+        decision = external_handoff_gate_decision(
+            operation=operation,
+            effect_class=effect_class,  # type: ignore[arg-type]
+            producing_step_terminal_disposition=(
+                self._step_terminal_dispositions.get(logical_step_id)
+            ),
+            gate_approved=gate_approved,
+            target=target,
+            idempotency_key=idempotency_key,
+            policy_permits_non_idempotent=policy_permits_non_idempotent,
+            effect_kind=effect_kind,  # type: ignore[arg-type]
+            reason=reason,
+        )
+        self._step_side_effect_records.setdefault(logical_step_id, []).append(
+            decision["record"]
+        )
+        return decision
+
+    @staticmethod
+    def _jira_orchestrate_handoff_operation(node: Mapping[str, Any]) -> str:
+        """Map a Jira Orchestrate handoff node to a gated handoff operation name."""
+
+        annotations = node.get("inputs", {})
+        role = ""
+        if isinstance(annotations, Mapping):
+            inner = annotations.get("annotations")
+            if isinstance(inner, Mapping):
+                role = str(inner.get("jiraOrchestrateRole") or "").strip().lower()
+        if not role:
+            outer = node.get("annotations")
+            if isinstance(outer, Mapping):
+                role = str(outer.get("jiraOrchestrateRole") or "").strip().lower()
+        return "repo.create_pr" if role == "pull-request-handoff" else "repo.publish"
+
     def _is_jira_orchestrate_external_handoff_node(
         self,
         node: Mapping[str, Any],
@@ -2514,14 +2585,37 @@ class MoonMindRunWorkflow:
         if not self._is_jira_orchestrate_external_handoff_node(node):
             return None
         verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
-        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
-            return None
         gate_context = self._publish_context.get("moonSpecGate")
         logical_step_id = None
         if isinstance(gate_context, Mapping):
             logical_step_id = self._coerce_text(
                 gate_context.get("logicalStepId"),
                 max_chars=200,
+            )
+        if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
+            # Existing behavior: a passing MoonSpec verdict opened the handoff.
+            # MM-826 adds the producing-step accepted terminal-disposition
+            # requirement on top, behind a replay-stable patch so in-flight runs
+            # already past the prior verdict-only gate keep their behavior.
+            if not workflow.patched(RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH):
+                return None
+            if not logical_step_id:
+                return None
+            disposition = self._step_terminal_dispositions.get(logical_step_id)
+            if disposition == "accepted":
+                return None
+            # Record the denial as a blocked publication side effect at the
+            # handoff boundary so it is aggregated into the terminal manifest.
+            self._external_handoff_gate(
+                logical_step_id,
+                operation=self._jira_orchestrate_handoff_operation(node),
+                effect_class="publication",
+                target=self._coerce_text(node.get("id"), max_chars=200),
+            )
+            return (
+                "Jira Orchestrate external handoff requires the producing step's "
+                "terminal disposition to be accepted; gate step terminal "
+                f"disposition was {disposition or 'unknown'}."
             )
         if verdict:
             parts = [

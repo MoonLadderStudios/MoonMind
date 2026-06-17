@@ -9,6 +9,7 @@ from moonmind.schemas.step_execution_models import (
 from moonmind.workflows.temporal.step_executions import (
     already_occurred_non_idempotent_effects,
     compensation_subject_key,
+    external_handoff_gate_decision,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
@@ -490,3 +491,199 @@ def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> 
     assert payload["workspace"]["policy"] == "continue_from_previous_execution"
     assert payload["workspace"]["gitEffect"]["disposition"] == "candidate"
     assert payload["sideEffects"]["records"][0]["disposition"] == "blocked"
+
+
+# ---------------------------------------------------------------------------
+# MM-826: external handoff producing-step accepted assertion
+# ---------------------------------------------------------------------------
+
+# Canonical terminal dispositions (Section 7.3). Only ``accepted`` may open a
+# gated external handoff.
+_NON_ACCEPTED_DISPOSITIONS = (
+    "retryable",
+    "candidate",
+    "discarded",
+    "superseded",
+    "blocked",
+    "needs_human",
+    "failed_unrecoverable",
+    "failed_with_remaining_work",
+    "",
+    None,
+)
+
+
+def test_external_handoff_gate_allows_only_accepted_and_gate_approved() -> None:
+    decision = external_handoff_gate_decision(
+        operation="jira.transition_issue",
+        effect_class="external_idempotent",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=True,
+        target="MM-826",
+        idempotency_key="wf:run:step:execution:jira-transition",
+    )
+
+    assert decision["allowed"] is True
+    assert decision["blocked"] is False
+    assert decision["reason"] is None
+    assert decision["producingStepAccepted"] is True
+    assert decision["gateApproved"] is True
+    assert decision["record"]["disposition"] == "accepted"
+
+
+def test_external_handoff_gate_blocks_when_gate_not_approved() -> None:
+    decision = external_handoff_gate_decision(
+        operation="jira.transition_issue",
+        effect_class="external_idempotent",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=False,
+        target="MM-826",
+        idempotency_key="wf:run:step:execution:jira-transition",
+    )
+
+    assert decision["allowed"] is False
+    assert decision["blocked"] is True
+    assert decision["reason"] == "gate_not_approved"
+    assert decision["record"]["disposition"] == "blocked"
+    assert decision["record"]["reason"] == "gate_not_approved"
+
+
+def test_external_handoff_gate_blocks_every_non_accepted_disposition() -> None:
+    for disposition in _NON_ACCEPTED_DISPOSITIONS:
+        decision = external_handoff_gate_decision(
+            operation="repo.merge_pr",
+            effect_class="publication",
+            producing_step_terminal_disposition=disposition,
+            # Even with a passing gate verdict, a non-accepted producing step
+            # must block the handoff (Section 18 / brief AC3).
+            gate_approved=True,
+            target="PR-1",
+        )
+
+        assert decision["allowed"] is False, disposition
+        assert decision["blocked"] is True, disposition
+        assert "producing_step_not_accepted" in decision["reason"], disposition
+        assert decision["record"]["disposition"] == "blocked", disposition
+
+
+def test_external_handoff_gate_combines_block_reasons() -> None:
+    decision = external_handoff_gate_decision(
+        operation="repo.merge_pr",
+        effect_class="publication",
+        producing_step_terminal_disposition="failed_with_remaining_work",
+        gate_approved=False,
+        target="PR-1",
+    )
+
+    assert decision["blocked"] is True
+    assert "producing_step_not_accepted" in decision["reason"]
+    assert "gate_not_approved" in decision["reason"]
+
+
+def test_external_handoff_gate_denies_non_idempotent_without_policy() -> None:
+    # AC4: a non-idempotent external action without explicit policy is denied at
+    # the boundary EVEN when the producing step is accepted and gate-approved.
+    decision = external_handoff_gate_decision(
+        operation="deployment.apply",
+        effect_class="external_non_idempotent",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=True,
+        target="deploy-1",
+        idempotency_key="wf:run:step:execution:deploy",
+    )
+
+    assert decision["requiresExplicitPolicy"] is True
+    assert decision["allowed"] is False
+    assert decision["reason"] == "non_idempotent_without_policy"
+    assert decision["record"]["disposition"] == "blocked"
+    # The producing step really was accepted+approved; only policy blocked it.
+    assert decision["record"]["workflowStateAccepted"] is True
+
+
+def test_external_handoff_gate_allows_non_idempotent_with_explicit_policy() -> None:
+    decision = external_handoff_gate_decision(
+        operation="deployment.apply",
+        effect_class="external_non_idempotent",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=True,
+        target="deploy-1",
+        idempotency_key="wf:run:step:execution:deploy",
+        policy_permits_non_idempotent=True,
+    )
+
+    assert decision["allowed"] is True
+    assert decision["record"]["disposition"] == "accepted"
+
+
+def test_external_handoff_gate_gates_pr_creation_even_if_idempotent_class() -> None:
+    # PR creation is an external handoff per the brief; it must be gated even when
+    # the caller declares it ``external_idempotent``.
+    blocked = external_handoff_gate_decision(
+        operation="repo.create_pr",
+        effect_class="external_idempotent",
+        producing_step_terminal_disposition="candidate",
+        gate_approved=True,
+        target="feature-branch",
+        idempotency_key="wf:run:step:execution:create-pr",
+    )
+    assert blocked["allowed"] is False
+    assert "producing_step_not_accepted" in blocked["reason"]
+
+    allowed = external_handoff_gate_decision(
+        operation="repo.create_pr",
+        effect_class="external_idempotent",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=True,
+        target="feature-branch",
+        idempotency_key="wf:run:step:execution:create-pr",
+    )
+    assert allowed["allowed"] is True
+    assert allowed["record"]["disposition"] == "accepted"
+
+
+def test_external_handoff_gate_allows_non_gated_effect() -> None:
+    decision = external_handoff_gate_decision(
+        operation="artifact.write_evidence",
+        effect_class="artifact_write",
+        producing_step_terminal_disposition="failed_with_remaining_work",
+        gate_approved=False,
+        target="art_evidence",
+    )
+
+    # A non-gated effect class is never blocked by the handoff assertion.
+    assert decision["allowed"] is True
+    assert decision["record"]["disposition"] == "accepted"
+
+
+def test_external_handoff_gate_does_not_block_compensation() -> None:
+    # Explicit, idempotent compensation is the authorized reconciliation path
+    # (Section 11 rule 4); it must not be re-blocked even when the producing step
+    # is not accepted.
+    decision = external_handoff_gate_decision(
+        operation="compensate:jira.transition_issue",
+        effect_class="external_idempotent",
+        producing_step_terminal_disposition="failed_with_remaining_work",
+        gate_approved=False,
+        target="MM-826",
+        idempotency_key="wf:run:step:execution:compensate",
+        effect_kind="compensation",
+    )
+
+    assert decision["allowed"] is True
+    assert decision["record"]["disposition"] == "accepted"
+
+
+def test_external_handoff_gate_blocked_reason_is_sanitized() -> None:
+    decision = external_handoff_gate_decision(
+        operation="provider_account.acquire",
+        effect_class="provider_account",
+        producing_step_terminal_disposition="blocked",
+        gate_approved=False,
+        target="slot token=ghp_leakedsecret",
+        reason="password=hunter2",
+    )
+
+    assert decision["blocked"] is True
+    serialized = str(decision["record"])
+    assert "ghp_leakedsecret" not in serialized
+    assert "hunter2" not in serialized

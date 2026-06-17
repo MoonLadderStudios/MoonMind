@@ -1,0 +1,256 @@
+"""Workflow-boundary coverage for MM-826 external handoff accepted-disposition gate.
+
+Exercises the producing-step accepted assertion as behavior of
+``MoonMindRunWorkflow``: external handoffs (PR creation, Jira transition/comment,
+merge, deploy/publish, provider-account) are permitted only when the producing
+Step Execution reached an ``accepted`` terminal disposition AND the controlling
+MoonSpec gate verdict passes; denials are recorded as ``blocked`` side effects.
+
+These tests instantiate the workflow directly (no Temporal test server), matching
+the existing ``test_run_step_ledger.py`` / ``test_run_reattempt_compensation.py``
+pattern. The accepted-disposition strengthening of the structured-review handoff
+gate is introduced behind a replay-stable patch, so an in-flight compatibility
+case (patch disabled) is included.
+
+Traceability: MM-826 / DESIGN-REQ-005, DESIGN-REQ-022.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from moonmind.workflows.temporal.workflows import run as run_module
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    MoonMindRunWorkflow,
+)
+
+
+def _configure_workflow_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    patched: bool = False,
+) -> None:
+    workflow_info = SimpleNamespace(
+        namespace="default",
+        workflow_id="wf-826",
+        run_id="run-826",
+        task_queue="mm.workflow",
+        search_attributes={"mm_owner_type": ["user"], "mm_owner_id": ["user-1"]},
+    )
+    logger = SimpleNamespace(
+        info=lambda *a, **k: None,
+        warning=lambda *a, **k: None,
+        error=lambda *a, **k: None,
+        debug=lambda *a, **k: None,
+        isEnabledFor=lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module.workflow, "info", lambda: workflow_info)
+    monkeypatch.setattr(run_module.workflow, "logger", logger)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: bool(patched)
+        if patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH
+        else False,
+    )
+
+
+_HANDOFF_NODE = {
+    "id": "code-review",
+    "inputs": {"annotations": {"jiraOrchestrateRole": "pull-request-handoff"}},
+}
+
+
+# ---------------------------------------------------------------------------
+# _external_handoff_gate: the reusable producing-step accepted assertion
+# ---------------------------------------------------------------------------
+
+
+def test_external_handoff_gate_allows_accepted_and_gate_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._step_terminal_dispositions["code-review"] = "accepted"
+    wf._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    decision = wf._external_handoff_gate(
+        "code-review",
+        operation="repo.create_pr",
+        effect_class="publication",
+        target="PR-1",
+    )
+
+    assert decision["allowed"] is True
+    assert decision["gateApproved"] is True
+    assert decision["record"]["disposition"] == "accepted"
+    assert wf._step_side_effect_records["code-review"][-1]["disposition"] == "accepted"
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    [
+        "candidate",
+        "retryable",
+        "discarded",
+        "superseded",
+        "blocked",
+        "needs_human",
+        "failed_unrecoverable",
+        "failed_with_remaining_work",
+        None,
+    ],
+)
+def test_external_handoff_gate_blocks_non_accepted_disposition(
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str | None,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    if disposition is not None:
+        wf._step_terminal_dispositions["code-review"] = disposition
+    # Passing gate verdict on purpose: the disposition alone must block.
+    wf._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    decision = wf._external_handoff_gate(
+        "code-review",
+        operation="repo.merge_pr",
+        effect_class="publication",
+        target="PR-1",
+    )
+
+    assert decision["allowed"] is False
+    assert "producing_step_not_accepted" in decision["reason"]
+    recorded = wf._step_side_effect_records["code-review"]
+    assert len(recorded) == 1
+    assert recorded[0]["disposition"] == "blocked"
+
+
+def test_external_handoff_gate_blocks_when_gate_not_approved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._step_terminal_dispositions["code-review"] = "accepted"
+    # No verdict recorded -> not gate-approved.
+
+    decision = wf._external_handoff_gate(
+        "code-review",
+        operation="jira.transition_issue",
+        effect_class="external_idempotent",
+        target="MM-826",
+        idempotency_key="wf-826:run-826:code-review:execution:1:jira-transition",
+    )
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "gate_not_approved"
+    assert wf._step_side_effect_records["code-review"][0]["disposition"] == "blocked"
+
+
+def test_external_handoff_gate_blocks_non_idempotent_without_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._step_terminal_dispositions["deploy"] = "accepted"
+    wf._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    decision = wf._external_handoff_gate(
+        "deploy",
+        operation="deployment.apply",
+        effect_class="external_non_idempotent",
+        target="prod",
+        idempotency_key="wf-826:run-826:deploy:execution:1:deploy",
+    )
+
+    assert decision["allowed"] is False
+    assert decision["reason"] == "non_idempotent_without_policy"
+
+    allowed = wf._external_handoff_gate(
+        "deploy",
+        operation="deployment.apply",
+        effect_class="external_non_idempotent",
+        target="prod",
+        idempotency_key="wf-826:run-826:deploy:execution:2:deploy",
+        policy_permits_non_idempotent=True,
+    )
+    assert allowed["allowed"] is True
+
+
+# ---------------------------------------------------------------------------
+# Structured-review handoff gate: accepted-disposition strengthening + in-flight
+# ---------------------------------------------------------------------------
+
+
+def test_structured_review_handoff_requires_accepted_disposition_under_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch, patched=True)
+    wf = MoonMindRunWorkflow()
+    # Verify gate passed, but the producing gate step is NOT accepted.
+    wf._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    wf._step_terminal_dispositions["verify-final"] = "failed_with_remaining_work"
+
+    reason = wf._jira_orchestrate_external_handoff_block_reason(_HANDOFF_NODE)
+
+    assert reason is not None
+    assert "terminal disposition to be accepted" in reason
+    # A blocked side effect was recorded on the controlling gate step.
+    recorded = wf._step_side_effect_records["verify-final"]
+    assert recorded[-1]["disposition"] == "blocked"
+
+
+def test_structured_review_handoff_allows_accepted_disposition_under_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch, patched=True)
+    wf = MoonMindRunWorkflow()
+    wf._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    wf._step_terminal_dispositions["verify-final"] = "accepted"
+
+    assert wf._jira_orchestrate_external_handoff_block_reason(_HANDOFF_NODE) is None
+    # Allowing the handoff must not record a spurious blocked side effect.
+    assert "verify-final" not in wf._step_side_effect_records
+
+
+def test_structured_review_handoff_in_flight_keeps_verdict_only_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # In-flight compatibility: with the patch disabled, a passing verdict opens
+    # the handoff regardless of the producing-step disposition (prior behavior).
+    _configure_workflow_runtime(monkeypatch, patched=False)
+    wf = MoonMindRunWorkflow()
+    wf._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    wf._step_terminal_dispositions["verify-final"] = "failed_with_remaining_work"
+
+    assert wf._jira_orchestrate_external_handoff_block_reason(_HANDOFF_NODE) is None
+    assert "verify-final" not in wf._step_side_effect_records
+
+
+def test_structured_review_handoff_still_blocks_failed_verdict_under_patch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Existing MoonSpec gate-verdict block must remain in force (no regression).
+    _configure_workflow_runtime(monkeypatch, patched=True)
+    wf = MoonMindRunWorkflow()
+    wf._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "ADDITIONAL_WORK_NEEDED"},
+    )
+    wf._step_terminal_dispositions["verify-final"] = "accepted"
+
+    reason = wf._jira_orchestrate_external_handoff_block_reason(_HANDOFF_NODE)
+    assert reason is not None
+    assert "ADDITIONAL_WORK_NEEDED" in reason

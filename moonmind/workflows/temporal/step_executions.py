@@ -57,11 +57,16 @@ _NON_IDEMPOTENT_SIDE_EFFECT_CLASSES = {
 _COMPENSATION_OPERATION_PREFIX = "compensate"
 _GATED_OPERATION_PREFIXES = (
     "jira.transition",
+    "repo.create_pr",
+    "repo.create_pull_request",
     "repo.merge",
     "repo.publish",
     "deployment.",
     "provider_account.",
 )
+# Side-effect kinds that are the authorized reconciliation path (Section 11
+# rule 4). They must not be re-blocked by the producing-step accepted assertion.
+_RECONCILIATION_EFFECT_KINDS = {"cleanup", "compensation"}
 _SECRET_LIKE_PATTERNS = (
     re.compile(r"ghp_[A-Za-z0-9_]+"),
     re.compile(r"github_pat_[A-Za-z0-9_]+"),
@@ -327,6 +332,94 @@ def side_effect_record(
             dict(memory_effect)
         ).model_dump(by_alias=True, mode="json")
     return record
+
+
+def _operation_is_gated_handoff(operation: str, effect_class: SideEffectClass) -> bool:
+    """Return whether an operation/class is a gated external handoff surface."""
+
+    if effect_class in _GATED_SIDE_EFFECT_CLASSES:
+        return True
+    operation_lower = str(operation or "").strip().lower()
+    return any(
+        operation_lower.startswith(prefix) for prefix in _GATED_OPERATION_PREFIXES
+    )
+
+
+def external_handoff_gate_decision(
+    *,
+    operation: str,
+    effect_class: SideEffectClass,
+    producing_step_terminal_disposition: str | None,
+    gate_approved: bool,
+    target: str | None = None,
+    idempotency_key: str | None = None,
+    policy_permits_non_idempotent: bool = False,
+    effect_kind: Literal["normal", "cleanup", "compensation"] = "normal",
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Decide whether an external handoff may proceed and build its side effect.
+
+    This is the canonical producing-step accepted assertion (Section 11 rule 2,
+    Section 18, Section 19 rule 6): publication, Jira transition, PR creation,
+    merge, deployment/publish, and provider-account handoffs require the producing
+    Step Execution to have reached an ``accepted`` terminal disposition AND a
+    passing gate verdict. Non-idempotent external actions without explicit policy
+    are denied at the boundary even when accepted and gate-approved.
+
+    Returns a compact decision whose ``record`` is always a valid side-effect
+    record (``disposition == "blocked"`` when denied) so callers can append it to
+    the step's side effects and aggregate it into the terminal manifest.
+    """
+
+    operation_text = str(operation or "").strip()
+    if not operation_text:
+        raise ValueError("operation must be a non-empty string")
+
+    producing_step_accepted = (
+        str(producing_step_terminal_disposition or "").strip() == "accepted"
+    )
+    gate_approved = bool(gate_approved)
+    requires_explicit_policy = effect_class == "external_non_idempotent"
+    reconciliation = effect_kind in _RECONCILIATION_EFFECT_KINDS
+    gated = _operation_is_gated_handoff(operation_text, effect_class)
+
+    block_reasons: list[str] = []
+    if gated and not reconciliation:
+        if not producing_step_accepted:
+            block_reasons.append("producing_step_not_accepted")
+        if not gate_approved:
+            block_reasons.append("gate_not_approved")
+        if requires_explicit_policy and not policy_permits_non_idempotent:
+            block_reasons.append("non_idempotent_without_policy")
+
+    allowed = not block_reasons
+    decision_reason = ",".join(block_reasons) if block_reasons else None
+    # Reconciliation effects are authorized to run; otherwise the workflow state
+    # is "accepted" for recording purposes only when the producing step is
+    # accepted and the gate approved. The explicit block reason (when present)
+    # forces the recorded disposition to ``blocked`` regardless.
+    workflow_state_accepted = reconciliation or (
+        producing_step_accepted and gate_approved
+    )
+    record = side_effect_record(
+        effect_class=effect_class,
+        operation=operation_text,
+        target=target,
+        idempotency_key=idempotency_key,
+        workflow_state_accepted=workflow_state_accepted,
+        disposition="blocked" if block_reasons else None,
+        effect_kind=effect_kind,
+        reason=decision_reason or reason,
+    )
+    return {
+        "allowed": allowed,
+        "blocked": not allowed,
+        "reason": decision_reason,
+        "producingStepAccepted": producing_step_accepted,
+        "gateApproved": gate_approved,
+        "requiresExplicitPolicy": requires_explicit_policy,
+        "record": record,
+    }
 
 
 def memory_side_effect_summary(
