@@ -9657,6 +9657,8 @@ def _checkpoint_failed_step_execution(checkpoint_payload: Mapping[str, Any]) -> 
     value = failed_step.get("executionOrdinal")
     if value is None:
         value = failed_step.get("attempt")
+    if isinstance(value, bool):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):

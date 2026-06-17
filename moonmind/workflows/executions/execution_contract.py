@@ -1555,6 +1555,11 @@ class ResumeFromFailedStepRef(BaseModel):
     source_run_id: str = Field(..., alias="sourceRunId")
     failed_step_id: str = Field(..., alias="failedStepId")
     failed_step_execution: int | None = Field(None, alias="failedStepExecution")
+    recovery_mode: Literal["selected_step"] | None = Field(None, alias="recoveryMode")
+    selected_start_step_id: str | None = Field(None, alias="selectedStartStepId")
+    selected_start_step_execution: int | None = Field(
+        None, alias="selectedStartStepExecution"
+    )
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
     checkpoint_boundary: Literal[
         "after_prepare",
@@ -1599,6 +1604,11 @@ class ResumeFromFailedStepRef(BaseModel):
     @field_validator("plan_ref", "plan_digest", mode="before")
     @classmethod
     def _clean_optional(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("selected_start_step_id", mode="before")
+    @classmethod
+    def _clean_selected_start_step_id(cls, value: object) -> str | None:
         return _clean_optional_str(value)
 
     @field_validator("preserved_step_refs")

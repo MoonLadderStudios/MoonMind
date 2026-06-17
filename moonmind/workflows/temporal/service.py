@@ -3052,21 +3052,23 @@ class TemporalExecutionService:
             ):
                 if candidate and candidate not in preserved_step_refs:
                     preserved_step_refs.append(candidate)
-            for artifact_ref in preserved_step.artifacts.values():
+            artifacts = preserved_step.artifacts or {}
+            for artifact_ref in artifacts.values():
                 if (
                     isinstance(artifact_ref, str)
                     and artifact_ref
                     and artifact_ref not in preserved_step_refs
                 ):
                     preserved_step_refs.append(artifact_ref)
+        recovery_workspace = checkpoint.recovery_workspace or {}
         workspace_policy = str(
-            checkpoint.recovery_workspace.get("workspacePolicy")
-            or checkpoint.recovery_workspace.get("workspace_policy")
+            recovery_workspace.get("workspacePolicy")
+            or recovery_workspace.get("workspace_policy")
             or "restore_pre_execution"
         ).strip()
         if not workspace_policy:
             workspace_policy = "restore_pre_execution"
-        dependency_signatures = checkpoint.recovery_workspace.get("dependencySignatures")
+        dependency_signatures = recovery_workspace.get("dependencySignatures")
         if not isinstance(dependency_signatures, dict):
             dependency_signatures = {}
         recover_ref = {

@@ -1751,6 +1751,34 @@ def test_mm825_recovery_resume_contract_preserves_checkpoint_restoration_fields(
     assert normalized["workspacePolicy"] == "restore_pre_execution"
 
 
+def test_mm825_recovery_resume_contract_preserves_selected_step_fields() -> None:
+    """MM-825: Selected-step recovery fields are part of the closed resume contract."""
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_canonical_task_payload({
+            "recovery": {
+                "kind": "recover_from_failed_step",
+                "sourceWorkflowId": "mm:abc123",
+                "sourceRunId": "run-1",
+            },
+            "resume": {
+                **_VALID_RESUME_BLOCK,
+                "failedStepId": "design",
+                "failedStepExecution": 1,
+                "recoveryMode": "selected_step",
+                "selectedStartStepId": "design",
+                "selectedStartStepExecution": 1,
+            },
+        }),
+    )
+
+    normalized = result["workflow"]["resume"]
+    assert normalized["failedStepId"] == "design"
+    assert normalized["recoveryMode"] == "selected_step"
+    assert normalized["selectedStartStepId"] == "design"
+    assert normalized["selectedStartStepExecution"] == 1
+
+
 def test_mm825_recovery_resume_contract_rejects_unknown_fields() -> None:
     """MM-825: Resume refs are a closed checkpoint-backed recovery contract."""
     with pytest.raises(ValidationError):
