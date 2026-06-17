@@ -107,6 +107,41 @@ def test_merge_automation_request_infers_issue_key_from_workflow_keyed_task() ->
     assert request["postMergeJira"]["required"] is True
 
 
+def test_merge_automation_request_falls_back_when_workflow_payload_empty() -> None:
+    # Mixed in-flight/legacy payloads can carry an empty canonical workflow
+    # object while the Jira-backed task body remains under "task".
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(
+        {
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "workflow": {},
+            "task": {
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "inputs": {"jira_issue_key": "MM-823"},
+                    }
+                ],
+                "steps": [
+                    {
+                        "title": "Finalize Jira status",
+                        "instructions": "Transition Jira issue MM-823 to Code Review.",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert request is not None
+    assert request["jiraIssueKey"] == "MM-823"
+    assert request["postMergeJira"]["enabled"] is True
+    assert request["postMergeJira"]["required"] is True
+
+
 def test_build_merge_gate_start_payload_carries_workflow_keyed_jira_key() -> None:
     # Regression for MM-823 at the merge-gate child boundary: the issue key and an
     # enabled post-merge Jira config must propagate into the merge automation child
