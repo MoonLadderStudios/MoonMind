@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"\n2. docs/tmp/TaskTerminologyCleanupPlan.md (score: 1.000, trust: canonical)\n    line 19: - **Broader task-shaped snapshot terminology:** The root user workflow type, workflow create envelope, workflow proposal contract, preset/recurring database names, frontend preset routes, code-scope enforcement, and agent-run identifiers are switched. Broader task-shaped snapshot keys such as original-input authoring fields and runtime draft-shape metadata remain compatibility-sensitive and should be handled as a separate cutover if the product contract is renamed further.\n3. moonmind/planning/jira_story_planner.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"\n4. moonmind/manifest/reader_adapter.py (score: 1.000, trust: canonical)\n    line 83: \"Overwriting existing adapter for type '%s': %s -> %s\",\n5. moonmind/manifest/validator.py (score: 1.000, trust: canonical)\n    line 126: # 2. Secret leak scan (before Pydantic — catch leaks even in malformed manifests)\n6. docs/Artifacts/ReportArtifacts.md (score: 1.000, trust: canonical)\n    line 410: If an execution has a canonical `report.primary` artifact, Mission Control should present that artifact before making the user inspect the generic artifact list.\n7. moonmind/security/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Shared security contracts for MoonMind runtime code.\"\"\"\n8. moonmind/security/outbound_scan.py (score: 1.000, trust: canonical)\n    line 17: \"\"\"Allow/block decision returned before an external side effect.\"\"\"",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/tmp/TaskTerminologyCleanupPlan.md",
+      "text": "line 19: - **Broader task-shaped snapshot terminology:** The root user workflow type, workflow create envelope, workflow proposal contract, preset/recurring database names, frontend preset routes, code-scope enforcement, and agent-run identifiers are switched. Broader task-shaped snapshot keys such as original-input authoring fields and runtime draft-shape metadata remain compatibility-sensitive and should be handled as a separate cutover if the product contract is renamed further.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 19,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/jira_story_planner.py",
+      "text": "line 1: \"\"\"Skeleton for planning Jira stories from high level text.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/manifest/reader_adapter.py",
+      "text": "line 83: \"Overwriting existing adapter for type '%s': %s -> %s\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 83,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/manifest/validator.py",
+      "text": "line 126: # 2. Secret leak scan (before Pydantic — catch leaks even in malformed manifests)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 126,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ReportArtifacts.md",
+      "text": "line 410: If an execution has a canonical `report.primary` artifact, Mission Control should present that artifact before making the user inspect the generic artifact list.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 410,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/security/__init__.py",
+      "text": "line 1: \"\"\"Shared security contracts for MoonMind runtime code.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/security/outbound_scan.py",
+      "text": "line 17: \"\"\"Allow/block decision returned before an external side effect.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 17,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-17T02:33:32Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
