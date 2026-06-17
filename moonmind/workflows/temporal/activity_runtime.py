@@ -157,7 +157,10 @@ from moonmind.schemas.managed_session_models import (
     SteerCodexManagedSessionTurnRequest,
     TerminateCodexManagedSessionRequest,
 )
-from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
+from moonmind.workflows.skills.artifact_store import (
+    ArtifactStoreError,
+    InMemoryArtifactStore,
+)
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.workflows.skills.plan_validation import validate_plan_payload
 
@@ -2749,6 +2752,16 @@ class TemporalSandboxActivities:
         )
         return _compact_artifact_ref_text(artifact)
 
+    async def _read_checkpoint_bytes(self, artifact_ref: str) -> bytes:
+        if self._artifact_service is not None:
+            _artifact, payload = await self._artifact_service.read(
+                artifact_id=artifact_ref,
+                principal="system",
+                allow_restricted_raw=True,
+            )
+            return payload
+        return self._artifact_store.get_bytes(artifact_ref)
+
     def _pull_auth_diagnostics(self, context_ref: str | None) -> dict[str, Any]:
         mode = "authenticated" if context_ref else "unavailable"
         if os.environ.get("GHCR_PULL_USER") or os.environ.get("GHCR_PULL_TOKEN"):
@@ -3013,31 +3026,402 @@ class TemporalSandboxActivities:
             if isinstance(request, WorkspacePolicyApplyInput)
             else WorkspacePolicyApplyInput.model_validate(request)
         )
-        workspace_payload = model.checkpoint.get("workspace")
+        provider_refs = self._provider_lease_refs(model.provider_lease_context_ref)
+        idempotent_result = self._read_workspace_policy_idempotency(
+            model.idempotency_key
+        )
+        if idempotent_result is not None:
+            return idempotent_result
+
+        try:
+            checkpoint = await self._load_policy_checkpoint(model)
+        except TemporalArtifactValidationError:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="artifact_unauthorized",
+                summary="checkpoint artifact evidence is unauthorized",
+                provider_refs=provider_refs,
+                diagnostic_refs=[],
+            )
+        except (ArtifactStoreError, TemporalArtifactError):
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="artifact_missing",
+                summary="checkpoint artifact evidence is missing",
+                provider_refs=provider_refs,
+                diagnostic_refs=[],
+            )
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="artifact_corrupted",
+                summary="checkpoint artifact evidence is corrupt",
+                provider_refs=provider_refs,
+                diagnostic_refs=[],
+            )
+        diagnostic_refs: list[str] = []
+
+        workspace_payload = checkpoint.get("workspace")
         if not isinstance(workspace_payload, dict):
-            workspace_payload = {}
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="invalid_checkpoint",
+                summary="checkpoint workspace evidence is invalid",
+                provider_refs=provider_refs,
+                diagnostic_refs=diagnostic_refs,
+                checkpoint=checkpoint,
+            )
         kind = workspace_payload.get("kind")
         accepted = checkpoint_kinds_for_workspace_policy(model.workspace_policy)
-        if kind not in accepted:
-            result = WorkspacePolicyApplyResult(
-                status="rejected",
-                workspaceRef=model.target_workspace_ref,
-                appliedCheckpointRef=model.checkpoint_ref,
-                providerLeaseRefs=self._provider_lease_refs(
-                    model.provider_lease_context_ref
-                ),
+        if accepted and kind not in accepted:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="policy_incompatible",
                 summary="checkpoint kind does not satisfy workspace policy",
-                failureCode="policy_incompatible",
+                provider_refs=provider_refs,
+                diagnostic_refs=diagnostic_refs,
+                checkpoint=checkpoint,
             )
-            return result.model_dump(by_alias=True, mode="json")
+
+        target = self._policy_target_workspace(model)
+        try:
+            await self._apply_workspace_policy_to_target(
+                model.workspace_policy,
+                workspace_payload,
+                target,
+            )
+        except ArtifactStoreError:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="artifact_missing",
+                summary="workspace policy artifact evidence is missing",
+                provider_refs=provider_refs,
+                diagnostic_refs=diagnostic_refs,
+                checkpoint=checkpoint,
+                target_workspace_ref=str(target),
+            )
+        except (json.JSONDecodeError, tarfile.TarError, UnicodeDecodeError):
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="artifact_corrupted",
+                summary="workspace policy artifact evidence is corrupt",
+                provider_refs=provider_refs,
+                diagnostic_refs=diagnostic_refs,
+                checkpoint=checkpoint,
+                target_workspace_ref=str(target),
+            )
+        except TemporalActivityRuntimeError as exc:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="workspace_incompatible",
+                summary=str(exc)[:1000],
+                provider_refs=provider_refs,
+                diagnostic_refs=diagnostic_refs,
+                checkpoint=checkpoint,
+                target_workspace_ref=str(target),
+            )
+
         result = WorkspacePolicyApplyResult(
-            status="prepared",
-            workspaceRef=model.target_workspace_ref,
+            status="applied",
+            workspaceRef=str(target),
             appliedCheckpointRef=model.checkpoint_ref,
-            providerLeaseRefs=self._provider_lease_refs(model.provider_lease_context_ref),
-            summary="workspace policy prepared",
+            providerLeaseRefs=provider_refs,
+            summary=f"workspace policy {model.workspace_policy} applied",
+        ).model_dump(by_alias=True, mode="json")
+        self._write_workspace_policy_idempotency(model.idempotency_key, result)
+        return result
+
+    async def _load_policy_checkpoint(
+        self,
+        model: WorkspacePolicyApplyInput,
+    ) -> dict[str, Any]:
+        payload = await self._read_checkpoint_bytes(model.checkpoint_ref)
+        decoded = json.loads(payload.decode("utf-8"))
+        if not isinstance(decoded, dict):
+            raise TemporalActivityRuntimeError(
+                "checkpoint artifact payload must be a JSON object"
+            )
+        return decoded
+
+    def _policy_target_workspace(self, model: WorkspacePolicyApplyInput) -> Path:
+        if model.target_workspace_ref:
+            return self._resolve_workspace(model.target_workspace_ref, must_exist=False)
+        digest = hashlib.sha256(model.idempotency_key.encode("utf-8")).hexdigest()[:16]
+        target = (
+            self._workspace_root
+            / "temporal_sandbox"
+            / "policy-workspaces"
+            / digest
+        )
+        return self._resolve_workspace(target, must_exist=False)
+
+    async def _apply_workspace_policy_to_target(
+        self,
+        policy: str,
+        workspace_payload: Mapping[str, Any],
+        target: Path,
+    ) -> None:
+        if policy == "continue_from_previous_execution":
+            workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+            if workspace_ref:
+                source = self._resolve_workspace(workspace_ref, must_exist=True)
+                if source != target:
+                    self._replace_workspace_tree(source, target)
+                return
+            if workspace_payload.get("kind") == "git_commit":
+                await self._checkout_commit_to_workspace(workspace_payload, target)
+                return
+            if workspace_payload.get("kind") == "git_patch":
+                await self._checkout_commit_to_workspace(workspace_payload, target)
+                await self._apply_patch_artifact(workspace_payload, target)
+                return
+            await self._restore_archive_to_workspace(workspace_payload, target)
+            return
+        if policy == "restore_pre_execution":
+            if workspace_payload.get("kind") == "git_commit":
+                await self._checkout_commit_to_workspace(workspace_payload, target)
+                return
+            if workspace_payload.get("kind") == "ephemeral_workspace_ref":
+                source = self._workspace_ref_source(workspace_payload)
+                self._replace_workspace_tree(source, target)
+                return
+            await self._restore_archive_to_workspace(workspace_payload, target)
+            return
+        if policy == "apply_previous_execution_diff_to_clean_baseline":
+            await self._checkout_commit_to_workspace(workspace_payload, target)
+            await self._apply_patch_artifact(workspace_payload, target)
+            return
+        if policy == "start_from_last_passed_commit":
+            await self._checkout_commit_to_workspace(workspace_payload, target)
+            return
+        if policy == "fresh_branch_from_source":
+            source_ref = str(
+                workspace_payload.get("workspaceRef")
+                or workspace_payload.get("branch")
+                or workspace_payload.get("baseCommit")
+                or ""
+            ).strip()
+            if source_ref:
+                source = self._resolve_workspace(source_ref, must_exist=True)
+                self._replace_workspace_tree(source, target)
+                return
+            target.mkdir(parents=True, exist_ok=True)
+            await _run_command(["git", "init"], cwd=str(target))
+            return
+        raise TemporalActivityRuntimeError(f"unsupported workspace policy: {policy}")
+
+    def _workspace_ref_source(self, workspace_payload: Mapping[str, Any]) -> Path:
+        workspace_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+        if not workspace_ref:
+            raise TemporalActivityRuntimeError("workspace ref evidence is missing")
+        return self._resolve_workspace(workspace_ref, must_exist=True)
+
+    def _replace_workspace_tree(self, source: Path, target: Path) -> None:
+        source = self._resolve_workspace(source, must_exist=True)
+        target = self._resolve_workspace(target, must_exist=False)
+        if source == target:
+            return
+        if target.exists():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, target, symlinks=True)
+
+    async def _restore_archive_to_workspace(
+        self,
+        workspace_payload: Mapping[str, Any],
+        target: Path,
+    ) -> None:
+        archive_ref = str(workspace_payload.get("archiveRef") or "").strip()
+        if not archive_ref:
+            raise TemporalActivityRuntimeError("workspace archive evidence is missing")
+        archive_payload = await self._read_checkpoint_bytes(archive_ref)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.parent / f".{target.name}.restore"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            with tarfile.open(fileobj=BytesIO(archive_payload), mode="r:gz") as archive:
+                for member in archive.getmembers():
+                    member_path = (staging / member.name).resolve()
+                    if not member_path.is_relative_to(staging):
+                        raise TemporalActivityRuntimeError(
+                            f"workspace archive member escapes workspace: {member.name}"
+                        )
+                    if member.issym() or member.islnk():
+                        link_target = (member_path.parent / member.linkname).resolve()
+                        if not link_target.is_relative_to(staging):
+                            raise TemporalActivityRuntimeError(
+                                f"workspace archive link escapes workspace: {member.name}"
+                            )
+                archive.extractall(staging, filter="data")
+            if target.exists():
+                shutil.rmtree(target)
+            staging.rename(target)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+    async def _checkout_commit_to_workspace(
+        self,
+        workspace_payload: Mapping[str, Any],
+        target: Path,
+    ) -> None:
+        commit = str(
+            workspace_payload.get("headCommit")
+            or workspace_payload.get("baseCommit")
+            or ""
+        ).strip()
+        if not commit:
+            raise TemporalActivityRuntimeError(
+                "git commit checkpoint evidence is missing"
+            )
+        source_ref = str(workspace_payload.get("workspaceRef") or "").strip()
+        if source_ref:
+            source = self._resolve_workspace(source_ref, must_exist=True)
+            self._replace_workspace_tree(source, target)
+        else:
+            if not (target / ".git").exists():
+                raise TemporalActivityRuntimeError(
+                    "git checkpoint requires workspaceRef or an existing git target workspace"
+                )
+        try:
+            await _run_command(
+                ["git", "checkout", "--force", "--detach", commit],
+                cwd=str(target),
+            )
+        except RuntimeError as exc:
+            raise TemporalActivityRuntimeError(
+                f"git checkout failed: {exc}"
+            ) from exc
+
+    async def _apply_patch_artifact(
+        self,
+        workspace_payload: Mapping[str, Any],
+        target: Path,
+    ) -> None:
+        patch_ref = str(workspace_payload.get("patchRef") or "").strip()
+        if not patch_ref:
+            raise TemporalActivityRuntimeError("git patch evidence is missing")
+        patch_payload = await self._read_checkpoint_bytes(patch_ref)
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "apply",
+            "--whitespace=nowarn",
+            "-",
+            cwd=str(target),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await process.communicate(patch_payload)
+        if process.returncode != 0:
+            raise TemporalActivityRuntimeError(
+                "git patch evidence could not be applied: "
+                f"{stderr.decode('utf-8', errors='replace')[:500]}"
+            )
+
+    def _workspace_policy_idempotency_path(self, idempotency_key: str) -> Path:
+        digest = hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()
+        path = (
+            self._workspace_root
+            / "temporal_sandbox"
+            / ".moonmind-policy-idempotency"
+            / f"{digest}.json"
+        )
+        return self._resolve_workspace(path, must_exist=False)
+
+    def _read_workspace_policy_idempotency(
+        self,
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        path = self._workspace_policy_idempotency_path(idempotency_key)
+        if not path.is_file():
+            return None
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
+        if isinstance(loaded, dict):
+            return loaded
+        return None
+
+    def _write_workspace_policy_idempotency(
+        self,
+        idempotency_key: str,
+        result: Mapping[str, Any],
+    ) -> None:
+        path = self._workspace_policy_idempotency_path(idempotency_key)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(dict(result), sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    async def _reject_workspace_policy(
+        self,
+        model: WorkspacePolicyApplyInput,
+        *,
+        failure_code: str,
+        summary: str,
+        provider_refs: list[str],
+        diagnostic_refs: list[str] | None = None,
+        checkpoint: Mapping[str, Any] | None = None,
+        target_workspace_ref: str | None = None,
+    ) -> dict[str, Any]:
+        refs = list(diagnostic_refs or [])
+        refs.append(
+            await self._write_policy_diagnostic(
+                model,
+                failure_code=failure_code,
+                summary=summary,
+                checkpoint=checkpoint,
+                target_workspace_ref=target_workspace_ref or model.target_workspace_ref,
+            )
+        )
+        result = WorkspacePolicyApplyResult(
+            status="rejected",
+            workspaceRef=target_workspace_ref or model.target_workspace_ref,
+            appliedCheckpointRef=model.checkpoint_ref,
+            providerLeaseRefs=provider_refs,
+            diagnosticRefs=refs,
+            summary=summary,
+            failureCode=failure_code,
         )
         return result.model_dump(by_alias=True, mode="json")
+
+    async def _write_policy_diagnostic(
+        self,
+        model: WorkspacePolicyApplyInput,
+        *,
+        failure_code: str,
+        summary: str,
+        checkpoint: Mapping[str, Any] | None,
+        target_workspace_ref: str | None,
+    ) -> str:
+        source = checkpoint.get("source") if isinstance(checkpoint, Mapping) else None
+        if not isinstance(source, Mapping):
+            source = model.identity.model_dump(by_alias=True, mode="json")
+        payload = {
+            "status": "blocked",
+            "failureCode": failure_code,
+            "summary": summary,
+            "logicalStepId": source.get("logicalStepId"),
+            "sourceWorkflowId": source.get("workflowId"),
+            "sourceRunId": source.get("runId"),
+            "checkpointRef": model.checkpoint_ref,
+            "workspacePolicy": model.workspace_policy,
+            "targetWorkspaceRef": target_workspace_ref,
+            "recommendedNextAction": (
+                "Inspect checkpoint evidence and select a compatible workspace "
+                "policy before reattempting the Step Execution."
+            ),
+        }
+        return await self._put_checkpoint_bytes(
+            _json_bytes(payload),
+            content_type="application/json",
+            metadata={"artifact_kind": "blocked_step_execution_manifest"},
+        )
 
     async def workspace_classify_git_effect(
         self,
@@ -10132,6 +10516,16 @@ class TemporalCheckpointActivities:
         )
         return _compact_artifact_ref_text(artifact)
 
+    async def _read_bytes(self, artifact_ref: str) -> bytes:
+        if self._artifact_service is not None:
+            _artifact, payload = await self._artifact_service.read(
+                artifact_id=artifact_ref,
+                principal=self._principal,
+                allow_restricted_raw=True,
+            )
+            return payload
+        return self._artifact_store.get_bytes(artifact_ref)
+
     async def step_checkpoint_create(
         self,
         request: Mapping[str, Any] | StepCheckpointCreateInput,
@@ -10182,7 +10576,11 @@ class TemporalCheckpointActivities:
             checkpoint_id = str(model.checkpoint.get("checkpointId") or checkpoint_id)
 
         for refs, code, message in (
-            (model.unsafe_artifact_refs, "unsafe_checkpoint", "checkpoint evidence is unsafe"),
+            (
+                model.unsafe_artifact_refs,
+                "unsafe_checkpoint",
+                "checkpoint evidence is unsafe",
+            ),
             (
                 model.unsupported_artifact_refs,
                 "unsupported_checkpoint_kind",
@@ -10205,13 +10603,55 @@ class TemporalCheckpointActivities:
                 )
                 return result.model_dump(by_alias=True, mode="json")
 
-        if not isinstance(model.checkpoint, Mapping) or "contentType" not in model.checkpoint:
+        checkpoint_payload: Any = model.checkpoint
+        if model.checkpoint_ref:
+            try:
+                raw_checkpoint = await self._read_bytes(model.checkpoint_ref)
+                checkpoint_payload = json.loads(raw_checkpoint.decode("utf-8"))
+            except TemporalArtifactValidationError:
+                result = StepCheckpointValidateResult(
+                    valid=False,
+                    failureCode="artifact_unauthorized",
+                    message="checkpoint artifact evidence is unauthorized",
+                    checkpointId=checkpoint_id,
+                    checkpointRef=model.checkpoint_ref,
+                    diagnosticRefs=[model.checkpoint_ref],
+                )
+                return result.model_dump(by_alias=True, mode="json")
+            except (ArtifactStoreError, TemporalArtifactError):
+                result = StepCheckpointValidateResult(
+                    valid=False,
+                    failureCode="artifact_missing",
+                    message="checkpoint artifact evidence is missing",
+                    checkpointId=checkpoint_id,
+                    checkpointRef=model.checkpoint_ref,
+                    diagnosticRefs=[model.checkpoint_ref],
+                )
+                return result.model_dump(by_alias=True, mode="json")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                result = StepCheckpointValidateResult(
+                    valid=False,
+                    failureCode="artifact_corrupted",
+                    message="checkpoint artifact evidence is corrupt",
+                    checkpointId=checkpoint_id,
+                    checkpointRef=model.checkpoint_ref,
+                    diagnosticRefs=[model.checkpoint_ref],
+                )
+                return result.model_dump(by_alias=True, mode="json")
+
+        if (
+            not isinstance(checkpoint_payload, Mapping)
+            or "contentType" not in checkpoint_payload
+        ):
             missing_refs = list(model.required_artifact_refs)
             if missing_refs:
                 result = StepCheckpointValidateResult(
                     valid=False,
                     failureCode="artifact_missing",
-                    message=f"checkpoint missing required artifact ref {missing_refs[0]}",
+                    message=(
+                        "checkpoint missing required artifact ref "
+                        f"{missing_refs[0]}"
+                    ),
                     checkpointId=checkpoint_id,
                     checkpointRef=model.checkpoint_ref,
                     diagnosticRefs=missing_refs,
@@ -10219,7 +10659,7 @@ class TemporalCheckpointActivities:
                 return result.model_dump(by_alias=True, mode="json")
 
         result = validate_step_checkpoint_payload(
-            model.checkpoint,
+            checkpoint_payload,
             expected_source=model.expected_source,
             expected_task_input_snapshot_ref=model.expected_task_input_snapshot_ref,
             expected_plan_ref=model.expected_plan_ref,

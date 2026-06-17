@@ -151,7 +151,11 @@ def workspace_policy_metadata(
 
     required_kinds = checkpoint_kinds_for_workspace_policy(policy)
     checkpoint_text = str(checkpoint_ref or "").strip() or None
-    evidence_required = bool(required_kinds)
+    evidence_required = bool(required_kinds) and (
+        policy != "fresh_branch_from_source"
+        or checkpoint_text is not None
+        or checkpoint_valid is not None
+    )
     evidence_accepted = (
         not evidence_required
         or (checkpoint_text is not None and checkpoint_valid is not False)

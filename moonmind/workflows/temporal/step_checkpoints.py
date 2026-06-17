@@ -35,7 +35,7 @@ _POLICY_CHECKPOINT_KINDS: dict[WorkspacePolicy, tuple[WorkspaceCheckpointKind, .
     ),
     "apply_previous_execution_diff_to_clean_baseline": ("git_patch",),
     "start_from_last_passed_commit": ("git_commit",),
-    "fresh_branch_from_source": (),
+    "fresh_branch_from_source": ("git_commit",),
 }
 
 
