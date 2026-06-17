@@ -684,6 +684,17 @@ cleanup:
 
 Default posture: destroy the sidecar and its graph storage at session end; preserve the workspace only according to the existing managed-session retention policy.
 
+### 20.1 Orphan reaping
+
+Per-session cleanup runs on the graceful `terminate_session` path. When the owning workflow is terminated or crashes, the managed session child is abandoned (`ParentClosePolicy.ABANDON`), so its agent container, docker sidecar, and sidecar volumes can be left running with no live session behind them.
+
+The recurring managed-session reconcile sweep (`MoonMind.ManagedSessionReconcile`) therefore also reaps orphaned session containers. A container carrying the `moonmind.session_id` label is removed when its session is **not active** in the durable session store, subject to a grace window so a freshly launched session is never reaped before its store record is durable. Reaping is best-effort: a failure never fails the reconcile sweep, and the sweep refuses to remove anything when the session store is unavailable.
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `MOONMIND_MANAGED_SESSION_REAP_ENABLED` | `1` (enabled) | Set to a falsey value (`0`, `false`, `no`, `off`) to disable orphan reaping entirely. |
+| `MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS` | `900` | Minimum age (seconds) before an orphaned container is eligible for reaping. |
+
 ---
 
 ## 21. Separation from the MoonMind admin/update path

@@ -14,6 +14,7 @@ import shlex
 import shutil
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Protocol, Sequence
@@ -77,7 +78,64 @@ _SESSION_DOCKER_CONFIG_FILENAME = "config.json"
 _DEFAULT_SESSION_DOCKER_SIDECAR_IMAGE = "docker:27-dind"
 _SESSION_DOCKER_MODE_ENABLED_VALUES = {"docker-sidecar"}
 _SESSION_DOCKER_MODE_DISABLED_VALUES = {"no-docker", "disabled", "none", "off"}
+# Grace window before an orphaned managed-session container is eligible for
+# reaping. A session writes its durable store record early in launch, but the
+# window protects against reaping a container whose record is not yet active
+# (mid-launch) or that is being relaunched.
+_DEFAULT_SESSION_REAP_GRACE_SECONDS = 900.0
+_MANAGED_SESSION_LABEL_KEY = "moonmind.session_id"
+_FALSEY_ENV_VALUES = {"0", "false", "no", "off", ""}
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ManagedSessionContainer:
+    """A docker container carrying the managed-session label."""
+
+    container_id: str
+    session_id: str
+    kind: str
+    created_at: datetime | None
+
+
+@dataclass(frozen=True)
+class ManagedSessionReapResult:
+    """Outcome of one orphaned managed-session container sweep."""
+
+    scanned_containers: int = 0
+    reaped_session_ids: tuple[str, ...] = ()
+    reaped_containers: int = 0
+    skipped_active: int = 0
+    skipped_recent: int = 0
+    disabled: bool = False
+
+
+def _parse_docker_timestamp(value: str) -> datetime | None:
+    """Parse a docker RFC3339(Nano) timestamp into an aware datetime.
+
+    Returns ``None`` for the docker zero time or any unparseable value so the
+    caller treats the container's age as unknown.
+    """
+
+    text = (value or "").strip()
+    if not text or text.startswith("0001-01-01"):
+        return None
+    text = text.replace("Z", "+00:00")
+    match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(.*)$", text)
+    if not match:
+        return None
+    fractional = match.group(2) or ""
+    if fractional:
+        # datetime.fromisoformat accepts at most microsecond precision.
+        fractional = fractional[:7]
+    rebuilt = f"{match.group(1)}{fractional}{match.group(3)}"
+    try:
+        parsed = datetime.fromisoformat(rebuilt)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
     normalized = str(value or "").strip()
@@ -2959,3 +3017,161 @@ class DockerCodexManagedSessionController:
                 )
                 reconciled.append(updated)
         return reconciled
+
+    @staticmethod
+    def _reap_enabled() -> bool:
+        raw = os.environ.get("MOONMIND_MANAGED_SESSION_REAP_ENABLED")
+        if raw is None:
+            return True
+        return raw.strip().lower() not in _FALSEY_ENV_VALUES
+
+    @staticmethod
+    def _reap_grace_seconds() -> float:
+        raw = os.environ.get("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS")
+        if not raw:
+            return _DEFAULT_SESSION_REAP_GRACE_SECONDS
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            return _DEFAULT_SESSION_REAP_GRACE_SECONDS
+
+    async def _list_managed_session_containers(
+        self,
+    ) -> list[_ManagedSessionContainer]:
+        returncode, stdout, stderr = await self._command_runner(
+            (
+                self._docker_binary,
+                "ps",
+                "-aq",
+                "--filter",
+                f"label={_MANAGED_SESSION_LABEL_KEY}",
+            ),
+            env=self._docker_env(),
+        )
+        if returncode != 0:
+            details = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+            raise RuntimeError(
+                f"failed to list managed session containers: {details}"
+            )
+        container_ids = [line.strip() for line in stdout.splitlines() if line.strip()]
+        if not container_ids:
+            return []
+        template = (
+            '{{printf "%s|%s|%s|%s" .Id '
+            f'(index .Config.Labels "{_MANAGED_SESSION_LABEL_KEY}") '
+            '(index .Config.Labels "moonmind.kind") '
+            ".Created}}"
+        )
+        # Tolerate partial failures: a container can vanish between listing and
+        # inspect. Parse whatever well-formed rows came back and let the next
+        # sweep retry the rest, rather than failing the whole reconcile.
+        _inspect_rc, inspect_out, _inspect_err = await self._command_runner(
+            (
+                self._docker_binary,
+                "inspect",
+                "--format",
+                template,
+                *container_ids,
+            ),
+            env=self._docker_env(),
+        )
+        containers: list[_ManagedSessionContainer] = []
+        for line in inspect_out.splitlines():
+            parts = line.split("|")
+            if len(parts) != 4:
+                continue
+            container_id, session_id, kind, created_raw = (
+                part.strip() for part in parts
+            )
+            if not container_id or not session_id:
+                continue
+            containers.append(
+                _ManagedSessionContainer(
+                    container_id=container_id,
+                    session_id=session_id,
+                    kind=kind,
+                    created_at=_parse_docker_timestamp(created_raw),
+                )
+            )
+        return containers
+
+    async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+        """Remove managed-session containers that no longer back a live session.
+
+        A managed session normally tears its containers down through
+        ``terminate_session``. When the owning workflow is terminated or crashes
+        the session child is abandoned (``ParentClosePolicy.ABANDON``), so the
+        agent container and its docker-sidecar (plus volumes) can be left
+        running indefinitely. This sweep removes containers whose session is not
+        active in the durable store, guarded by a grace window so a freshly
+        launched session is never reaped before its record is durable.
+        """
+
+        if not self._reap_enabled():
+            return ManagedSessionReapResult(disabled=True)
+        if self._session_store is None:
+            # Without the durable store we cannot tell which sessions are live,
+            # so refuse to remove anything rather than guess.
+            return ManagedSessionReapResult(disabled=True)
+
+        containers = await self._list_managed_session_containers()
+        if not containers:
+            return ManagedSessionReapResult()
+
+        active_session_ids = {
+            record.session_id for record in self._session_store.list_active()
+        }
+        grace_seconds = self._reap_grace_seconds()
+        now = datetime.now(tz=UTC)
+
+        by_session: dict[str, list[_ManagedSessionContainer]] = {}
+        for container in containers:
+            by_session.setdefault(container.session_id, []).append(container)
+
+        skipped_active = 0
+        skipped_recent = 0
+        reaped_containers = 0
+        reaped_session_ids: list[str] = []
+
+        for session_id, session_containers in by_session.items():
+            if session_id in active_session_ids:
+                skipped_active += len(session_containers)
+                continue
+            newest = max(
+                (
+                    container.created_at
+                    for container in session_containers
+                    if container.created_at is not None
+                ),
+                default=None,
+            )
+            if newest is not None and (now - newest).total_seconds() < grace_seconds:
+                skipped_recent += len(session_containers)
+                continue
+            removed_any = False
+            for container in session_containers:
+                if await self._remove_container(
+                    container.container_id, ignore_failure=True
+                ):
+                    reaped_containers += 1
+                    removed_any = True
+            # Remove any sidecar container lingering by name and its volumes.
+            await self._cleanup_docker_sidecar_resources(
+                session_id,
+                ignore_failure=True,
+                remove_volumes_if_container_missing=True,
+            )
+            if removed_any:
+                reaped_session_ids.append(session_id)
+                logger.info(
+                    "Reaped orphaned managed session containers for session %s",
+                    session_id,
+                )
+
+        return ManagedSessionReapResult(
+            scanned_containers=len(containers),
+            reaped_session_ids=tuple(reaped_session_ids),
+            reaped_containers=reaped_containers,
+            skipped_active=skipped_active,
+            skipped_recent=skipped_recent,
+        )

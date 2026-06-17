@@ -62,6 +62,133 @@ def test_merge_automation_request_infers_jira_orchestrate_issue_key() -> None:
     assert request["postMergeJira"]["enabled"] is True
     assert request["postMergeJira"]["required"] is True
 
+def test_merge_automation_request_infers_issue_key_from_workflow_keyed_task() -> None:
+    # Regression for MM-823: canonical runtime parameters carry the task payload
+    # under "workflow" (not "task") with merge automation enabled at top level and
+    # no explicit jiraIssueKey. The issue key must still be derived from the
+    # jira-implement applied template / step text so post-merge Jira completion is
+    # enabled; otherwise the issue is left stuck in Code Review after merge.
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(
+        {
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "instructions": (
+                "Fetch Jira issue MM-823 through the deterministic trusted Jira "
+                "tool surface."
+            ),
+            "workflow": {
+                "title": (
+                    "Fetch Jira issue MM-823 through the deterministic trusted "
+                    "Jira tool surface."
+                ),
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "inputs": {"jira_issue_key": "MM-823"},
+                    }
+                ],
+                "steps": [
+                    {
+                        "title": "Finalize Jira status",
+                        "instructions": "Transition Jira issue MM-823 to Code Review.",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert request is not None
+    assert request["jiraIssueKey"] == "MM-823"
+    assert request["postMergeJira"]["enabled"] is True
+    assert request["postMergeJira"]["required"] is True
+
+
+def test_merge_automation_request_falls_back_when_workflow_payload_empty() -> None:
+    # Mixed in-flight/legacy payloads can carry an empty canonical workflow
+    # object while the Jira-backed task body remains under "task".
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(
+        {
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "workflow": {},
+            "task": {
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "inputs": {"jira_issue_key": "MM-823"},
+                    }
+                ],
+                "steps": [
+                    {
+                        "title": "Finalize Jira status",
+                        "instructions": "Transition Jira issue MM-823 to Code Review.",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert request is not None
+    assert request["jiraIssueKey"] == "MM-823"
+    assert request["postMergeJira"]["enabled"] is True
+    assert request["postMergeJira"]["required"] is True
+
+
+def test_build_merge_gate_start_payload_carries_workflow_keyed_jira_key() -> None:
+    # Regression for MM-823 at the merge-gate child boundary: the issue key and an
+    # enabled post-merge Jira config must propagate into the merge automation child
+    # payload when the task is supplied under the canonical "workflow" key.
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "fetch-jira-issue-mm-823"
+    workflow._publish_context["baseRef"] = "main"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "instructions": (
+                "Fetch Jira issue MM-823 through the deterministic trusted Jira "
+                "tool surface."
+            ),
+            "workflow": {
+                "title": "Fetch Jira issue MM-823.",
+                "publish": {"mode": "pr"},
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "inputs": {"jira_issue_key": "MM-823"},
+                    }
+                ],
+                "steps": [
+                    {
+                        "title": "Finalize Jira status",
+                        "instructions": "Transition Jira issue MM-823 to Code Review.",
+                    }
+                ],
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/2501",
+        head_sha="f818b9df3e325cd0ab18814e183240b95a42ea3f",
+        parent_workflow_id="mm:2593ddff",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    assert payload["jiraIssueKey"] == "MM-823"
+    assert payload["mergeAutomationConfig"]["gate"]["jira"]["issueKey"] == "MM-823"
+    assert payload["mergeAutomationConfig"]["postMergeJira"]["enabled"] is True
+
+
 def test_merge_automation_request_does_not_guess_ambiguous_jira_issue_key() -> None:
     workflow = MoonMindRunWorkflow()
 

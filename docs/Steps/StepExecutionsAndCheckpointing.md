@@ -1263,10 +1263,10 @@ Rules:
 
 1. Manifest and checkpoint schemas are versioned through their content types (section 2); a writer must never emit a payload it cannot name with a canonical content type.
 2. Enum growth (reasons, statuses, dispositions, boundaries, policies, verdicts, failure codes) is additive within `v1`; readers must map unknown values to typed invalid/degraded decisions, never crash or silently coerce.
-3. Renaming or removing a field, changing identity/key shapes, or changing disposition semantics requires a new content-type version and a cutover in which the old version is deleted, not aliased (Constitution principle XIII).
+3. Renaming or removing a field, changing identity/key shapes, or changing disposition semantics requires a new content-type version and a cutover in which the old version is deleted, not aliased (Constitution: **Pre-Release Velocity: Delete, Don't Deprecate**).
 4. Replay safety: any change to manifest/checkpoint payloads carried through workflow state must include a compatibility or replay-style regression test at the workflow boundary, or documented proof that no in-flight run can carry the old shape.
 
-Non-canonical working notes remain outside this document under `docs/tmp/` per Constitution principle XII; this document describes only the target contracts.
+Non-canonical working notes remain outside this document under `docs/tmp/` per the Constitution's **Canonical Documentation Separates Desired State from Migration Backlog** principle; this document describes only the target contracts.
 
 ---
 

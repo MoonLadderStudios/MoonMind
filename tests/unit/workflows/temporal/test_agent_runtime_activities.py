@@ -52,6 +52,9 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
 )
+from moonmind.workflows.temporal.runtime.managed_session_controller import (
+    ManagedSessionReapResult,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
@@ -5094,6 +5097,15 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
                 _session_record("sess-orphaned-container", status="degraded"),
             ]
 
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            return ManagedSessionReapResult(
+                scanned_containers=4,
+                reaped_session_ids=("sess-orphaned-container",),
+                reaped_containers=2,
+                skipped_active=1,
+                skipped_recent=1,
+            )
+
     activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
 
     result = await activities.agent_runtime_reconcile_managed_sessions({})
@@ -5107,7 +5119,29 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
             "sess-orphaned-container",
         ],
         "truncated": False,
+        "orphanContainersReaped": 2,
+        "orphanSessionIdsReaped": ["sess-orphaned-container"],
+        "orphanReapSkippedRecent": 1,
     }
+
+
+async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> None:
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return [_session_record("sess-ready", status="ready")]
+
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            raise RuntimeError("docker daemon unavailable")
+
+    activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    # A reap failure must not fail reconcile; reattach results still surface.
+    assert result["managedSessionRecordsReconciled"] == 1
+    assert result["orphanContainersReaped"] == 0
+    assert result["orphanSessionIdsReaped"] == []
+    assert result["orphanReapSkippedRecent"] == 0
 
 @pytest.mark.asyncio
 async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(
@@ -5119,6 +5153,9 @@ async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeatin
                 _session_record(f"sess-{index}", status="degraded")
                 for index in range(60)
             ]
+
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            return ManagedSessionReapResult()
 
     heartbeat_payloads: list[dict[str, Any]] = []
 
@@ -5141,12 +5178,15 @@ async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeatin
 
     result = await activities.agent_runtime_reconcile_managed_sessions({})
 
+    # Both the reattach pass and the orphan reap pass are heartbeated.
     assert heartbeat_payloads == [
-        {"activityType": "agent_runtime.reconcile_managed_sessions"}
+        {"activityType": "agent_runtime.reconcile_managed_sessions"},
+        {"activityType": "agent_runtime.reconcile_managed_sessions"},
     ]
     assert result["managedSessionRecordsReconciled"] == 60
     assert result["degradedSessionRecords"] == 60
     assert len(result["sessionIds"]) == 50
+    assert result["orphanContainersReaped"] == 0
     assert result["truncated"] is True
 
 async def test_agent_runtime_session_request_logs_bounded_telemetry_context(

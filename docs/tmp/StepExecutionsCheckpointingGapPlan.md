@@ -8,7 +8,7 @@ Roadmap alignment: `docs/MoonMindRoadmap.md` Milestones 1, 3, 5, 12, 13, and 14
 
 This document tracks the remaining wiring between the canonical desired-state
 Step Executions and Checkpointing design and production `MoonMind.UserWorkflow`
-orchestration. It exists under `docs/tmp/` per Constitution principle XII.
+orchestration. It exists under `docs/tmp/` per the Constitution's **Canonical Documentation Separates Desired State from Migration Backlog** principle.
 Delete it when the gaps close.
 
 This refresh accounts for the June 2026 roadmap reframing around managed runtime
