@@ -238,7 +238,9 @@ def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
     assert "worktree_archive" in checkpoint_kinds_for_workspace_policy(
         "restore_pre_execution"
     )
-    assert checkpoint_kinds_for_workspace_policy("fresh_branch_from_source") == ()
+    assert checkpoint_kinds_for_workspace_policy("fresh_branch_from_source") == (
+        "git_commit",
+    )
 
     checkpoint = StepExecutionCheckpointModel.model_validate(
         build_step_checkpoint_payload(
@@ -268,7 +270,7 @@ def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
     assert result.failure_code == "policy_incompatible"
     assert "apply_previous_execution_diff_to_clean_baseline" in result.message
 
-    fresh_branch_mismatch = validate_step_checkpoint(
+    fresh_branch_source_ref = validate_step_checkpoint(
         StepCheckpointValidationRequestModel(
             checkpoint=checkpoint,
             expectedSource=_identity(),
@@ -278,8 +280,8 @@ def test_workspace_policy_matrix_and_validation_failure_codes() -> None:
         )
     )
 
-    assert fresh_branch_mismatch.valid is False
-    assert fresh_branch_mismatch.failure_code == "policy_incompatible"
+    assert fresh_branch_source_ref.valid is True
+    assert fresh_branch_source_ref.failure_code is None
 
 
 def test_validation_reports_source_plan_and_artifact_failures() -> None:
