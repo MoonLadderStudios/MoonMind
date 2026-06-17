@@ -49,7 +49,7 @@ Repo and built-in Skill Markdown should use frontmatter metadata:
 name: jira-pr-verify
 description: Verify a GitHub pull request against a Jira issue's goals, requirements, and acceptance criteria, then post a PR comment with the findings.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - jira
     - git
     - gh
@@ -58,7 +58,7 @@ metadata:
 
 Rules:
 
-1. `metadata.requiredCapabilities` is a YAML sequence of strings.
+1. `metadata.required-capabilities` is a YAML sequence of strings.
 2. Capability tokens are normalized to lowercase and deduplicated while preserving first-seen order.
 3. Invalid, blank, or non-string tokens fail Skill resolution before runtime launch.
 4. Deployment-stored Skill versions should store the same data in artifact metadata as `required_capabilities: string[]`; the resolver may expose both sources as `ResolvedSkillEntry.required_capabilities`.
@@ -80,7 +80,7 @@ The coarse names should continue to work until the platform has a stable scoped 
 ### Phase 1 — Data model and parsing
 
 - Extend `ResolvedSkillEntry` with `required_capabilities: list[str]`.
-- Parse `metadata.requiredCapabilities` from repo and built-in `SKILL.md` frontmatter alongside `metadata.required-skills`.
+- Parse `metadata.required-capabilities` from repo and built-in `SKILL.md` frontmatter alongside `metadata.required-skills`.
 - Read deployment artifact metadata `required_capabilities` for deployment-stored Skills.
 - Normalize and validate capability tokens in one helper, similar to required-Skill name parsing.
 - Include the final per-Skill capability list in the resolved manifest and source trace so detail/debug views can explain why a run required a capability.
@@ -119,7 +119,7 @@ Treat each normalized capability as a launch preflight requirement.
 
 ### Phase 5 — Seed metadata and audit existing Skills
 
-- Add `metadata.requiredCapabilities: [jira, git, gh]` to `jira-pr-verify`.
+- Add `metadata.required-capabilities: [jira, git, gh]` to `jira-pr-verify`.
 - Audit built-in Skills for hard dependencies implied by their instructions:
   - PR resolvers and comment fixers likely require `git` and `gh`.
   - Jira triage / Jira implementation / Jira verification Skills likely require `jira` and often `git` or `gh`.
@@ -130,7 +130,7 @@ Treat each normalized capability as a launch preflight requirement.
 
 Minimum coverage:
 
-1. Parser accepts `metadata.requiredCapabilities` YAML arrays and rejects invalid shapes.
+1. Parser accepts `metadata.required-capabilities` YAML arrays and rejects invalid shapes.
 2. Resolver exposes Skill-declared capabilities on `ResolvedSkillEntry` and resolved manifests.
 3. Selecting `jira-pr-verify` directly produces top-level `requiredCapabilities` containing `codex_cli`, `git`, `gh`, and `jira`, even when no Jira preset is selected.
 4. Existing Advanced Mode tests for explicit `git`, `jira` remain green.
@@ -154,7 +154,7 @@ Minimum coverage:
 
 ```yaml
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - jira
     - git
     - gh
