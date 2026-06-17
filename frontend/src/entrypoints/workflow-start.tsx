@@ -60,6 +60,21 @@ const JIRA_LAST_BOARD_SESSION_KEY =
 const JIRA_MANUAL_CONTINUATION_MESSAGE =
   "You can continue creating the task manually.";
 const DEPENDENCY_LIMIT = 10;
+const PENTEST_TOOL_ID = "security.pentest.run";
+const PENTEST_SCOPE_ACTIONS = [
+  "recon",
+  "scan",
+  "content_discovery",
+  "auth_testing",
+  "vuln_validation",
+  "exploit_validation",
+] as const;
+const PENTEST_BASELINE_ACTIONS = ["recon", "scan", "content_discovery"];
+const PENTEST_VALIDATE_ACTIONS = [
+  "auth_testing",
+  "vuln_validation",
+  "exploit_validation",
+];
 const PRESET_REAPPLY_REQUIRED_MESSAGE =
   "Preset instructions changed. Reapply the preset to regenerate preset-derived steps.";
 
@@ -111,6 +126,21 @@ function writeLocalPreference(key: string, value: string): void {
   } catch {
     // Keep browser preferences best-effort.
   }
+}
+
+function createPentestScopeDraftState(
+  overrides: Partial<PentestScopeDraftState> = {},
+): PentestScopeDraftState {
+  return {
+    mode: "generate",
+    generatedScopeValues: {},
+    validationErrors: {},
+    validationWarnings: [],
+    uploadStatus: "idle",
+    confirmAuthorized: false,
+    previewOpen: false,
+    ...overrides,
+  };
 }
 
 function readSessionPreference(key: string): string {
@@ -563,6 +593,7 @@ interface PresetStepSkill {
   id?: string;
   name?: string;
   type?: string;
+  version?: string;
   args?: Record<string, unknown>;
   inputs?: Record<string, unknown>;
   requiredCapabilities?: string[];
@@ -653,6 +684,25 @@ interface StepAttachmentRef {
   sizeBytes: number;
 }
 
+type PentestScopeMode = "generate" | "upload" | "existing";
+
+interface PentestScopeDraftState {
+  mode: PentestScopeMode;
+  generatedScopeValues: Record<string, unknown>;
+  uploadedScopeFileName?: string;
+  uploadedScopePreview?: Record<string, unknown>;
+  attachedArtifactId?: string;
+  attachedArtifactRef?: string;
+  attachedTarget?: string;
+  attachedOperationMode?: string;
+  attachedRunnerProfileId?: string;
+  validationErrors: Record<string, string>;
+  validationWarnings: string[];
+  uploadStatus: "idle" | "validating" | "uploading" | "attached" | "failed";
+  confirmAuthorized: boolean;
+  previewOpen: boolean;
+}
+
 type StepType = "tool" | "skill" | "preset";
 
 const STEP_TYPE_HELP_TEXT: Record<StepType, string> = {
@@ -684,6 +734,10 @@ interface StepState {
   toolId: string;
   toolVersion: string;
   toolInputs: string;
+  toolInputValues: Record<string, unknown>;
+  toolInputErrors: Record<string, string>;
+  toolJsonMode: boolean;
+  pentestScopeDraft: PentestScopeDraftState;
   skillId: string;
   skillArgs: string;
   skillRequiredCapabilities: string;
@@ -1321,6 +1375,10 @@ function createStepStateEntry(
     toolId: "",
     toolVersion: "",
     toolInputs: "{}",
+    toolInputValues: {},
+    toolInputErrors: {},
+    toolJsonMode: false,
+    pentestScopeDraft: createPentestScopeDraftState(),
     skillId: "",
     skillArgs: "",
     skillRequiredCapabilities: "",
@@ -2397,8 +2455,14 @@ function mapExpandedStepToState(
     title: String(step.title || "").trim(),
     stepType: isToolStep ? "tool" : "skill",
     instructions,
-    skillId: String(tool.name || tool.id || "").trim(),
-    skillArgs: stringifySkillArgs(inlineInputs),
+    toolId: isToolStep ? String(tool.id || tool.name || "").trim() : "",
+    toolVersion: isToolStep ? String(tool.version || "").trim() : "",
+    toolInputs: isToolStep ? JSON.stringify(inlineInputs, null, 2) : "{}",
+    toolInputValues: isToolStep
+      ? (inlineInputs as Record<string, unknown>)
+      : {},
+    skillId: isToolStep ? "" : String(tool.name || tool.id || "").trim(),
+    skillArgs: isToolStep ? "" : stringifySkillArgs(inlineInputs),
     skillRequiredCapabilities: extractCapabilityCsv(tool.requiredCapabilities),
     templateStepId: stepId,
     templateInstructions: instructions,
@@ -2651,7 +2715,9 @@ function resolveSchemaCapabilityValues(
       isFeatureRequestInputKey(name) && instructionFeatureRequest
         ? instructionFeatureRequest
         : rawExplicit;
-    const fallback = safeCapabilityDefault(detail.defaults, name);
+    const fallback =
+      safeCapabilityDefault(detail.defaults, name) ??
+      safeCapabilityDefault(fieldSchema, "default");
     if (explicit !== undefined) {
       if (
         explicit === "" &&
@@ -2699,6 +2765,44 @@ function validateSchemaCapabilityValues(
     }
     if (required.has(name) && (value === undefined || value === null || value === "")) {
       errors[name] = `${capabilityFieldLabel(name, fieldSchema)} is required.`;
+      continue;
+    }
+    if (value === undefined || value === null || value === "") {
+      continue;
+    }
+    if (Array.isArray(fieldSchema.enum)) {
+      const allowed = new Set(fieldSchema.enum.map((item) => String(item)));
+      if (!allowed.has(String(value))) {
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must use an available option.`;
+        continue;
+      }
+    }
+    if (fieldSchema.type === "number" || fieldSchema.type === "integer") {
+      const numericValue =
+        typeof value === "number" ? value : Number(String(value).trim());
+      if (!Number.isFinite(numericValue)) {
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a number.`;
+        continue;
+      }
+      if (fieldSchema.type === "integer" && !Number.isInteger(numericValue)) {
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a whole number.`;
+        continue;
+      }
+      const minimum = Number(fieldSchema.minimum);
+      const maximum = Number(fieldSchema.maximum);
+      if (Number.isFinite(minimum) && numericValue < minimum) {
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be at least ${minimum}.`;
+        continue;
+      }
+      if (Number.isFinite(maximum) && numericValue > maximum) {
+        errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be at most ${maximum}.`;
+      }
+    }
+    if (
+      fieldSchema.type === "object" &&
+      (typeof value !== "object" || Array.isArray(value))
+    ) {
+      errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a JSON object.`;
     }
   }
   return errors;
@@ -2726,6 +2830,346 @@ function mergeSkillArgsWithSchemaInputs(
   schemaInputs: Record<string, unknown>,
 ): Record<string, unknown> {
   return { ...skillArgs, ...schemaInputs };
+}
+
+function schemaToolInputs(
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults"> | null | undefined,
+  explicitValues: Record<string, unknown>,
+): {
+  values: Record<string, unknown>;
+  errors: Record<string, string>;
+} {
+  if (!detail || !schemaContractHasFields(detail)) {
+    return { values: {}, errors: {} };
+  }
+  const rawValues = resolveSchemaCapabilityValues(detail, explicitValues);
+  const required = schemaRequired(detail.inputSchema);
+  const values: Record<string, unknown> = {};
+  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
+    const fieldSchema = recordValue(rawSchema);
+    const value = rawValues[name];
+    if (value === undefined || value === null) {
+      continue;
+    }
+    if (typeof value === "string" && !required.has(name) && !value.trim()) {
+      continue;
+    }
+    if (fieldSchema.type === "integer" || fieldSchema.type === "number") {
+      if (value === "" && !required.has(name)) {
+        continue;
+      }
+      const numericValue =
+        typeof value === "number" ? value : Number(String(value).trim());
+      values[name] = numericValue;
+      continue;
+    }
+    if (
+      fieldSchema.type === "object" &&
+      typeof value === "string" &&
+      !value.trim()
+    ) {
+      continue;
+    }
+    values[name] = value;
+  }
+  const sanitized = { ...values };
+  delete sanitized.approved_scope;
+  return {
+    values: sanitized,
+    errors: validateSchemaCapabilityValues(detail, sanitized),
+  };
+}
+
+function detailFromTrustedTool(
+  tool: TrustedToolDefinition | null | undefined,
+): Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults"> | null {
+  if (!tool?.inputSchema) {
+    return null;
+  }
+  return {
+    inputSchema: tool.inputSchema,
+    defaults: {},
+    uiSchema: {},
+  };
+}
+
+function initializeToolInputValues(
+  tool: TrustedToolDefinition | null,
+  currentValues: Record<string, unknown>,
+  toolInputsText: string,
+): Record<string, unknown> {
+  const detail = detailFromTrustedTool(tool);
+  if (!detail || !schemaContractHasFields(detail)) {
+    return currentValues;
+  }
+  const parsed = parseToolInputsText(toolInputsText);
+  const merged = parsed.ok
+    ? { ...parsed.value, ...currentValues }
+    : { ...currentValues };
+  return resolveSchemaCapabilityValues(detail, merged);
+}
+
+function serializeToolInputValues(values: Record<string, unknown>): string {
+  return JSON.stringify(values, null, 2);
+}
+
+function slugPart(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "target"
+  );
+}
+
+function targetHostFromValue(value: string): string {
+  const target = value.trim();
+  if (!target) {
+    return "";
+  }
+  try {
+    return new URL(target).hostname;
+  } catch {
+    return target.replace(/^https?:\/\//i, "").split(/[/:?#]/, 1)[0] || target;
+  }
+}
+
+function inferPentestTargetClass(target: string): string {
+  const host = targetHostFromValue(target).toLowerCase();
+  if (
+    host === "localhost" ||
+    host.endsWith(".local") ||
+    host.includes("lab") ||
+    host.startsWith("10.") ||
+    host.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)
+  ) {
+    return "lab";
+  }
+  if (host.endsWith(".internal") || host.endsWith(".test")) {
+    return "internal_authorized";
+  }
+  return "external_authorized";
+}
+
+function defaultPentestExpiresAt(): string {
+  const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  return expires.toISOString().slice(0, 16);
+}
+
+function datetimeLocalToIso(value: unknown): string {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  }
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? raw : date.toISOString();
+}
+
+function defaultPentestAllowedActions(operationMode: string): string[] {
+  if (operationMode === "validate_hypothesis") {
+    return [...PENTEST_VALIDATE_ACTIONS];
+  }
+  if (operationMode === "full_authorized") {
+    return [...PENTEST_SCOPE_ACTIONS];
+  }
+  return [...PENTEST_BASELINE_ACTIONS];
+}
+
+function pentestGeneratedScopeValues(
+  draft: PentestScopeDraftState,
+  toolInputs: Record<string, unknown>,
+): Record<string, unknown> {
+  const target = String(toolInputs.target || "").trim();
+  const host = targetHostFromValue(target);
+  const operationMode = String(toolInputs.operation_mode || "recon_only").trim();
+  const runnerProfile = String(toolInputs.runner_profile_id || "pentestgpt-safe").trim();
+  const current = draft.generatedScopeValues;
+  const inferredClass = inferPentestTargetClass(target);
+  return {
+    scope_title:
+      current.scope_title ||
+      (target ? `Pentest scope for ${target}` : "Pentest scope"),
+    scope_id:
+      current.scope_id ||
+      `${slugPart(host || target)}-${new Date().toISOString().slice(0, 10)}`,
+    environment: current.environment || "development",
+    expires_at: current.expires_at || defaultPentestExpiresAt(),
+    approval_ticket: current.approval_ticket || "self-approved-dev-test",
+    target_url: current.target_url || target,
+    target_host: current.target_host || host,
+    target_class: current.target_class || inferredClass,
+    allowed_actions: Array.isArray(current.allowed_actions)
+      ? current.allowed_actions
+      : defaultPentestAllowedActions(operationMode),
+    allowed_runner_profiles: Array.isArray(current.allowed_runner_profiles)
+      ? current.allowed_runner_profiles
+      : [runnerProfile || "pentestgpt-safe"],
+    requires_manual_approval:
+      current.requires_manual_approval !== undefined
+        ? Boolean(current.requires_manual_approval)
+        : inferredClass === "external_authorized",
+    approval_recorded:
+      current.approval_recorded !== undefined
+        ? Boolean(current.approval_recorded)
+        : draft.confirmAuthorized,
+    application_stack: current.application_stack || "",
+    notes: current.notes || "",
+  };
+}
+
+function buildPentestApprovedScope(
+  draft: PentestScopeDraftState,
+  toolInputs: Record<string, unknown>,
+): Record<string, unknown> {
+  const values = pentestGeneratedScopeValues(draft, toolInputs);
+  const target = String(values.target_url || toolInputs.target || "").trim();
+  const host = String(values.target_host || targetHostFromValue(target)).trim();
+  const allowedActions = Array.isArray(values.allowed_actions)
+    ? values.allowed_actions.map(String).filter(Boolean)
+    : defaultPentestAllowedActions(String(toolInputs.operation_mode || "recon_only"));
+  const allowedRunnerProfiles = Array.isArray(values.allowed_runner_profiles)
+    ? values.allowed_runner_profiles.map(String).filter(Boolean)
+    : [String(toolInputs.runner_profile_id || "pentestgpt-safe")];
+  return {
+    scope_id: String(values.scope_id || slugPart(host || target)).trim(),
+    title: String(values.scope_title || `Pentest scope for ${target}`).trim(),
+    owner_user_id: null,
+    created_at: new Date().toISOString(),
+    expires_at: datetimeLocalToIso(values.expires_at),
+    target_class: String(values.target_class || inferPentestTargetClass(target)),
+    targets: [
+      ...(target
+        ? [
+            {
+              kind: target.includes("://") ? "url" : "host",
+              value: target,
+              notes: String(values.notes || "Approved target.").trim(),
+            },
+          ]
+        : []),
+      ...(host && host !== target
+        ? [
+            {
+              kind: "fqdn",
+              value: host,
+              notes: "Host component of approved target.",
+            },
+          ]
+        : []),
+    ],
+    allowed_actions: allowedActions,
+    prohibited_actions: [],
+    requires_manual_approval: Boolean(values.requires_manual_approval),
+    approval_ticket: String(values.approval_ticket || "").trim(),
+    approval_recorded: Boolean(values.approval_recorded || draft.confirmAuthorized),
+    allowed_runner_profiles: allowedRunnerProfiles,
+    required_network_attachment_type:
+      String(toolInputs.runner_profile_id || "") === "pentestgpt-vpn-lab"
+        ? "vpn_lab"
+        : null,
+    authorized_principals: ["workflow"],
+    metadata: {
+      environment: String(values.environment || "development"),
+      application_stack: String(values.application_stack || "").trim() || null,
+      production: String(values.environment || "").trim() === "production",
+      first_pass: true,
+      human_restrictions: [
+        "No denial-of-service testing on first pass.",
+        "No persistence.",
+        "No uncontrolled data exfiltration.",
+        "No uncontrolled lateral movement.",
+      ],
+    },
+  };
+}
+
+function validatePentestScopeDocument(
+  scope: Record<string, unknown>,
+  target: string,
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (!String(scope.scope_id || "").trim()) {
+    errors.scope_id = "Scope id is required.";
+  }
+  if (!String(scope.title || "").trim()) {
+    errors.title = "Scope title is required.";
+  }
+  if (!Array.isArray(scope.targets) || scope.targets.length === 0) {
+    errors.targets = "At least one target is required.";
+  }
+  const allowedActions = Array.isArray(scope.allowed_actions)
+    ? scope.allowed_actions.map(String)
+    : [];
+  if (allowedActions.length === 0) {
+    errors.allowed_actions = "At least one allowed action is required.";
+  } else {
+    const unsupported = allowedActions.filter(
+      (action) => !PENTEST_SCOPE_ACTIONS.includes(action as typeof PENTEST_SCOPE_ACTIONS[number]),
+    );
+    if (unsupported.length > 0) {
+      errors.allowed_actions = `Unsupported allowed action: ${unsupported[0]}.`;
+    }
+  }
+  if (
+    !Array.isArray(scope.allowed_runner_profiles) ||
+    scope.allowed_runner_profiles.length === 0
+  ) {
+    errors.allowed_runner_profiles = "At least one runner profile is required.";
+  }
+  const expires = new Date(String(scope.expires_at || ""));
+  if (Number.isNaN(expires.getTime()) || expires <= new Date()) {
+    errors.expires_at = "Expiration must be in the future.";
+  }
+  const normalizedTarget = target.trim().toLowerCase();
+  if (normalizedTarget && Array.isArray(scope.targets)) {
+    const covered = scope.targets.some((entry) => {
+      const value =
+        entry && typeof entry === "object"
+          ? String((entry as Record<string, unknown>).value || "").toLowerCase()
+          : "";
+      return value && (normalizedTarget.includes(value) || value.includes(normalizedTarget));
+    });
+    if (!covered) {
+      errors.target = "Scope targets do not appear to cover the selected target.";
+    }
+  }
+  return errors;
+}
+
+function pentestScopeWarnings(
+  draft: PentestScopeDraftState,
+  toolInputs: Record<string, unknown>,
+): string[] {
+  if (!draft.attachedArtifactId) {
+    return [];
+  }
+  const warnings: string[] = [];
+  const target = String(toolInputs.target || "").trim();
+  const operationMode = String(toolInputs.operation_mode || "").trim();
+  const runnerProfileId = String(toolInputs.runner_profile_id || "").trim();
+  if (draft.attachedTarget && target && draft.attachedTarget !== target) {
+    warnings.push(
+      "The target changed after this scope was attached. Regenerate or revalidate the scope before submitting.",
+    );
+  }
+  if (
+    draft.attachedOperationMode &&
+    operationMode &&
+    draft.attachedOperationMode !== operationMode
+  ) {
+    warnings.push("The operation mode changed after this scope was attached.");
+  }
+  if (
+    draft.attachedRunnerProfileId &&
+    runnerProfileId &&
+    draft.attachedRunnerProfileId !== runnerProfileId
+  ) {
+    warnings.push("The runner profile changed after this scope was attached.");
+  }
+  return warnings;
 }
 
 function SchemaCapabilityFields({
@@ -3161,6 +3605,77 @@ async function createInputArtifact(
   await completeArtifactUpload(
     artifactId,
     "Failed to finalize task input artifact upload.",
+  );
+  return { artifactId };
+}
+
+async function createJsonArtifact(
+  createEndpoint: string,
+  body: string,
+  metadata: Record<string, unknown>,
+  failureLabel: string,
+): Promise<{ artifactId: string }> {
+  const createResponse = await fetch(createEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      content_type: "application/json; charset=utf-8",
+      size_bytes: new TextEncoder().encode(body).length,
+      retention_class: "pinned",
+      metadata,
+    }),
+  });
+  if (!createResponse.ok) {
+    throw new Error(
+      await responseErrorMessage(createResponse, `Failed to create ${failureLabel}.`),
+    );
+  }
+  const created = (await createResponse.json()) as {
+    artifact_ref?: { artifact_id?: string };
+    upload?: {
+      mode?: string;
+      upload_url?: string;
+      required_headers?: Record<string, string>;
+    };
+  };
+  const artifactId = String(created.artifact_ref?.artifact_id || "").trim();
+  const uploadMode = String(created.upload?.mode || "single_put")
+    .trim()
+    .toLowerCase();
+  if (!artifactId) {
+    throw new Error(`${failureLabel} upload details were incomplete.`);
+  }
+  if (uploadMode === "multipart") {
+    throw new Error(`${failureLabel} is too large for browser upload.`);
+  }
+  const uploadUrl =
+    String(created.upload?.upload_url || "").trim() ||
+    `/api/artifacts/${encodeURIComponent(artifactId)}/content`;
+  const uploadHeaders = new Headers(
+    created.upload?.required_headers &&
+      typeof created.upload.required_headers === "object"
+      ? created.upload.required_headers
+      : {},
+  );
+  if (!uploadHeaders.has("content-type")) {
+    uploadHeaders.set("content-type", "application/json; charset=utf-8");
+  }
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: uploadHeaders,
+    body,
+  });
+  if (!uploadResponse.ok) {
+    throw new Error(
+      await responseErrorMessage(uploadResponse, `Failed to upload ${failureLabel}.`),
+    );
+  }
+  await completeArtifactUpload(
+    artifactId,
+    `Failed to finalize ${failureLabel}.`,
   );
   return { artifactId };
 }
@@ -5652,6 +6167,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         ) {
           nextStep.skillArgs = "";
         }
+        if (Object.prototype.hasOwnProperty.call(updates, "toolInputValues")) {
+          nextStep.toolInputs = serializeToolInputValues(nextStep.toolInputValues);
+          nextStep.toolInputErrors = {};
+        }
         return nextStep;
       }),
     );
@@ -5669,7 +6188,39 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }
 
   function selectTrustedTool(localId: string, toolId: string) {
-    updateStep(localId, { toolId });
+    const tool =
+      (trustedToolsQuery.data || []).find(
+        (candidate) => toolDefinitionId(candidate) === toolId,
+      ) || null;
+    setSteps((current) =>
+      current.map((step) => {
+        if (step.localId !== localId) {
+          return step;
+        }
+        const nextValues = initializeToolInputValues(
+          tool,
+          step.toolInputValues,
+          step.toolInputs,
+        );
+        return {
+          ...step,
+          stepType: "tool",
+          toolId,
+          toolVersion: String(tool?.inputSchema?.["x-moonmind-tool-version"] || ""),
+          toolInputValues: nextValues,
+          toolInputs: serializeToolInputValues(nextValues),
+          toolInputErrors: {},
+          toolJsonMode: false,
+        };
+      }),
+    );
+    setStepJiraProvenance((current) => {
+      if (!current[localId]) {
+        return current;
+      }
+      const { [localId]: _removed, ...rest } = current;
+      return rest;
+    });
     setJiraTransitionStateByStep((current) => {
       if (!current[localId]) {
         return current;
@@ -5677,6 +6228,169 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       const { [localId]: _removed, ...rest } = current;
       return rest;
     });
+  }
+
+  function updateToolInputValue(localId: string, name: string, value: unknown) {
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    const nextValues = { ...(step?.toolInputValues || {}), [name]: value };
+    updateStep(localId, { toolInputValues: nextValues });
+  }
+
+  function updatePentestScopeDraft(
+    localId: string,
+    updates: Partial<PentestScopeDraftState>,
+  ) {
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    updateStep(localId, {
+      pentestScopeDraft: {
+        ...(step?.pentestScopeDraft || createPentestScopeDraftState()),
+        ...updates,
+      },
+    });
+  }
+
+  function updateGeneratedPentestScopeValue(
+    localId: string,
+    name: string,
+    value: unknown,
+  ) {
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    const draft = step?.pentestScopeDraft || createPentestScopeDraftState();
+    updatePentestScopeDraft(localId, {
+      generatedScopeValues: {
+        ...draft.generatedScopeValues,
+        [name]: value,
+      },
+      validationErrors: {},
+    });
+  }
+
+  async function attachPentestScopeArtifact(
+    localId: string,
+    scope: Record<string, unknown>,
+  ) {
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    if (!step) {
+      return;
+    }
+    const target = String(step.toolInputValues.target || "").trim();
+    const errors = validatePentestScopeDocument(scope, target);
+    if (!step.pentestScopeDraft.confirmAuthorized) {
+      errors.authorization = "Confirm authorization before attaching scope.";
+    }
+    if (Object.keys(errors).length > 0) {
+      updatePentestScopeDraft(localId, {
+        validationErrors: errors,
+        uploadStatus: "failed",
+      });
+      return;
+    }
+    updatePentestScopeDraft(localId, {
+      uploadStatus: "uploading",
+      validationErrors: {},
+    });
+    try {
+      const body = JSON.stringify(scope, null, 2);
+      const artifact = await createJsonArtifact(
+        artifactCreateEndpoint,
+        body,
+        {
+          label: `Approved Pentest Scope - ${target || "target"}`,
+          artifact_type: "approved_pentest_scope",
+          target: target || null,
+          source: "workflow-start-pentest-scope",
+          tool: PENTEST_TOOL_ID,
+          scope_id: String(scope.scope_id || "").trim(),
+          environment: String(recordValue(scope.metadata).environment || "development"),
+        },
+        "approved Pentest scope artifact",
+      );
+      const nextValues = {
+        ...step.toolInputValues,
+        scope_artifact_ref: artifact.artifactId,
+      };
+      updateStep(localId, {
+        toolInputValues: nextValues,
+        pentestScopeDraft: {
+          ...step.pentestScopeDraft,
+          attachedArtifactId: artifact.artifactId,
+          attachedArtifactRef: artifact.artifactId,
+          attachedTarget: target,
+          attachedOperationMode: String(step.toolInputValues.operation_mode || "").trim(),
+          attachedRunnerProfileId: String(step.toolInputValues.runner_profile_id || "").trim(),
+          validationErrors: {},
+          validationWarnings: [],
+          uploadStatus: "attached",
+        },
+      });
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error("Failed to attach approved Pentest scope.");
+      updatePentestScopeDraft(localId, {
+        uploadStatus: "failed",
+        validationErrors: { upload: failure.message },
+      });
+    }
+  }
+
+  async function attachGeneratedPentestScope(localId: string) {
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    if (!step) {
+      return;
+    }
+    await attachPentestScopeArtifact(
+      localId,
+      buildPentestApprovedScope(step.pentestScopeDraft, step.toolInputValues),
+    );
+  }
+
+  async function handlePentestScopeFile(
+    localId: string,
+    file: File | undefined,
+  ) {
+    if (!file) {
+      return;
+    }
+    try {
+      updatePentestScopeDraft(localId, {
+        uploadStatus: "validating",
+        uploadedScopeFileName: file.name,
+        validationErrors: {},
+      });
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Uploaded scope must be a JSON object.");
+      }
+      updatePentestScopeDraft(localId, {
+        uploadedScopePreview: parsed as Record<string, unknown>,
+        uploadStatus: "idle",
+      });
+    } catch (error) {
+      const failure =
+        error instanceof Error ? error : new Error("Invalid uploaded scope JSON.");
+      const step = stepsRef.current.find((item) => item.localId === localId);
+      updateStep(localId, {
+        pentestScopeDraft: {
+          ...(step?.pentestScopeDraft || createPentestScopeDraftState()),
+          uploadStatus: "failed",
+          validationErrors: { upload: failure.message },
+        },
+      });
+    }
+  }
+
+  async function attachUploadedPentestScope(localId: string) {
+    const step = stepsRef.current.find((item) => item.localId === localId);
+    const scope = step?.pentestScopeDraft.uploadedScopePreview;
+    if (!step || !scope) {
+      updatePentestScopeDraft(localId, {
+        validationErrors: { upload: "Choose a valid JSON scope file first." },
+      });
+      return;
+    }
+    await attachPentestScopeArtifact(localId, scope);
   }
 
   async function loadJiraTransitionOptions(step: StepState) {
@@ -5789,6 +6503,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         transitionId,
         targetStatus: undefined,
       }),
+      toolInputValues: {
+        ...step.toolInputValues,
+        transitionId,
+        targetStatus: undefined,
+      },
     });
   }
 
@@ -5826,6 +6545,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           nextStep.toolId = "";
           nextStep.toolVersion = "";
           nextStep.toolInputs = "{}";
+          nextStep.toolInputValues = {};
+          nextStep.toolInputErrors = {};
+          nextStep.toolJsonMode = false;
+          nextStep.pentestScopeDraft = createPentestScopeDraftState();
         }
 
         if (
@@ -7115,13 +7838,37 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         clearSubmitBusy();
         return;
       }
-      const parsedToolInputs = parseToolInputsText(primaryStep.toolInputs);
-      if (!parsedToolInputs.ok) {
-        setSubmitMessage("Step 1 Tool Inputs must be valid JSON object text.");
-        clearSubmitBusy();
-        return;
+      const primaryToolDefinition =
+        (trustedToolsQuery.data || []).find(
+          (tool) => toolDefinitionId(tool) === primaryStep.toolId.trim(),
+        ) || null;
+      const primaryToolDetail = detailFromTrustedTool(primaryToolDefinition);
+      if (primaryToolDetail && schemaContractHasFields(primaryToolDetail)) {
+        const structuredInputs = schemaToolInputs(
+          primaryToolDetail,
+          primaryStep.toolInputValues,
+        );
+        if (Object.keys(structuredInputs.errors).length > 0) {
+          updateStep(primaryStep.localId, {
+            toolInputErrors: structuredInputs.errors,
+          });
+          setSubmitMessage(
+            Object.values(structuredInputs.errors)[0] ||
+              "Complete required Tool input fields before submitting.",
+          );
+          clearSubmitBusy();
+          return;
+        }
+        primaryToolInputs = structuredInputs.values;
+      } else {
+        const parsedToolInputs = parseToolInputsText(primaryStep.toolInputs);
+        if (!parsedToolInputs.ok) {
+          setSubmitMessage("Step 1 Tool Inputs must be valid JSON object text.");
+          clearSubmitBusy();
+          return;
+        }
+        primaryToolInputs = parsedToolInputs.value;
       }
-      primaryToolInputs = parsedToolInputs.value;
     }
 
     const primaryStepTool = {
@@ -7181,6 +7928,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       const stepSkillDetail = stepIsSkill
         ? skillsQuery.data?.detailsById[stepSkillId] || null
         : null;
+      const stepToolDefinition =
+        stepIsTool
+          ? (trustedToolsQuery.data || []).find(
+              (tool) => toolDefinitionId(tool) === step.toolId.trim(),
+            ) || null
+          : null;
+      const stepToolDetail = detailFromTrustedTool(stepToolDefinition);
       const stepSchemaInputs = schemaSkillInputs(
         stepSkillDetail,
         step.presetInputValues,
@@ -7209,6 +7963,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         (stepIsTool && Boolean(step.toolId.trim())) ||
         (stepIsTool && Boolean(step.toolVersion.trim())) ||
         hasAuthoredToolInputs ||
+        (stepIsTool && Object.keys(step.toolInputValues).length > 0) ||
         Boolean(stepSkillId) ||
         Boolean(stepSkillArgsRaw) ||
         Object.keys(stepSchemaInputs.values).length > 0 ||
@@ -7224,15 +7979,34 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           clearSubmitBusy();
           return;
         }
-        const parsedToolInputs = parseToolInputsText(step.toolInputs);
-        if (!parsedToolInputs.ok) {
-          setSubmitMessage(
-            `Step ${index + 1} Tool Inputs must be valid JSON object text.`,
+        if (stepToolDetail && schemaContractHasFields(stepToolDetail)) {
+          const structuredInputs = schemaToolInputs(
+            stepToolDetail,
+            step.toolInputValues,
           );
-          clearSubmitBusy();
-          return;
+          if (Object.keys(structuredInputs.errors).length > 0) {
+            updateStep(step.localId, {
+              toolInputErrors: structuredInputs.errors,
+            });
+            setSubmitMessage(
+              Object.values(structuredInputs.errors)[0] ||
+                `Complete required Tool input fields before submitting Step ${index + 1}.`,
+            );
+            clearSubmitBusy();
+            return;
+          }
+          stepToolInputs = structuredInputs.values;
+        } else {
+          const parsedToolInputs = parseToolInputsText(step.toolInputs);
+          if (!parsedToolInputs.ok) {
+            setSubmitMessage(
+              `Step ${index + 1} Tool Inputs must be valid JSON object text.`,
+            );
+            clearSubmitBusy();
+            return;
+          }
+          stepToolInputs = parsedToolInputs.value;
         }
-        stepToolInputs = parsedToolInputs.value;
       }
       if (stepSkillArgsRaw) {
         try {
@@ -8545,6 +9319,36 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 trustedToolDefinitions.find(
                   (tool) => toolDefinitionId(tool) === step.toolId.trim(),
                 ) || null;
+              const selectedToolDetail = detailFromTrustedTool(selectedTrustedTool);
+              const selectedToolRequired = schemaRequired(
+                selectedToolDetail?.inputSchema,
+              );
+              const visibleToolSchemaFields =
+                selectedToolDetail && schemaContractHasFields(selectedToolDetail)
+                  ? Object.entries(schemaProperties(selectedToolDetail.inputSchema))
+                  : [];
+              const requiredToolSchemaFields = visibleToolSchemaFields.filter(
+                ([name]) => selectedToolRequired.has(name),
+              );
+              const optionalToolSchemaFields = visibleToolSchemaFields.filter(
+                ([name]) => !selectedToolRequired.has(name),
+              );
+              const isPentestTool = step.toolId.trim() === PENTEST_TOOL_ID;
+              const pentestScopeValues = isPentestTool
+                ? pentestGeneratedScopeValues(
+                    step.pentestScopeDraft,
+                    step.toolInputValues,
+                  )
+                : {};
+              const pentestWarnings = isPentestTool
+                ? [
+                    ...step.pentestScopeDraft.validationWarnings,
+                    ...pentestScopeWarnings(
+                      step.pentestScopeDraft,
+                      step.toolInputValues,
+                    ),
+                  ]
+                : [];
               const jiraTransitionState =
                 jiraTransitionStateByStep[step.localId] || null;
               const showJiraTransitionOptions =
@@ -8744,20 +9548,380 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           }
                         />
                       </label>
-                      <label>
-                        Tool Inputs (JSON object)
-                        <textarea
-                          data-step-field="toolInputs"
-                          data-step-index={String(index)}
-                          placeholder='{"issueKey":"MM-563"}'
-                          value={step.toolInputs}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              toolInputs: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
+                      {isPentestTool ? (
+                        <div className="notice small">
+                          Runs require an approved scope artifact. Inline scope is
+                          not accepted from workflow submission. External targets
+                          are disabled unless explicitly enabled by deployment
+                          policy. Default profile is safe/non-VPN. VPN/lab
+                          requires an approved network attachment.
+                        </div>
+                      ) : null}
+                      {selectedToolDetail && visibleToolSchemaFields.length > 0 ? (
+                        <div className="stack">
+                          <SchemaCapabilityFields
+                            fields={requiredToolSchemaFields.filter(
+                              ([name]) =>
+                                !(isPentestTool && name === "scope_artifact_ref"),
+                            )}
+                            detail={selectedToolDetail}
+                            values={step.toolInputValues}
+                            errors={step.toolInputErrors}
+                            disabled={false}
+                            onChange={(name, value) =>
+                              updateToolInputValue(step.localId, name, value)
+                            }
+                          />
+                          {isPentestTool ? (
+                            <div className="stack queue-tool-dynamic-options">
+                              <strong>Approved Scope</strong>
+                              <div
+                                className="queue-step-type-options"
+                                role="radiogroup"
+                                aria-label="Approved Scope mode"
+                              >
+                                {[
+                                  ["generate", "Generate from fields"],
+                                  ["upload", "Upload JSON"],
+                                  ["existing", "Use existing artifact ref"],
+                                ].map(([mode, label]) => (
+                                  <label
+                                    key={mode}
+                                    className="queue-step-type-option"
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={`pentest-scope-mode-${step.localId}`}
+                                      value={mode}
+                                      checked={step.pentestScopeDraft.mode === mode}
+                                      onChange={(event) =>
+                                        updatePentestScopeDraft(step.localId, {
+                                          mode: event.target.value as PentestScopeMode,
+                                          validationErrors: {},
+                                        })
+                                      }
+                                    />
+                                    <span className="queue-step-type-option-label">
+                                      {label}
+                                    </span>
+                                  </label>
+                                ))}
+                              </div>
+                              {step.pentestScopeDraft.mode === "generate" ? (
+                                <div className="grid-2">
+                                  <label>
+                                    Scope title
+                                    <input
+                                      value={String(pentestScopeValues.scope_title || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "scope_title",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Environment
+                                    <select
+                                      value={String(pentestScopeValues.environment || "development")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "environment",
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      {["development", "staging", "internal", "lab", "production"].map((item) => (
+                                        <option key={item} value={item}>
+                                          {item}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Target URL
+                                    <input
+                                      value={String(pentestScopeValues.target_url || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "target_url",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Target host/FQDN
+                                    <input
+                                      value={String(pentestScopeValues.target_host || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "target_host",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Target class
+                                    <select
+                                      value={String(pentestScopeValues.target_class || "lab")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "target_class",
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      {["lab", "internal_authorized", "external_authorized"].map((item) => (
+                                        <option key={item} value={item}>
+                                          {item}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Expires at
+                                    <input
+                                      type="datetime-local"
+                                      value={String(pentestScopeValues.expires_at || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "expires_at",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Approval ticket / reason
+                                    <input
+                                      value={String(pentestScopeValues.approval_ticket || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "approval_ticket",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Allowed actions
+                                    <select
+                                      value={String(
+                                        Array.isArray(pentestScopeValues.allowed_actions)
+                                          ? pentestScopeValues.allowed_actions.join(",")
+                                          : PENTEST_BASELINE_ACTIONS.join(","),
+                                      )}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "allowed_actions",
+                                          event.target.value.split(",").filter(Boolean),
+                                        )
+                                      }
+                                    >
+                                      <option value={PENTEST_BASELINE_ACTIONS.join(",")}>
+                                        First-pass baseline
+                                      </option>
+                                      <option value={PENTEST_VALIDATE_ACTIONS.join(",")}>
+                                        Validate hypothesis
+                                      </option>
+                                      {String(step.toolInputValues.operation_mode || "") ===
+                                      "full_authorized" ? (
+                                        <option value={PENTEST_SCOPE_ACTIONS.join(",")}>
+                                          Full authorized
+                                        </option>
+                                      ) : null}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Application stack
+                                    <input
+                                      value={String(pentestScopeValues.application_stack || "")}
+                                      onChange={(event) =>
+                                        updateGeneratedPentestScopeValue(
+                                          step.localId,
+                                          "application_stack",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                </div>
+                              ) : null}
+                              {step.pentestScopeDraft.mode === "upload" ? (
+                                <div className="stack">
+                                  <label>
+                                    Upload approved scope JSON
+                                    <input
+                                      type="file"
+                                      accept="application/json,.json"
+                                      onChange={(event) => {
+                                        void handlePentestScopeFile(
+                                          step.localId,
+                                          event.currentTarget.files?.[0],
+                                        );
+                                        event.currentTarget.value = "";
+                                      }}
+                                    />
+                                  </label>
+                                  {step.pentestScopeDraft.uploadedScopeFileName ? (
+                                    <p className="small">
+                                      {`Selected: ${step.pentestScopeDraft.uploadedScopeFileName}`}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                              {step.pentestScopeDraft.mode === "existing" ? (
+                                <label>
+                                  Approved scope artifact
+                                  <input
+                                    value={String(step.toolInputValues.scope_artifact_ref || "")}
+                                    placeholder="art_..."
+                                    aria-invalid={Boolean(step.toolInputErrors.scope_artifact_ref)}
+                                    onChange={(event) =>
+                                      updateToolInputValue(
+                                        step.localId,
+                                        "scope_artifact_ref",
+                                        event.target.value,
+                                      )
+                                    }
+                                  />
+                                  <span className="small">
+                                    ArtifactRef for the approved pentest scope document.
+                                  </span>
+                                </label>
+                              ) : null}
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={step.pentestScopeDraft.confirmAuthorized}
+                                  onChange={(event) =>
+                                    updatePentestScopeDraft(step.localId, {
+                                      confirmAuthorized: event.target.checked,
+                                      validationErrors: {},
+                                    })
+                                  }
+                                />
+                                I confirm I am authorized to test this target within the selected scope.
+                              </label>
+                              {step.pentestScopeDraft.mode === "generate" ? (
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={step.pentestScopeDraft.uploadStatus === "uploading"}
+                                  onClick={() => void attachGeneratedPentestScope(step.localId)}
+                                >
+                                  Generate and attach scope
+                                </button>
+                              ) : null}
+                              {step.pentestScopeDraft.mode === "upload" ? (
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={step.pentestScopeDraft.uploadStatus === "uploading"}
+                                  onClick={() => void attachUploadedPentestScope(step.localId)}
+                                >
+                                  Upload and attach scope
+                                </button>
+                              ) : null}
+                              {step.pentestScopeDraft.attachedArtifactId ? (
+                                <p className="notice small">
+                                  {`Approved scope attached: ${step.pentestScopeDraft.attachedArtifactId}`}
+                                </p>
+                              ) : null}
+                              {Object.values(step.pentestScopeDraft.validationErrors).map((error) => (
+                                <p key={error} className="notice small">
+                                  {error}
+                                </p>
+                              ))}
+                              {pentestWarnings.map((warning) => (
+                                <p key={warning} className="notice small">
+                                  {warning}
+                                </p>
+                              ))}
+                            </div>
+                          ) : null}
+                          {optionalToolSchemaFields.length > 0 ? (
+                            <details>
+                              <summary>Optional inputs</summary>
+                              <SchemaCapabilityFields
+                                fields={optionalToolSchemaFields.filter(
+                                  ([name]) =>
+                                    !(isPentestTool && name === "approved_scope"),
+                                )}
+                                detail={selectedToolDetail}
+                                values={step.toolInputValues}
+                                errors={step.toolInputErrors}
+                                disabled={false}
+                                onChange={(name, value) =>
+                                  updateToolInputValue(step.localId, name, value)
+                                }
+                              />
+                            </details>
+                          ) : null}
+                          <details open={step.toolJsonMode}>
+                            <summary
+                              onClick={(event) => {
+                                event.preventDefault();
+                                updateStep(step.localId, {
+                                  toolJsonMode: !step.toolJsonMode,
+                                });
+                              }}
+                            >
+                              Edit JSON
+                            </summary>
+                            {step.toolJsonMode ? (
+                              <label>
+                                Tool Inputs (JSON object)
+                                <textarea
+                                  data-step-field="toolInputs"
+                                  data-step-index={String(index)}
+                                  placeholder='{"issueKey":"MM-563"}'
+                                  value={step.toolInputs}
+                                  onChange={(event) => {
+                                    const text = event.target.value;
+                                    const parsed = parseToolInputsText(text);
+                                    updateStep(step.localId, {
+                                      toolInputs: text,
+                                      ...(parsed.ok
+                                        ? {
+                                            toolInputValues: parsed.value,
+                                            toolInputErrors: {},
+                                          }
+                                        : {}),
+                                    });
+                                  }}
+                                />
+                              </label>
+                            ) : null}
+                          </details>
+                        </div>
+                      ) : (
+                        <label>
+                          Tool Inputs (JSON object)
+                          <textarea
+                            data-step-field="toolInputs"
+                            data-step-index={String(index)}
+                            placeholder='{"issueKey":"MM-563"}'
+                            value={step.toolInputs}
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                toolInputs: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      )}
                       {showJiraTransitionOptions ? (
                         <div className="stack queue-tool-dynamic-options">
                           <button

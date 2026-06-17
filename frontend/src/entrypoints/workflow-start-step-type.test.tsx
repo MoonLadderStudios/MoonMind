@@ -73,7 +73,8 @@ function getStepTypeRadio(step: HTMLElement, label: "Skill" | "Tool" | "Preset")
 }
 
 function selectStepType(step: HTMLElement, label: "Skill" | "Tool" | "Preset") {
-  fireEvent.click(getStepTypeRadio(step, label));
+  const radio = getStepTypeRadio(step, label);
+  fireEvent.click(radio);
 }
 
 describe("Task Create Step Type authoring", () => {
@@ -105,6 +106,108 @@ describe("Task Create Step Type authoring", () => {
         }
         if (url.startsWith("/api/v1/provider-profiles")) {
           return Promise.resolve({ ok: true, json: async () => [] } as Response);
+        }
+        if (url === "/mcp/tools") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              tools: [
+                {
+                  name: "security.pentest.run",
+                  description: "Run an authorized PentestGPT workload.",
+                  inputSchema: {
+                    type: "object",
+                    required: [
+                      "target",
+                      "scope_artifact_ref",
+                      "operation_mode",
+                      "runner_profile_id",
+                    ],
+                    properties: {
+                      target: {
+                        type: "string",
+                        title: "Target",
+                        description:
+                          "Approved target URL, host, CIDR, FQDN, or application.",
+                      },
+                      scope_artifact_ref: {
+                        type: "string",
+                        title: "Approved scope artifact",
+                        description:
+                          "ArtifactRef for the approved pentest scope document.",
+                      },
+                      operation_mode: {
+                        type: "string",
+                        title: "Operation mode",
+                        enum: ["recon_only", "validate_hypothesis"],
+                        default: "recon_only",
+                      },
+                      runner_profile_id: {
+                        type: "string",
+                        title: "Runner profile",
+                        enum: ["pentestgpt-safe"],
+                        default: "pentestgpt-safe",
+                      },
+                      objective: {
+                        type: "string",
+                        title: "Objective",
+                      },
+                      time_budget_minutes: {
+                        type: "integer",
+                        title: "Time budget minutes",
+                        minimum: 1,
+                        maximum: 120,
+                        default: 60,
+                      },
+                      evidence_level: {
+                        type: "string",
+                        title: "Evidence level",
+                        enum: ["minimal", "standard"],
+                        default: "standard",
+                      },
+                    },
+                    additionalProperties: false,
+                    "x-moonmind-tool-version": "1.0.0",
+                  },
+                },
+                {
+                  name: "example.raw_tool",
+                  description: "Raw tool.",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url === "/api/artifacts" && init?.method === "POST") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              artifact_ref: { artifact_id: "art_scope_123" },
+              upload: {
+                mode: "single_put",
+                upload_url: "/api/artifacts/art_scope_123/content",
+                required_headers: {},
+              },
+            }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/art_scope_123/content") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ artifact_id: "art_scope_123" }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/art_scope_123/complete") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ artifact_id: "art_scope_123" }),
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ workflowId: "wf-123" }),
+          } as Response);
         }
         if (url.startsWith("/api/presets?scope=global")) {
           return Promise.resolve({
@@ -477,5 +580,92 @@ describe("Task Create Step Type authoring", () => {
     expect(
       (instructions as HTMLTextAreaElement).value,
     ).toBe("new issue");
+  });
+
+  it("renders PentestGPT schema fields and blocks missing required inputs", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    let step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "security.pentest.run" }),
+    );
+
+    const targetFields = await screen.findAllByLabelText(/^Target/);
+    expect(targetFields[0]).toBeTruthy();
+    expect(screen.getByLabelText(/^Operation mode/)).toBeTruthy();
+    expect(
+      (screen.getByLabelText(/^Operation mode/) as HTMLSelectElement).value,
+    ).toBe("recon_only");
+    expect(
+      (screen.getByLabelText(/^Runner profile/) as HTMLSelectElement).value,
+    ).toBe("pentestgpt-safe");
+    expect(screen.getByText("Approved Scope")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findAllByText("Target is required.")).toHaveLength(2);
+  });
+
+  it("generates and attaches a Pentest scope artifact before canonical tool submit", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    let step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "security.pentest.run" }),
+    );
+    const [targetField] = await screen.findAllByLabelText(/^Target/);
+    expect(targetField).toBeTruthy();
+    fireEvent.change(targetField!, {
+      target: { value: "https://lab-app.internal.example" },
+    });
+    fireEvent.click(
+      screen.getByLabelText(
+        "I confirm I am authorized to test this target within the selected scope.",
+      ),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Generate and attach scope",
+      }),
+    );
+
+    await screen.findByText("Approved scope attached: art_scope_123");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      const createCall = fetchSpy.mock.calls.find(
+        ([url]) => String(url) === "/api/executions",
+      );
+      expect(createCall).toBeTruthy();
+      const body = JSON.parse(String(createCall?.[1]?.body || "{}"));
+      const tool =
+        body.payload.task.steps[0].tool as Record<string, Record<string, unknown>>;
+      expect(tool.id).toBe("security.pentest.run");
+      expect(tool.inputs).toMatchObject({
+        target: "https://lab-app.internal.example",
+        scope_artifact_ref: "art_scope_123",
+        operation_mode: "recon_only",
+        runner_profile_id: "pentestgpt-safe",
+        time_budget_minutes: 60,
+        evidence_level: "standard",
+      });
+      expect(tool.inputs).not.toHaveProperty("approved_scope");
+    });
+
+    const artifactCreateCall = fetchSpy.mock.calls.find(
+      ([url, init]) => String(url) === "/api/artifacts" && init?.method === "POST",
+    );
+    const artifactBody = JSON.parse(
+      String(artifactCreateCall?.[1]?.body || "{}"),
+    );
+    expect(artifactBody.retention_class).toBe("pinned");
+    expect(artifactBody.metadata.artifact_type).toBe("approved_pentest_scope");
   });
 });
