@@ -93,6 +93,16 @@ class ManagedRunSupervisor:
             stalled_progress_reason: str | None = None
             last_output_seen_at = start_time
             last_no_output_annotation_at = start_time
+            # Cumulative observed output size and the supervisor's latest
+            # progress timestamp. These are persisted to the run store on each
+            # heartbeat (alongside last_heartbeat_at) so the workflow-level
+            # no-progress watchdog can observe genuine progress — not just
+            # process liveness — for one-shot runtimes such as claude_code.
+            # The watchdog (agent_run._status_progress_signature) deliberately
+            # ignores last_heartbeat_at, so without these fields a healthy,
+            # actively-working run is falsely escalated to intervention.
+            output_offset = 0
+            latest_observed_progress_at: datetime | None = None
             first_stdout_seen = False
             first_stderr_seen = False
             stderr_buffer = ""
@@ -131,9 +141,11 @@ class ManagedRunSupervisor:
                 return any(keyword in lowered for keyword in _WARNING_SUBSTRINGS)
 
             def _handle_stream_chunk(stream_name: str, text: str) -> None:
-                nonlocal first_stdout_seen, first_stderr_seen, last_output_seen_at, stderr_buffer
+                nonlocal first_stdout_seen, first_stderr_seen, last_output_seen_at
+                nonlocal stderr_buffer, output_offset
                 if not text:
                     return
+                output_offset += len(text)
                 if not text.isspace():
                     last_output_seen_at = datetime.now(tz=UTC)
                 if not first_stdout_seen and stream_name == "stdout":
@@ -253,7 +265,13 @@ class ManagedRunSupervisor:
 
             async def _emit_no_output_annotation(now: datetime) -> None:
                 nonlocal last_no_output_annotation_at, stalled_no_progress, stalled_progress_reason
+                nonlocal latest_observed_progress_at
                 latest_progress_at = await _latest_progress_at()
+                # Cache the supervisor's authoritative progress signal so the
+                # heartbeat loop can persist it to the run store. This runs on
+                # every heartbeat (it is the no_output_callback), just before
+                # the heartbeat store update reads the snapshot below.
+                latest_observed_progress_at = latest_progress_at
                 idle_progress_seconds = max(
                     0.0,
                     (now - latest_progress_at).total_seconds(),
@@ -301,6 +319,21 @@ class ManagedRunSupervisor:
                 )
                 last_no_output_annotation_at = now
 
+            def _progress_snapshot() -> tuple[datetime | None, int | None]:
+                # Snapshot of observed output progress for the heartbeat store
+                # update. ``latest_observed_progress_at`` is refreshed every
+                # heartbeat by ``_emit_no_output_annotation`` (which runs just
+                # before this snapshot is read). Return ``None`` for the
+                # timestamp until real progress has been seen so we never
+                # persist a misleading ``last_log_at`` placeholder.
+                progress_at = latest_observed_progress_at
+                if progress_at is None or progress_at <= start_time:
+                    progress_at = None
+                return (
+                    progress_at,
+                    output_offset if output_offset > 0 else None,
+                )
+
             # Run heartbeat/wait and log streaming CONCURRENTLY so that OS
             # pipe buffers are drained in real-time.  Sequential streaming
             # (heartbeat first, then stream) fills the kernel pipe buffer for
@@ -313,6 +346,7 @@ class ManagedRunSupervisor:
                     process,
                     timeout_seconds,
                     no_output_callback=_emit_no_output_annotation,
+                    progress_snapshot=_progress_snapshot,
                 )
             )
             stream_task = asyncio.create_task(
@@ -542,8 +576,17 @@ class ManagedRunSupervisor:
         run_id: str,
         process: asyncio.subprocess.Process,
         no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
+        progress_snapshot: Callable[[], tuple[datetime | None, int | None]]
+        | None = None,
     ) -> int:
-        """Send heartbeats while waiting for the process to complete."""
+        """Send heartbeats while waiting for the process to complete.
+
+        Each heartbeat also persists observed output progress
+        (``last_log_at``/``last_log_offset``) when ``progress_snapshot`` is
+        supplied, so the workflow-level no-progress watchdog can distinguish a
+        live, working run from a genuinely stuck one. ``last_heartbeat_at`` is
+        pure process liveness and is intentionally ignored by that watchdog.
+        """
         while True:
             try:
                 exit_code = await asyncio.wait_for(
@@ -558,10 +601,18 @@ class ManagedRunSupervisor:
                 except Exception as e:
                     # Activity heartbeat failures are non-fatal for the supervisor loop
                     logger.debug("Activity heartbeat failed: %s", e)
+                progress_fields: dict[str, Any] = {}
+                if progress_snapshot is not None:
+                    last_log_at, last_log_offset = progress_snapshot()
+                    if last_log_at is not None:
+                        progress_fields["last_log_at"] = last_log_at
+                    if last_log_offset is not None:
+                        progress_fields["last_log_offset"] = last_log_offset
                 self._store.update_status(
                     run_id,
                     "running",
                     last_heartbeat_at=datetime.now(tz=UTC),
+                    **progress_fields,
                 )
 
     async def _heartbeat_and_wait_with_timeout(
@@ -570,6 +621,8 @@ class ManagedRunSupervisor:
         process: asyncio.subprocess.Process,
         timeout_seconds: int,
         no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
+        progress_snapshot: Callable[[], tuple[datetime | None, int | None]]
+        | None = None,
     ) -> tuple[int | None, bool]:
         """Wrap _heartbeat_and_wait with a total timeout.
 
@@ -588,6 +641,7 @@ class ManagedRunSupervisor:
                     run_id,
                     process,
                     no_output_callback=no_output_callback,
+                    progress_snapshot=progress_snapshot,
                 ),
                 timeout=timeout_seconds,
             )
