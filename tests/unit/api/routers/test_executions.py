@@ -1376,14 +1376,71 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
     assert response.status_code == 200
     count_query = temporal_client.count_workflows.await_args.kwargs["query"]
     list_query = temporal_client.list_workflows.call_args.kwargs["query"]
-    assert 'mm_repo LIKE "%Moon%"' in count_query
-    assert 'WorkflowId LIKE "%wf-%"' in count_query
-    assert 'mm_title LIKE "%release%"' in count_query
+    assert 'mm_repo STARTS_WITH "Moon"' in count_query
+    assert 'WorkflowId STARTS_WITH "wf-"' in count_query
+    assert 'mm_title = "release"' in count_query
     assert "ORDER BY" not in count_query
     assert list_query.endswith("ORDER BY StartTime ASC")
 
 
-def test_list_executions_temporal_query_uses_workflow_id_text_filter() -> None:
+def test_list_executions_temporal_query_title_filter_ands_word_tokens() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "titleContains": "Post-Merge Jira"},
+        )
+
+    assert response.status_code == 200
+    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
+    # The free-text title is tokenized and ANDed so every typed word must be a
+    # member of the mm_title KeywordList.
+    assert 'mm_title = "post"' in count_query
+    assert 'mm_title = "merge"' in count_query
+    assert 'mm_title = "jira"' in count_query
+    assert "LIKE" not in count_query
+
+
+def test_list_executions_temporal_query_rejects_title_filter_without_tokens() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+    temporal_client = SimpleNamespace(count_workflows=AsyncMock(), list_workflows=Mock())
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "titleContains": "!!!"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_query"
+    assert "titleContains must contain at least one alphanumeric word token" in response.json()["detail"]["message"]
+    temporal_client.count_workflows.assert_not_called()
+
+
+def test_list_executions_temporal_query_uses_workflow_id_prefix_filter() -> None:
     app = FastAPI()
     app.include_router(router)
     mock_service = AsyncMock()
@@ -1416,7 +1473,7 @@ def test_list_executions_temporal_query_uses_workflow_id_text_filter() -> None:
     assert response.status_code == 200
     count_query = temporal_client.count_workflows.await_args.kwargs["query"]
     list_query = temporal_client.list_workflows.call_args.kwargs["query"]
-    assert 'WorkflowId LIKE "%wf-%"' in count_query
+    assert 'WorkflowId STARTS_WITH "wf-"' in count_query
     assert list_query.endswith("ORDER BY WorkflowId DESC")
 
 
@@ -7638,7 +7695,6 @@ def test_describe_execution_bounds_slow_live_progress_query(
     _override_query_client(
         app,
         progress={"total": 99},
-        delay_seconds=0.2,
     )
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(
@@ -7651,8 +7707,18 @@ def test_describe_execution_bounds_slow_live_progress_query(
         "temporal_authoritative_read_enabled",
         False,
     )
+    observed_timeouts: list[float] = []
+
+    async def fail_fast_timeout(awaitable, *, timeout: float):
+        observed_timeouts.append(timeout)
+        awaitable.close()
+        raise TimeoutError
 
     with (
+        patch(
+            "api_service.api.routers.executions.asyncio.wait_for",
+            side_effect=fail_fast_timeout,
+        ),
         patch(
             "api_service.api.routers.executions._hydrate_execution_report_projection",
             new_callable=AsyncMock,
@@ -7664,12 +7730,10 @@ def test_describe_execution_bounds_slow_live_progress_query(
         ),
         TestClient(app) as test_client,
     ):
-        started = time.perf_counter()
         response = test_client.get("/api/executions/mm:wf-1")
-        elapsed = time.perf_counter() - started
 
     assert response.status_code == 200
-    assert elapsed < 0.15
+    assert observed_timeouts == [0.01]
     assert response.json()["progress"] is None
 
 def test_describe_execution_skips_live_progress_query_for_terminal_runs() -> None:

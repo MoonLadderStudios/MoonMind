@@ -1616,6 +1616,55 @@ def test_jira_blocker_wait_unpatched_histories_publish_each_observation(
     ]
 
 
+def _captured_search_attribute_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+    workflow_instance: MoonMindRunWorkflow,
+) -> dict[str, Any]:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda pairs: captured.__setitem__("pairs", pairs),
+    )
+    workflow_instance._update_search_attributes()
+    return {pair.key.name: pair.value for pair in captured["pairs"]}
+
+
+def test_update_search_attributes_includes_title_tokens_for_visibility_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_instance = MoonMindRunWorkflow()
+    workflow_instance._title = "Release the Kraken"
+
+    by_name = _captured_search_attribute_pairs(monkeypatch, workflow_instance)
+
+    # mm_title is a KeywordList of lowercased, deduped word tokens so operators
+    # can word-match titles in Temporal SQL visibility.
+    assert by_name["mm_title"] == ["release", "the", "kraken"]
+
+
+def test_update_search_attributes_omits_title_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow_instance = MoonMindRunWorkflow()
+    # _title defaults to None; the title pair must be omitted rather than
+    # upserting an empty KeywordList.
+
+    by_name = _captured_search_attribute_pairs(monkeypatch, workflow_instance)
+
+    assert "mm_title" not in by_name
+
+
 @pytest.mark.asyncio
 async def test_jira_blocker_wait_rechecks_with_compact_payload_and_no_manifest(
     monkeypatch: pytest.MonkeyPatch,

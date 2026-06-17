@@ -125,6 +125,7 @@ from moonmind.workflows.temporal.bounded_story_loop import (
 from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
+from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.activity_catalog import (
     INTEGRATIONS_TASK_QUEUE,
     WORKFLOW_TASK_QUEUE,
@@ -11611,6 +11612,19 @@ class MoonMindRunWorkflow:
                 SearchAttributePair(
                     SearchAttributeKey.for_keyword("mm_owner_id"),
                     self._owner_id,
+                )
+            )
+        title_tokens = tokenize_title(self._title)
+        if title_tokens:
+            # mm_title is a KeywordList of the title's word tokens. Temporal SQL
+            # visibility supports neither LIKE nor substring matching, and the
+            # custom-Keyword budget (10) is full, so operators word-match titles
+            # via KeywordList membership (`mm_title = "word"`). Keep tokenization
+            # identical to the executions list endpoint (see title_search).
+            pairs.append(
+                SearchAttributePair(
+                    SearchAttributeKey.for_keyword_list("mm_title"),
+                    title_tokens,
                 )
             )
         if self._repo:

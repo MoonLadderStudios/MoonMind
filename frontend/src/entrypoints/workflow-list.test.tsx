@@ -256,7 +256,7 @@ describe('Workflows Entrypoint', () => {
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
+        '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
   });
@@ -355,10 +355,10 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
-      '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoExact=moon%2Fdemo',
+      '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoContains=moon%2Fdemo',
     );
     expect(screen.getByText(/Workflow scope filters are not available on Workflows/i)).toBeTruthy();
-    expect(window.location.search).toBe('?stateIn=completed&repoExact=moon%2Fdemo&limit=50');
+    expect(window.location.search).toBe('?stateIn=completed&repoContains=moon%2Fdemo&limit=50');
     expect(screen.queryByText('MoonMind.ProviderProfileManager')).toBeNull();
     expect(screen.queryByText('manifest')).toBeNull();
   });
@@ -636,6 +636,10 @@ describe('Workflows Entrypoint', () => {
     const baselineCalls = executionListCalls().length;
 
     fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    expect(screen.getAllByPlaceholderText('repo starts with…')).not.toHaveLength(0);
+    expect(screen.getByLabelText('Repository filter value').getAttribute('title')).toBe(
+      'Prefix match: finds repository names that start with this text.',
+    );
     fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo' },
     });
@@ -647,7 +651,7 @@ describe('Workflows Entrypoint', () => {
       expect(executionListCalls().length).toBe(baselineCalls + 1);
     });
     expect(lastExecutionListUrl()).toBe(
-      '/api/executions?source=temporal&pageSize=50&repoExact=owner%2Frepo',
+      '/api/executions?source=temporal&pageSize=50&repoContains=owner%2Frepo',
     );
     await screen.findAllByText('Example task');
 
@@ -1224,7 +1228,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
-        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoExact=owner%2Frepo&targetRuntimeIn=codex_cli',
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cli',
       );
     });
 
