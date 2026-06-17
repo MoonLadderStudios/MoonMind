@@ -3223,6 +3223,7 @@ class TemporalSandboxActivities:
             return
         if target.exists():
             shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, target, symlinks=True)
 
     async def _restore_archive_to_workspace(
@@ -3234,23 +3235,32 @@ class TemporalSandboxActivities:
         if not archive_ref:
             raise TemporalActivityRuntimeError("workspace archive evidence is missing")
         archive_payload = await self._read_checkpoint_bytes(archive_ref)
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(fileobj=BytesIO(archive_payload), mode="r:gz") as archive:
-            for member in archive.getmembers():
-                member_path = (target / member.name).resolve()
-                if not member_path.is_relative_to(target):
-                    raise TemporalActivityRuntimeError(
-                        f"workspace archive member escapes workspace: {member.name}"
-                    )
-                if member.issym() or member.islnk():
-                    link_target = (member_path.parent / member.linkname).resolve()
-                    if not link_target.is_relative_to(target):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = target.parent / f".{target.name}.restore"
+        if staging.exists():
+            shutil.rmtree(staging)
+        staging.mkdir(parents=True, exist_ok=False)
+        try:
+            with tarfile.open(fileobj=BytesIO(archive_payload), mode="r:gz") as archive:
+                for member in archive.getmembers():
+                    member_path = (staging / member.name).resolve()
+                    if not member_path.is_relative_to(staging):
                         raise TemporalActivityRuntimeError(
-                            f"workspace archive link escapes workspace: {member.name}"
+                            f"workspace archive member escapes workspace: {member.name}"
                         )
-            archive.extractall(target)
+                    if member.issym() or member.islnk():
+                        link_target = (member_path.parent / member.linkname).resolve()
+                        if not link_target.is_relative_to(staging):
+                            raise TemporalActivityRuntimeError(
+                                f"workspace archive link escapes workspace: {member.name}"
+                            )
+                archive.extractall(staging, filter="data")
+            if target.exists():
+                shutil.rmtree(target)
+            staging.rename(target)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
 
     async def _checkout_commit_to_workspace(
         self,
@@ -3271,13 +3281,19 @@ class TemporalSandboxActivities:
             source = self._resolve_workspace(source_ref, must_exist=True)
             self._replace_workspace_tree(source, target)
         else:
-            target.mkdir(parents=True, exist_ok=True)
             if not (target / ".git").exists():
-                await _run_command(["git", "init"], cwd=str(target))
-        await _run_command(
-            ["git", "checkout", "--force", "--detach", commit],
-            cwd=str(target),
-        )
+                raise TemporalActivityRuntimeError(
+                    "git checkpoint requires workspaceRef or an existing git target workspace"
+                )
+        try:
+            await _run_command(
+                ["git", "checkout", "--force", "--detach", commit],
+                cwd=str(target),
+            )
+        except RuntimeError as exc:
+            raise TemporalActivityRuntimeError(
+                f"git checkout failed: {exc}"
+            ) from exc
 
     async def _apply_patch_artifact(
         self,
