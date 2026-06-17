@@ -561,7 +561,7 @@ describe('Workflows Entrypoint', () => {
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-490');
     expect(EXECUTING_STATUS_PILL_TRACEABILITY.relatedJiraIssues).toContain('MM-491');
 
-    const waitingPills = screen.getAllByText('AWAITING TASK');
+    const waitingPills = screen.getAllByText('AWAITING DEP');
     expect(waitingPills.length).toBeGreaterThan(0);
     for (const pill of waitingPills) {
       expect(pill.closest('span')?.dataset.effect).toBeUndefined();
@@ -697,7 +697,7 @@ describe('Workflows Entrypoint', () => {
     expect(optionLabels).toEqual([
       'scheduled',
       'initializing',
-      'AWAITING TASK',
+      'AWAITING DEP',
       'planning',
       'AWAITING SLOT',
       'executing',
