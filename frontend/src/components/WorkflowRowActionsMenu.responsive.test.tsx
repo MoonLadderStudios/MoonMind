@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 import postcss from 'postcss';
 import type { AtRule, Root, Rule } from 'postcss';
@@ -10,7 +9,7 @@ import { renderWithClient } from '../utils/test-utils';
 import { WorkflowRowActionsMenu } from './WorkflowRowActionsMenu';
 
 const missionControlCss = readFileSync(
-  fileURLToPath(new URL('../styles/mission-control.css', import.meta.url)),
+  `${process.cwd()}/frontend/src/styles/mission-control.css`,
   'utf8',
 );
 
