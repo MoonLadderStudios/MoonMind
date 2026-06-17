@@ -2228,7 +2228,7 @@ class MoonMindRunWorkflow:
             apply_payload,
             **self._execute_kwargs_for_route(apply_route),
         )
-        if not isinstance(policy, Mapping) or policy.get("status") != "prepared":
+        if not isinstance(policy, Mapping) or policy.get("status") != "applied":
             failure_code = "policy_incompatible"
             if isinstance(policy, Mapping):
                 failure_code = str(policy.get("failureCode") or failure_code)

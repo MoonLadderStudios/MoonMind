@@ -355,7 +355,206 @@ async def test_workspace_apply_policy_handles_degraded_checkpoint_payload(
     )
 
     assert policy["status"] == "rejected"
-    assert policy["failureCode"] == "policy_incompatible"
+    assert policy["failureCode"] == "artifact_missing"
+    diagnostic = json.loads(store.get_bytes(policy["diagnosticRefs"][0]).decode())
+    assert diagnostic["status"] == "blocked"
+    assert diagnostic["failureCode"] == "artifact_missing"
+    assert diagnostic["recommendedNextAction"]
+
+
+def _checkpoint_artifact(
+    store: InMemoryArtifactStore,
+    *,
+    workspace: dict[str, object],
+    boundary: str = "after_execution",
+) -> str:
+    payload = {
+        "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        "schemaVersion": "v1",
+        "checkpointId": (
+            "workflow-1:run-1:checkpoint-story:execution:1:"
+            f"checkpoint:{boundary}"
+        ),
+        "checkpointKind": "step_boundary",
+        "boundary": boundary,
+        "source": _identity().model_dump(by_alias=True),
+        "taskInputSnapshotRef": "artifact-input",
+        "planDigest": "sha256:plan",
+        "workspace": workspace,
+        "createdAt": datetime(2026, 6, 13, 12, 0, tzinfo=UTC).isoformat(),
+    }
+    artifact = store.put_json(payload, metadata={"artifact_kind": "checkpoint"})
+    return artifact.artifact_ref
+
+
+async def test_workspace_apply_policy_applies_all_canonical_policies_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    base_commit = (
+        subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo)
+        .decode()
+        .strip()
+    )
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+    archive_capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "worktree_archive",
+            "workspacePath": str(repo),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-archive-policy-capture",
+        }
+    )
+    patch_capture = await sandbox.workspace_capture_checkpoint(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "boundary": "after_execution",
+            "kind": "git_patch",
+            "workspacePath": str(repo),
+            "artifactNamespace": "checkpoint",
+            "idempotencyKey": "idem-patch-policy-capture",
+            "baseCommit": base_commit,
+        }
+    )
+    cases = [
+        (
+            "restore_pre_execution",
+            archive_capture["workspace"],
+            "base\nchanged\n",
+        ),
+        (
+            "continue_from_previous_execution",
+            {
+                "kind": "ephemeral_workspace_ref",
+                "workspaceRef": str(repo),
+            },
+            "base\nchanged\n",
+        ),
+        (
+            "apply_previous_execution_diff_to_clean_baseline",
+            {
+                **patch_capture["workspace"],
+                "workspaceRef": str(repo),
+            },
+            "base\nchanged\n",
+        ),
+        (
+            "start_from_last_passed_commit",
+            {
+                "kind": "git_commit",
+                "headCommit": base_commit,
+                "workspaceRef": str(repo),
+            },
+            "base\n",
+        ),
+        (
+            "fresh_branch_from_source",
+            {
+                "kind": "git_commit",
+                "headCommit": base_commit,
+                "workspaceRef": str(repo),
+            },
+            "base\nchanged\n",
+        ),
+    ]
+
+    for policy, workspace, expected_readme in cases:
+        target = root / "temporal_sandbox" / f"target-{policy}"
+        checkpoint_ref = _checkpoint_artifact(store, workspace=workspace)
+        request = {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": policy,
+            "checkpointRef": checkpoint_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(target),
+            "expectedPlanDigest": "sha256:plan",
+            "idempotencyKey": f"MM-824:{policy}:idem",
+        }
+
+        first = await sandbox.workspace_apply_policy(request)
+        second = await sandbox.workspace_apply_policy(request)
+
+        assert first["status"] == "applied"
+        assert second == first
+        assert first["workspaceRef"] == str(target)
+        assert (target / "README.md").read_text(encoding="utf-8") == expected_readme
+
+
+async def test_workspace_apply_policy_rejects_sandbox_escape_before_mutation(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    checkpoint_ref = _checkpoint_artifact(
+        store,
+        workspace={
+            "kind": "ephemeral_workspace_ref",
+            "workspaceRef": str(repo),
+        },
+    )
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    with pytest.raises(RuntimeError, match="escapes sandbox root"):
+        await sandbox.workspace_apply_policy(
+            {
+                "identity": _identity().model_dump(by_alias=True),
+                "workspacePolicy": "continue_from_previous_execution",
+                "checkpointRef": checkpoint_ref,
+                "checkpoint": {},
+                "targetWorkspaceRef": str(tmp_path / "outside"),
+                "idempotencyKey": "MM-824:sandbox-escape",
+            }
+        )
+
+    assert not (tmp_path / "outside").exists()
+
+
+async def test_workspace_apply_policy_fails_closed_for_missing_and_corrupt_evidence(
+    tmp_path: Path,
+) -> None:
+    store = InMemoryArtifactStore()
+    root = _workspace_root(tmp_path)
+    repo = _repo(root)
+    corrupt_ref = store.put_bytes(
+        b"{not-json",
+        content_type=STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+        metadata={"artifact_kind": "checkpoint"},
+    ).artifact_ref
+    target = root / "temporal_sandbox" / "missing-policy-target"
+    sandbox = TemporalSandboxActivities(workspace_root=root, artifact_store=store)
+
+    missing = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": "art:sha256:missing",
+            "checkpoint": {},
+            "targetWorkspaceRef": str(target),
+            "idempotencyKey": "MM-824:missing-policy",
+        }
+    )
+    corrupt = await sandbox.workspace_apply_policy(
+        {
+            "identity": _identity().model_dump(by_alias=True),
+            "workspacePolicy": "continue_from_previous_execution",
+            "checkpointRef": corrupt_ref,
+            "checkpoint": {},
+            "targetWorkspaceRef": str(root / "temporal_sandbox" / "corrupt-target"),
+            "idempotencyKey": "MM-824:corrupt-policy",
+        }
+    )
+
+    assert missing["status"] == "rejected"
+    assert missing["failureCode"] == "artifact_missing"
+    assert corrupt["status"] == "rejected"
+    assert corrupt["failureCode"] == "artifact_corrupted"
+    assert not target.exists()
+    assert (repo / "README.md").read_text(encoding="utf-8") == "base\nchanged\n"
 
 
 async def test_sandbox_checkpoint_writes_use_artifact_service_when_available(
@@ -433,18 +632,20 @@ async def test_checkpoint_activity_failures_are_typed_and_secret_safe(
     assert missing["valid"] is False
     assert missing["failureCode"] == "artifact_missing"
 
+    incompatible_checkpoint_ref = _checkpoint_artifact(
+        store,
+        workspace={
+            "kind": "git_patch",
+            "baseCommit": "abc",
+            "patchRef": "artifact-patch",
+        },
+    )
     policy = await sandbox.workspace_apply_policy(
         {
             "identity": _identity().model_dump(by_alias=True),
             "workspacePolicy": "start_from_last_passed_commit",
-            "checkpointRef": "artifact-checkpoint",
-            "checkpoint": {
-                "workspace": {
-                    "kind": "git_patch",
-                    "baseCommit": "abc",
-                    "patchRef": "artifact-patch",
-                }
-            },
+            "checkpointRef": incompatible_checkpoint_ref,
+            "checkpoint": {},
             "targetWorkspaceRef": str(repo),
             "expectedPlanDigest": "sha256:plan",
             "idempotencyKey": "idem-policy",
@@ -475,11 +676,11 @@ async def test_workflow_recovery_routes_checkpoint_validation_before_policy(
             }
         if activity_type == "workspace.apply_policy":
             return {
-                "status": "prepared",
+                "status": "applied",
                 "workspaceRef": "workspace-target",
                 "appliedCheckpointRef": payload["checkpointRef"],
                 "providerLeaseRefs": [],
-                "summary": "workspace policy prepared",
+                "summary": "workspace policy applied",
                 "failureCode": None,
             }
         raise AssertionError(f"unexpected activity {activity_type}")
@@ -603,7 +804,7 @@ async def test_checkpoint_validate_activity_reports_boundary_failure_classes(
             "policy_incompatible",
         ),
         (
-            {"checkpoint": {"checkpointId": "bad-checkpoint"}},
+            {"checkpoint": {"checkpointId": "bad-checkpoint"}, "checkpointRef": None},
             "invalid_checkpoint",
         ),
     ]
