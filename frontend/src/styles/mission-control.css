@@ -1994,6 +1994,47 @@ tr[data-proposal-id].proposal-consuming td {
     align-self: flex-start;
     flex-shrink: 1;
   }
+
+  /*
+   * Workflow actions menu inside mobile cards.
+   *
+   * On mobile the Workflows table is hidden and each row is a `.queue-card`
+   * whose actions kebab lives in `.queue-card-actions`. The shared popover is
+   * absolutely positioned and anchored to `right: 0`, so against the narrow,
+   * left-aligned kebab it shot off the left edge of the viewport. `.queue-card`
+   * also clips its children with `overflow: hidden`, so the floating popover was
+   * cut off as well. Render the menu in-flow beneath the trigger on mobile so it
+   * always stays on screen, fills the card width, and grows the card instead of
+   * being clipped.
+   */
+  .queue-card-actions .workflow-row-actions {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .queue-card-actions .td-workflow-actions-menu {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+
+  .queue-card-actions .td-workflow-actions-trigger-compact {
+    align-self: flex-start;
+  }
+
+  .queue-card-actions .td-workflow-actions-popover {
+    position: static;
+    width: 100%;
+    max-width: 100%;
+    max-height: none;
+    margin-top: 0.45rem;
+  }
+
+  .queue-card-actions .workflow-row-actions-error {
+    max-width: 100%;
+    text-align: left;
+  }
 }
 
 .status {
