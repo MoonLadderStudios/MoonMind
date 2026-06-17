@@ -919,6 +919,9 @@ class ManagedSessionController(Protocol):
     async def reconcile(self) -> Sequence[CodexManagedSessionRecord | Mapping[str, Any]]:
         pass
 
+    async def reap_orphan_session_containers(self) -> Any:
+        pass
+
 def _managed_runtime_artifact_root() -> Path:
     return managed_runtime_artifact_root()
 
@@ -7409,11 +7412,43 @@ class TemporalAgentRuntimeActivities:
                 session_ids.append(record.session_id)
             if str(record.status).lower() == "degraded":
                 degraded_count += 1
+
+        # Best-effort orphan sweep: removing leaked session containers must not
+        # fail the reconcile activity, whose reattach/degrade work is primary.
+        orphan_containers_reaped = 0
+        orphan_reap_skipped_recent = 0
+        orphan_session_ids_reaped: list[str] = []
+        try:
+            reap_result = await _await_with_activity_heartbeats(
+                controller.reap_orphan_session_containers(),
+                heartbeat_payload={
+                    "activityType": "agent_runtime.reconcile_managed_sessions",
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Managed session orphan container reap failed during reconcile",
+                exc_info=True,
+            )
+        else:
+            orphan_containers_reaped = int(
+                getattr(reap_result, "reaped_containers", 0) or 0
+            )
+            orphan_reap_skipped_recent = int(
+                getattr(reap_result, "skipped_recent", 0) or 0
+            )
+            orphan_session_ids_reaped = list(
+                getattr(reap_result, "reaped_session_ids", ()) or ()
+            )[:session_id_limit]
+
         return {
             "managedSessionRecordsReconciled": reconciled_count,
             "degradedSessionRecords": degraded_count,
             "sessionIds": session_ids,
             "truncated": reconciled_count > session_id_limit,
+            "orphanContainersReaped": orphan_containers_reaped,
+            "orphanSessionIdsReaped": orphan_session_ids_reaped,
+            "orphanReapSkippedRecent": orphan_reap_skipped_recent,
         }
 
     @staticmethod
