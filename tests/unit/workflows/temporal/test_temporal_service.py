@@ -692,6 +692,75 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
         assert snapshot[dep2.workflow_id].workflow_type == "MoonMind.UserWorkflow"
 
 @pytest.mark.asyncio
+async def test_create_execution_promotes_legacy_task_payload_to_workflow(
+    tmp_path, mock_client_adapter
+):
+    """Legacy ``task`` initial parameters must survive as canonical ``workflow``.
+
+    Typed submissions such as the deployment update path build
+    ``initial_parameters={"task": {...}}`` with no dependsOn/remediation. Prior
+    to the fix the ``task`` key was popped and never re-promoted, so the
+    workflow started with only ``{"failurePolicy": ...}`` and the agent_runtime
+    planner failed with "requires non-empty instructions".
+    """
+
+    async with temporal_db(tmp_path) as session:
+        owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+
+        execution = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=owner_id,
+            title="Update deployment stack moonmind",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy="fail_fast",
+            initial_parameters={
+                "task": {
+                    "instructions": "Run the policy-gated deployment update operation.",
+                    "steps": [
+                        {
+                            "id": "update-moonmind-deployment",
+                            "type": "tool",
+                            "tool": {
+                                "type": "skill",
+                                "name": "deployment.update_compose_stack",
+                                "version": "1.0.0",
+                                "inputs": {"stack": "moonmind"},
+                            },
+                        }
+                    ],
+                }
+            },
+            idempotency_key=None,
+        )
+
+        record = await session.get(
+            TemporalExecutionCanonicalRecord, execution.workflow_id
+        )
+        assert record is not None
+        assert "task" not in record.parameters
+        assert record.parameters["failurePolicy"] == "fail_fast"
+        workflow_payload = record.parameters["workflow"]
+        assert (
+            workflow_payload["instructions"]
+            == "Run the policy-gated deployment update operation."
+        )
+        assert workflow_payload["steps"][0]["tool"]["name"] == (
+            "deployment.update_compose_stack"
+        )
+
+        start_args = mock_client_adapter.start_workflow.await_args.kwargs["input_args"]
+        promoted = start_args["initial_parameters"]["workflow"]
+        assert (
+            promoted["instructions"]
+            == "Run the policy-gated deployment update operation."
+        )
+        assert "task" not in start_args["initial_parameters"]
+
+
+@pytest.mark.asyncio
 async def test_create_execution_persists_remediation_link_and_supports_lookups(
     tmp_path, mock_client_adapter
 ):

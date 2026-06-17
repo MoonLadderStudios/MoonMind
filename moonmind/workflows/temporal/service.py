@@ -1045,6 +1045,13 @@ class TemporalExecutionService:
                 pinned_remediation["target"] = pinned_target
                 task_params["remediation"] = pinned_remediation
                 params["workflow"] = task_params
+        # Re-promote the normalized task payload under the canonical
+        # "workflow" key. The legacy "task" input shape (used by typed
+        # submissions such as the deployment update path) is otherwise
+        # dropped here when neither the dependsOn nor remediation branch
+        # re-attaches it, leaving the workflow with no instructions/plan.
+        if "workflow" not in params and task_params:
+            params["workflow"] = task_params
 
         resolved_title = title or self._default_title_for_type(workflow_type_enum)
         memo = {
