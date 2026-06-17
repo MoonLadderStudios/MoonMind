@@ -465,7 +465,7 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
             "parametersPatch": {
                 "model": "claude-opus-4-7",
                 "profileId": "claude_anthropic",
-                "task": {
+                "workflow": {
                     "runtime": {
                         "mode": "claude_code",
                         "model": "claude-opus-4-7",
@@ -485,7 +485,7 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
             "parametersPatch": {
                 "model": "claude-opus-4-7",
                 "profileId": "claude_anthropic",
-                "task": {
+                "workflow": {
                     "runtime": {
                         "mode": "claude_code",
                         "model": "claude-opus-4-7",
@@ -496,6 +496,60 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
         },
     )
     assert result["forwardedRuntimeSelectionUpdate"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_inputs_forwards_runtime_selection_from_canonical_workflow_patch(
+    monkeypatch,
+):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                        "effort": "high",
+                    }
+                }
+            }
+        }
+    )
+
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "model": "claude-opus-4-7",
+            "executionProfileRef": "claude_anthropic",
+            "effort": "high",
+            "targetRuntime": "claude_code",
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                        "effort": "high",
+                    }
+                }
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
 
 @pytest.mark.asyncio
 async def test_run_workflow_send_message_update_uses_temporal_boundary(
