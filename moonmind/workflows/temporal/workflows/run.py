@@ -8947,7 +8947,14 @@ class MoonMindRunWorkflow:
         self,
         parameters: Mapping[str, Any],
     ) -> str | None:
-        task_payload = self._mapping_value(parameters, "task")
+        # Canonical runtime parameters carry the task payload under "workflow";
+        # only legacy/submission-shaped payloads use "task". Resolve "workflow"
+        # first (with a "task" fallback) so Jira-backed task detection and the
+        # issue-key text scan see the steps/appliedStepTemplates that identify
+        # the issue. Mismatching this key silently drops the issue key, which
+        # disables post-merge Jira completion and leaves the issue in Code
+        # Review. This mirrors _merge_automation_request's own lookup.
+        task_payload = self._mapping_value(parameters, "workflow", "task")
         explicit_key = self._first_explicit_jira_issue_key(parameters, task_payload)
         if explicit_key:
             return explicit_key
