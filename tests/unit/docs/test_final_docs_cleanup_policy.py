@@ -77,6 +77,7 @@ def test_manifest_consolidation_claims_follow_current_code_evidence() -> None:
         )
     else:
         assert "build_step_execution_manifest_payload" not in temp_text
+        assert "Consolidate manifest writers (completed)" in temp_text
 
 
 def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
@@ -101,6 +102,8 @@ def test_temp_plan_cleanup_guard_retains_active_plan_when_final_dod_is_open() ->
     if _manifest_builder_is_live():
         assert "deleted in the closing PR" in text
         assert "build_step_execution_manifest_payload" in text
+    else:
+        assert "build_step_execution_manifest_payload" not in text
 
 
 def test_docs_do_not_inline_secrets_or_raw_evidence() -> None:

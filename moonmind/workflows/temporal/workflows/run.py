@@ -107,7 +107,6 @@ from moonmind.workflows.temporal.step_ledger import (
     validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.step_executions import (
-    build_step_execution_manifest_payload,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
@@ -1096,42 +1095,53 @@ class MoonMindRunWorkflow:
                 {"invalidatedLogicalStepIds": []},
             )
 
-        manifest_payload = build_step_execution_manifest_payload(
-            workflow_id=identity.workflow_id,
-            run_id=identity.run_id,
-            logical_step_id=identity.logical_step_id,
-            execution_ordinal=identity.execution_ordinal,
-            reason=reason,  # type: ignore[arg-type]
-            status=resolved_status,  # type: ignore[arg-type]
-            terminal_disposition=resolved_terminal_disposition,  # type: ignore[arg-type]
-            started_at=self._step_execution_started_at(logical_step_id),
-            updated_at=updated_at,
-            summary=resolved_summary,
-            lineage=lineage,
-            input_refs=self._combined_step_execution_input_refs(input_refs),
+        bounded_outputs = dict(outputs or {})
+        if resolved_summary is not None:
+            bounded_outputs.setdefault("summary", resolved_summary[:500])
+        prepared_input_refs = self._combined_step_execution_input_refs(input_refs)
+        input_payload: dict[str, Any] = {}
+        if prepared_input_refs:
+            input_payload["preparedInputRefs"] = prepared_input_refs
+        workspace_payload = dict(workspace)
+        if git_effect is not None:
+            workspace_payload["gitEffect"] = dict(git_effect)
+        if side_effect_records:
+            side_effects_payload["records"] = [
+                dict(record) for record in side_effect_records
+            ]
+
+        manifest = StepExecutionManifestModel(
+            stepExecutionId=step_execution_id,
+            workflowId=identity.workflow_id,
+            runId=identity.run_id,
+            logicalStepId=identity.logical_step_id,
+            executionOrdinal=identity.execution_ordinal,
+            lineage=dict(lineage) if lineage is not None else None,
+            reason=reason,
+            status=resolved_status,
+            terminalDisposition=resolved_terminal_disposition,
+            startedAt=self._step_execution_started_at(logical_step_id) or updated_at,
+            updatedAt=updated_at,
+            input=input_payload,
             context=self._step_execution_manifest_context_projection(
                 logical_step_id,
                 attempt=identity.execution_ordinal,
                 reason=reason,
                 execution=execution_payload,
             ),
-            workspace=workspace,
-            git_effect=git_effect,
+            workspace=workspace_payload,
             execution=execution_payload,
-            outputs=outputs,
+            outputs=bounded_outputs,
             checks=checks,
-            side_effects=side_effects_payload,
-            side_effect_records=side_effect_records,
-            dependency_effects=dependency_effects,
-            recovery_source=self._validate_recovery_source_for_execution(),
+            sideEffects=side_effects_payload,
+            dependencyEffects=dependency_effects,
+            recoverySource=self._validate_recovery_source_for_execution(),
             budget=budget,
         )
-        manifest_model_payload = dict(manifest_payload)
-        manifest_model_payload.pop("contentType", None)
         manifest_ref = await self._write_step_execution_manifest(
             logical_step_id,
             attempt=attempt,
-            manifest=StepExecutionManifestModel.model_validate(manifest_model_payload),
+            manifest=manifest,
             step_execution_id=step_execution_id,
             idempotency_key=idempotency_key,
             updated_at=updated_at,

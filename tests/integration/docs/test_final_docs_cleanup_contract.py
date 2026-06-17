@@ -36,7 +36,7 @@ def test_canonical_docs_and_runtime_evidence_agree_on_manifest_and_checkpoint_st
     assert "STEP_EXECUTION_MANIFEST_CONTENT_TYPE" in runtime_text
     assert "STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE" in runtime_text
     assert "_record_step_execution_manifest" in runtime_text
-    assert "build_step_execution_manifest_payload" in runtime_text
+    assert "build_step_execution_manifest_payload" not in runtime_text
 
     assert "application/vnd.moonmind.step-execution+json;version=1" in docs_text
     assert "application/vnd.moonmind.step-execution-checkpoint+json;version=1" in docs_text
@@ -48,12 +48,11 @@ def test_temp_plan_state_matches_incomplete_final_definition_of_done() -> None:
     temp_text = _read(TEMP_PLAN)
     roadmap_text = _read(ROADMAP_DOC)
 
-    assert "build_step_execution_manifest_payload" in runtime_text
     assert TEMP_PLAN.exists()
     assert "Status: Execution plan (disposable; not canonical)" in temp_text
-    assert "One canonical manifest write path" in temp_text
+    assert "Consolidate manifest writers (completed)" in temp_text
     assert "- [ ] **13.1** Resume-from-checkpoint as the default recovery path" in roadmap_text
-    assert "deleted in the closing PR" in temp_text
+    assert "build_step_execution_manifest_payload" not in temp_text
 
 
 def test_roadmap_and_implementation_evidence_remain_consistent() -> None:
@@ -61,7 +60,7 @@ def test_roadmap_and_implementation_evidence_remain_consistent() -> None:
     runtime_text = "\n".join(_read(path) for path in (RUN_WORKFLOW, STEP_EXECUTIONS))
 
     assert "_record_step_execution_manifest" in runtime_text
-    assert "build_step_execution_manifest_payload" in runtime_text
+    assert "build_step_execution_manifest_payload" not in runtime_text
     assert "Durable step ledger & checkpoints" in roadmap_text
     assert "Resume foundations" in roadmap_text
     assert "checkpoint restore logic exists but is not yet the primary operator flow" in roadmap_text
