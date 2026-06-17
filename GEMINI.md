@@ -319,6 +319,8 @@ Key diagnostics:
 - Python 3.12 + Pydantic v2, Temporal Python SDK, FastAPI, SQLAlchemy async service fixtures, pytest, existing workload launcher/registry, Docker Buildx, GitHub Actions (001-finish-pentestgpt)
 - Existing Temporal workflow history and artifact store; existing provider-profile/secret configuration; no new persistent storage. (001-finish-pentestgpt)
 - Python 3.12 + Pydantic v2, Temporal Python SDK activity boundaries, SQLAlchemy async artifact repository, existing `TemporalArtifactService`, existing report-bundle helpers (001-close-pentest-publication)
+- Python 3.12 and Bash runner wrapper + Python standard library JSON/path/datetime/hash parsing, Pydantic v2 models at the MoonMind boundary, existing Temporal artifact/report services (001-expand-pentest-normalizer)
+- Filesystem artifacts under the run-scoped pentest artifact directory; no new persistent storage (001-expand-pentest-normalizer)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

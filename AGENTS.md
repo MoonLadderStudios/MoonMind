@@ -328,6 +328,8 @@ Key diagnostics:
 - Python 3.12 + Pydantic v2, Temporal Python SDK activity boundaries, SQLAlchemy async artifact repository, existing `TemporalArtifactService`, existing report-bundle helpers (001-close-pentest-publication)
 - TypeScript/React for Mission Control UI; Python 3.12 for FastAPI/Pydantic backend contracts. + React, TanStack Query, Zod, FastAPI, Pydantic v2, Temporal Python SDK service boundaries. (001-workflow-actions-menu)
 - Existing Temporal execution records, memo/search/projection data, and artifact-backed task snapshots only; no new storage. (001-workflow-actions-menu)
+- Python 3.12 and Bash runner wrapper + Python standard library JSON/path/datetime/hash parsing, Pydantic v2 models at the MoonMind boundary, existing Temporal artifact/report services (001-expand-pentest-normalizer)
+- Filesystem artifacts under the run-scoped pentest artifact directory; no new persistent storage (001-expand-pentest-normalizer)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers
