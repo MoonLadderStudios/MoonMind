@@ -3,7 +3,7 @@
 > Tracking the major milestones remaining to fully deliver on the README promise:
 > **safety, resiliency, and observability for Claude Code and Codex CLI.**
 >
-> Last updated: 2026-06-13
+> Last updated: 2026-06-16
 
 ---
 
@@ -26,9 +26,11 @@ The README was reframed (2026-06-09) around three headline value propositions �
 
 ---
 
-## Milestone 1 — Managed Agent Runtimes 🔧
+## Milestone 1 — Managed Agent Runtimes & the Shared Managed-Session Plane 🔧
 
 **README claim:** *"MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class workflow-scoped managed-session runtime; Claude Code is a first-class managed-runtime target … on the path to the same live session controller."*
+
+**Framing:** This milestone owns **one shared, runtime-neutral managed-session plane** — not a control plane per runtime. Codex CLI is the live binding today; Claude Code reaches parity by entering the *same* `MoonMind.AgentSession` controller through adapter seams, never a second session architecture. Parity must be **safe** parity: a runtime is not complete until its launch/control boundaries consume the Milestone 12 safety contracts, emit the minimum Milestone 14 observability evidence, and preserve Milestone 13-compatible checkpoint/resume evidence. New behavior belongs in adapters, not in workflow-specific branches.
 
 ### What's shipped
 - Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`)
@@ -39,18 +41,20 @@ The README was reframed (2026-06-09) around three headline value propositions �
 - Graceful worker pause / unpause — API (`system_operations.py`) + Settings Operations surface
 - MoonMind-native xterm.js OAuth terminal for provider login (spec 306 `finalize-oauth-terminal`, `frontend/src/entrypoints/oauth-terminal.tsx`) — supersedes the earlier Tmate-based design
 - OAuth runner bootstrap over PTY with session guardrails (specs 192, 245)
+- Claude managed-session **domain contracts** — session records, surfaces, turns, decisions, policy envelopes, context snapshots, checkpoints, telemetry, and governance evidence, with boundary tests (`moonmind/schemas/managed_session_models.py`; `tests/unit/schemas/test_claude_policy_envelope.py`, `tests/integration/schemas/test_claude_decision_pipeline_boundary.py`). **Modeled, not live:** these are not yet wired into the live workflow-scoped session controller — `canonical_managed_session_runtime_id()` resolves only `codex_cli`, and `AgentExecutionRequest.managed_session` is still typed to the Codex binding.
 
 ### Remaining work
 - [x] **1.1–1.6** Auth parity, profile UI, health checks, API key gate removal, auto-seeding — all shipped
 - [x] **1.7** Graceful worker pause / unpause — API + Settings Operations wiring
 - [x] **1.8** Universal OAuth sessions — Delivered as the native xterm.js OAuth terminal (spec 306); Tmate architecture retired
-- [ ] **1.9** Claude Code workflow-scoped managed-session parity — Claude-specific session design exists (`docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `ManagedSession*` controller path that Codex uses. This is the top runtime-parity gap against the README headline. Split into acceptance-level sub-items so progress is visible:
-  - [ ] **1.9a** Claude session launch/transport adapter — runtime-specific controller entering the shared `ManagedSession*` path
-  - [ ] **1.9b** Normalized turn lifecycle and session state — identity fields, epochs, clear/reset boundaries
-  - [ ] **1.9c** Policy enforcement at Claude session launch — enforcement hook only; envelope contracts are 12.1
-  - [ ] **1.9d** Checkpoint / resume / fork semantics for Claude sessions
-  - [ ] **1.9e** Live logs, artifacts, and diagnostics parity with the Codex session plane
-  - [ ] **1.9f** Parity tests against the Codex managed-session contract — adapter-boundary and in-flight compatibility coverage per repo testing rules
+- [ ] **1.9** Claude Code parity on the shared managed-session plane — Claude domain contracts exist (see *What's shipped*; `docs/ManagedAgents/ClaudeCodeManagedSessions.md`) but Claude does not yet enter the live `MoonMind.AgentSession` controller. The work is *runtime-neutralizing the plane and adding Claude through it* — not building a parallel session stack. Top runtime-parity gap against the README headline. Acceptance sub-items:
+  - [ ] **1.9a** Runtime-neutral managed-session contracts — introduce neutral `ManagedSessionBinding`, runtime family/id, protocol, locator, control-request, and artifact-publication types (today the session literals resolve to `codex_cli` only and `ManagedSessionBinding` is an alias of the Codex binding). Preserve Codex replay compatibility via patch/version markers; `codex_cli` stays green while `claude_code` is representable without masquerading as Codex; no Claude-specific fields leak into generic workflow code except through adapter-owned metadata.
+  - [ ] **1.9b** Claude launch/transport adapter (MVP) — a Claude controller/adapter that enters `MoonMind.AgentSession`. Start with the smallest live shape (local/headless `local_process`); mark remote-control/cloud/team semantics as modeled-not-live until wired. Runtime-specific complexity stays in the adapter, not in `MoonMind.AgentRun`.
+  - [ ] **1.9c** Launch-time policy-envelope enforcement — compile a versioned Claude `PolicyEnvelope` before session launch, fail closed where configured, block risky controls that cannot obtain required interactive approval (rather than silently downgrading), and record a policy event + governance decision for every launch/control denial. Envelope tests already cover precedence, fail-closed, risky controls, and visibility metadata; this wires them into the launch path. (Depends on Milestone 12 for the general policy substrate.)
+  - [ ] **1.9d** Normalized turn & control lifecycle parity — Claude supports the shared verbs (start/resume/send/steer/interrupt/clear/cancel/terminate) with explicit session epochs and reset boundaries; the workflow sees normalized turns, work items, decisions, and artifact refs, not Claude-native internals. Match the contract the live Codex path wires through the `agent_runtime.*` session-control activities (`launch_session`, `send_turn`, `steer_turn`, `interrupt_turn`, `clear_session`, `terminate_session`, `fetch_session_summary`, `publish_session_artifacts`).
+  - [ ] **1.9e** Checkpoint / resume / fork (MVP) — map Claude checkpoint metadata to MoonMind checkpoint refs; expose resume-from-last-known-good as an operator action; keep full transcript/checkpoint payloads pointer-based or runtime-local unless explicitly exported (per the design's non-goal of centrally storing every transcript/diff); represent fork/handoff lineage without overclaiming cloud/remote execution. The code already models checkpoint-capture decisions, checkpoint indexes, and rewind requests — this is live integration, not more modeling.
+  - [ ] **1.9f** Observability parity minimum — session/turn lifecycle, decisions, checkpoints, context compaction, and failures emit artifact-first evidence; logs/diagnostics carry workflow/run/session/step correlation IDs; live-log delivery failure never fails the agent run. Per-step token/cost attribution can stay in Milestone 14, but Milestone 1 must emit the IDs/metadata Milestone 14 will consume.
+  - [ ] **1.9g** Cross-runtime managed-session conformance suite — one shared suite runs against the Codex *and* Claude adapters, covering launch, clear/reset epoch, interrupt, timeout, no-progress detection, policy fail-closed, redaction, artifact publication, and replay compatibility; Claude cases keep proving no Codex terms (e.g. `threadId`) leak into Claude wire contracts. Promotes the existing Claude boundary tests into an explicit acceptance gate.
 
 ---
 
@@ -58,14 +62,25 @@ The README was reframed (2026-06-09) around three headline value propositions �
 
 **README claim:** *"Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop."*
 
+**Framing:** The core external-agent architecture and the Codex Cloud adapter are now in place, so this milestone is **hardening, not new bespoke integrations** — the goal is to make external providers safe, retry-safe, observable, and boring to add. Remains P2.
+
 ### What's shipped
 - Jules end-to-end external event workflow — adapter, event wiring, multi-step `sendMessage` flow, status polling
 - Generic external-agent adapter pattern (MM-741) — shared contract, registry-based provider selection, polling and streaming-gateway execution styles
 - Generic integration callback receiver with correlation lookup and polling fallback (MM-779)
 - External runs integrated into the main workflow console
+- Codex Cloud core external-agent adapter — `CodexCloudAgentAdapter` (canonical start/status/fetch/cancel), runtime gate (`moonmind/codex_cloud/settings.py`), registration in the default registry when the gate is enabled, and four Temporal activities (`integration.codex_cloud.{start,status,fetch_result,cancel}`). Provider status is normalized at the adapter boundary with unknown-status rejection (`normalize_codex_cloud_status` / `raise_unsupported_status`).
+- Canonical external contracts hardened — `ProviderCapabilityDescriptor` (callbacks / cancel / result-fetch / poll-hint / execution-style) and `AgentExecutionRequest` validators that reject raw credential keys in `parameters` / `workspaceSpec`.
 
 ### Remaining work
-- [ ] **2.3** Codex Cloud integration adapter — Runtime gate/settings exist (`moonmind/codex_cloud/settings.py`); full adapter for the hosted Codex product not yet implemented
+- [ ] **2.3** Codex Cloud production-readiness & contract validation — fake-provider/contract-test E2E across start → poll → fetch → cancel; runtime-gate diagnostics visible in Settings/Mission Control; explicit, tested provider→canonical status mapping; bounded unknown-status behavior (reject at the boundary or enter a diagnosed/intervention state after a bounded wait); move API-key config toward SecretRef/profile-backed resolution rather than long-term raw-env reliance.
+  *Done means:* a CI-runnable contract test exercises the full lifecycle and the gate's enabled/disabled state is operator-visible.
+- [ ] **2.4** External-agent conformance suite — every provider passes the same tests: gate disabled/enabled, start/status/fetch/cancel, polling vs callback, timeout + cancellation cleanup, canonical metadata shape, provider errors mapped to `failureClass`/`providerErrorCode`/diagnostics, and no provider-native top-level payload above the adapter/activity boundary.
+- [ ] **2.5** Durable idempotency & correlation — persist `idempotencyKey` and `correlationId` with the external run handle so retries across Temporal activity attempts cannot create duplicate provider jobs where the provider supports idempotency; where it does not, record the limitation and expose a recovery/intervention path; keep callback correlation keys stable and auditable. (Today the base adapter's in-memory cache only guards a single activity attempt — make cross-attempt dedup explicit.)
+- [ ] **2.6** Safety at external-agent boundaries — route external prompts, metadata, feedback messages, comments, PR publishing, artifact publication, and merge/push-like actions through the high-security outbound scan where applicable; reject raw credential keys from request `parameters`/`workspaceSpec` (validator shipped — extend coverage); scrub provider errors before they enter logs/artifacts; allow risky external follow-ups to route through governance/review instead of auto-send. (Full outbound-scan rollout is Milestone 12; this names the external boundaries that must adopt it.)
+- [ ] **2.7** External-agent observability contract — every external run records provider name, external URL, provider status, normalized status, poll hint, callback support, cancellation semantics, last progress signature, and diagnostics refs; Mission Control shows "cancel unsupported," "awaiting callback," "awaiting feedback," and "intervention requested" truthfully; lifecycle events stay trace/log-correlatable for Milestone 14.
+- [ ] **2.8** Simplify workflow-side provider handling — retire the legacy `_coerce_external_start_status()` repair path in `MoonMind.AgentRun` except as a clearly named replay-compatibility shim; route by provider capability, not payload shape; prevent new providers from adding workflow-side parsing branches.
+- [ ] **2.9** Provider capability matrix — document, per provider: runtime gate, execution style, callbacks, cancel support, result-fetch support, expected terminal statuses, idempotency support, and known limitations (backed by `ProviderCapabilityDescriptor`).
 
 ---
 
@@ -295,7 +310,7 @@ Milestones ordered by **impact on delivering the README promise** (highest first
 
 | Priority | Milestone | Current Status | Remaining |
 |----------|-----------|----------------|-----------|
-| 🔴 P0 | **1 — Claude Code managed-session parity (1.9a–f)** | 🔧 Partial | 6 sub-items |
+| 🔴 P0 | **1 — Shared managed-session plane + Claude parity (1.9a–g)** | 🔧 Partial | 7 sub-items |
 | 🔴 P0 | **13 — Operator-driven recovery (13.1–13.3)** | 🔧 Partial | 3 items |
 | 🔴 P0 | **12 — Safety Guardrails & Governance** | 🔧 Partial | 5 items |
 | 🟠 P1 | **14 — Deep Observability (OTel, cost, live logs)** | 🔧 Partial | 4 items |
@@ -303,7 +318,7 @@ Milestones ordered by **impact on delivering the README promise** (highest first
 | 🟠 P1 | **3 — Multi-Step Planning & Context** | 🔧 Partial | 2 items |
 | 🟠 P1 | **7 — Mission Control Dashboard** | 🔧 Partial | 4 items |
 | 🟡 P2 | **5 — RAG & Document Retrieval** | 🔧 Partial | 2 items |
-| 🟡 P2 | **2 — External Agent Coordination** | 🔧 Partial | 1 item |
+| 🟡 P2 | **2 — External-agent hardening (Codex Cloud core shipped)** | 🔧 Partial | 7 items |
 | 🟡 P2 | **8 — Universal Integration (MCP)** | 🔧 Partial | 1 item |
 | 🟡 P2 | **H — Housekeeping (H.6 metadata hygiene)** | 🔧 Partial | 1 item |
 | 🟢 Done | **4, 6, 9, 10, 11** | ✅ Shipped | 0 items |

@@ -26,7 +26,9 @@ from moonmind.schemas.managed_session_models import (
 )
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
+    ManagedSessionReapResult,
     _default_command_runner,
+    _parse_docker_timestamp,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
     ManagedSessionStore,
@@ -4216,6 +4218,200 @@ async def test_controller_reconcile_degrades_when_container_inspect_fails(
         "failed to inspect managed session container ctr-ok: "
         "docker daemon unavailable"
     )
+
+
+def _reap_active_record(session_id: str) -> CodexManagedSessionRecord:
+    return CodexManagedSessionRecord(
+        sessionId=session_id,
+        sessionEpoch=1,
+        agentRunId="task-1",
+        containerId=f"ctr-{session_id}",
+        threadId=f"thread-{session_id}",
+        runtimeId="codex_cli",
+        imageRef="img",
+        controlUrl=f"docker-exec://{session_id}",
+        status="ready",
+        workspacePath="/work/repo",
+        sessionWorkspacePath="/work/session",
+        artifactSpoolPath="/work/artifacts",
+        startedAt="2026-04-06T12:00:00Z",
+    )
+
+
+def test_parse_docker_timestamp_handles_nano_zulu_and_zero_time() -> None:
+    parsed = _parse_docker_timestamp("2026-06-17T05:20:54.273688912Z")
+    assert parsed is not None
+    assert parsed.tzinfo is not None
+    assert parsed.year == 2026 and parsed.month == 6 and parsed.minute == 20
+    # Docker's zero-value timestamp is treated as unknown.
+    assert _parse_docker_timestamp("0001-01-01T00:00:00Z") is None
+    assert _parse_docker_timestamp("") is None
+    assert _parse_docker_timestamp("not-a-time") is None
+
+
+@pytest.mark.asyncio
+async def test_controller_reaps_orphan_session_containers_and_skips_active(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(_reap_active_record("sess-active"))
+
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:2] == ("docker", "ps"):
+            return 0, "c-active\nc-orphan-agent\nc-orphan-docker\n", ""
+        if command[:3] == ("docker", "inspect", "--format"):
+            return (
+                0,
+                "c-active|sess-active|managed-session|2020-01-01T00:00:00Z\n"
+                "c-orphan-agent|sess-orphan|managed-session|2020-01-01T00:00:00Z\n"
+                "c-orphan-docker|sess-orphan|session-docker-sidecar"
+                "|2020-01-01T00:00:00Z\n",
+                "",
+            )
+        if command[:3] == ("docker", "rm", "-f"):
+            if command[-1].startswith("moonmind-session-"):
+                return 1, "", "No such container"
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert isinstance(result, ManagedSessionReapResult)
+    assert result.scanned_containers == 3
+    assert result.reaped_session_ids == ("sess-orphan",)
+    assert result.reaped_containers == 2
+    assert result.skipped_active == 1
+    assert result.skipped_recent == 0
+    removed = {cmd[-1] for cmd in commands if cmd[:3] == ("docker", "rm", "-f")}
+    assert "c-orphan-agent" in removed
+    assert "c-orphan-docker" in removed
+    assert "c-active" not in removed
+    # Sidecar volumes for the orphan are cleaned up.
+    volume_removals = {
+        cmd[-1] for cmd in commands if cmd[:4] == ("docker", "volume", "rm", "-f")
+    }
+    assert "moonmind-session-sess-orphan-docker-graph" in volume_removals
+    assert "moonmind-session-sess-orphan-docker-socket" in volume_removals
+
+
+@pytest.mark.asyncio
+async def test_controller_reap_skips_orphans_within_grace_window(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    recent = datetime.now(tz=UTC).isoformat()
+
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:2] == ("docker", "ps"):
+            return 0, "c-new\n", ""
+        if command[:3] == ("docker", "inspect", "--format"):
+            return 0, f"c-new|sess-new|managed-session|{recent}\n", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.skipped_recent == 1
+    assert result.reaped_containers == 0
+    assert result.reaped_session_ids == ()
+    assert not any(cmd[:3] == ("docker", "rm", "-f") for cmd in commands)
+
+
+@pytest.mark.asyncio
+async def test_controller_reap_disabled_via_env_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", "0")
+    store = ManagedSessionStore(tmp_path / "session-store")
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        raise AssertionError(f"reap must not call docker when disabled: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.disabled is True
+    assert result.reaped_containers == 0
+
+
+@pytest.mark.asyncio
+async def test_controller_reap_without_store_is_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        raise AssertionError(f"reap must not call docker without a store: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=None,
+        command_runner=_fake_runner,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.disabled is True
+
 
 @pytest.mark.asyncio
 async def test_controller_session_status_persists_returned_session_identity(

@@ -1,5 +1,9 @@
 # MoonMind Constitution
 
+**Version:** 2.0.0 · **Last amended:** 2026-06-16
+
+> Principles are cited **by name**, not by number — ordering and numbering may change across amendments. See **Governance** at the end of this document for the versioning policy, amendment procedure, and amendment log. This revision adds three execution-model principles (**Safety and Governance by Construction**, **Temporal-Native Durable Orchestration**, **Artifacts Are the Durable Evidence Layer**), updates four existing principles, and relocates the former *Product & Operational Constraints* into their owning principles so each rule lives in exactly one place.
+
 ## Core Principles
 
 ### I. Orchestrate, Don't Recreate
@@ -10,16 +14,73 @@ Non-negotiable rules:
 
 - MoonMind MUST work with any agent that can be reached via a standard interface (CLI, API, MCP). Specialized integrations MAY provide deeper orchestration for specific agents, but the platform MUST NOT require them.
 - Adding support for a new agent MUST require only a new adapter — not changes to core orchestration logic.
-- MoonMind MUST support two levels of agent integration:
-  - **Managed runtimes** where MoonMind controls execution, lifecycle, and recovery directly.
-  - **Coordinated agents** where MoonMind tracks status, injects context, and provides feedback but cannot control the agent's internals.
+- MoonMind MUST distinguish at least three execution classes and MUST NOT collapse them into one another:
+  - **Managed runs** — MoonMind directly launches and supervises a CLI runtime execution (lifecycle, recovery, result normalization). Claude Code and Codex CLI are concrete on this path today.
+  - **Managed sessions** — a longer-lived, workflow-scoped runtime with explicit session identity, turn control, continuity epochs, and clear/reset semantics. Codex CLI is the current concrete implementation.
+  - **External / delegated agents** — MoonMind coordinates a provider-owned runtime it does not control: tracking status, injecting context, and closing the feedback loop (e.g., Jules, Codex Cloud).
+- A runtime MUST NOT be described or surfaced as **session-capable** until it has a runtime-specific controller/adapter that satisfies the shared managed-session contract (launch/resume, turn control, active-turn identity, epoch/reset behavior, continuity artifacts, routing/affinity guarantees, and Mission Control projections). Managed-run support does not imply managed-session support.
+- Runtime-specific behavior MUST remain behind strategies, adapters, launchers, supervisors, provider-profile materialization, and activity handlers. Core orchestration MUST consume canonical contracts and compact metadata, not runtime internals.
+- Core orchestration features (planning, context management, resiliency) MUST degrade gracefully — not break — for external/delegated agents where deep control is unavailable.
+- MoonMind MUST NOT build a competing cognitive engine to replace the agents themselves. MoonMind MAY run its own scoped model calls for orchestration-level functions (planning, evaluation, summarization, risk classification, review) where they serve the orchestration layer rather than recreating the agent.
 
-  Core orchestration features (planning, context management, resiliency) MUST degrade gracefully — not break — when operating in coordination mode.
-- MoonMind MUST NOT build its own competing cognitive engine. The value is in the orchestration layer — resiliency, context management, planning, and coordination — not in replacing the agents themselves.
+Rationale: The agents themselves evolve rapidly and are best maintained by their providers. MoonMind's moat is the orchestration layer above them, and that layer depends on keeping the run / session / delegated execution classes distinct rather than over-claiming uniform capability.
 
-Rationale: The agents themselves evolve rapidly and are best maintained by their providers. MoonMind's moat is the orchestration layer above them.
+### II. Safety and Governance by Construction
 
-### II. One-Click Agent Deployment
+MoonMind MUST constrain autonomous agents through enforceable runtime, credential, filesystem, Docker, network, publish, and approval boundaries built into the execution substrate — not through trust in the agent's prompt behavior. Safety is a first-class product surface, not an operational afterthought.
+
+Non-negotiable rules (enforced today):
+
+- Launch, control, publish, push, comment, artifact-publication, and external-tool boundaries MUST enforce the policy in effect for the run. Policy violations MUST fail fast with actionable errors, never silent degradation.
+- MoonMind MUST NOT silently substitute a credential source, switch provider profiles, rewrite billing-relevant values (e.g., model identifiers, effort), or fall back to a less-constrained execution path. Missing or revoked credentials MUST produce explicit, actionable failures — fail-fast, not fall-back.
+- Provider Profiles MUST be treated as execution-target **policy contracts** (runtime + provider + credential source + materialization mode + model defaults + concurrency/cooldown + routing), not merely auth records.
+- Secrets MUST be carried as **references**, never raw values, in durable contracts, profile rows, workflow payloads, logs, and artifacts. Secret values MUST be resolved only at controlled launch/proxy boundaries and MUST be redacted from observable output (logs, artifacts, outbound text, PR/issue text).
+- Managed runtime work MUST run inside isolated execution boundaries: capability-routed Docker access, a per-session sidecar daemon rather than the host socket for ordinary session Docker work, and file allowlists restricting what a run may modify.
+- High-autonomy or high-privilege actions (e.g., dangerous-permission runtime modes, autonomous remediation) MUST be policy-gated and operator-visible.
+
+Target-state rules (recommended now; tracked in **Roadmap Milestone 12** and becoming MUST as the substrate lands):
+
+- Every managed run and session SHOULD compile a **typed policy envelope** declaring runtime, provider profile, credential references, workspace scope, file allowlists, Docker/network permissions, outbound boundaries, and approval requirements — enforced at launch and control boundaries. *(Target state; becomes MUST once envelopes are compiled and enforced per run.)*
+- Privileged actions SHOULD produce **governance telemetry** recording actor, action, target, policy decision, rationale, and evidence/artifact references. *(Target state.)*
+- The **secret lifecycle** — who created, rotated, or deleted a secret; which profiles reference it; which launches resolved it — SHOULD be answerable from operator surfaces without exposing secret values. *(Target state.)*
+- Outbound boundaries (PR/issue comments, commit/push paths, messages, artifact publication, external tool calls) SHOULD run deterministic secret/safety scans in high-security mode, blocking on match. *(Partially adopted at Jira-comment and managed-workspace git-push boundaries; full coverage is target state.)*
+
+Gate (a prohibition, enforced today):
+
+- Autonomous remediation and other high-autonomy actions MUST NOT be enabled until the substrate they depend on — enforced policy, governance telemetry, secret auditability, and sufficient forensic observability — is in place. Autonomy MUST NOT outrun its guardrails.
+
+Rationale: Granting an agent your credentials and a shell is a liability unless something constrains it. Building the constraints into the substrate — and making them auditable — is what lets MoonMind grant autonomy without granting trust.
+
+### III. Temporal-Native Durable Orchestration
+
+MoonMind MUST keep Temporal as the authoritative orchestration boundary for workflow lifecycle, retries, timers, cancellation, signals, updates, queries, child workflows, durable waiting, and operator-visible workflow state.
+
+Non-negotiable rules:
+
+- Workflow code MUST be deterministic and side-effect-free. It MUST NOT read or write files, open network connections, hold PTYs/WebSockets, launch or supervise processes, call Docker or provider APIs, write application databases or artifact stores, or resolve raw secrets. All such side effects MUST happen in routed Activities, external services, or integration callback boundaries.
+- Side-effecting Activities MUST be idempotent or guarded by durable idempotency keys (e.g., `workflow_id`, `run_id`, `session_id`, `session_epoch`, `turn_id`, `request_id`, or a lease ID).
+- Workflow payloads, Search Attributes, Workflow IDs, Memos, Signals, Updates, Queries, and Activity inputs/results MUST contain only compact, non-sensitive metadata. Large content and evidence MUST be represented by artifact references (see **Artifacts Are the Durable Evidence Layer**). Secret values MUST NOT traverse the Temporal control plane unless an explicit Payload Codec / Data Converter encryption policy is enabled for that payload class.
+- Long-lived workflows MUST bound history and preserve replay compatibility through Continue-As-New, Temporal patch/version markers, Worker Versioning, or an explicit reset/migration plan. Changes that add, remove, or reorder workflow commands MUST use these mechanisms whenever in-flight histories or persisted payloads depend on them.
+- Compatibility-sensitive orchestration changes MUST ship with boundary-level regression coverage (worker-binding, Temporal activity-invocation, replay-style, or in-flight payload compatibility tests), not only isolated unit tests.
+
+Rationale: Temporal is the durable envelope that makes fire-and-forget execution and clean recovery possible. Determinism, payload discipline, and replay compatibility are correctness requirements, not stylistic preferences — they are what allow the system to be deleted-and-rebuilt aggressively (see **Pre-Release Velocity: Delete, Don't Deprecate**) without corrupting live executions.
+
+### IV. Artifacts Are the Durable Evidence Layer
+
+MoonMind MUST treat every run as an evidence-producing process whose durable record survives the container, worker, session, or provider process that produced it.
+
+Non-negotiable rules:
+
+- Large execution data — prompts and instruction bundles, retrieved context packs, skill snapshots, stdout/stderr, merged logs, diagnostics, generated files and patches, provider result bundles, session summaries and reset boundaries, control events, and observability event streams — MUST be stored as artifacts or compact artifact references, not embedded in workflow history or terminal result contracts.
+- Artifacts MUST remain linked to concrete executions. Workflow-, step-, run-, and session-oriented views — including Mission Control — MUST be projections over execution-linked artifacts and compact metadata, NOT a second durable source of truth.
+- MoonMind MUST provide an operator-facing surface (Mission Control) to track real-time run status, browse artifacts, inspect per-step logs and diagnostics, monitor intervention requests, and audit execution histories. Mission Control is the primary operator interface and its capabilities SHOULD grow alongside the orchestration layer.
+- Operators MUST be able to answer "what happened?" and "what is the evidence?" from durable artifacts and compact metadata without reading raw worker internals. Operators SHOULD likewise be able to answer "what changed?", "what failed?", and "what did it cost?" as the observability surface matures. *(End-to-end tracing and per-step cost attribution are target state; tracked in Roadmap Milestone 14.)*
+- Structured logs, metrics, and traces MUST use stable, non-sensitive correlation identifiers (workflow / activity / run / runtime / profile / session / turn IDs and artifact refs). Raw prompts, raw credentials, full logs, generated file contents, and secret-bearing data MUST NOT be emitted as ordinary structured telemetry fields.
+- Live logs and streaming SHOULD degrade to artifact-backed replay; live-stream failure MUST NOT fail the run.
+
+Rationale: "It finished" is not an answer. Evidence that outlives the process is what makes runs auditable, recoverable, and improvable. Mission Control reads that evidence; it does not replace it.
+
+### V. One-Click Agent Deployment
 
 MoonMind MUST provide a “fresh clone → running system” path that is simple,
 documented, reliable, and local-first in any environment that supports Docker
@@ -48,7 +109,7 @@ Non-negotiable rules:
 Rationale: MoonMind is an operator tool. Setup friction and mandatory cloud
 coupling are feature-killers.
 
-### III. Avoid Vendor Lock-In
+### VI. Avoid Vendor Lock-In
 
 MoonMind MUST avoid designs that force one exclusive proprietary provider to use core functionality.
 
@@ -62,7 +123,7 @@ Non-negotiable rules:
 
 Rationale: MoonMind should remain deployable and evolvable across ecosystems.
 
-### IV. Own Your Data
+### VII. Own Your Data
 
 MoonMind MUST make it easy to gather data from many sources, store it locally, and provide it as managed context to AI agents.
 
@@ -75,7 +136,7 @@ Non-negotiable rules:
 
 Rationale: Context management is a core orchestration advantage. Agents perform better when they see the right information at the right time — and operators must own the data that makes that possible.
 
-### V. Skills Are First-Class and Easy to Add
+### VIII. Skills Are First-Class and Easy to Add
 
 MoonMind MUST make skills straightforward to create, register, test, and use across runtimes.
 
@@ -95,7 +156,7 @@ Non-negotiable rules:
 
 Rationale: Skills are the unit of scale for MoonMind automation.
 
-### VI. The Bittersweet Lesson: AI scaffolds are useful, but they must constantly evolve.
+### IX. The Bittersweet Lesson: AI scaffolds are useful, but they must constantly evolve.
 
 **The Principle:** AI scaffolding is a massive short-term speed multiplier—but it expires. Scaffolding decays rapidly as product boundaries sharpen, integrations drift, and foundation model capabilities internalize what used to require custom code. Therefore, optimize for **replaceability and evolution**: build every scaffold expecting to delete, swap, or regenerate it quickly without destabilizing the system.
 
@@ -114,7 +175,7 @@ Focus rigid, robust engineering on what LLMs won’t do natively: secure remote 
 5. **Isolate Volatility**
 Encapsulate likely-to-change code—vendor auth flows, API clients, capability negotiation, and UI seams—into replaceable modules with explicit boundaries. This ensures that early integration hacks don’t calcify into the permanent architecture.
 
-### VII. Powerful Runtime Configurability
+### X. Powerful Runtime Configurability
 
 MoonMind MUST be configurable at runtime without requiring code edits or image rebuilds for routine changes.
 
@@ -135,7 +196,7 @@ Non-negotiable rules:
 
 Rationale: MoonMind runs in many environments; routine tuning must be easy and reversible.
 
-### VIII. Modular and Extensible Architecture
+### XI. Modular and Extensible Architecture
 
 MoonMind MUST remain easy to extend without rewriting the core.
 
@@ -150,13 +211,13 @@ Non-negotiable rules:
 
 Rationale: Extensibility is the product. Architecture must resist entanglement.
 
-### IX. Resilient by Default
+### XII. Resilient by Default
 
 MoonMind MUST enable fire-and-forget execution — operators should be able to submit work, walk away, and trust the system to handle failures without babysitting.
 
 Non-negotiable rules:
 
-- All externally visible side effects MUST be designed to be retry-safe (idempotent or de-duplicated).
+- All externally visible side effects (starting runs, publishing results, posting to GitHub/Jira) MUST be retry-safe so that a crash mid-operation never produces duplicates. At the workflow boundary this is realized through the activity-idempotency rule in **Temporal-Native Durable Orchestration**.
 - Long-running workflows MUST persist enough state to resume, retry, or fail deterministically after worker restarts.
 - MoonMind MUST detect stuck agents (loops, repeated failures) and apply escalating interventions (soft reset, hard reset, termination) before burning through the operator's API budget.
 - Failure classification MUST distinguish transient errors (safe to retry) from permanent failures (stop execution).
@@ -165,14 +226,19 @@ Non-negotiable rules:
   - deterministic “needs human” terminal states when not recoverable,
   - error summaries that tell an operator what happened and what to do next.
 - Health checks MUST exist for runtime-critical services and worker processes (startup checks + dependency checks).
-- Changes to workflow/activity/update/signal contracts MUST be safe for in-flight executions:
-  - preserve compatibility for persisted payloads and worker-bound invocation shapes where feasible, or
-  - use an explicit versioned cutover/migration plan when compatibility cannot be preserved.
-- Compatibility-sensitive orchestration changes MUST ship with boundary-level regression coverage (for example worker-binding, Temporal activity invocation, replay-style, or in-flight payload compatibility tests), not only isolated unit tests.
+- Changes to workflow/activity/update/signal contracts MUST remain safe for in-flight executions per **Temporal-Native Durable Orchestration** (replay compatibility, versioned cutover, and boundary-level regression coverage).
 
-Rationale: Resiliency is what makes unattended execution possible. The system must withstand infrastructure failures, agent failures, and runaway costs.
+Evidence-based recovery and remediation:
 
-### X. Facilitate Continuous Improvement
+- Recovery MUST be evidence-based: remediation actions MUST read durable artifacts, step ledgers, diagnostics, and compact workflow metadata rather than transient container state.
+- Remediation actions MUST be typed, idempotent, privilege-separated, and audit-logged.
+- Duplicate or conflicting repair attempts MUST be prevented through durable locks, ledgers, or reconciliation state.
+- Checkpoint resume SHOULD be the default recovery path when evidence supports it. *(Operator-driven recovery is current; resume-as-default is target state, tracked in Roadmap Milestone 13.)*
+- Autonomous remediation MUST NOT outrun the safety and observability substrate it depends on (see **Safety and Governance by Construction**).
+
+Rationale: Resiliency is what makes unattended execution possible. The system must withstand infrastructure failures, agent failures, and runaway costs — and when a run does fail, recovery must be driven by durable evidence, not by whatever happened to survive in a container.
+
+### XIII. Facilitate Continuous Improvement
 
 MoonMind MUST make it easy to improve itself and the projects it operates on.
 
@@ -189,7 +255,7 @@ Non-negotiable rules:
 
 Rationale: MoonMind is an automation engine; it must learn from real execution.
 
-### XI. Docs-First Development and Traceability
+### XIV. Docs-First Development and Traceability
 
 MoonMind development MUST be docs-first, with clear contracts and traceability. The durable source of truth is the canonical, long-lived documentation under `docs/` together with this constitution — not the per-feature execution packets under `specs/`.
 
@@ -200,10 +266,12 @@ Non-negotiable rules:
 - When a non-trivial change lands, its durable decisions MUST be reflected in the owning `docs/` files; the `specs/` packet (if one was produced) remains supplemental execution evidence, not the system of record.
 - When a feature does use the optional execution workflow, `spec.md` SHOULD remain technology-agnostic with implementation details in `plan.md`, and `plan.md` MUST include a “Constitution Check” with PASS/FAIL coverage for each principle (documenting any violation and mitigation in “Complexity Tracking”).
 - Documentation MUST NOT silently drift from reality: when behavior changes, update the owning long-lived `docs/` files first; refresh any in-flight `specs/` execution packet only as supplemental history.
+- **Public-facing release metadata is a documentation surface.** Package metadata, license declarations, version strings, README positioning, compose/startup instructions, and product descriptions (e.g., `pyproject.toml`, `package.json`) MUST agree with each other and with the canonical README, roadmap, and long-lived `docs/`. They MUST NOT describe an older or divergent product.
+- **This constitution is itself a canonical documentation surface.** It MUST carry version and amendment metadata (see **Governance**) and MUST NOT drift from the architecture and product direction it governs.
 
-Rationale: Canonical docs are how MoonMind stays maintainable while evolving quickly. Spec packets are disposable execution scaffolding; the long-lived docs and matrices are what operators and agents must be able to rely on.
+Rationale: Canonical docs are how MoonMind stays maintainable while evolving quickly. Spec packets are disposable execution scaffolding; the long-lived docs, the public release metadata, and this constitution are what operators and agents must be able to rely on.
 
-### XII. Canonical Documentation Separates Desired State from Migration Backlog
+### XV. Canonical Documentation Separates Desired State from Migration Backlog
 
 MoonMind MUST keep long-lived documentation readable as **what the system is for and how it should behave**, not as a running construction diary.
 
@@ -217,7 +285,7 @@ Non-negotiable rules:
 
 Rationale: Canonical docs stay stable references for operators and implementers; time-bound work belongs in `docs/tmp/` or disposable local artifacts.
 
-### XIII. Pre-Release Velocity: Delete, Don't Deprecate
+### XVI. Pre-Release Velocity: Delete, Don't Deprecate
 
 MoonMind is a **pre-release project** with no external consumers. Speed of iteration and codebase clarity MUST take priority over backward compatibility with internal legacy patterns.
 
@@ -229,30 +297,34 @@ Non-negotiable rules:
 - Legacy artifacts (code, docs, configs) that remain after a refactor are considered **tech debt bugs**, not acceptable trade-offs. They actively harm troubleshooting by creating ambiguity about which path is live.
 - When refactoring, **track down and update every caller** — grep the codebase, update tests, update docs — in a single cohesive change. Partial migrations are worse than no migration.
 
-Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds the cost of a clean break. Every stale alias, orphaned model, or outdated doc section is a future debugging trap that wastes hours of human and agent time.
+Durable-execution carve-out (this is a correctness boundary, not legacy compatibility):
 
-## Non-Negotiable Product & Operational Constraints
+- "Delete, don't deprecate" MUST NOT be read to permit Temporal nondeterminism, broken replay, orphaned in-flight executions, or unreadable persisted payloads. Internal compatibility shims for code-level contracts are unnecessary, but replay / version / migration paths are **required** when durable workflow histories, persisted payloads, or live executions depend on them (see **Temporal-Native Durable Orchestration** and **Resilient by Default**).
+- Breaking changes to any future **public** API/contract MUST include a migration plan. Deprecation windows and compatibility aliases are NOT required for internal contracts — remove cleanly and immediately. If a public API surface is later introduced, deprecation windows MUST be defined at that time.
 
-- **Security / secret hygiene**:
-  - Secrets MUST NOT be written into artifacts, logs, or PR text.
-  - Secret inputs MUST be passed via approved secret channels (env/secret stores) and redacted in output.
-- **Observability & Mission Control**:
-  - Workflows MUST emit enough structured metadata to diagnose issues (run IDs, stage names, outcomes, durations).
-  - Operators MUST be able to answer “what happened?” without reading raw worker internals.
-  - MoonMind MUST provide an operator-facing surface (Mission Control) to track real-time run status, browse artifacts, monitor intervention requests, and audit execution histories.
-  - Mission Control is the primary interface for operators — its capabilities SHOULD grow alongside the orchestration layer.
-- **Compatibility & migration**:
-  - Breaking changes to public APIs/contracts MUST include a migration plan.
-  - Since MoonMind is pre-release (see Principle XIII), **deprecation windows and compatibility aliases are NOT required** for internal contracts. Remove cleanly and immediately.
-  - If a future public API surface is introduced, deprecation windows MUST be defined at that time.
+Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds the cost of a clean break. Every stale alias, orphaned model, or outdated doc section is a future debugging trap. The one thing a clean break must never break is a durable workflow that is already running.
 
 ## Development Workflow & Quality Gates
 
 - **Constitution is a gate**:
   - Every `/agentkit.plan` output MUST include the Constitution Check gate, and it MUST be re-checked after Phase 1 design.
+  - A plan **PASSES** a principle when it complies with that principle's **MUST** rules. **SHOULD** and explicitly **target-state** items are recommendations: they do not by themselves cause a FAIL, but a plan that regresses against them MUST note it under “Complexity Tracking,” and a plan that claims to deliver a target-state capability MUST meet the corresponding MUST bar.
 - **Validation is required**:
   - Each feature MUST define at least one independent validation path (automated tests or a deterministic quickstart/manual validation).
 - **Clarity over cleverness**:
   - Prefer explicit contracts, explicit adapters, and explicit errors over implicit fallback behavior.
 - **Exceptions must be visible**:
   - If a plan violates a MUST principle, it MUST be documented as a violation with a mitigation and a path back to compliance.
+
+## Governance
+
+- **Authority.** This constitution and the canonical long-lived documentation under `docs/` are the durable source of truth. Where this constitution and a `docs/` file disagree, the constitution governs the principle and the `docs/` file governs the mechanism; conflicts MUST be resolved by amendment rather than left standing.
+- **Referencing principles.** Cite principles **by name** (e.g., “Safety and Governance by Construction”), not by number. Numbering is presentation order and MAY change across amendments; names are stable identifiers.
+- **Versioning policy.** This document uses semantic versioning:
+  - **MAJOR** — a principle is added, removed, or materially redefined, or the document is restructured.
+  - **MINOR** — a new rule or meaningful expansion is added within an existing principle.
+  - **PATCH** — clarifications, wording, or non-semantic fixes.
+- **Amendment procedure.** Amendments MUST update the version and `Last amended` date, summarize the change in the amendment log below, and propagate any renamed principles to dependent references (e.g., agent instruction files, `docs/` cross-references) in the same change, per **Pre-Release Velocity: Delete, Don't Deprecate**.
+- **Amendment log.**
+  - **2.0.0 (2026-06-16)** — Added **Safety and Governance by Construction**, **Temporal-Native Durable Orchestration**, and **Artifacts Are the Durable Evidence Layer**. Updated **Orchestrate, Don't Recreate** (three execution classes; session-capability claim discipline), **Resilient by Default** (evidence-based/typed remediation; autonomous-repair gate), **Docs-First Development and Traceability** (release-metadata hygiene; constitution as a versioned doc surface), and **Pre-Release Velocity: Delete, Don't Deprecate** (durable-execution carve-out). Reordered so the execution-model principles follow **Orchestrate, Don't Recreate**, with Safety leading. Relocated the former *Non-Negotiable Product & Operational Constraints* (security/secret hygiene, observability/Mission Control, compatibility/migration) into their owning principles so each rule lives once. Established versioning and the cite-by-name convention.
+  - **1.x (unversioned)** — Original thirteen-principle constitution prior to the introduction of version metadata.

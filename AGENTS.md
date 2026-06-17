@@ -29,7 +29,7 @@ When writing code that interacts with skills:
 
 - **Canonical docs** (`docs/`): describe **declarative desired state** — architecture, contracts, operator-visible behavior, target semantics. Avoid making phased migration or implementation checklists the main story in these files.
 - **Migration, rollout, and MoonSpec execution notes** belong under **`docs/tmp/`** or in **local-only / gitignored paths** (e.g. `artifacts/` for tool handoffs), not as the primary framing of canonical docs. `specs/` is no longer a version-controlled source of guidance.
-- Align with **Constitution principle XII** in `.specify/memory/constitution.md`.
+- Align with the **Canonical Documentation Separates Desired State from Migration Backlog** principle in `.specify/memory/constitution.md`.
 - Document classes, declarative-vs-imperative classification, and precedence rules are defined in `docs/Workflows/MoonSpecDocumentModel.md`.
 
 ## Testing Instructions
@@ -145,7 +145,7 @@ Key diagnostics:
 - Repo and local skill sources are potentially *untrusted input*. Implementations must respect deployment policy on whether those sources are allowed and must not silently assume repo/local skills are always enabled.
 
 ## Compatibility Policy
-- MoonMind is a **pre-release project** (see Constitution Principle XIII). Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
+- MoonMind is a **pre-release project** (see the **Pre-Release Velocity: Delete, Don't Deprecate** principle in the Constitution). Do NOT introduce compatibility aliases, translation layers, or backward-compat wrappers for internal contracts. When a pattern is superseded, **remove the old version entirely** in the same change.
 - When refactoring an activity name, model, or interface: grep the entire codebase, update every caller, test, mock, and doc reference, and delete the old artifact. Partial migrations are not acceptable.
 - Never introduce compatibility transforms that change execution semantics or billing-relevant values (for example model identifiers, effort values, queue semantics, or publish behavior).
 - Prefer fail-fast behavior for unsupported runtime input values over hidden fallback behavior.
