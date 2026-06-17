@@ -211,4 +211,141 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       effort: "low",
     });
   });
+
+  it("reconstructs canonical workflow steps from execution parameters", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution({
+      workflowId: "mm:canonical-workflow",
+      workflowType: "MoonMind.UserWorkflow",
+      targetRuntime: "codex_cli",
+      inputParameters: {
+        workflow: {
+          instructions: "Run Jira Implement for MM-901.",
+          runtime: { mode: "codex_cli", model: "gpt-5.4" },
+          appliedStepTemplates: [
+            {
+              slug: "jira-implement",
+              version: "1.0.0",
+              stepIds: [
+                "tpl:jira-implement:1.0.0:01",
+                "tpl:jira-implement:1.0.0:02",
+              ],
+            },
+          ],
+          steps: [
+            {
+              id: "tpl:jira-implement:1.0.0:01",
+              title: "Load Jira preset brief",
+              type: "tool",
+              instructions: "Load MM-901.",
+              tool: { id: "jira.load_preset_brief", inputs: { issueKey: "MM-901" } },
+            },
+            {
+              id: "tpl:jira-implement:1.0.0:02",
+              title: "Assess existing implementation state",
+              type: "skill",
+              instructions: "Assess MM-901.",
+              skill: { id: "auto", args: {} },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(draft.taskInstructions).toBe(
+      "Run Jira Implement for MM-901.\n\nLoad MM-901.\n\nAssess MM-901.",
+    );
+    expect(draft.steps.map((step) => step.title)).toEqual([
+      "Load Jira preset brief",
+      "Assess existing implementation state",
+    ]);
+    expect(draft.appliedTemplates).toEqual([
+      {
+        slug: "jira-implement",
+        version: "1.0.0",
+        inputs: {},
+        stepIds: [
+          "tpl:jira-implement:1.0.0:01",
+          "tpl:jira-implement:1.0.0:02",
+        ],
+        appliedAt: "",
+        capabilities: [],
+      },
+    ]);
+  });
+
+  it("prefers authoritative draft.workflow when it carries the full preset expansion", () => {
+    const draft = buildTemporalSubmissionDraftFromExecution(
+      {
+        workflowId: "mm:canonical-workflow-snapshot",
+        workflowType: "MoonMind.UserWorkflow",
+        taskInputSnapshot: {
+          available: true,
+          artifactRef: "art-snapshot",
+          snapshotVersion: 1,
+          sourceKind: "create",
+          reconstructionMode: "authoritative",
+          disabledReasons: {},
+          fallbackEvidenceRefs: [],
+        },
+        inputParameters: {
+          workflow: {
+            instructions: "Run Jira Implement for MM-902.",
+            steps: [
+              {
+                id: "tpl:jira-implement:1.0.0:01",
+                title: "Load Jira preset brief",
+                instructions: "Load MM-902.",
+              },
+            ],
+          },
+        },
+      },
+      {
+        snapshotVersion: 1,
+        source: { kind: "create" },
+        draft: {
+          workflowShape: "multi_step",
+          workflow: {
+            instructions: "Run Jira Implement for MM-902.",
+            appliedStepTemplates: [
+              {
+                slug: "jira-implement",
+                version: "1.0.0",
+                stepIds: [
+                  "tpl:jira-implement:1.0.0:01",
+                  "tpl:jira-implement:1.0.0:02",
+                  "tpl:jira-implement:1.0.0:03",
+                ],
+              },
+            ],
+            steps: [
+              {
+                id: "tpl:jira-implement:1.0.0:01",
+                title: "Load Jira preset brief",
+                instructions: "Load MM-902.",
+              },
+              {
+                id: "tpl:jira-implement:1.0.0:02",
+                title: "Assess existing implementation state",
+                instructions: "Assess MM-902.",
+              },
+              {
+                id: "tpl:jira-implement:1.0.0:03",
+                title: "Finalize Jira status",
+                instructions: "Finalize MM-902.",
+                skill: { id: "jira-issue-updater", args: {} },
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(draft.steps.map((step) => step.title)).toEqual([
+      "Load Jira preset brief",
+      "Assess existing implementation state",
+      "Finalize Jira status",
+    ]);
+    expect(draft.appliedTemplates[0]?.slug).toBe("jira-implement");
+  });
 });

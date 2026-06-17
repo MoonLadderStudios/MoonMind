@@ -1769,7 +1769,8 @@ def _serialize_execution(
     skill_params = (
         task_params.get("skill") if isinstance(task_params.get("skill"), dict) else {}
     )
-    target_skill = (
+    preset_primary_skill = _preset_primary_skill_name(task_params)
+    target_skill = preset_primary_skill or (
         str(
             tool_params.get("name")
             or tool_params.get("id")
@@ -1779,8 +1780,6 @@ def _serialize_execution(
         ).strip()
         or None
     )
-    if not target_skill:
-        target_skill = _preset_primary_skill_name(task_params)
     if not target_skill:
         target_skill = (
             _coerce_temporal_scalar(params.get("targetSkill"))
@@ -1900,9 +1899,8 @@ def _serialize_execution(
 
     task_skills = _skill_selector_names(task_payload.get("skills"))
     if task_skills is None:
-        template_primary_skill = _preset_primary_skill_name(task_payload)
-        if template_primary_skill:
-            task_skills = [template_primary_skill]
+        if preset_primary_skill:
+            task_skills = [preset_primary_skill]
     skill_runtime = _skill_runtime_evidence(
         params=params,
         task_payload=task_payload,

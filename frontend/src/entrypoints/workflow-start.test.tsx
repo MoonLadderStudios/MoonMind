@@ -13944,6 +13944,70 @@ describe("Task Create MM-578 Preset expansion", () => {
         }),
       } as Response);
     }
+    if (
+      url ===
+      "/api/executions/mm%3Acanonical-preset-edit?source=temporal"
+    ) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          workflowId: "mm:canonical-preset-edit",
+          workflowType: "MoonMind.UserWorkflow",
+          state: "executing",
+          targetRuntime: "codex_cli",
+          repository: "MoonLadderStudios/MoonMind",
+          publishMode: "pr",
+          inputParameters: {
+            targetRuntime: "codex_cli",
+            repository: "MoonLadderStudios/MoonMind",
+            workflow: {
+              instructions: "Run Jira Implement for MM-901.",
+              runtime: { mode: "codex_cli" },
+              publish: { mode: "pr" },
+              taskTemplate: {
+                slug: "jira-implement",
+                version: "1.0.0",
+              },
+              appliedStepTemplates: [
+                {
+                  slug: "jira-implement",
+                  version: "1.0.0",
+                  stepIds: [
+                    "tpl:jira-implement:1.0.0:01",
+                    "tpl:jira-implement:1.0.0:02",
+                  ],
+                },
+              ],
+              steps: [
+                {
+                  id: "tpl:jira-implement:1.0.0:01",
+                  title: "Fetch Jira issue",
+                  instructions: "Fetch MM-901.",
+                  tool: {
+                    type: "tool",
+                    id: "jira.get_issue",
+                    inputs: { issueKey: "MM-901" },
+                  },
+                },
+                {
+                  id: "tpl:jira-implement:1.0.0:02",
+                  title: "Implement preset story",
+                  instructions: "Implement MM-901.",
+                  skill: {
+                    id: "moonspec-orchestrate",
+                    args: { issueKey: "MM-901" },
+                  },
+                },
+              ],
+            },
+          },
+          actions: {
+            canUpdateInputs: true,
+            canRerun: false,
+          },
+        }),
+      } as Response);
+    }
     if (url === "/api/executions") {
       return Promise.resolve({
         ok: true,
@@ -13954,6 +14018,14 @@ describe("Task Create MM-578 Preset expansion", () => {
       return Promise.resolve({
         ok: true,
         json: async () => ({ execution: { workflowId: "mm:auto-preset-edit" } }),
+      } as Response);
+    }
+    if (url === "/api/executions/mm%3Acanonical-preset-edit/update") {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          execution: { workflowId: "mm:canonical-preset-edit" },
+        }),
       } as Response);
     }
     return Promise.resolve({
@@ -14843,6 +14915,61 @@ describe("Task Create MM-578 Preset expansion", () => {
         (entry) => entry.type === "preset",
       ),
     ).toBe(false);
+  });
+
+  it("saves canonical workflow edit patches without dropping expanded preset steps", async () => {
+    window.history.pushState(
+      {},
+      "Task Edit",
+      "/workflows/new?editExecutionId=mm%3Acanonical-preset-edit",
+    );
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Edit Workflow" })).toBeTruthy();
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    expect(await screen.findByText("Step 2")).toBeTruthy();
+    expect(await screen.findByDisplayValue("Implement MM-901.")).toBeTruthy();
+
+    fireEvent.change(within(firstStep).getByLabelText("Step 1 Instructions"), {
+      target: { value: "Fetch edited MM-901." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Acanonical-preset-edit/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Acanonical-preset-edit/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body || "{}")) as {
+      updateName?: string;
+      parametersPatch?: {
+        task?: unknown;
+        workflow?: {
+          appliedStepTemplates?: Array<Record<string, unknown>>;
+          steps?: Array<Record<string, unknown>>;
+        };
+      };
+    };
+    expect(request.updateName).toBe("UpdateInputs");
+    expect(request.parametersPatch?.task).toBeUndefined();
+    expect(
+      request.parametersPatch?.workflow?.steps?.map((entry) => entry.title),
+    ).toEqual(["Fetch Jira issue", "Implement preset story"]);
+    expect(request.parametersPatch?.workflow?.steps?.[0]?.instructions).toBe(
+      "Fetch edited MM-901.",
+    );
+    expect(
+      request.parametersPatch?.workflow?.appliedStepTemplates?.[0]?.slug,
+    ).toBe("jira-implement");
   });
 
   it("does not auto-expand or submit on non-submit Preset interactions", async () => {

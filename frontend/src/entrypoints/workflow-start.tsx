@@ -866,13 +866,30 @@ function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown
   return structuredClone(value) as Record<string, unknown>;
 }
 
+function workflowPayloadKey(
+  source: Record<string, unknown>,
+): "workflow" | "task" | null {
+  if (Object.keys(recordValue(source.workflow)).length > 0) {
+    return "workflow";
+  }
+  if (Object.keys(recordValue(source.task)).length > 0) {
+    return "task";
+  }
+  return null;
+}
+
+function workflowTaskRecord(source: Record<string, unknown>): Record<string, unknown> {
+  const key = workflowPayloadKey(source);
+  return key ? recordValue(source[key]) : {};
+}
+
 function artifactInputTaskRecord(
   artifactInput: Record<string, unknown>,
 ): Record<string, unknown> {
   const snapshotDraft = recordValue(artifactInput.draft);
   const source =
     Object.keys(snapshotDraft).length > 0 ? snapshotDraft : artifactInput;
-  return recordValue(source.task);
+  return workflowTaskRecord(source);
 }
 
 function artifactInputHasStepInstructionGaps(
@@ -933,7 +950,8 @@ function mergeMissingTaskInstructionsFromArtifact(
   const mergedDraft = recordValue(merged.draft);
   const mergedSource =
     Object.keys(mergedDraft).length > 0 ? mergedDraft : merged;
-  const mergedTask = recordValue(mergedSource.task);
+  const mergedTaskKey = workflowPayloadKey(mergedSource);
+  const mergedTask = mergedTaskKey ? recordValue(mergedSource[mergedTaskKey]) : {};
   const mergedSteps = Array.isArray(mergedTask.steps) ? mergedTask.steps : [];
   if (mergedSteps.length === 0) {
     return artifactInput;
@@ -980,7 +998,9 @@ function mergeMissingTaskInstructionsFromArtifact(
       instructions: String(sourceStep?.instructions),
     };
   });
-  mergedSource.task = mergedTask;
+  if (mergedTaskKey) {
+    mergedSource[mergedTaskKey] = mergedTask;
+  }
   return changed ? merged : artifactInput;
 }
 
@@ -1037,14 +1057,14 @@ function buildEditParametersPatch({
       ? artifactBase.parameters
       : executionParameters,
   );
-  const submittedTask = recordValue(submittedPayload.task);
-  const artifactBaseTask = recordValue(artifactBase.parameters.task);
-  const executionTask = recordValue(executionParameters.task);
+  const submittedTask = workflowTaskRecord(submittedPayload);
+  const artifactBaseTask = workflowTaskRecord(artifactBase.parameters);
+  const executionTask = workflowTaskRecord(executionParameters);
   const baseTask = mergeRecordValues(
     artifactBase.fromAuthoritativeDraft
       ? executionTask
       : artifactBaseTask,
-    recordValue(baseParameters.task),
+    workflowTaskRecord(baseParameters),
   );
   const editTask = { ...submittedTask };
 
@@ -1076,11 +1096,18 @@ function buildEditParametersPatch({
     delete mergedTask.git;
   }
 
+  const usesCanonicalWorkflowPayload =
+    Object.keys(recordValue(baseParameters.workflow)).length > 0 ||
+    Object.keys(recordValue(executionParameters.workflow)).length > 0 ||
+    Object.keys(recordValue(artifactBase.parameters.workflow)).length > 0 ||
+    Object.keys(recordValue(submittedPayload.workflow)).length > 0;
+  const workflowPatchKey = usesCanonicalWorkflowPayload ? "workflow" : "task";
   const parametersPatch: Record<string, unknown> = {
     ...baseParameters,
     ...submittedPayload,
-    task: mergedTask,
+    [workflowPatchKey]: mergedTask,
   };
+  delete parametersPatch[workflowPatchKey === "workflow" ? "task" : "workflow"];
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
   }
@@ -3989,7 +4016,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           execution.taskInputSnapshot?.artifactRef || "",
         ).trim();
         const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
-        const inlineTask = execution.inputParameters?.task;
+        const inlineTask = workflowTaskRecord(recordValue(execution.inputParameters));
         if (
           execution.taskInputSnapshot?.reconstructionMode === "authoritative" &&
           snapshotArtifactRef

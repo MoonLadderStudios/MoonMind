@@ -12031,7 +12031,9 @@ class MoonMindRunWorkflow:
         if isinstance(runtime_block, Mapping):
             selection.update(self._runtime_selection_from_source(runtime_block))
 
-        task_payload = parameters_patch.get("task")
+        task_payload = parameters_patch.get("workflow")
+        if not isinstance(task_payload, Mapping):
+            task_payload = parameters_patch.get("task")
         if isinstance(task_payload, Mapping):
             task_runtime = task_payload.get("runtime")
             if isinstance(task_runtime, Mapping):
