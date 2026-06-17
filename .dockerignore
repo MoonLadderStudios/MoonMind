@@ -19,5 +19,5 @@ coverage/
 *.log
 *.log*
 var/
-artifacts/
-artifacts.*/
+/artifacts/
+/artifacts.*/
