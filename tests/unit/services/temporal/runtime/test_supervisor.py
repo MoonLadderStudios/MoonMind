@@ -448,6 +448,7 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
         process: asyncio.subprocess.Process,
         timeout_seconds: int,
         no_output_callback=None,
+        progress_snapshot=None,
     ) -> tuple[int | None, bool]:
         base_time = datetime.now(tz=UTC)
         if no_output_callback is None:
@@ -641,6 +642,66 @@ async def test_heartbeat_updates(supervisor_env):
     # Last heartbeat should have been set
     loaded = store.load("run-1")
     assert loaded.last_heartbeat_at is not None
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_persists_output_progress(supervisor_env):
+    """Mid-run heartbeats must persist real output progress, not just liveness.
+
+    Regression for the false ``intervention_requested`` escalation: the
+    one-shot supervisor previously updated only ``last_heartbeat_at`` during a
+    run. The workflow-level no-progress watchdog
+    (``agent_run._status_progress_signature``) deliberately ignores
+    ``lastHeartbeatAt`` and keys off ``lastLogAt``/``lastLogOffset``. Because
+    those fields stayed ``None`` mid-run for one-shot runtimes such as
+    claude_code, any run exceeding the no-progress window was falsely escalated
+    to intervention even while the agent was actively producing output.
+    """
+    store, _, _, supervisor = supervisor_env
+    # Mirror the incident: claude_code runtime (no supervisor-level stall
+    # detector), emit output, then keep running so a heartbeat fires after
+    # output has already been observed.
+    record = ManagedRunRecord(
+        run_id="run-1",
+        agent_id="agent-1",
+        runtime_id="claude_code",
+        status="launching",
+        started_at=datetime.now(tz=UTC),
+    )
+    store.save(record)
+
+    process = await asyncio.create_subprocess_exec(
+        "sh", "-c", "echo working; sleep 2",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    running_updates: list[dict] = []
+    original_update = store.update_status
+
+    def _spy_update(run_id, status, **kwargs):
+        if status == "running":
+            running_updates.append(dict(kwargs))
+        return original_update(run_id, status, **kwargs)
+
+    with patch(
+        "moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL", 1
+    ):
+        with patch.object(store, "update_status", side_effect=_spy_update):
+            result = await supervisor.supervise(
+                run_id="run-1", process=process, timeout_seconds=30
+            )
+
+    assert result.status == "completed"
+    # At least one mid-run heartbeat must have carried output progress so the
+    # watchdog's progress signature advances for a live, working run.
+    progress_updates = [u for u in running_updates if "last_log_at" in u]
+    assert progress_updates, (
+        "heartbeat loop must persist last_log_at during the run, not only "
+        "last_heartbeat_at"
+    )
+    assert any(u.get("last_log_offset") for u in progress_updates)
 
 # ---------------------------------------------------------------------------
 # Completion callback tests
