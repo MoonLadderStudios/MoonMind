@@ -599,7 +599,7 @@ def _state_include_clause(values: list[str]) -> str | None:
     workflow last published (often a non-terminal one like
     ``waiting_on_dependencies``). The executions list serializer then derives
     the displayed state from the Temporal ``ExecutionStatus``, which means a
-    closed workflow can leak into "AWAITING TASK" or any other non-terminal
+    closed workflow can leak into "AWAITING DEP" or any other non-terminal
     filter result. Anchor non-terminal states to ``ExecutionStatus="Running"``
     and map terminal states to their Temporal ``ExecutionStatus`` so the
     server-side filter agrees with the rendered status.
