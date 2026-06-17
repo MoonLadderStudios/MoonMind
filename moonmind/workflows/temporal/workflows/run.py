@@ -4222,6 +4222,9 @@ class MoonMindRunWorkflow:
         self._dependency_failure = None
         self._failed_dependency_id = None
         self._dependency_resolution = DEPENDENCY_RESOLUTION_BYPASSED
+        if self._jira_blocker_wait_active:
+            self._jira_blocker_wait_skipped = True
+            self._paused = False
         self._summary = reason
         self._get_logger().warning(
             "Dependency gate bypassed by operator",
@@ -6775,8 +6778,9 @@ class MoonMindRunWorkflow:
             not self._jira_blocker_wait_active
             or signature != self._jira_blocker_wait_published_signature
         )
+        if not self._jira_blocker_wait_active:
+            self._jira_blocker_wait_skipped = False
         self._jira_blocker_wait_active = True
-        self._jira_blocker_wait_skipped = False
         self._jira_blocker_wait_issue_keys = issue_keys
         self._jira_blocker_wait_summary = summary
         self._waiting_reason = "jira_blocker_wait"
