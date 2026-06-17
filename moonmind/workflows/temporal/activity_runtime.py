@@ -210,17 +210,22 @@ from moonmind.workflows.temporal.story_output_tools import (
 from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_create_result,
     build_step_checkpoint_payload,
-    checkpoint_kinds_for_workspace_policy,
     validate_step_checkpoint_payload,
 )
 
 class CmdRes:
-    def __init__(self, stdout_bytes: bytes):
+    def __init__(self, stdout_bytes: bytes, stderr_bytes: bytes = b"", returncode: int = 0):
         self._stdout_bytes = stdout_bytes
+        self._stderr_bytes = stderr_bytes
+        self.returncode = returncode
 
     @property
     def stdout(self) -> str:
         return self._stdout_bytes.decode('utf-8', errors='replace')
+
+    @property
+    def stderr_text(self) -> str:
+        return self._stderr_bytes.decode('utf-8', errors='replace')
 
 async def _run_command(cmd, **kwargs):
     check = kwargs.pop("check", True)
@@ -230,7 +235,7 @@ async def _run_command(cmd, **kwargs):
     stdout, stderr = await proc.communicate()
     if check and proc.returncode != 0:
         raise RuntimeError(f"Command failed: {cmd} {stderr.decode('utf-8', errors='replace')}")
-    return CmdRes(stdout)
+    return CmdRes(stdout, stderr, proc.returncode or 0)
 
 logger = getLogger(__name__)
 
@@ -238,6 +243,46 @@ _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID = "provider-profile-manager:pentestgpt"
 _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
+
+# Canonical recommended next action for each workspace-policy failure code,
+# surfaced in structured diagnostics before any workspace mutation (Section 18).
+_WORKSPACE_POLICY_NEXT_ACTIONS: dict[str, str] = {
+    "policy_incompatible": "select_compatible_checkpoint_or_policy",
+    "checkpoint_kind_incompatible": "select_compatible_checkpoint_or_policy",
+    "invalid_checkpoint": "recapture_checkpoint",
+    "unsupported_checkpoint_kind": "recapture_checkpoint",
+    "artifact_missing": "restore_checkpoint_artifacts",
+    "artifact_corrupted": "recapture_checkpoint",
+    "artifact_unauthorized": "reauthorize_checkpoint_artifacts",
+    "workspace_incompatible": "provision_approved_workspace",
+    "workspace_mismatch": "reconcile_workspace_state",
+    "unsafe_checkpoint": "remediate_unsafe_workspace",
+    "source_mismatch": "rebind_recovery_source",
+    "step_mismatch": "rebind_recovery_source",
+    "execution_mismatch": "rebind_recovery_source",
+    "task_input_mismatch": "rebind_recovery_source",
+    "plan_mismatch": "rebind_recovery_source",
+}
+
+
+class _WorkspacePolicyApplyError(Exception):
+    """Internal typed failure raised while applying a workspace policy."""
+
+    def __init__(self, failure_code: str, message: str) -> None:
+        super().__init__(message)
+        self.failure_code = failure_code
+        self.message = message
+
+
+def _checkpoint_task_input_snapshot_ref(checkpoint: Mapping[str, Any]) -> str:
+    """Best-effort task input snapshot ref read from a raw checkpoint payload."""
+
+    if not isinstance(checkpoint, Mapping):
+        return ""
+    value = checkpoint.get("taskInputSnapshotRef") or checkpoint.get(
+        "task_input_snapshot_ref"
+    )
+    return str(value or "").strip()
 
 
 class PentestWorkloadHandle(Protocol):
@@ -2718,6 +2763,9 @@ class TemporalSandboxActivities:
         self._workspace_root = Path(
             workspace_root or settings.workflow.workspace_root
         ).resolve()
+        # Attempt-scoped idempotency ledger for workspace.apply_policy so a
+        # replayed apply returns the prior result without re-mutating the tree.
+        self._applied_policy_results: dict[str, dict[str, Any]] = {}
 
     async def _put_checkpoint_bytes(
         self,
@@ -3010,31 +3058,396 @@ class TemporalSandboxActivities:
             if isinstance(request, WorkspacePolicyApplyInput)
             else WorkspacePolicyApplyInput.model_validate(request)
         )
-        workspace_payload = model.checkpoint.get("workspace")
-        if not isinstance(workspace_payload, dict):
-            workspace_payload = {}
-        kind = workspace_payload.get("kind")
-        accepted = checkpoint_kinds_for_workspace_policy(model.workspace_policy)
-        if kind not in accepted:
-            result = WorkspacePolicyApplyResult(
-                status="rejected",
-                workspaceRef=model.target_workspace_ref,
-                appliedCheckpointRef=model.checkpoint_ref,
-                providerLeaseRefs=self._provider_lease_refs(
-                    model.provider_lease_context_ref
-                ),
-                summary="checkpoint kind does not satisfy workspace policy",
-                failureCode="policy_incompatible",
+        # Idempotency: a repeated apply for the same attempt-scoped key must not
+        # mutate the workspace again; replay the prior result verbatim.
+        cached = self._applied_policy_results.get(model.idempotency_key)
+        if cached is not None:
+            return dict(cached)
+
+        policy = model.workspace_policy
+
+        # fresh_branch_from_source starts from a source ref and requires no
+        # checkpoint evidence (Section 9.3). It is the only policy whose accepted
+        # checkpoint-kind set is empty.
+        if policy == "fresh_branch_from_source":
+            result = await self._apply_fresh_branch_policy(model)
+            if result["status"] in {"applied", "prepared"}:
+                self._applied_policy_results[model.idempotency_key] = dict(result)
+            return result
+
+        # Fail closed on the full persisted checkpoint payload before resolving or
+        # mutating any workspace (Sections 9.4, 18, 19). Presence/absence metadata
+        # is not enough: the payload must structurally validate and satisfy the
+        # policy-to-checkpoint matrix.
+        validation = validate_step_checkpoint_payload(
+            model.checkpoint,
+            expected_source=model.identity,
+            expected_task_input_snapshot_ref=(
+                model.expected_task_input_snapshot_ref
+                or _checkpoint_task_input_snapshot_ref(model.checkpoint)
+            ),
+            expected_plan_ref=model.expected_plan_ref,
+            expected_plan_digest=model.expected_plan_digest,
+            workspace_policy=policy,
+            required_artifact_refs=model.required_artifact_refs,
+            checkpoint_ref=model.checkpoint_ref,
+        )
+        if not validation.valid:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code=validation.failure_code or "invalid_checkpoint",
+                message=validation.message or "checkpoint validation failed",
             )
-            return result.model_dump(by_alias=True, mode="json")
+
+        # Resolve and scope the target workspace to an approved sandbox path. A
+        # path that escapes the sandbox root or does not exist is rejected before
+        # any mutation rather than silently falling back to a full rerun.
+        try:
+            workspace = self._resolve_workspace(
+                model.target_workspace_ref or "", must_exist=True
+            )
+        except TemporalActivityRuntimeError as exc:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="workspace_incompatible",
+                message=str(exc)[:1000],
+            )
+
+        if self._workspace_has_unsafe_skill_projection(
+            workspace
+        ) or self._workspace_has_traversal(workspace):
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="unsafe_checkpoint",
+                message="workspace failed pre-apply safety guardrails",
+                status="unsafe",
+            )
+
+        evidence = model.checkpoint.get("workspace")
+        if not isinstance(evidence, Mapping):
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="invalid_checkpoint",
+                message="checkpoint workspace evidence is missing",
+            )
+
+        try:
+            result = await self._apply_validated_workspace_policy(
+                model, dict(evidence), workspace
+            )
+        except _WorkspacePolicyApplyError as exc:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code=exc.failure_code,
+                message=exc.message,
+            )
+
+        self._applied_policy_results[model.idempotency_key] = dict(result)
+        return result
+
+    async def _apply_validated_workspace_policy(
+        self,
+        model: WorkspacePolicyApplyInput,
+        evidence: dict[str, Any],
+        workspace: Path,
+    ) -> dict[str, Any]:
+        policy = model.workspace_policy
+        kind = str(evidence.get("kind") or "")
+
+        if policy == "continue_from_previous_execution":
+            # Keep the prior Step Execution working tree untouched (Section 10).
+            return self._workspace_policy_applied(
+                model,
+                workspace,
+                summary="preserved previous execution working tree",
+            )
+
+        if policy == "apply_previous_execution_diff_to_clean_baseline":
+            base_commit = str(evidence.get("baseCommit") or "").strip()
+            patch_ref = str(evidence.get("patchRef") or "").strip()
+            await self._git_reset_clean(workspace, base_commit)
+            await self._git_apply_checkpoint_patch(workspace, patch_ref)
+            return self._workspace_policy_applied(
+                model,
+                workspace,
+                summary="reset to clean baseline and applied previous execution diff",
+            )
+
+        if policy in {"restore_pre_execution", "start_from_last_passed_commit"}:
+            if kind == "git_commit":
+                commit = str(
+                    evidence.get("headCommit") or evidence.get("baseCommit") or ""
+                ).strip()
+                await self._git_reset_clean(workspace, commit)
+                return self._workspace_policy_applied(
+                    model,
+                    workspace,
+                    summary=f"restored workspace to checkpoint commit ({policy})",
+                )
+            if kind == "worktree_archive":
+                await self._restore_worktree_archive(
+                    workspace, str(evidence.get("archiveRef") or "").strip()
+                )
+                return self._workspace_policy_applied(
+                    model,
+                    workspace,
+                    summary="restored workspace from worktree archive checkpoint",
+                )
+            # ephemeral_workspace_ref / external_state_ref already point at durable
+            # state; reference it without local mutation.
+            referenced = str(
+                evidence.get("workspaceRef")
+                or evidence.get("externalStateRef")
+                or ""
+            ).strip()
+            return self._workspace_policy_applied(
+                model,
+                workspace,
+                summary=f"prepared workspace from {kind} checkpoint",
+                status="prepared",
+                workspace_ref=referenced or None,
+            )
+
+        raise _WorkspacePolicyApplyError(
+            "policy_incompatible",
+            f"unsupported workspace policy mutation: {policy}",
+        )
+
+    async def _apply_fresh_branch_policy(
+        self,
+        model: WorkspacePolicyApplyInput,
+    ) -> dict[str, Any]:
+        try:
+            workspace = self._resolve_workspace(
+                model.target_workspace_ref or "", must_exist=True
+            )
+        except TemporalActivityRuntimeError as exc:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="workspace_incompatible",
+                message=str(exc)[:1000],
+            )
+        if self._workspace_has_unsafe_skill_projection(
+            workspace
+        ) or self._workspace_has_traversal(workspace):
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="unsafe_checkpoint",
+                message="workspace failed pre-apply safety guardrails",
+                status="unsafe",
+            )
+        branch = (model.branch_ref or "").strip() or (
+            f"mm/{model.identity.logical_step_id}/"
+            f"execution/{model.identity.execution_ordinal}"
+        )
+        source_ref = (model.source_ref or "").strip() or "HEAD"
+        create = await _run_command(
+            ["git", "checkout", "-b", branch, source_ref],
+            cwd=str(workspace),
+            check=False,
+        )
+        if create.returncode != 0:
+            return await self._reject_workspace_policy(
+                model,
+                failure_code="workspace_incompatible",
+                message=f"fresh branch creation failed: {create.stderr_text[:500]}",
+            )
+        return self._workspace_policy_applied(
+            model,
+            workspace,
+            summary=f"created fresh branch {branch} from {source_ref}",
+        )
+
+    async def _git_reset_clean(self, workspace: Path, commit: str) -> None:
+        target = (commit or "").strip()
+        if not target:
+            raise _WorkspacePolicyApplyError(
+                "invalid_checkpoint",
+                "checkpoint commit is required to restore the workspace",
+            )
+        reset = await _run_command(
+            ["git", "reset", "--hard", target],
+            cwd=str(workspace),
+            check=False,
+        )
+        if reset.returncode != 0:
+            raise _WorkspacePolicyApplyError(
+                "workspace_mismatch",
+                f"git reset to {target} failed: {reset.stderr_text[:500]}",
+            )
+        clean = await _run_command(
+            ["git", "clean", "-fd"],
+            cwd=str(workspace),
+            check=False,
+        )
+        if clean.returncode != 0:
+            raise _WorkspacePolicyApplyError(
+                "workspace_mismatch",
+                f"git clean failed: {clean.stderr_text[:500]}",
+            )
+
+    async def _git_apply_checkpoint_patch(
+        self, workspace: Path, patch_ref: str
+    ) -> None:
+        ref = (patch_ref or "").strip()
+        if not ref:
+            raise _WorkspacePolicyApplyError(
+                "invalid_checkpoint",
+                "git_patch checkpoint requires a patch ref",
+            )
+        try:
+            patch_bytes = await self._read_checkpoint_artifact_bytes(ref)
+        except Exception as exc:  # noqa: BLE001 - any read failure must fail closed
+            raise _WorkspacePolicyApplyError(
+                "artifact_missing",
+                f"checkpoint patch artifact unavailable: {str(exc)[:500]}",
+            ) from exc
+        if not patch_bytes.strip():
+            return
+        apply_result = await self._git_apply_patch_bytes(workspace, patch_bytes)
+        if apply_result.returncode != 0:
+            raise _WorkspacePolicyApplyError(
+                "artifact_corrupted",
+                f"git apply failed: {apply_result.stderr_text[:500]}",
+            )
+
+    async def _git_apply_patch_bytes(
+        self, workspace: Path, patch_bytes: bytes
+    ) -> "CmdRes":
+        with tempfile.NamedTemporaryFile(delete=False) as patch_file:
+            patch_file.write(patch_bytes)
+            patch_path = Path(patch_file.name)
+        try:
+            return await _run_command(
+                ["git", "apply", str(patch_path)],
+                cwd=str(workspace),
+                check=False,
+            )
+        finally:
+            patch_path.unlink(missing_ok=True)
+
+    async def _restore_worktree_archive(
+        self, workspace: Path, archive_ref: str
+    ) -> None:
+        ref = (archive_ref or "").strip()
+        if not ref:
+            raise _WorkspacePolicyApplyError(
+                "invalid_checkpoint",
+                "worktree_archive checkpoint requires an archive ref",
+            )
+        try:
+            archive_bytes = await self._read_checkpoint_artifact_bytes(ref)
+        except Exception as exc:  # noqa: BLE001 - any read failure must fail closed
+            raise _WorkspacePolicyApplyError(
+                "artifact_missing",
+                f"checkpoint archive artifact unavailable: {str(exc)[:500]}",
+            ) from exc
+        try:
+            with tarfile.open(fileobj=BytesIO(archive_bytes), mode="r:gz") as archive:
+                members = archive.getmembers()
+                for member in members:
+                    member_path = (workspace / member.name).resolve()
+                    if not member_path.is_relative_to(workspace):
+                        raise _WorkspacePolicyApplyError(
+                            "unsafe_checkpoint",
+                            f"archive member escapes workspace: {member.name}",
+                        )
+                archive.extractall(path=workspace, members=members)
+        except _WorkspacePolicyApplyError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - corrupt archives fail closed
+            raise _WorkspacePolicyApplyError(
+                "artifact_corrupted",
+                f"worktree archive restore failed: {str(exc)[:500]}",
+            ) from exc
+
+    async def _read_checkpoint_artifact_bytes(self, ref: str) -> bytes:
+        text = str(ref or "").strip()
+        if not text:
+            raise TemporalActivityRuntimeError(
+                "checkpoint artifact ref must not be empty"
+            )
+        if self._artifact_service is not None:
+            _artifact, payload = await self._artifact_service.read(
+                artifact_id=_artifact_id_from_ref(text),
+                principal="system",
+                allow_restricted_raw=True,
+            )
+            return bytes(payload)
+        return self._artifact_store.get_bytes(text)
+
+    def _workspace_policy_applied(
+        self,
+        model: WorkspacePolicyApplyInput,
+        workspace: Path,
+        *,
+        summary: str,
+        status: str = "applied",
+        workspace_ref: str | None = None,
+    ) -> dict[str, Any]:
         result = WorkspacePolicyApplyResult(
-            status="prepared",
-            workspaceRef=model.target_workspace_ref,
+            status=status,
+            workspaceRef=workspace_ref or str(workspace),
             appliedCheckpointRef=model.checkpoint_ref,
-            providerLeaseRefs=self._provider_lease_refs(model.provider_lease_context_ref),
-            summary="workspace policy prepared",
+            providerLeaseRefs=self._provider_lease_refs(
+                model.provider_lease_context_ref
+            ),
+            summary=summary[:1000],
         )
         return result.model_dump(by_alias=True, mode="json")
+
+    async def _reject_workspace_policy(
+        self,
+        model: WorkspacePolicyApplyInput,
+        *,
+        failure_code: str,
+        message: str,
+        status: str = "rejected",
+    ) -> dict[str, Any]:
+        diagnostics_ref = await self._write_workspace_policy_diagnostics(
+            model, failure_code=failure_code, message=message
+        )
+        result = WorkspacePolicyApplyResult(
+            status=status,
+            workspaceRef=model.target_workspace_ref,
+            appliedCheckpointRef=model.checkpoint_ref,
+            diagnosticRefs=[diagnostics_ref] if diagnostics_ref else [],
+            providerLeaseRefs=self._provider_lease_refs(
+                model.provider_lease_context_ref
+            ),
+            summary=message[:1000],
+            failureCode=failure_code,
+        )
+        return result.model_dump(by_alias=True, mode="json")
+
+    async def _write_workspace_policy_diagnostics(
+        self,
+        model: WorkspacePolicyApplyInput,
+        *,
+        failure_code: str,
+        message: str,
+    ) -> str | None:
+        diagnostics = {
+            "failureCode": failure_code,
+            "logicalStepId": model.identity.logical_step_id,
+            "sourceWorkflowId": model.identity.workflow_id,
+            "sourceRunId": model.identity.run_id,
+            "sourceExecutionOrdinal": model.identity.execution_ordinal,
+            "checkpointRef": model.checkpoint_ref,
+            "workspacePolicy": model.workspace_policy,
+            "recommendedNextAction": _WORKSPACE_POLICY_NEXT_ACTIONS.get(
+                failure_code, "inspect_diagnostics"
+            ),
+            "message": message[:1000],
+        }
+        try:
+            return await self._put_checkpoint_bytes(
+                _json_bytes(diagnostics),
+                content_type="application/json",
+                metadata={"artifact_kind": "workspace_policy_diagnostics"},
+            )
+        except Exception:  # noqa: BLE001 - diagnostics persistence is best-effort
+            return None
 
     async def workspace_classify_git_effect(
         self,

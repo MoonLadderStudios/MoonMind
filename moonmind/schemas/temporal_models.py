@@ -1161,9 +1161,14 @@ class WorkspacePolicyApplyInput(BaseModel):
     checkpoint_ref: str = Field(..., alias="checkpointRef", min_length=1)
     checkpoint: dict[str, Any] = Field(default_factory=dict, alias="checkpoint")
     target_workspace_ref: str | None = Field(None, alias="targetWorkspaceRef")
+    expected_task_input_snapshot_ref: str | None = Field(
+        None, alias="expectedTaskInputSnapshotRef"
+    )
     expected_plan_ref: str | None = Field(None, alias="expectedPlanRef")
     expected_plan_digest: str | None = Field(None, alias="expectedPlanDigest")
     required_artifact_refs: list[str] = Field(default_factory=list, alias="requiredArtifactRefs")
+    source_ref: str | None = Field(None, alias="sourceRef")
+    branch_ref: str | None = Field(None, alias="branchRef")
     provider_lease_context_ref: str | None = Field(None, alias="providerLeaseContextRef")
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
 

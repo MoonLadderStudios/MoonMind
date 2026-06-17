@@ -2219,6 +2219,7 @@ class MoonMindRunWorkflow:
             "checkpointRef": checkpoint_ref,
             "checkpoint": dict(checkpoint_payload),
             "targetWorkspaceRef": target_workspace_ref,
+            "expectedTaskInputSnapshotRef": task_input_snapshot_ref or None,
             "expectedPlanRef": source_plan_ref or None,
             "expectedPlanDigest": source_plan_digest or None,
             "idempotencyKey": f"{checkpoint_ref}:workspace_policy:{workspace_policy}",
@@ -2228,7 +2229,10 @@ class MoonMindRunWorkflow:
             apply_payload,
             **self._execute_kwargs_for_route(apply_route),
         )
-        if not isinstance(policy, Mapping) or policy.get("status") != "prepared":
+        if not isinstance(policy, Mapping) or policy.get("status") not in {
+            "applied",
+            "prepared",
+        }:
             failure_code = "policy_incompatible"
             if isinstance(policy, Mapping):
                 failure_code = str(policy.get("failureCode") or failure_code)
