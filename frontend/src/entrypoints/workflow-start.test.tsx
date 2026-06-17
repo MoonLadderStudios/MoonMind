@@ -6410,6 +6410,55 @@ describe.skip("Task Create Entrypoint", () => {
     });
   });
 
+  it("defaults publish mode to none when selecting self-publishing fix skills", async () => {
+    type MockInitialData = {
+      dashboardConfig: {
+        system: {
+          defaultPublishMode: string;
+        };
+      };
+    };
+
+    const payload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        ...(mockPayload.initialData as MockInitialData),
+        dashboardConfig: {
+          ...(mockPayload.initialData as MockInitialData).dashboardConfig,
+          system: {
+            ...(mockPayload.initialData as MockInitialData).dashboardConfig
+              .system,
+            defaultPublishMode: "pr",
+          },
+        },
+      },
+    };
+
+    renderWithClient(<WorkflowStartPage payload={payload} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    );
+    expect(primaryStep).not.toBeNull();
+
+    const skillSelect = within(primaryStep as HTMLElement).getByLabelText(
+      /Skill \(optional\)/,
+    );
+    const publishSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
+    for (const skillId of ["fix-comments", "fix-ci", "fix-merge-conflicts"]) {
+      // Reset the publish mode to "pr" before each iteration so every skill is
+      // independently verified to force the mode back to "none"; otherwise a
+      // bug in a later skill would be masked by the value set by an earlier one.
+      fireEvent.change(publishSelect, { target: { value: "pr" } });
+      fireEvent.change(skillSelect, { target: { value: skillId } });
+      await waitFor(() => {
+        expect(publishSelect.value).toBe("none");
+      });
+    }
+  });
+
   it("defaults publish mode to none when selecting jira-verify or jira-pr-verify skills", async () => {
     type MockInitialData = {
       dashboardConfig: {

@@ -50,7 +50,14 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _SELF_MANAGED_PUBLISH_SKILLS = frozenset(
-    {"pr-resolver", "batch-pr-resolver", "batch-dependabot-resolver"}
+    {
+        "pr-resolver",
+        "batch-pr-resolver",
+        "batch-dependabot-resolver",
+        "fix-comments",
+        "fix-ci",
+        "fix-merge-conflicts",
+    }
 )
 _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
     {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}
@@ -2052,7 +2059,14 @@ def _build_spec_from_codex_skill_payload(payload: Mapping[str, Any]) -> dict[str
         payload.get("ref")
     )
     publish_payload = {
-        "mode": _normalize_publish_mode(publish_mode),
+        # Preserve an omitted publish mode as ``None`` so the self-managed skill
+        # resolver applies the correct per-skill default (e.g. ``none`` for
+        # fix-comments/fix-ci/fix-merge-conflicts). Materializing the default
+        # ``pr`` here would make ``resolve_publish_mode_for_skill`` treat the
+        # absent mode as an explicit forbidden mode and reject the request.
+        "mode": _normalize_publish_mode(publish_mode)
+        if publish_mode is not None
+        else None,
         "prBaseBranch": publish_base,
         "commitMessage": None,
         "prTitle": None,
