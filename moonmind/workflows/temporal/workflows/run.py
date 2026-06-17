@@ -832,6 +832,12 @@ class MoonMindRunWorkflow:
         # logical step id. Used to detect already-occurred non-idempotent
         # external effects when a reattempt starts (Section 11, rules 3-4).
         self._step_side_effect_records: dict[str, list[dict[str, Any]]] = {}
+        # MM-826: producing-step accepted-disposition denials already recorded as
+        # `blocked` side effects per external-handoff operation, keyed by
+        # operation -> set of controlling gate step ids. The publication gate
+        # reason is recomputed at several call sites in one publish pass; this
+        # guarantees exactly one blocked record per denial (SC-002).
+        self._accepted_disposition_blocked_handoffs: dict[str, set[str]] = {}
         # Subjects (prior-effect identities) already compensated, so a given
         # non-idempotent effect is reconciled at most once across reattempts.
         self._step_compensated_subjects: dict[str, set[str]] = {}
@@ -3413,7 +3419,16 @@ class MoonMindRunWorkflow:
         if verdict is None:
             return None
         if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
-            return None
+            # MM-826 (DESIGN-REQ-022 / FR-003): a passing MoonSpec verdict alone
+            # no longer opens publication. The controlling gate step must also
+            # have reached an `accepted` terminal disposition. Behind a
+            # replay-stable patch so in-flight runs already past the prior
+            # verdict-only gate keep their behavior.
+            return self._accepted_disposition_handoff_block_reason(
+                operation="repo.create_pr",
+                surface="Publication",
+                require_gate_approved=False,
+            )
         gate_context = self._publish_context.get("moonSpecGate")
         diagnostics_ref = None
         if isinstance(gate_context, Mapping):
@@ -3440,6 +3455,87 @@ class MoonMindRunWorkflow:
         self._publish_reason = reason
         self._publish_context["publicationBlockedBy"] = "moonspec_verify"
         return True
+
+    def _accepted_disposition_handoff_block_reason(
+        self,
+        *,
+        operation: str,
+        surface: str,
+        require_gate_approved: bool,
+    ) -> str | None:
+        """MM-826 producing-step accepted assertion for a publish/merge handoff.
+
+        Implements DESIGN-REQ-022 / FR-003 at the actual external-handoff
+        boundaries beyond the structured-review (Jira Orchestrate) flow: the
+        controlling MoonSpec gate step must have reached an ``accepted`` terminal
+        disposition (and, when ``require_gate_approved`` is set, the gate verdict
+        must also pass) before the handoff is allowed. On denial a single
+        ``blocked`` side effect is recorded via :meth:`_external_handoff_gate` so
+        it is aggregated into the terminal manifest, and a bounded reason is
+        returned; on allow (or when no controlling gate step is known) ``None``
+        is returned. Guarded by ``RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH`` so
+        in-flight runs keep prior behavior.
+        """
+
+        if not workflow.patched(RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH):
+            return None
+        gate_context = self._publish_context.get("moonSpecGate")
+        logical_step_id = None
+        if isinstance(gate_context, Mapping):
+            logical_step_id = self._coerce_text(
+                gate_context.get("logicalStepId"),
+                max_chars=200,
+            )
+        if not logical_step_id:
+            # No controlling gate step is known for this handoff; the prior
+            # verdict-only gating (handled by the caller) remains authoritative.
+            return None
+        disposition = self._step_terminal_dispositions.get(logical_step_id)
+        gate_approved = (
+            self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+            in _MOONSPEC_GATE_PASSING_VERDICTS
+        )
+        if disposition == "accepted" and (gate_approved or not require_gate_approved):
+            return None
+        # Record exactly one blocked side effect per (operation, controlling gate
+        # step) even though the publication reason is recomputed at several
+        # publish call sites in a single pass.
+        blocked_steps = self._accepted_disposition_blocked_handoffs.setdefault(
+            operation, set()
+        )
+        if logical_step_id not in blocked_steps:
+            blocked_steps.add(logical_step_id)
+            self._external_handoff_gate(
+                logical_step_id,
+                operation=operation,
+                effect_class="publication",
+            )
+        details: list[str] = []
+        if disposition != "accepted":
+            details.append(
+                "the producing step's terminal disposition is not accepted "
+                f"(was {disposition or 'unknown'})"
+            )
+        if require_gate_approved and not gate_approved:
+            details.append(
+                "the controlling MoonSpec gate has not approved advancement"
+            )
+        detail = "; ".join(details) or "the producing step is not accepted+approved"
+        return f"{surface} external handoff blocked: {detail}."
+
+    def _merge_handoff_block_reason(self) -> str | None:
+        """MM-826 (DESIGN-REQ-022 / FR-003): gate the merge-automation external
+        handoff (``repo.merge_pr``) on the controlling gate step's accepted
+        terminal disposition AND gate approval, recording a blocked side effect
+        on denial. Returns ``None`` (allowing the merge) when accepted+approved,
+        when the patch is inactive, or when no controlling MoonSpec gate is
+        known."""
+
+        return self._accepted_disposition_handoff_block_reason(
+            operation="repo.merge_pr",
+            surface="Merge automation",
+            require_gate_approved=True,
+        )
 
     def _review_gate_budget_metadata(
         self,
@@ -10760,37 +10856,57 @@ class MoonMindRunWorkflow:
                         else None
                     )
 
-                    self._get_logger().info(
-                        "Jules branch-publish: merging PR %s (base=%s)",
-                        pr_url,
-                        effective_base or starting_branch,
-                    )
-                    merge_payload = {"pr_url": pr_url}
-                    if effective_base:
-                        merge_payload["target_branch"] = effective_base
-
-                    merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-                        "repo.merge_pr"
-                    )
-                    merge_result = await workflow.execute_activity(
-                        merge_route.activity_type,
-                        merge_payload,
-                        cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        **self._execute_kwargs_for_route(merge_route),
-                    )
-                    merged = self._get_from_result(merge_result, "merged")
-                    merge_summary = self._get_from_result(merge_result, "summary") or ""
-                    if merged:
-                        self._pull_request_url = pr_url
-                        self._publish_status = "published"
-                        self._publish_reason = "published branch"
+                    # MM-826 (DESIGN-REQ-022 / FR-003): the merge is an external
+                    # handoff and must assert the producing Step Execution is
+                    # accepted + gate-approved before landing changes on the
+                    # target branch. On denial, record a blocked publication side
+                    # effect and skip the merge instead of executing it.
+                    merge_block_reason = self._merge_handoff_block_reason()
+                    if merge_block_reason:
+                        self._plan_blocked_message = merge_block_reason
+                        self._publish_status = "not_required"
+                        self._publish_reason = merge_block_reason
+                        self._publish_context["publicationBlockedBy"] = (
+                            "moonspec_verify"
+                        )
                         self._get_logger().info(
-                            "Jules branch-publish: PR merged: %s", merge_summary
+                            "Jules branch-publish: skipping PR merge: %s",
+                            merge_block_reason,
                         )
                     else:
-                        raise ValueError(
-                            f"Jules branch-publish: merge failed: {merge_summary}"
+                        self._get_logger().info(
+                            "Jules branch-publish: merging PR %s (base=%s)",
+                            pr_url,
+                            effective_base or starting_branch,
                         )
+                        merge_payload = {"pr_url": pr_url}
+                        if effective_base:
+                            merge_payload["target_branch"] = effective_base
+
+                        merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+                            "repo.merge_pr"
+                        )
+                        merge_result = await workflow.execute_activity(
+                            merge_route.activity_type,
+                            merge_payload,
+                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            **self._execute_kwargs_for_route(merge_route),
+                        )
+                        merged = self._get_from_result(merge_result, "merged")
+                        merge_summary = (
+                            self._get_from_result(merge_result, "summary") or ""
+                        )
+                        if merged:
+                            self._pull_request_url = pr_url
+                            self._publish_status = "published"
+                            self._publish_reason = "published branch"
+                            self._get_logger().info(
+                                "Jules branch-publish: PR merged: %s", merge_summary
+                            )
+                        else:
+                            raise ValueError(
+                                f"Jules branch-publish: merge failed: {merge_summary}"
+                            )
                 else:
                     raise ValueError("Jules branch-publish: no PR URL found in result")
             except Exception as exc:
