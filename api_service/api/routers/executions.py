@@ -106,6 +106,7 @@ from moonmind.workflows.temporal import (
     build_manifest_status_snapshot,
 )
 from moonmind.workflows.temporal.step_ledger import build_initial_step_rows
+from moonmind.workflows.temporal.title_search import tokenize_title
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactAuthorizationError,
     build_artifact_ref,
@@ -730,16 +731,39 @@ def _append_datetime_temporal_filter(
     query_parts.extend(range_parts)
 
 
-def _append_contains_temporal_filter(
+def _append_prefix_temporal_filter(
     query_parts: list[str],
     attr: str,
     raw: str | None,
     *,
     alias: str,
 ) -> None:
+    # Temporal SQL (PostgreSQL) visibility does not support the LIKE operator;
+    # substring matching is unavailable. STARTS_WITH is the supported prefix
+    # operator for Keyword attributes (and built-ins like WorkflowId).
     value = _normalize_text_filter(raw, alias=alias)
     if value:
-        query_parts.append(f'{attr} LIKE "%{_escape_temporal_value(value)}%"')
+        query_parts.append(f'{attr} STARTS_WITH "{_escape_temporal_value(value)}"')
+
+
+def _append_word_match_temporal_filter(
+    query_parts: list[str],
+    attr: str,
+    raw: str | None,
+    *,
+    alias: str,
+) -> None:
+    # Temporal SQL visibility supports neither LIKE nor substring matching, and
+    # the custom-Keyword budget is full, so the workflow title is stored as a
+    # KeywordList of word tokens (mm_title) and matched by membership with `=`.
+    # Tokenize the operator's text the same way the workflow does (see
+    # title_search.tokenize_title) and AND the tokens so every typed word must
+    # be present in the title.
+    value = _normalize_text_filter(raw, alias=alias)
+    if not value:
+        return
+    for token in tokenize_title(value):
+        query_parts.append(f'{attr} = "{_escape_temporal_value(token)}"')
 
 
 def _build_temporal_execution_query(
@@ -845,7 +869,7 @@ def _build_temporal_execution_query(
         exclude=repo_not_in_values,
     )
     if not excluded("repoContains"):
-        _append_contains_temporal_filter(
+        _append_prefix_temporal_filter(
             query_parts, "mm_repo", request.query_params.get("repoContains"), alias="repoContains"
         )
     if integration and not excluded("integration"):
@@ -870,14 +894,14 @@ def _build_temporal_execution_query(
             exact=request.query_params.get("workflowId"),
         )
     if not excluded("workflowIdContains"):
-        _append_contains_temporal_filter(
+        _append_prefix_temporal_filter(
             query_parts,
             "WorkflowId",
             request.query_params.get("workflowIdContains"),
             alias="workflowIdContains",
         )
     if not excluded("titleContains"):
-        _append_contains_temporal_filter(
+        _append_word_match_temporal_filter(
             query_parts,
             "mm_title",
             request.query_params.get("titleContains"),

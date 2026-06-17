@@ -193,6 +193,7 @@ mm_updated_at:Datetime
 mm_started_at:Datetime
 mm_repo:Keyword
 mm_integration:Keyword
+mm_title:KeywordList
 mm_scheduled_for:Datetime
 mm_has_dependencies:Bool
 mm_dependency_count:Int

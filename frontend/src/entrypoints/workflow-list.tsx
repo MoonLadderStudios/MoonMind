@@ -1060,7 +1060,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               type="text"
               value={draft.contains || ''}
               disabled={!listEnabled}
-              placeholder={field === 'workflowId' ? 'workflow id' : 'title text'}
+              placeholder={field === 'workflowId' ? 'id starts with…' : 'title word…'}
+              title={
+                field === 'workflowId'
+                  ? 'Prefix match: finds workflow IDs that start with this text.'
+                  : 'Word match: finds titles containing this whole word.'
+              }
               onChange={(event) => {
               if (isMobile) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
                 else updateDraftText(field, event.target.value);
