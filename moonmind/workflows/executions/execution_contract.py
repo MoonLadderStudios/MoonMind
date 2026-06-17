@@ -50,7 +50,14 @@ _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"
 _PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _SELF_MANAGED_PUBLISH_SKILLS = frozenset(
-    {"pr-resolver", "batch-pr-resolver", "batch-dependabot-resolver"}
+    {
+        "pr-resolver",
+        "batch-pr-resolver",
+        "batch-dependabot-resolver",
+        "fix-comments",
+        "fix-ci",
+        "fix-merge-conflicts",
+    }
 )
 _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
     {"jira-issue-creator", "jira-issue-updater", "jira-pr-verify", "jira-verify"}

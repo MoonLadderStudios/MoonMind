@@ -1009,7 +1009,14 @@ def test_jira_side_effect_skills_reject_repository_publish_modes(
 
 @pytest.mark.parametrize(
     "skill_id",
-    ["pr-resolver", "batch-pr-resolver", "batch-dependabot-resolver"],
+    [
+        "pr-resolver",
+        "batch-pr-resolver",
+        "batch-dependabot-resolver",
+        "fix-comments",
+        "fix-ci",
+        "fix-merge-conflicts",
+    ],
 )
 def test_self_managed_publish_skills_force_none(skill_id: str) -> None:
     assert resolve_publish_mode_for_skill(skill_id, None) == "none"

@@ -34,6 +34,9 @@ const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
 const JIRA_IMPLEMENT_PRESET_SLUG = "jira-implement";
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
+  "fix-comments",
+  "fix-ci",
+  "fix-merge-conflicts",
   JIRA_BREAKDOWN_PRESET_SLUG,
   JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG,
   JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG,
