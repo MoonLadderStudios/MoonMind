@@ -991,7 +991,7 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
 
 
 def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_status() -> None:
-    """Selecting ``AWAITING TASK`` must not match closed workflows whose
+    """Selecting ``AWAITING DEP`` must not match closed workflows whose
     ``mm_state`` search attribute was left at ``waiting_on_dependencies``
     when they were canceled or failed.
     """

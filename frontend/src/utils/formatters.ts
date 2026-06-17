@@ -10,7 +10,7 @@ export function formatTaskSkills(
 
 const STATUS_DISPLAY_NAMES: Record<string, string> = {
   awaiting_slot: 'AWAITING SLOT',
-  waiting_on_dependencies: 'AWAITING TASK',
+  waiting_on_dependencies: 'AWAITING DEP',
   checkpoint_validation: 'Checkpoint validation',
   failed_step_execution: 'Failed step execution',
   preserved_output_injection: 'Preserved output injection',
