@@ -30,8 +30,8 @@ foundations from remaining gaps.
 | --- | --- | --- |
 | Step Execution identity / ordinal increment | Wired | Step rows carry `attempt` / `executionOrdinal`; `_mark_step_running(increment_attempt=True)` increments semantic executions. |
 | Canonical content types | Wired | `STEP_EXECUTION_MANIFEST_CONTENT_TYPE` and `STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE` are canonical. Do not reintroduce `step-checkpoint`, `step-resume-checkpoint`, or API `attempts` vocabulary. |
-| Typed manifest start and terminal models | Partially wired | `_record_step_execution_manifest_start` and `_record_step_execution_manifest_terminal` write `StepExecutionManifestModel` payloads with canonical content type. |
-| Legacy duplicate start manifest path | Still present | `_record_step_execution_manifest_started` plus `build_step_execution_manifest_payload` remain and must be deleted after their unique behavior is folded into the typed writer. |
+| Typed manifest start and terminal models | Wired | `_record_step_execution_manifest` writes `StepExecutionManifestModel` payloads with canonical content type for start, launch-blocked, and terminal evidence. |
+| Legacy duplicate start manifest path | Removed | Manifest creation is folded into `_record_step_execution_manifest`; read-side validation remains separate for persisted/degraded evidence. |
 | Ledger manifest refs | Wired | Latest and historical Step Execution manifest refs are attached to step rows. |
 | Gated reattempt loop | Wired for MoonSpec/remediation presets | `ADDITIONAL_WORK_NEEDED` / `FULLY_IMPLEMENTED` drive bounded reattempt behavior; the broader typed gate model is still missing. |
 | Non-attempt stop dimension | Wired | Consecutive no-progress budget is recorded in Step Execution budget manifests and can stop downstream handoff. |
@@ -46,7 +46,6 @@ foundations from remaining gaps.
 
 | Gap | Current impact | Owning work package |
 | --- | --- | --- |
-| One canonical manifest write path | Two manifest start paths still exist. This violates the design requirement for one manifest write path per identity. | WP1 |
 | Checkpoint artifact creation at canonical boundaries | `step_checkpoints.py` helpers exist, but workflow capture is still mostly ref-ingestion from runtime outputs; canonical boundary checkpoint artifacts are not written by `MoonMind.UserWorkflow`. | WP2, WP3 |
 | Checkpoint-backed workspace policy application | Launch validation can block missing evidence, but policy application/restoration is not backed by validated checkpoint artifacts. | WP4 |
 | Checkpoint-backed Resume as default recovery path | Recovery payloads carry checkpoint evidence, but recovery does not yet validate/apply a checkpoint before new work as the primary operator path. | WP5 |
@@ -72,11 +71,10 @@ post-recovery hardening/alignment work.
 ### 1.4 Phase 12 cleanup decision
 
 Phase 12 evidence review retains this temp plan because the final definition of
-done is still open: `build_step_execution_manifest_payload` remains in the live
-workflow path, checkpoint-backed recovery is not yet the default operator flow,
-retrieval-backed context packs are not injected into Temporal step execution,
-and remediation panels remain partial. The plan is non-canonical temporary
-material and must not be cited as implementation completion evidence.
+done is still open: checkpoint-backed recovery is not yet the default operator
+flow, retrieval-backed context packs are not injected into Temporal step
+execution, and remediation panels remain partial. The plan is non-canonical
+temporary material and must not be cited as implementation completion evidence.
 
 Conditional documentation review:
 
@@ -161,7 +159,7 @@ land.
 
 ---
 
-### WP1 — Consolidate manifest writers (prerequisite)
+### WP1 — Consolidate manifest writers (completed)
 
 **Goal:** Make exactly one Step Execution manifest write path per identity.
 
@@ -175,10 +173,8 @@ land.
    - execution metadata override (`kind`, `toolName`, idempotency key);
    - budget metadata;
    - launch-blocked summary/disposition.
-3. Replace all `_record_step_execution_manifest_started` call sites with the
-   canonical typed method.
-4. Delete `_record_step_execution_manifest_started` and
-   `build_step_execution_manifest_payload` entirely.
+3. Route all manifest call sites through the canonical typed method.
+4. Delete duplicate manifest-start helpers entirely.
 5. Keep replay patch markers only as routing guards, not as alternate payload
    builders.
 
@@ -187,9 +183,9 @@ launch-blocked start manifest uses canonical content type; old raw manifest
 payload validates/degrades at the boundary; grep/contract test proves the legacy
 helper is gone.
 
-**Acceptance:** `grep -R "build_step_execution_manifest_payload"` finds no
-production references. All new manifest writes use
-`STEP_EXECUTION_MANIFEST_CONTENT_TYPE`.
+**Acceptance:** Production manifest writes use `_record_step_execution_manifest`
+and `STEP_EXECUTION_MANIFEST_CONTENT_TYPE`; persisted manifest reads continue to
+validate or fail closed through the boundary validator.
 
 ---
 

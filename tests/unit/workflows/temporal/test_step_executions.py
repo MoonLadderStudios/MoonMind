@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from moonmind.schemas.step_execution_models import STEP_EXECUTION_CONTENT_TYPE
+from moonmind.schemas.step_execution_models import (
+    STEP_EXECUTION_CONTENT_TYPE,
+    StepExecutionManifestModel,
+)
 from moonmind.workflows.temporal.step_executions import (
     already_occurred_non_idempotent_effects,
-    build_step_execution_manifest_payload,
     compensation_subject_key,
     git_effect_metadata,
     logical_step_success_allowed,
@@ -58,21 +60,23 @@ def test_operation_idempotency_key_includes_execution_ordinal_and_operation() ->
 
 def test_manifest_payload_is_compact_boundary_contract() -> None:
     now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
-    payload = build_step_execution_manifest_payload(
-        workflow_id="wf-1",
-        run_id="run-1",
-        logical_step_id="implement",
-        execution_ordinal=1,
+    manifest = StepExecutionManifestModel(
+        workflowId="wf-1",
+        runId="run-1",
+        logicalStepId="implement",
+        executionOrdinal=1,
         reason="initial_execution",
         status="running",
-        updated_at=now,
-        summary="Executing plan step",
+        startedAt=now,
+        updatedAt=now,
         execution={
             "kind": "skill",
             "idempotencyKey": "wf-1:run-1:implement:execution:1:execute",
         },
-        input_refs=["artifact://input"],
+        input={"preparedInputRefs": ["artifact://input"]},
+        outputs={"summary": "Executing plan step"},
     )
+    payload = manifest.model_dump(by_alias=True, mode="json")
 
     assert payload["contentType"] == STEP_EXECUTION_CONTENT_TYPE
     assert payload["stepExecutionId"] == "wf-1:run-1:implement:execution:1"
@@ -83,23 +87,23 @@ def test_manifest_payload_is_compact_boundary_contract() -> None:
 
 def test_manifest_payload_accepts_terminal_disposition_and_effect_matrices() -> None:
     now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
-    payload = build_step_execution_manifest_payload(
-        workflow_id="wf-1",
-        run_id="run-1",
-        logical_step_id="implement",
-        execution_ordinal=1,
+    manifest = StepExecutionManifestModel(
+        workflowId="wf-1",
+        runId="run-1",
+        logicalStepId="implement",
+        executionOrdinal=1,
         reason="initial_execution",
         status="succeeded",
-        terminal_disposition="accepted",
-        updated_at=now,
-        input_refs=["artifact://input"],
+        terminalDisposition="accepted",
+        startedAt=now,
+        updatedAt=now,
+        input={"preparedInputRefs": ["artifact://input"]},
         context={"bundleRef": "artifact://context"},
         workspace={"policy": "fresh_branch_from_source"},
-        git_effect={"disposition": "accepted", "acceptedOutputPresent": True},
         execution={"kind": "agent_runtime"},
         outputs={"summaryRef": "artifact://summary"},
         checks=[{"kind": "approval_policy", "status": "passed"}],
-        side_effects={
+        sideEffects={
             "summary": {
                 "categories": {
                     "git": 1,
@@ -111,20 +115,33 @@ def test_manifest_payload_accepts_terminal_disposition_and_effect_matrices() -> 
                     "retrieval": 1,
                     "record": 7,
                 }
-            }
+            },
+            "records": [
+                {"class": "external_idempotent", "kind": "normal", "operation": "jira"},
+                {"class": "artifact_write", "kind": "normal", "operation": "artifact"},
+                {"class": "publication", "kind": "normal", "operation": "publish"},
+                {
+                    "class": "external_non_idempotent",
+                    "kind": "compensation",
+                    "operation": "compensate",
+                },
+                {"class": "memory_update", "kind": "normal", "operation": "memory"},
+                {
+                    "class": "retrieval_index_update",
+                    "kind": "normal",
+                    "operation": "retrieval",
+                },
+                {"class": "workspace_mutation", "kind": "normal", "operation": "record"},
+            ],
         },
-        side_effect_records=[
-            {"class": "external_idempotent", "kind": "normal", "operation": "jira"},
-            {"class": "artifact_write", "kind": "normal", "operation": "artifact"},
-            {"class": "publication", "kind": "normal", "operation": "publish"},
-            {"class": "external_non_idempotent", "kind": "compensation", "operation": "compensate"},
-            {"class": "memory_update", "kind": "normal", "operation": "memory"},
-            {"class": "retrieval_index_update", "kind": "normal", "operation": "retrieval"},
-            {"class": "workspace_mutation", "kind": "normal", "operation": "record"},
-        ],
-        dependency_effects={"invalidatedLogicalStepIds": ["verify"]},
+        dependencyEffects={"invalidatedLogicalStepIds": ["verify"]},
         budget={"maxReviewAttempts": 2},
     )
+    manifest.workspace["gitEffect"] = {
+        "disposition": "accepted",
+        "acceptedOutputPresent": True,
+    }
+    payload = manifest.model_dump(by_alias=True, mode="json")
 
     assert payload["terminalDisposition"] == "accepted"
     assert payload["workspace"]["gitEffect"]["disposition"] == "accepted"
@@ -437,33 +454,38 @@ def test_plan_reattempt_compensation_noop_without_prior_effects() -> None:
 
 def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> None:
     now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
-    payload = build_step_execution_manifest_payload(
-        workflow_id="wf-1",
-        run_id="run-1",
-        logical_step_id="implement",
-        execution_ordinal=2,
+    workspace = workspace_policy_metadata(
+        policy="continue_from_previous_execution",
+        checkpoint_ref="artifact://checkpoint",
+        checkpoint_valid=True,
+    )
+    workspace["gitEffect"] = git_effect_metadata(
+        disposition="candidate",
+        working_tree_diff_ref="artifact://diff",
+        patch_ref="artifact://patch",
+        workspace_checkpoint_ref="artifact://checkpoint",
+    )
+    manifest = StepExecutionManifestModel(
+        workflowId="wf-1",
+        runId="run-1",
+        logicalStepId="implement",
+        executionOrdinal=2,
         reason="tests_failed",
         status="failed",
-        updated_at=now,
-        workspace=workspace_policy_metadata(
-            policy="continue_from_previous_execution",
-            checkpoint_ref="artifact://checkpoint",
-            checkpoint_valid=True,
-        ),
-        git_effect=git_effect_metadata(
-            disposition="candidate",
-            working_tree_diff_ref="artifact://diff",
-            patch_ref="artifact://patch",
-            workspace_checkpoint_ref="artifact://checkpoint",
-        ),
-        side_effect_records=[
-            side_effect_record(
-                effect_class="publication",
-                operation="repo.merge_pr",
-                workflow_state_accepted=False,
-            )
-        ],
+        startedAt=now,
+        updatedAt=now,
+        workspace=workspace,
+        sideEffects={
+            "records": [
+                side_effect_record(
+                    effect_class="publication",
+                    operation="repo.merge_pr",
+                    workflow_state_accepted=False,
+                )
+            ],
+        },
     )
+    payload = manifest.model_dump(by_alias=True, mode="json")
 
     assert payload["workspace"]["policy"] == "continue_from_previous_execution"
     assert payload["workspace"]["gitEffect"]["disposition"] == "candidate"
