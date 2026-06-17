@@ -1667,6 +1667,11 @@ function createStepStateEntriesFromTemporalDraft(
           ).trim()
         : "";
 
+    const toolInputs =
+      step.stepType === "tool"
+        ? (toolPayload.inputs || step.skillArgs || {})
+        : {};
+
     return createStepStateEntry(index + 1, {
       id: step.id,
       title: step.title,
@@ -1696,8 +1701,12 @@ function createStepStateEntriesFromTemporalDraft(
           : "",
       toolInputs:
         step.stepType === "tool"
-          ? JSON.stringify(toolPayload.inputs || step.skillArgs || {}, null, 2)
+          ? JSON.stringify(toolInputs, null, 2)
           : "{}",
+      toolInputValues:
+        step.stepType === "tool" && toolInputs && typeof toolInputs === "object"
+          ? structuredClone(toolInputs as Record<string, unknown>)
+          : {},
       presetKey,
       presetInputValues:
         step.stepType === "preset"
@@ -2788,8 +2797,14 @@ function validateSchemaCapabilityValues(
         errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be a whole number.`;
         continue;
       }
-      const minimum = Number(fieldSchema.minimum);
-      const maximum = Number(fieldSchema.maximum);
+      const minimum =
+        fieldSchema.minimum !== undefined && fieldSchema.minimum !== null
+          ? Number(fieldSchema.minimum)
+          : NaN;
+      const maximum =
+        fieldSchema.maximum !== undefined && fieldSchema.maximum !== null
+          ? Number(fieldSchema.maximum)
+          : NaN;
       if (Number.isFinite(minimum) && numericValue < minimum) {
         errors[name] = `${capabilityFieldLabel(name, fieldSchema)} must be at least ${minimum}.`;
         continue;
@@ -2956,7 +2971,10 @@ function inferPentestTargetClass(target: string): string {
 
 function defaultPentestExpiresAt(): string {
   const expires = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  return expires.toISOString().slice(0, 16);
+  const localExpires = new Date(
+    expires.getTime() - expires.getTimezoneOffset() * 60 * 1000,
+  );
+  return localExpires.toISOString().slice(0, 16);
 }
 
 function datetimeLocalToIso(value: unknown): string {
@@ -3068,9 +3086,8 @@ function buildPentestApprovedScope(
     allowed_runner_profiles: allowedRunnerProfiles,
     required_network_attachment_type:
       String(toolInputs.runner_profile_id || "") === "pentestgpt-vpn-lab"
-        ? "vpn_lab"
+        ? "lab_network"
         : null,
-    authorized_principals: ["workflow"],
     metadata: {
       environment: String(values.environment || "development"),
       application_stack: String(values.application_stack || "").trim() || null,
@@ -3125,12 +3142,23 @@ function validatePentestScopeDocument(
   }
   const normalizedTarget = target.trim().toLowerCase();
   if (normalizedTarget && Array.isArray(scope.targets)) {
+    const normalizedTargetHost = targetHostFromValue(normalizedTarget).toLowerCase();
     const covered = scope.targets.some((entry) => {
       const value =
         entry && typeof entry === "object"
           ? String((entry as Record<string, unknown>).value || "").toLowerCase()
           : "";
-      return value && (normalizedTarget.includes(value) || value.includes(normalizedTarget));
+      if (!value) {
+        return false;
+      }
+      const scopeHost = targetHostFromValue(value).toLowerCase();
+      return (
+        value === normalizedTarget ||
+        (normalizedTargetHost &&
+          scopeHost &&
+          (normalizedTargetHost === scopeHost ||
+            normalizedTargetHost.endsWith(`.${scopeHost}`)))
+      );
     });
     if (!covered) {
       errors.target = "Scope targets do not appear to cover the selected target.";

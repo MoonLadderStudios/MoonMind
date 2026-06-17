@@ -145,7 +145,7 @@ describe("Task Create Step Type authoring", () => {
                       runner_profile_id: {
                         type: "string",
                         title: "Runner profile",
-                        enum: ["pentestgpt-safe"],
+                        enum: ["pentestgpt-safe", "pentestgpt-vpn-lab"],
                         default: "pentestgpt-safe",
                       },
                       objective: {
@@ -624,6 +624,9 @@ describe("Task Create Step Type authoring", () => {
     fireEvent.change(targetField!, {
       target: { value: "https://lab-app.internal.example" },
     });
+    fireEvent.change(screen.getByLabelText(/^Runner profile/), {
+      target: { value: "pentestgpt-vpn-lab" },
+    });
     fireEvent.click(
       screen.getByLabelText(
         "I confirm I am authorized to test this target within the selected scope.",
@@ -652,7 +655,7 @@ describe("Task Create Step Type authoring", () => {
         target: "https://lab-app.internal.example",
         scope_artifact_ref: "art_scope_123",
         operation_mode: "recon_only",
-        runner_profile_id: "pentestgpt-safe",
+        runner_profile_id: "pentestgpt-vpn-lab",
         time_budget_minutes: 60,
         evidence_level: "standard",
       });
@@ -667,5 +670,20 @@ describe("Task Create Step Type authoring", () => {
     );
     expect(artifactBody.retention_class).toBe("pinned");
     expect(artifactBody.metadata.artifact_type).toBe("approved_pentest_scope");
+
+    const artifactContentCall = fetchSpy.mock.calls.find(
+      ([url]) => String(url) === "/api/artifacts/art_scope_123/content",
+    );
+    const generatedScope = JSON.parse(
+      String(artifactContentCall?.[1]?.body || "{}"),
+    );
+    expect(generatedScope.required_network_attachment_type).toBe("lab_network");
+    expect(generatedScope).not.toHaveProperty("authorized_principals");
+    expect(generatedScope.targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: "https://lab-app.internal.example" }),
+        expect.objectContaining({ value: "lab-app.internal.example" }),
+      ]),
+    );
   });
 });
