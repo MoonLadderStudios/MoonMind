@@ -1134,8 +1134,8 @@ class MoonMindRunWorkflow:
             outputs=bounded_outputs,
             checks=checks,
             sideEffects=side_effects_payload,
-            dependency_effects=dependency_effects,
-            recovery_source=self._validate_recovery_source_for_execution(),
+            dependencyEffects=dependency_effects,
+            recoverySource=self._validate_recovery_source_for_execution(),
             budget=budget,
         )
         manifest_ref = await self._write_step_execution_manifest(
