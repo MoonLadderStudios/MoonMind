@@ -7694,7 +7694,6 @@ def test_describe_execution_bounds_slow_live_progress_query(
     _override_query_client(
         app,
         progress={"total": 99},
-        delay_seconds=0.2,
     )
     _override_user_dependencies(app, is_superuser=True)
     monkeypatch.setattr(
@@ -7707,8 +7706,18 @@ def test_describe_execution_bounds_slow_live_progress_query(
         "temporal_authoritative_read_enabled",
         False,
     )
+    observed_timeouts: list[float] = []
+
+    async def fail_fast_timeout(awaitable, *, timeout: float):
+        observed_timeouts.append(timeout)
+        awaitable.close()
+        raise TimeoutError
 
     with (
+        patch(
+            "api_service.api.routers.executions.asyncio.wait_for",
+            side_effect=fail_fast_timeout,
+        ),
         patch(
             "api_service.api.routers.executions._hydrate_execution_report_projection",
             new_callable=AsyncMock,
@@ -7720,12 +7729,10 @@ def test_describe_execution_bounds_slow_live_progress_query(
         ),
         TestClient(app) as test_client,
     ):
-        started = time.perf_counter()
         response = test_client.get("/api/executions/mm:wf-1")
-        elapsed = time.perf_counter() - started
 
     assert response.status_code == 200
-    assert elapsed < 0.15
+    assert observed_timeouts == [0.01]
     assert response.json()["progress"] is None
 
 def test_describe_execution_skips_live_progress_query_for_terminal_runs() -> None:
