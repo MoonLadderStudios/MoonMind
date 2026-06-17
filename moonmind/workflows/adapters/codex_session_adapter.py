@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from temporalio.exceptions import ActivityError, ApplicationError
+from temporalio.exceptions import (
+    ActivityError,
+    ApplicationError,
+    TimeoutError as TemporalTimeoutError,
+)
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -512,6 +516,52 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     "CodexTransientTurnError",
                     "CodexPermanentTurnError",
                 ):
+                    if isinstance(exc.cause, TemporalTimeoutError):
+                        # The turn activity hit a Temporal timeout
+                        # (ScheduleToClose/StartToClose/Heartbeat) without the
+                        # runtime producing a completed turn. Surface an
+                        # operator-actionable summary instead of letting the
+                        # generic failure handler collapse to "Activity task
+                        # failed" / a bare failure class.
+                        timeout_type = getattr(exc.cause, "type", None)
+                        timeout_label = (
+                            str(getattr(timeout_type, "name", timeout_type) or "")
+                            .replace("TIMEOUT_TYPE_", "")
+                            .replace("_", " ")
+                            .strip()
+                            .lower()
+                            or "timeout"
+                        )
+                        timeout_reason = (
+                            "Managed-session turn activity timed out "
+                            f"({timeout_label}) without producing a completed "
+                            "turn; retry or human intervention is required."
+                        )
+                        timeout_failure_result = self._persist_failed_run_state(
+                            run_id=run_id,
+                            agent_id=request.agent_id,
+                            managed_run_id=binding.agent_run_id,
+                            binding=binding,
+                            workspace_path=workspace_path,
+                            locator=current_locator.model_dump(
+                                mode="json", by_alias=True
+                            ),
+                            active_turn_id=current_active_turn_id,
+                            summary=timeout_reason,
+                            default_summary=timeout_reason,
+                            started_at=started_at,
+                            finished_at=_current_time(),
+                            instruction_ref=original_instruction_ref,
+                            resolved_skillset_ref=original_skillset_ref,
+                            turn_id=None,
+                            profile_id=launch_context.profile_id or None,
+                            turn_status="timed_out",
+                        )
+                        failed_state_persisted = True
+                        raise CodexSessionRunFailedError(
+                            timeout_reason,
+                            result=timeout_failure_result,
+                        ) from exc
                     raise
                 turn_metadata = _turn_failure_metadata_from_activity_error(turn_error)
                 if (

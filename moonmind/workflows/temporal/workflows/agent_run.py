@@ -159,6 +159,17 @@ MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
 AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
     "agent-run-workflow-child-task-queue-v2"
 )
+# Enforce the agent-run execution budget at the workflow boundary for the
+# managed-session (codex) turn. The codex turn runs as a single long-blocking
+# ``agent_runtime.send_turn`` activity, so while the workflow is parked on that
+# await it cannot run its own elapsed/no-progress checks; it relies solely on
+# the activity's server-side ScheduleToClose timeout. When that timer is not
+# enforced promptly a stuck turn can run far past its budget before failing.
+# This patch races the turn against a deterministic workflow timer so a stuck
+# or parked turn is aborted at its budget and reported with a real summary.
+MANAGED_SESSION_TURN_DEADLINE_PATCH_ID = (
+    "agent-run-managed-session-turn-deadline-v1"
+)
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.UserWorkflow (run.py:50).
@@ -179,6 +190,9 @@ _DEFAULT_SESSION_IMAGE_REF = os.environ.get(
     "ghcr.io/moonladderstudios/moonmind:latest",
 )
 _SLOT_HANDOFF_TTL_SECONDS = 10
+# Floor for the workflow-side managed-session turn deadline so a nearly-exhausted
+# budget still gives the turn a usable, non-zero window before being aborted.
+_MIN_MANAGED_TURN_DEADLINE_SECONDS = 60
 
 def _request_selected_skill(
     request: AgentExecutionRequest,
@@ -761,6 +775,93 @@ class MoonMindAgentRun:
             providerErrorCode="intervention_requested",
             metadata=result_metadata,
         )
+
+    def _timed_out_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        timeout_seconds: float,
+        detail: str,
+        elapsed_seconds: float | None = None,
+    ) -> AgentRunResult:
+        """Build a failed result for an agent-run timeout with an actionable summary.
+
+        ``failure_class`` stays ``execution_error`` so retry/category/billing
+        semantics are unchanged; this only guarantees a non-empty, descriptive
+        ``summary`` so downstream operator surfaces never collapse to the bare
+        ``execution_error`` token (the runtime emits no summary of its own when
+        the turn is aborted by a timeout).
+        """
+        elapsed_text = (
+            f" after {int(elapsed_seconds)}s"
+            if elapsed_seconds is not None
+            else ""
+        )
+        summary = (
+            f"Managed agent run {detail}{elapsed_text} "
+            f"(execution budget {int(timeout_seconds)}s). No completed turn or "
+            "result was produced; retry or human intervention is required."
+        )
+        metadata: dict[str, Any] = {
+            "reason": "timed_out",
+            "timeoutSeconds": int(timeout_seconds),
+            "agentId": request.agent_id,
+            "agentKind": request.agent_kind,
+        }
+        if elapsed_seconds is not None:
+            metadata["elapsedSeconds"] = int(elapsed_seconds)
+        return AgentRunResult(
+            summary=summary,
+            failure_class="execution_error",
+            metadata=metadata,
+        )
+
+    async def _send_turn_within_budget(
+        self,
+        request_payload: Any,
+        *,
+        timeout_seconds: float,
+        overall_start: datetime,
+    ) -> Any:
+        """Dispatch the managed-session turn activity under a workflow-side budget.
+
+        The codex turn runs as a single long-blocking ``agent_runtime.send_turn``
+        activity, so while the workflow is parked on that await it cannot run its
+        own elapsed/no-progress checks; it relies solely on the activity's
+        server-side timeout. When that timer is not enforced promptly a stuck or
+        parked turn can run far past its budget before failing. Race the turn
+        against a deterministic workflow timer so it is aborted at its budget.
+
+        On deadline a typed ``ApplicationError`` is raised; it flows through the
+        adapter's failure path so the operator gets a real summary rather than a
+        bare ``execution_error``. Real activity errors/completions are returned or
+        re-raised unchanged so existing retry/empty-turn handling is preserved.
+        """
+        turn_coro = self._execute_routed_activity(
+            "agent_runtime.send_turn",
+            request_payload,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        if not workflow.patched(MANAGED_SESSION_TURN_DEADLINE_PATCH_ID):
+            return await turn_coro
+        remaining = timeout_seconds - (workflow.now() - overall_start).total_seconds()
+        deadline = max(remaining, _MIN_MANAGED_TURN_DEADLINE_SECONDS)
+        turn_task = asyncio.create_task(turn_coro)
+        try:
+            await workflow.wait_condition(
+                lambda: turn_task.done(),
+                timeout=timedelta(seconds=deadline),
+            )
+        except asyncio.TimeoutError:
+            turn_task.cancel()
+            raise ApplicationError(
+                f"Managed-session turn exceeded its {int(deadline)}s budget "
+                "without completing; the turn was aborted and requires retry or "
+                "human intervention.",
+                type="ManagedSessionTurnDeadlineExceeded",
+                non_retryable=True,
+            )
+        return turn_task.result()
 
     def _enrich_result_metadata(
         self,
@@ -2208,7 +2309,15 @@ class MoonMindAgentRun:
                     self.run_status = RunStatus.timed_out
                     return await self._publish_terminal_result(
                         request=request,
-                        result=AgentRunResult(failure_class="execution_error"),
+                        result=self._timed_out_result(
+                            request=request,
+                            timeout_seconds=timeout_seconds,
+                            elapsed_seconds=elapsed,
+                            detail=(
+                                "exceeded its execution budget before dispatching "
+                                "a turn"
+                            ),
+                        ),
                     )
 
                 manager_handle = None
@@ -2607,10 +2716,10 @@ class MoonMindAgentRun:
                             )
 
                         async def _send_turn(request_payload: Any) -> Any:
-                            return await self._execute_routed_activity(
-                                "agent_runtime.send_turn",
+                            return await self._send_turn_within_budget(
                                 request_payload,
-                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                                timeout_seconds=timeout_seconds,
+                                overall_start=overall_start,
                             )
 
                         async def _interrupt_turn(request_payload: Any) -> Any:
@@ -3103,7 +3212,15 @@ class MoonMindAgentRun:
                         )
                     return await self._publish_terminal_result(
                         request=request,
-                        result=AgentRunResult(failure_class="execution_error"),
+                        result=self._timed_out_result(
+                            request=request,
+                            timeout_seconds=timeout_seconds,
+                            elapsed_seconds=elapsed,
+                            detail=(
+                                "made no observable progress and exceeded its "
+                                "execution budget"
+                            ),
+                        ),
                     )
 
                 if self.final_result is None:
@@ -3339,7 +3456,14 @@ class MoonMindAgentRun:
                     self._get_logger().warning("Failed to release slot on timeout, which may lead to a leak.", exc_info=True)
             return await self._publish_terminal_result(
                 request=request,
-                result=AgentRunResult(failure_class="execution_error"),
+                result=self._timed_out_result(
+                    request=request,
+                    timeout_seconds=timeout_seconds,
+                    elapsed_seconds=(
+                        workflow.now() - overall_start
+                    ).total_seconds(),
+                    detail="timed out without completing the turn",
+                ),
             )
 
         except CancelledError:
