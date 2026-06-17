@@ -10367,7 +10367,7 @@ def test_failed_step_recovery_submission_rejects_stale_recovery_evidence(
                 "workflow": {"instructions": "change the task"},
                 "runtime": {"model": "gpt-5.4"},
             },
-            ["runtime"],
+            ["runtime", "workflow"],
         ),
         (
             {
@@ -10441,10 +10441,13 @@ def test_failed_step_recovery_request_rejects_edited_task_payload_fields(
             },
         )
 
-    assert response.status_code == 400
-    body = response.json()["detail"]
-    assert body["code"] == "recovery_payload_not_allowed"
-    assert body["fields"] == expected_fields
+    assert response.status_code == 422
+    rejected_fields = sorted(
+        item["loc"][-1]
+        for item in response.json()["detail"]
+        if item["type"] == "extra_forbidden"
+    )
+    assert rejected_fields == expected_fields
 
 
 def test_mm773_serialize_execution_surfaces_comparison_source_related_run() -> None:

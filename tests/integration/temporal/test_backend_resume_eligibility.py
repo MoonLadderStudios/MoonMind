@@ -124,9 +124,16 @@ async def test_accepted_recovery_carries_canonical_recovery_and_recovery_refs(
         "failedStepId": "implement",
         "failedStepExecution": 1,
         "recoveryCheckpointRef": "artifact://checkpoint/source",
+        "checkpointBoundary": "before_recovery_restoration",
         "taskInputSnapshotRef": "artifact://snapshot/source",
         "planRef": "artifact://plan/source",
         "planDigest": "sha256:plan",
+        "preservedStepRefs": [
+            "artifact://workspace/before-plan",
+            "artifact://summary",
+        ],
+        "dependencySignatures": {},
+        "workspacePolicy": "restore_pre_execution",
     }
     assert "agentRunId" not in resumed.parameters
 

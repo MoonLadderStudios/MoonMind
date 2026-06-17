@@ -1751,6 +1751,17 @@ def test_mm825_recovery_resume_contract_preserves_checkpoint_restoration_fields(
     assert normalized["workspacePolicy"] == "restore_pre_execution"
 
 
+def test_mm825_recovery_resume_contract_rejects_unknown_fields() -> None:
+    """MM-825: Resume refs are a closed checkpoint-backed recovery contract."""
+    with pytest.raises(ValidationError):
+        ResumeFromFailedStepRef.model_validate(
+            {
+                **_VALID_RESUME_BLOCK,
+                "inlineCheckpointPayload": {"workspace": "not allowed"},
+            }
+        )
+
+
 def test_sc001_recovery_source_workflow_id_must_match_recovery() -> None:
     """MM-638: recovery and resume must pin the same source workflow."""
     with pytest.raises(WorkflowContractError, match="sourceWorkflowId"):

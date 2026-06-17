@@ -1523,7 +1523,9 @@ def test_recover_from_failed_step_route_contract_is_registered() -> None:
     assert route["responses"]["201"]["description"]
     request_schema = route["requestBody"]["content"]["application/json"]["schema"]
     ref = request_schema["$ref"].removeprefix("#/components/schemas/")
-    properties = schema["components"]["schemas"][ref]["properties"]
+    request_contract = schema["components"]["schemas"][ref]
+    properties = request_contract["properties"]
+    assert request_contract["additionalProperties"] is False
     assert {
         "sourceWorkflowId",
         "sourceRunId",
@@ -1548,6 +1550,7 @@ def test_recover_from_selected_step_route_contract_is_registered() -> None:
     ref = request_schema["$ref"].removeprefix("#/components/schemas/")
     request_contract = schema["components"]["schemas"][ref]
     properties = request_contract["properties"]
+    assert request_contract["additionalProperties"] is False
     assert {
         "sourceWorkflowId",
         "sourceRunId",

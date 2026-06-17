@@ -1546,7 +1546,7 @@ class WorkflowRecoveryProvenance(BaseModel):
 class ResumeFromFailedStepRef(BaseModel):
     """Pins a resume submission to a specific source run, failed step, and checkpoint."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     kind: Literal["recover_from_failed_step"] = Field(
         "recover_from_failed_step", alias="kind"

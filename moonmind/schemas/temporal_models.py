@@ -1626,7 +1626,7 @@ class UpdateExecutionRequest(BaseModel):
 class RecoverFromFailedStepRequest(BaseModel):
     """Request payload for creating a failed-step recovery follow-up execution."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=128)
     source_workflow_id: Optional[str] = Field(None, alias="sourceWorkflowId", min_length=1)
