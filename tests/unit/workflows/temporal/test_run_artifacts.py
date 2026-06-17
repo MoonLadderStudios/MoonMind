@@ -1520,6 +1520,50 @@ def test_jira_blocker_wait_coalesces_unchanged_observations(
     assert metadata_updates == ["search", "memo", "search", "memo"]
 
 
+def test_jira_blocker_wait_preserves_operator_bypass_on_reentry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._jira_blocker_wait_active = True
+    workflow._jira_blocker_wait_skipped = True
+    blocked_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "blocked",
+            "blockingIssues": [
+                {"issueKey": "MM-685", "status": "In Progress", "done": False}
+            ],
+            "summary": "MM-686 is blocked by MM-685.",
+        },
+    }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: (
+            patch_id
+            == run_workflow_module.RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH
+        ),
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workflow, "_mark_step_waiting", lambda *args, **kwargs: None)
+    monkeypatch.setattr(workflow, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow, "_update_memo", lambda: None)
+
+    workflow._enter_jira_blocker_wait(
+        node_id="check-blockers",
+        execution_result=blocked_result,
+    )
+
+    assert workflow._jira_blocker_wait_skipped is True
+
+
 def test_jira_blocker_wait_unpatched_histories_publish_each_observation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3102,7 +3146,9 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
         **_kwargs: Any,
     ) -> None:
         assert predicate() is False
-        workflow._jira_blocker_wait_skipped = True
+        workflow._bypass_dependencies(
+            {"payload": {"reason": "Operator override from Mission Control."}}
+        )
         assert predicate() is True
 
     monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
@@ -3122,6 +3168,18 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
         fake_wait_condition,
     )
     monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {
+                "warning": lambda *args, **kwargs: None,
+                "info": lambda *args, **kwargs: None,
+            },
+        )(),
+    )
 
     current_result, skipped = await workflow._wait_for_jira_blocker_resolution(
         execution_result={
@@ -3141,6 +3199,7 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
     assert skipped is True
     assert current_result["outputs"]["decision"] == "blocked"
     assert workflow._state == run_workflow_module.STATE_EXECUTING
+    assert workflow._dependency_resolution == "bypassed"
     assert workflow._jira_blocker_wait_active is False
     assert workflow._waiting_reason is None
 
