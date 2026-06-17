@@ -26,14 +26,14 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
         workflowType: "MoonMind.UserWorkflow",
         targetRuntime: "codex_cli",
         inputParameters: {
-          task: {
+          workflow: {
             instructions: "/review\nCheck the branch.",
             runtime: { mode: "codex_cli" },
           },
         },
       },
       {
-        task: {
+        workflow: {
           instructions: "/review\nCheck the branch.",
           runtimeCommand: {
             kind: "slash_command",
@@ -81,8 +81,8 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
         workflowType: "MoonMind.UserWorkflow",
         targetRuntime: "codex_cli",
         inputParameters: {
-          task: {
-            instructions: "Inline fallback should not win.",
+          workflow: {
+            instructions: "Inline workflow should not win.",
             runtime: { mode: "codex_cli" },
           },
         },
@@ -136,8 +136,8 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
         workflowType: "MoonMind.UserWorkflow",
         targetRuntime: "codex_cli",
         inputParameters: {
-          task: {
-            instructions: "Inline fallback should not replace history.",
+          workflow: {
+            instructions: "Inline workflow should not replace history.",
             runtime: { mode: "codex_cli" },
           },
         },
@@ -164,7 +164,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "codex_cli",
       inputParameters: {
-        task: {
+        workflow: {
           instructions: "Review the overall branch.",
           steps: [
             {
@@ -187,7 +187,7 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
       workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "codex_cli",
       inputParameters: {
-        task: {
+        workflow: {
           instructions: "Coordinate portable steps.",
           runtime: { mode: "codex_cli", model: "gpt-5.4", effort: "medium" },
           steps: [

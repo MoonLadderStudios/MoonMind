@@ -701,21 +701,8 @@ function normalizeAppliedTemplates(
     .filter((entry) => entry.slug);
 }
 
-function workflowPayloadKey(
-  source: Record<string, unknown>,
-): 'workflow' | 'task' | null {
-  if (Object.keys(objectValue(source.workflow)).length > 0) {
-    return 'workflow';
-  }
-  if (Object.keys(objectValue(source.task)).length > 0) {
-    return 'task';
-  }
-  return null;
-}
-
-function workflowTaskRecord(source: Record<string, unknown>): Record<string, unknown> {
-  const key = workflowPayloadKey(source);
-  return key ? objectValue(source[key]) : {};
+function workflowRecord(source: Record<string, unknown>): Record<string, unknown> {
+  return objectValue(source.workflow);
 }
 
 function assertSnapshotAttachmentBindings(
@@ -764,10 +751,6 @@ function snapshotDraftTask(
   const nestedWorkflow = objectValue(snapshotDraft.workflow);
   if (Object.keys(nestedWorkflow).length > 0) {
     return nestedWorkflow;
-  }
-  const nestedTask = objectValue(snapshotDraft.task);
-  if (Object.keys(nestedTask).length > 0) {
-    return nestedTask;
   }
   const primarySkill = objectValue(snapshotDraft.primarySkill);
   const publish = objectValue(snapshotDraft.publish);
@@ -873,10 +856,10 @@ export function buildTemporalSubmissionDraftFromExecution(
   const params = objectValue(execution.inputParameters);
   const artifactParams = objectValue(artifactInput);
   const snapshotDraft = objectValue(artifactParams.draft);
-  const task = workflowTaskRecord(params);
+  const task = workflowRecord(params);
   const artifactTask = Object.keys(snapshotDraft).length > 0
     ? snapshotDraftTask(snapshotDraft)
-    : workflowTaskRecord(artifactParams);
+    : workflowRecord(artifactParams);
   const runtime = objectValue(task.runtime);
   const artifactRuntime = objectValue(artifactTask.runtime);
   const git = objectValue(task.git);

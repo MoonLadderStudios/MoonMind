@@ -465,7 +465,7 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
             "parametersPatch": {
                 "model": "claude-opus-4-7",
                 "profileId": "claude_anthropic",
-                "task": {
+                "workflow": {
                     "runtime": {
                         "mode": "claude_code",
                         "model": "claude-opus-4-7",
@@ -485,7 +485,7 @@ async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(
             "parametersPatch": {
                 "model": "claude-opus-4-7",
                 "profileId": "claude_anthropic",
-                "task": {
+                "workflow": {
                     "runtime": {
                         "mode": "claude_code",
                         "model": "claude-opus-4-7",

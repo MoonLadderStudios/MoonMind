@@ -866,43 +866,30 @@ function cloneJsonRecord(value: Record<string, unknown>): Record<string, unknown
   return structuredClone(value) as Record<string, unknown>;
 }
 
-function workflowPayloadKey(
-  source: Record<string, unknown>,
-): "workflow" | "task" | null {
-  if (Object.keys(recordValue(source.workflow)).length > 0) {
-    return "workflow";
-  }
-  if (Object.keys(recordValue(source.task)).length > 0) {
-    return "task";
-  }
-  return null;
+function workflowRecord(source: Record<string, unknown>): Record<string, unknown> {
+  return recordValue(source.workflow);
 }
 
-function workflowTaskRecord(source: Record<string, unknown>): Record<string, unknown> {
-  const key = workflowPayloadKey(source);
-  return key ? recordValue(source[key]) : {};
-}
-
-function artifactInputTaskRecord(
+function artifactInputWorkflowRecord(
   artifactInput: Record<string, unknown>,
 ): Record<string, unknown> {
   const snapshotDraft = recordValue(artifactInput.draft);
   const source =
     Object.keys(snapshotDraft).length > 0 ? snapshotDraft : artifactInput;
-  return workflowTaskRecord(source);
+  return workflowRecord(source);
 }
 
 function artifactInputHasStepInstructionGaps(
   artifactInput: Record<string, unknown>,
 ): boolean {
-  const task = artifactInputTaskRecord(artifactInput);
-  const steps = task.steps;
+  const workflow = artifactInputWorkflowRecord(artifactInput);
+  const steps = workflow.steps;
   if (!Array.isArray(steps)) {
     return false;
   }
   const appliedStepIds = new Set<string>();
-  const appliedTemplates = Array.isArray(task.appliedStepTemplates)
-    ? task.appliedStepTemplates
+  const appliedTemplates = Array.isArray(workflow.appliedStepTemplates)
+    ? workflow.appliedStepTemplates
     : [];
   appliedTemplates.forEach((template) => {
     const templateRecord = recordValue(template);
@@ -940,8 +927,10 @@ function mergeMissingTaskInstructionsFromArtifact(
   artifactInput: Record<string, unknown>,
   sourceArtifactInput: Record<string, unknown>,
 ): Record<string, unknown> {
-  const sourceTask = artifactInputTaskRecord(sourceArtifactInput);
-  const sourceSteps = Array.isArray(sourceTask.steps) ? sourceTask.steps : [];
+  const sourceWorkflow = artifactInputWorkflowRecord(sourceArtifactInput);
+  const sourceSteps = Array.isArray(sourceWorkflow.steps)
+    ? sourceWorkflow.steps
+    : [];
   if (sourceSteps.length === 0) {
     return artifactInput;
   }
@@ -950,9 +939,10 @@ function mergeMissingTaskInstructionsFromArtifact(
   const mergedDraft = recordValue(merged.draft);
   const mergedSource =
     Object.keys(mergedDraft).length > 0 ? mergedDraft : merged;
-  const mergedTaskKey = workflowPayloadKey(mergedSource);
-  const mergedTask = mergedTaskKey ? recordValue(mergedSource[mergedTaskKey]) : {};
-  const mergedSteps = Array.isArray(mergedTask.steps) ? mergedTask.steps : [];
+  const mergedWorkflow = workflowRecord(mergedSource);
+  const mergedSteps = Array.isArray(mergedWorkflow.steps)
+    ? mergedWorkflow.steps
+    : [];
   if (mergedSteps.length === 0) {
     return artifactInput;
   }
@@ -967,16 +957,18 @@ function mergeMissingTaskInstructionsFromArtifact(
     }
   });
 
-  const sourceTaskInstructions = String(sourceTask.instructions || "").trim();
+  const sourceWorkflowInstructions = String(
+    sourceWorkflow.instructions || "",
+  ).trim();
   if (
-    sourceTaskInstructions &&
-    !String(mergedTask.instructions || "").trim()
+    sourceWorkflowInstructions &&
+    !String(mergedWorkflow.instructions || "").trim()
   ) {
-    mergedTask.instructions = sourceTask.instructions;
+    mergedWorkflow.instructions = sourceWorkflow.instructions;
     changed = true;
   }
 
-  mergedTask.steps = mergedSteps.map((step, index) => {
+  mergedWorkflow.steps = mergedSteps.map((step, index) => {
     const stepRecord = recordValue(step);
     if (Object.keys(stepRecord).length === 0) {
       return step;
@@ -998,9 +990,7 @@ function mergeMissingTaskInstructionsFromArtifact(
       instructions: String(sourceStep?.instructions),
     };
   });
-  if (mergedTaskKey) {
-    mergedSource[mergedTaskKey] = mergedTask;
-  }
+  mergedSource.workflow = mergedWorkflow;
   return changed ? merged : artifactInput;
 }
 
@@ -1042,10 +1032,12 @@ function buildEditParametersPatch({
   execution,
   artifactInput,
   submittedPayload,
+  submittedWorkflow,
 }: {
   execution: TemporalTaskEditingExecutionContract;
   artifactInput?: Record<string, unknown> | undefined;
   submittedPayload: Record<string, unknown>;
+  submittedWorkflow: Record<string, unknown>;
 }): Record<string, unknown> {
   const artifactBase = artifactInputParametersForPatch(execution, artifactInput);
   const executionParameters = recordValue(execution.inputParameters);
@@ -1057,57 +1049,53 @@ function buildEditParametersPatch({
       ? artifactBase.parameters
       : executionParameters,
   );
-  const submittedTask = workflowTaskRecord(submittedPayload);
-  const artifactBaseTask = workflowTaskRecord(artifactBase.parameters);
-  const executionTask = workflowTaskRecord(executionParameters);
-  const baseTask = mergeRecordValues(
+  const artifactBaseWorkflow = workflowRecord(artifactBase.parameters);
+  const executionWorkflow = workflowRecord(executionParameters);
+  const baseWorkflow = mergeRecordValues(
     artifactBase.fromAuthoritativeDraft
-      ? executionTask
-      : artifactBaseTask,
-    workflowTaskRecord(baseParameters),
+      ? executionWorkflow
+      : artifactBaseWorkflow,
+    workflowRecord(baseParameters),
   );
-  const editTask = { ...submittedTask };
+  const editWorkflow = { ...submittedWorkflow };
 
   // This field is not reconstructed into the edit form yet. Preserve the
   // existing value instead of letting the create-form default overwrite it.
-  if ("proposeTasks" in editTask) {
-    delete editTask.proposeTasks;
+  if ("proposeTasks" in editWorkflow) {
+    delete editWorkflow.proposeTasks;
   }
 
-  const mergedTask: Record<string, unknown> = {
-    ...baseTask,
-    ...editTask,
+  const mergedWorkflow: Record<string, unknown> = {
+    ...baseWorkflow,
+    ...editWorkflow,
     runtime: mergeRecordValues(
-      recordValue(baseTask.runtime),
-      recordValue(editTask.runtime),
+      recordValue(baseWorkflow.runtime),
+      recordValue(editWorkflow.runtime),
     ),
-    git: mergeRecordValues(recordValue(baseTask.git), recordValue(editTask.git)),
+    git: mergeRecordValues(
+      recordValue(baseWorkflow.git),
+      recordValue(editWorkflow.git),
+    ),
     publish: mergeRecordValues(
-      recordValue(baseTask.publish),
-      recordValue(editTask.publish),
+      recordValue(baseWorkflow.publish),
+      recordValue(editWorkflow.publish),
     ),
   };
-  const mergedGit = recordValue(mergedTask.git);
+  const mergedGit = recordValue(mergedWorkflow.git);
   delete mergedGit.startingBranch;
   delete mergedGit.targetBranch;
   if (Object.keys(mergedGit).length > 0) {
-    mergedTask.git = mergedGit;
+    mergedWorkflow.git = mergedGit;
   } else {
-    delete mergedTask.git;
+    delete mergedWorkflow.git;
   }
 
-  const usesCanonicalWorkflowPayload =
-    Object.keys(recordValue(baseParameters.workflow)).length > 0 ||
-    Object.keys(recordValue(executionParameters.workflow)).length > 0 ||
-    Object.keys(recordValue(artifactBase.parameters.workflow)).length > 0 ||
-    Object.keys(recordValue(submittedPayload.workflow)).length > 0;
-  const workflowPatchKey = usesCanonicalWorkflowPayload ? "workflow" : "task";
   const parametersPatch: Record<string, unknown> = {
     ...baseParameters,
     ...submittedPayload,
-    [workflowPatchKey]: mergedTask,
+    workflow: mergedWorkflow,
   };
-  delete parametersPatch[workflowPatchKey === "workflow" ? "task" : "workflow"];
+  delete parametersPatch.task;
   if (!("mergeAutomation" in submittedPayload)) {
     delete parametersPatch.mergeAutomation;
   }
@@ -3383,13 +3371,22 @@ function stripOversizedInlineInstructions(
   }
 
   const payloadRecord = payload as Record<string, unknown>;
-  const task = payloadRecord.task;
-  if (!task || typeof task !== "object" || Array.isArray(task)) {
+  const workflow = payloadRecord.workflow;
+  const createTask = payloadRecord.task;
+  const workflowInput =
+    workflow && typeof workflow === "object" && !Array.isArray(workflow)
+      ? workflow
+      : createTask && typeof createTask === "object" && !Array.isArray(createTask)
+        ? createTask
+        : null;
+  if (!workflowInput) {
     return;
   }
 
-  const taskRecord = task as Record<string, unknown>;
-  const steps = Array.isArray(taskRecord.steps) ? taskRecord.steps : [];
+  const workflowInputRecord = workflowInput as Record<string, unknown>;
+  const steps = Array.isArray(workflowInputRecord.steps)
+    ? workflowInputRecord.steps
+    : [];
 
   const fitsInlineLimit = () =>
     utf8ByteLength(JSON.stringify(requestBody)) <=
@@ -3436,8 +3433,8 @@ function stripOversizedInlineInstructions(
     }
   }
 
-  if ("instructions" in taskRecord) {
-    delete taskRecord.instructions;
+  if ("instructions" in workflowInputRecord) {
+    delete workflowInputRecord.instructions;
     if (fitsInlineLimit()) {
       return;
     }
@@ -4016,7 +4013,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           execution.taskInputSnapshot?.artifactRef || "",
         ).trim();
         const inputArtifactRef = String(execution.inputArtifactRef || "").trim();
-        const inlineTask = workflowTaskRecord(recordValue(execution.inputParameters));
+        const inlineTask = workflowRecord(recordValue(execution.inputParameters));
         if (
           execution.taskInputSnapshot?.reconstructionMode === "authoritative" &&
           snapshotArtifactRef
@@ -7913,12 +7910,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       }
       const editParametersPatch =
         temporalDraftData && pageMode.intent !== "comparison"
-          ? buildEditParametersPatch({
-              execution: temporalDraftData.execution,
-              artifactInput: temporalDraftData.artifactInput,
-              submittedPayload,
-            })
-          : null;
+      ? buildEditParametersPatch({
+          execution: temporalDraftData.execution,
+          artifactInput: temporalDraftData.artifactInput,
+          submittedPayload,
+          submittedWorkflow: taskPayload,
+        })
+      : null;
       const artifactPayload = editParametersPatch ?? submittedPayload;
       const isExactRerunRequest =
         pageMode.mode === "rerun" && pageMode.intent === "rerun";
@@ -7938,16 +7936,17 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             "Cannot request edited retry because the source execution identity is missing.",
           );
         }
-        const editedTaskPayload: Record<string, unknown> = {
-          ...recordValue(artifactPayload.task ?? taskPayload),
+        const editedWorkflowPayload: Record<string, unknown> = {
+          ...mergeRecordValues(taskPayload, workflowRecord(artifactPayload)),
           recovery: {
             kind: "edited_full_retry",
             sourceWorkflowId,
             sourceRunId,
           },
         };
-        delete editedTaskPayload.resume;
-        artifactPayload.task = editedTaskPayload;
+        delete editedWorkflowPayload.resume;
+        artifactPayload.workflow = editedWorkflowPayload;
+        delete artifactPayload.task;
       }
       if (
         pageMode.intent === "comparison" &&
@@ -8012,9 +8011,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             JSON.stringify(rerunDraft.inputAttachments)
         : false;
       const isExactRerun = isExactRerunRequest && !rerunFormChanged;
+      const artifactWorkflowPayload = mergeRecordValues(
+        taskPayload,
+        workflowRecord(artifactPayload),
+      );
       const taskInputArtifactBody = JSON.stringify({
         repository: artifactPayload.repository ?? normalizedRepository,
-        task: artifactPayload.task ?? taskPayload,
+        workflow: artifactWorkflowPayload,
       });
       const taskInputArtifactBytes = utf8ByteLength(taskInputArtifactBody);
       const existingInputArtifactRef = String(

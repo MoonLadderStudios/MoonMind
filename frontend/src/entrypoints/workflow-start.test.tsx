@@ -9352,7 +9352,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
       repository: "MoonLadderStudios/MoonMind",
-      task: {
+      workflow: {
         instructions: expect.stringContaining(
           "Large instructions Large instructions",
         ),
@@ -9684,7 +9684,7 @@ describe.skip("Task Create Entrypoint", () => {
       .at(-1);
     expect(JSON.parse(String(uploadCall?.[1]?.body))).toMatchObject({
       repository: "MoonLadderStudios/MoonMind",
-      task: {
+      workflow: {
         instructions: "Primary objective",
         steps: expect.arrayContaining([
           expect.objectContaining({
@@ -13917,7 +13917,7 @@ describe("Task Create MM-578 Preset expansion", () => {
           inputParameters: {
             targetRuntime: "codex_cli",
             repository: "MoonLadderStudios/MoonMind",
-            task: {
+            workflow: {
               instructions: "Edit a trusted preset draft.",
               runtime: { mode: "codex_cli" },
               publish: { mode: "pr" },
@@ -14903,15 +14903,19 @@ describe("Task Create MM-578 Preset expansion", () => {
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body || "{}")) as {
       updateName?: string;
-      parametersPatch?: { task?: { steps?: Array<Record<string, unknown>> } };
+      parametersPatch?: {
+        task?: unknown;
+        workflow?: { steps?: Array<Record<string, unknown>> };
+      };
     };
     expect(request.updateName).toBe("UpdateInputs");
-    expect(request.parametersPatch?.task?.steps?.map((entry) => entry.type)).toEqual([
+    expect(request.parametersPatch?.task).toBeUndefined();
+    expect(request.parametersPatch?.workflow?.steps?.map((entry) => entry.type)).toEqual([
       "tool",
       "skill",
     ]);
     expect(
-      request.parametersPatch?.task?.steps?.some(
+      request.parametersPatch?.workflow?.steps?.some(
         (entry) => entry.type === "preset",
       ),
     ).toBe(false);
