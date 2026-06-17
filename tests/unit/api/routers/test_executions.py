@@ -1418,6 +1418,27 @@ def test_list_executions_temporal_query_title_filter_ands_word_tokens() -> None:
     assert "LIKE" not in count_query
 
 
+def test_list_executions_temporal_query_rejects_title_filter_without_tokens() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+    temporal_client = SimpleNamespace(count_workflows=AsyncMock(), list_workflows=Mock())
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "titleContains": "!!!"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "invalid_execution_query"
+    assert "titleContains must contain at least one alphanumeric word token" in response.json()["detail"]["message"]
+    temporal_client.count_workflows.assert_not_called()
+
+
 def test_list_executions_temporal_query_uses_workflow_id_prefix_filter() -> None:
     app = FastAPI()
     app.include_router(router)

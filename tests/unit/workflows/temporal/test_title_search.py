@@ -27,3 +27,8 @@ def test_tokenize_title_caps_token_count() -> None:
     tokens = tokenize_title(title)
     assert len(tokens) == 50
     assert tokens[0] == "word0"
+
+
+def test_tokenize_title_skips_over_limit_tokens() -> None:
+    long_token = "a" * 201
+    assert tokenize_title(f"release {long_token} done") == ["release", "done"]

@@ -762,7 +762,12 @@ def _append_word_match_temporal_filter(
     value = _normalize_text_filter(raw, alias=alias)
     if not value:
         return
-    for token in tokenize_title(value):
+    tokens = tokenize_title(value)
+    if not tokens:
+        raise TemporalExecutionValidationError(
+            f"{alias} must contain at least one alphanumeric word token."
+        )
+    for token in tokens:
         query_parts.append(f'{attr} = "{_escape_temporal_value(token)}"')
 
 

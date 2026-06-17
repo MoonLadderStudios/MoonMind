@@ -379,7 +379,7 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
 
   const repoIn = splitParam(params, 'repoIn');
   const repoNotIn = splitParam(params, 'repoNotIn');
-  const repoExact = (params.get('repoExact') || params.get('repo') || '').trim();
+  const repoExact = (params.get('repoContains') || params.get('repoExact') || params.get('repo') || '').trim();
   if (repoNotIn.length > 0) {
     filters.repository = { mode: 'exclude', values: repoNotIn, exactText: repoExact, blank: '' };
   } else {
@@ -459,7 +459,7 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
   if (filters.workflowId.contains?.trim()) params.set('workflowIdContains', filters.workflowId.contains.trim());
   appendValueParams(params, filters.status, 'stateIn', 'stateNotIn');
   if (filters.repository.exactText?.trim()) {
-    params.set('repoExact', filters.repository.exactText.trim());
+    params.set('repoContains', filters.repository.exactText.trim());
   }
   appendValueParams(params, filters.repository, 'repoIn', 'repoNotIn', 'repoBlank');
   appendValueParams(params, filters.targetRuntime, 'targetRuntimeIn', 'targetRuntimeNotIn', 'targetRuntimeBlank');
@@ -1127,7 +1127,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               type="text"
               value={isMobile ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
               disabled={!listEnabled}
-              placeholder="owner/repo"
+              placeholder="repo starts with…"
+              title="Prefix match: finds repository names that start with this text."
               onChange={(event) => {
                 if (isMobile) applyMobileRepository(event.target.value);
                 else updateDraftRepository(event.target.value);

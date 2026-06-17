@@ -27,6 +27,7 @@ _TITLE_TOKEN_RE = re.compile(r"[a-z0-9]+")
 # Defensive cap so an unexpectedly long title cannot blow past Temporal's
 # per-search-attribute size limits. Titles are short in practice.
 _MAX_TITLE_TOKENS = 50
+_MAX_TITLE_TOKEN_LENGTH = 200
 
 
 def tokenize_title(text: str | None) -> list[str]:
@@ -40,6 +41,8 @@ def tokenize_title(text: str | None) -> list[str]:
     tokens: list[str] = []
     seen: set[str] = set()
     for match in _TITLE_TOKEN_RE.findall(str(text).lower()):
+        if len(match) > _MAX_TITLE_TOKEN_LENGTH:
+            continue
         if match in seen:
             continue
         seen.add(match)
