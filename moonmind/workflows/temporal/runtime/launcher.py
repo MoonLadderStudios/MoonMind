@@ -611,12 +611,12 @@ class ManagedRuntimeLauncher:
     def _runtime_requires_direct_github_env(runtime_id: str | None) -> bool:
         """Return whether a managed runtime needs token env in addition to broker helpers.
 
-        Codex CLI shell-tool execution can bypass the workspace-local ``gh`` wrapper
-        during nested ``bash -lc`` command execution, so direct ``GITHUB_TOKEN``
-        env remains necessary for reliable GitHub CLI auth.
+        Some runtime shell-tool execution can bypass the workspace-local ``gh``
+        wrapper during nested shell execution, so direct ``GITHUB_TOKEN`` env
+        remains necessary for reliable GitHub CLI auth.
         """
 
-        return str(runtime_id or "").strip() == "codex_cli"
+        return (runtime_id or "").strip() in {"claude_code", "codex_cli"}
 
     @staticmethod
     def _write_executable_script(path: Path, content: str) -> str:
