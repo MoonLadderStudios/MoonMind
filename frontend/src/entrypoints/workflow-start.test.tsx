@@ -6444,12 +6444,17 @@ describe.skip("Task Create Entrypoint", () => {
     const skillSelect = within(primaryStep as HTMLElement).getByLabelText(
       /Skill \(optional\)/,
     );
+    const publishSelect = screen.getByLabelText(
+      "Publish Mode",
+    ) as HTMLSelectElement;
     for (const skillId of ["fix-comments", "fix-ci", "fix-merge-conflicts"]) {
+      // Reset the publish mode to "pr" before each iteration so every skill is
+      // independently verified to force the mode back to "none"; otherwise a
+      // bug in a later skill would be masked by the value set by an earlier one.
+      fireEvent.change(publishSelect, { target: { value: "pr" } });
       fireEvent.change(skillSelect, { target: { value: skillId } });
       await waitFor(() => {
-        expect(
-          (screen.getByLabelText("Publish Mode") as HTMLSelectElement).value,
-        ).toBe("none");
+        expect(publishSelect.value).toBe("none");
       });
     }
   });

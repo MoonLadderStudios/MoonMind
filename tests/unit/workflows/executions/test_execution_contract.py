@@ -1025,6 +1025,34 @@ def test_self_managed_publish_skills_force_none(skill_id: str) -> None:
         resolve_publish_mode_for_skill(skill_id, "pr")
 
 
+@pytest.mark.parametrize(
+    "skill_id",
+    ["fix-comments", "fix-ci", "fix-merge-conflicts"],
+)
+def test_codex_skill_payload_defaults_self_managed_publish_to_none(
+    skill_id: str,
+) -> None:
+    """codex_skill submissions that omit publishMode must default to ``none``.
+
+    Regression for the legacy payload path materializing the default ``pr`` mode
+    before the self-managed resolver runs, which incorrectly rejected the
+    request even though the omitted mode should resolve to ``none``.
+    """
+
+    result = build_canonical_workflow_view(
+        job_type="codex_skill",
+        payload={
+            "skillId": skill_id,
+            "inputs": {
+                "repo": "MoonLadderStudios/MoonMind",
+                "instruction": f"Run {skill_id}.",
+            },
+        },
+    )
+
+    assert result["workflow"]["publish"]["mode"] == "none"
+
+
 def test_jira_issue_updater_allows_explicit_repository_publish_modes() -> None:
     assert resolve_publish_mode_for_skill("jira-issue-updater", "pr") == "pr"
     assert resolve_publish_mode_for_skill("jira-issue-updater", "branch") == "branch"
