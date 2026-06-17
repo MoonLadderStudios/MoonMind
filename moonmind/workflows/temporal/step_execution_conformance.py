@@ -19,13 +19,13 @@ from moonmind.schemas.temporal_models import (
     StepExecutionCheckpointModel,
     StepExecutionIdentityModel,
     StepExecutionManifestModel,
+    build_step_execution_id,
 )
 from moonmind.workflows.temporal.step_checkpoints import (
     build_step_checkpoint_payload,
     validate_step_checkpoint_payload,
 )
 from moonmind.workflows.temporal.step_executions import (
-    build_step_execution_manifest_payload,
     memory_side_effect_summary,
     validate_step_execution_manifest_payload,
 )
@@ -121,15 +121,18 @@ def _decision(
 
 
 def _valid_manifest_payload(**overrides: Any) -> dict[str, Any]:
-    payload = build_step_execution_manifest_payload(
-        workflow_id="workflow-1",
-        run_id="run-1",
-        logical_step_id="implement-story",
-        execution_ordinal=2,
+    identity = _identity()
+    payload = StepExecutionManifestModel(
+        stepExecutionId=build_step_execution_id(identity),
+        workflowId=identity.workflow_id,
+        runId=identity.run_id,
+        logicalStepId=identity.logical_step_id,
+        executionOrdinal=identity.execution_ordinal,
         reason="initial_execution",
         status="succeeded",
-        updated_at=_now(),
-        input_refs=["artifact://input"],
+        startedAt=_now(),
+        updatedAt=_now(),
+        input={"preparedInputRefs": ["artifact://input"]},
         context={"contextBundleRef": "artifact://context"},
         workspace={
             "policy": "continue_from_previous_execution",
@@ -139,11 +142,10 @@ def _valid_manifest_payload(**overrides: Any) -> dict[str, Any]:
         execution={"childWorkflowId": "child-1"},
         outputs={"summaryRef": "artifact://summary", "diffRef": "artifact://diff"},
         checks=[{"kind": "unit", "status": "passed"}],
-        side_effects={"recordsRef": "artifact://side-effects"},
-        dependency_effects={"invalidatedLogicalStepIds": []},
+        sideEffects={"recordsRef": "artifact://side-effects"},
+        dependencyEffects={"invalidatedLogicalStepIds": []},
         budget={"attemptLimit": 3},
-    )
-    payload.pop("contentType", None)
+    ).model_dump(by_alias=True, mode="json")
     payload.update(overrides)
     return payload
 

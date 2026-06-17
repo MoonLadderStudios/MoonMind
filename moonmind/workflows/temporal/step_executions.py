@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
 import posixpath
 import re
 from typing import Any, Literal
@@ -13,10 +12,6 @@ from pydantic import ValidationError
 from moonmind.schemas.step_execution_models import (
     MemorySideEffectSummary,
     StepExecutionIdentityModel,
-    StepExecutionManifestModel,
-    StepExecutionReason,
-    StepExecutionStatus,
-    StepExecutionTerminalDisposition,
 )
 from moonmind.schemas.temporal_models import (
     StepExecutionManifestModel as BoundaryStepExecutionManifestModel,
@@ -577,70 +572,6 @@ def plan_reattempt_compensation(
     if not reattempt_allowed:
         plan["reason"] = "uncompensated_non_idempotent_effects"
     return plan
-
-
-def build_step_execution_manifest_payload(
-    *,
-    workflow_id: str,
-    run_id: str,
-    logical_step_id: str,
-    execution_ordinal: int,
-    reason: StepExecutionReason,
-    status: StepExecutionStatus,
-    terminal_disposition: StepExecutionTerminalDisposition | None = None,
-    updated_at: datetime,
-    started_at: datetime | None = None,
-    summary: str | None = None,
-    lineage: Mapping[str, Any] | None = None,
-    input_refs: Sequence[str] = (),
-    context: Mapping[str, Any] | None = None,
-    workspace: Mapping[str, Any] | None = None,
-    git_effect: Mapping[str, Any] | None = None,
-    execution: Mapping[str, Any] | None = None,
-    outputs: Mapping[str, Any] | None = None,
-    checks: Sequence[Mapping[str, Any]] = (),
-    side_effects: Mapping[str, Any] | None = None,
-    side_effect_records: Sequence[Mapping[str, Any]] = (),
-    dependency_effects: Mapping[str, Any] | None = None,
-    recovery_source: Mapping[str, Any] | None = None,
-    budget: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    bounded_outputs = dict(outputs or {})
-    if summary is not None:
-        bounded_outputs.setdefault("summary", summary[:500])
-    prepared_refs = [str(ref).strip() for ref in input_refs if str(ref).strip()]
-    input_payload: dict[str, Any] = {}
-    if prepared_refs:
-        input_payload["preparedInputRefs"] = prepared_refs
-    workspace_payload = dict(workspace or {})
-    if git_effect is not None:
-        workspace_payload["gitEffect"] = dict(git_effect)
-    side_effect_payload = dict(side_effects or {})
-    if side_effect_records:
-        side_effect_payload["records"] = [dict(record) for record in side_effect_records]
-    manifest = StepExecutionManifestModel(
-        workflowId=workflow_id,
-        runId=run_id,
-        logicalStepId=logical_step_id,
-        executionOrdinal=execution_ordinal,
-        lineage=dict(lineage) if lineage is not None else None,
-        reason=reason,
-        status=status,
-        terminalDisposition=terminal_disposition,
-        startedAt=started_at or updated_at,
-        updatedAt=updated_at,
-        input=input_payload,
-        context=dict(context or {}),
-        workspace=workspace_payload,
-        execution=dict(execution or {}),
-        outputs=bounded_outputs,
-        checks=[dict(check) for check in checks],
-        sideEffects=side_effect_payload,
-        dependencyEffects=dict(dependency_effects or {}),
-        recoverySource=dict(recovery_source or {}),
-        budget=dict(budget or {}),
-    )
-    return manifest.model_dump(by_alias=True, mode="json")
 
 
 def validate_step_execution_manifest_payload(
