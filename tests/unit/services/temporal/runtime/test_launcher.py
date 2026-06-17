@@ -1995,7 +1995,7 @@ async def test_launch_resolves_github_token_from_secret_ref_setting(
 
     run_root = store.store_root.parent / "workspaces" / "run-github-secret-ref-1"
     assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
-    assert "GITHUB_TOKEN" not in captured_env
+    assert captured_env["GITHUB_TOKEN"] == "resolved-github-token"
     assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
     gitconfig = Path(captured_env["GIT_CONFIG_GLOBAL"])
     assert gitconfig.exists()
@@ -2072,7 +2072,7 @@ async def test_launch_resolves_github_token_from_managed_secrets_store_without_p
 
     run_root = store.store_root.parent / "workspaces" / "run-github-managed-store-1"
     assert captured_env["GIT_TERMINAL_PROMPT"] == "0"
-    assert "GITHUB_TOKEN" not in captured_env
+    assert captured_env["GITHUB_TOKEN"] == "resolved-from-managed-secrets-table"
     assert captured_env["PATH"].startswith(str(run_root / ".moonmind" / "bin"))
     assert (run_root / ".moonmind" / "bin" / "gh").exists()
 
@@ -2407,7 +2407,7 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
     )
     assert ("chown", "-R", "app:app", str(workspace_root.parent)) in chown_calls
     assert str(socket_path.parent) in deferred_cleanup
-    assert "GITHUB_TOKEN" not in captured_launch_env
+    assert captured_launch_env["GITHUB_TOKEN"] == "ghp_testtoken123"
     assert captured_launch_env["PATH"].startswith(
         str(workspace_root.parent / ".moonmind" / "bin")
     )
