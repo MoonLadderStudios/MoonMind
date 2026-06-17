@@ -6770,6 +6770,46 @@ export interface components {
             updatedAt?: string | null;
         };
         /**
+         * RecoverFromFailedStepRequest
+         * @description Request payload for creating a failed-step recovery follow-up execution.
+         */
+        RecoverFromFailedStepRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Sourceworkflowid */
+            sourceWorkflowId?: string | null;
+            /** Sourcerunid */
+            sourceRunId?: string | null;
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal?: number | null;
+            /** Recoverycheckpointref */
+            recoveryCheckpointRef?: string | null;
+            /** Checkpointboundary */
+            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
+            /** Taskinputsnapshotref */
+            taskInputSnapshotRef?: string | null;
+            /** Planref */
+            planRef?: string | null;
+            /** Plandigest */
+            planDigest?: string | null;
+            /** Preservedsteprefs */
+            preservedStepRefs?: string[];
+            /** Dependencysignatures */
+            dependencySignatures?: {
+                [key: string]: unknown;
+            };
+            /** Workspacepolicy */
+            workspacePolicy?: ("restore_pre_execution" | "continue_from_previous_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source") | null;
+            /** Operatormetadata */
+            operatorMetadata?: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * RecoverFromFailedStepResponse
          * @description Response from the failed-step recovery command.
          */
@@ -6796,6 +6836,48 @@ export interface components {
             relationship: "Recovered from failed step" | "Recovered from selected step";
             /** Recoverycheckpointref */
             recoveryCheckpointRef: string;
+        };
+        /**
+         * RecoverFromSelectedStepRequest
+         * @description Request payload for creating a selected-step recovery follow-up execution.
+         */
+        RecoverFromSelectedStepRequest: {
+            /** Idempotencykey */
+            idempotencyKey: string;
+            /** Sourceworkflowid */
+            sourceWorkflowId: string;
+            /** Sourcerunid */
+            sourceRunId: string;
+            /** Logicalstepid */
+            logicalStepId?: string | null;
+            /** Sourceexecutionordinal */
+            sourceExecutionOrdinal?: number | null;
+            /** Recoverycheckpointref */
+            recoveryCheckpointRef?: string | null;
+            /** Checkpointboundary */
+            checkpointBoundary?: ("after_prepare" | "before_execution" | "after_execution" | "after_gate" | "before_publication" | "before_recovery_restoration") | null;
+            /** Taskinputsnapshotref */
+            taskInputSnapshotRef?: string | null;
+            /** Planref */
+            planRef?: string | null;
+            /** Plandigest */
+            planDigest?: string | null;
+            /** Preservedsteprefs */
+            preservedStepRefs?: string[];
+            /** Dependencysignatures */
+            dependencySignatures?: {
+                [key: string]: unknown;
+            };
+            /** Workspacepolicy */
+            workspacePolicy?: ("restore_pre_execution" | "continue_from_previous_execution" | "apply_previous_execution_diff_to_clean_baseline" | "start_from_last_passed_commit" | "fresh_branch_from_source") | null;
+            /** Operatormetadata */
+            operatorMetadata?: {
+                [key: string]: unknown;
+            };
+            /** Selectedstartstepid */
+            selectedStartStepId: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * RecoveryEligibilityDiagnosticModel
@@ -12316,11 +12398,9 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["RecoverFromFailedStepRequest"];
             };
         };
         responses: {
@@ -12353,11 +12433,9 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["RecoverFromSelectedStepRequest"];
             };
         };
         responses: {

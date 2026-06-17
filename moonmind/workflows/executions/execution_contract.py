@@ -1553,7 +1553,7 @@ class WorkflowRecoveryProvenance(BaseModel):
 class ResumeFromFailedStepRef(BaseModel):
     """Pins a resume submission to a specific source run, failed step, and checkpoint."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     kind: Literal["recover_from_failed_step"] = Field(
         "recover_from_failed_step", alias="kind"
@@ -1562,10 +1562,34 @@ class ResumeFromFailedStepRef(BaseModel):
     source_run_id: str = Field(..., alias="sourceRunId")
     failed_step_id: str = Field(..., alias="failedStepId")
     failed_step_execution: int | None = Field(None, alias="failedStepExecution")
+    recovery_mode: Literal["selected_step"] | None = Field(None, alias="recoveryMode")
+    selected_start_step_id: str | None = Field(None, alias="selectedStartStepId")
+    selected_start_step_execution: int | None = Field(
+        None, alias="selectedStartStepExecution"
+    )
     recovery_checkpoint_ref: str = Field(..., alias="recoveryCheckpointRef")
+    checkpoint_boundary: Literal[
+        "after_prepare",
+        "before_execution",
+        "after_execution",
+        "after_gate",
+        "before_publication",
+        "before_recovery_restoration",
+    ] | None = Field(None, alias="checkpointBoundary")
     task_input_snapshot_ref: str = Field(..., alias="taskInputSnapshotRef")
     plan_ref: str | None = Field(None, alias="planRef")
     plan_digest: str | None = Field(None, alias="planDigest")
+    preserved_step_refs: list[str] = Field(default_factory=list, alias="preservedStepRefs")
+    dependency_signatures: dict[str, Any] = Field(
+        default_factory=dict, alias="dependencySignatures"
+    )
+    workspace_policy: Literal[
+        "restore_pre_execution",
+        "continue_from_previous_execution",
+        "apply_previous_execution_diff_to_clean_baseline",
+        "start_from_last_passed_commit",
+        "fresh_branch_from_source",
+    ] | None = Field(None, alias="workspacePolicy")
 
     @field_validator(
         "source_workflow_id",
@@ -1588,6 +1612,33 @@ class ResumeFromFailedStepRef(BaseModel):
     @classmethod
     def _clean_optional(cls, value: object) -> str | None:
         return _clean_optional_str(value)
+
+    @field_validator("selected_start_step_id", mode="before")
+    @classmethod
+    def _clean_selected_start_step_id(cls, value: object) -> str | None:
+        return _clean_optional_str(value)
+
+    @field_validator("preserved_step_refs")
+    @classmethod
+    def _clean_preserved_step_refs(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            candidate = _clean_str(item)
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        return normalized
+
+    @field_validator("dependency_signatures", mode="before")
+    @classmethod
+    def _require_dependency_signatures_mapping(cls, value: object) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping):
+            raise WorkflowContractError("dependencySignatures must be an object")
+        return dict(value)
 
 
 class WorkflowExecutionSpec(BaseModel):

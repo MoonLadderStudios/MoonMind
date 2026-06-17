@@ -3043,6 +3043,34 @@ class TemporalExecutionService:
             "sourceWorkflowId": record.workflow_id,
             "sourceRunId": source_run_id,
         }
+        preserved_step_refs: list[str] = []
+        for preserved_step in preserved_steps:
+            for candidate in (
+                preserved_step.state_checkpoint_ref,
+                preserved_step.workspace_checkpoint_ref,
+                preserved_step.step_checkpoint_ref,
+            ):
+                if candidate and candidate not in preserved_step_refs:
+                    preserved_step_refs.append(candidate)
+            artifacts = preserved_step.artifacts or {}
+            for artifact_ref in artifacts.values():
+                if (
+                    isinstance(artifact_ref, str)
+                    and artifact_ref
+                    and artifact_ref not in preserved_step_refs
+                ):
+                    preserved_step_refs.append(artifact_ref)
+        recovery_workspace = checkpoint.recovery_workspace or {}
+        workspace_policy = str(
+            recovery_workspace.get("workspacePolicy")
+            or recovery_workspace.get("workspace_policy")
+            or "restore_pre_execution"
+        ).strip()
+        if not workspace_policy:
+            workspace_policy = "restore_pre_execution"
+        dependency_signatures = recovery_workspace.get("dependencySignatures")
+        if not isinstance(dependency_signatures, dict):
+            dependency_signatures = {}
         recover_ref = {
             "kind": "recover_from_failed_step",
             "sourceWorkflowId": record.workflow_id,
@@ -3050,7 +3078,11 @@ class TemporalExecutionService:
             "failedStepId": failed_step_id,
             "failedStepExecution": failed_step_execution,
             "recoveryCheckpointRef": checkpoint_ref,
+            "checkpointBoundary": "before_recovery_restoration",
             "taskInputSnapshotRef": source_snapshot_ref,
+            "preservedStepRefs": preserved_step_refs,
+            "dependencySignatures": dependency_signatures,
+            "workspacePolicy": workspace_policy,
         }
         if recovery_mode == "selected_step":
             recover_ref["recoveryMode"] = recovery_mode
