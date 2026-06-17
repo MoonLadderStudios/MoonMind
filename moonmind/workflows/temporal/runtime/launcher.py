@@ -616,7 +616,7 @@ class ManagedRuntimeLauncher:
         remains necessary for reliable GitHub CLI auth.
         """
 
-        return str(runtime_id or "").strip() in {"claude_code", "codex_cli"}
+        return (runtime_id or "").strip() in {"claude_code", "codex_cli"}
 
     @staticmethod
     def _write_executable_script(path: Path, content: str) -> str:
