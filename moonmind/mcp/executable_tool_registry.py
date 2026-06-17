@@ -20,31 +20,38 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
     "properties": {
         "target": {
             "type": "string",
+            "title": "Target",
             "description": "Approved target URL, host, CIDR, FQDN, or application.",
         },
         "scope_artifact_ref": {
             "type": "string",
+            "title": "Approved scope artifact",
             "description": "ArtifactRef for the approved pentest scope document.",
         },
         "objective": {
             "type": "string",
+            "title": "Objective",
             "description": "Bounded pentest objective for the approved target.",
         },
         "operation_mode": {
             "type": "string",
+            "title": "Operation mode",
             "enum": ["recon_only", "validate_hypothesis", "full_authorized"],
         },
         "runner_profile_id": {
             "type": "string",
+            "title": "Runner profile",
             "enum": ["pentestgpt-safe", "pentestgpt-vpn-lab"],
             "default": "pentestgpt-safe",
         },
         "execution_profile_ref": {
             "type": "string",
+            "title": "Execution profile",
             "description": "Exact PentestGPT Provider Profile to use.",
         },
         "provider_selector": {
             "type": "object",
+            "title": "Provider selector",
             "additionalProperties": False,
             "properties": {
                 "provider_id": {"type": "string"},
@@ -54,18 +61,21 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
         },
         "time_budget_minutes": {
             "type": "integer",
+            "title": "Time budget minutes",
             "minimum": 1,
             "maximum": 480,
             "default": 60,
         },
-        "repo_dir": {"type": "string"},
+        "repo_dir": {"type": "string", "title": "Repository directory"},
         "evidence_level": {
             "type": "string",
+            "title": "Evidence level",
             "enum": ["minimal", "standard", "full"],
             "default": "standard",
         },
         "network_attachment_ref": {
             "type": "string",
+            "title": "Network attachment",
             "description": (
                 "Optional approved network attachment ref required by VPN/lab "
                 "runner profiles."
