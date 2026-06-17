@@ -12100,11 +12100,11 @@ class MoonMindRunWorkflow:
         if isinstance(runtime_block, Mapping):
             selection.update(self._runtime_selection_from_source(runtime_block))
 
-        task_payload = parameters_patch.get("task")
-        if isinstance(task_payload, Mapping):
-            task_runtime = task_payload.get("runtime")
-            if isinstance(task_runtime, Mapping):
-                selection.update(self._runtime_selection_from_source(task_runtime))
+        workflow_payload = parameters_patch.get("workflow")
+        if isinstance(workflow_payload, Mapping):
+            workflow_runtime = workflow_payload.get("runtime")
+            if isinstance(workflow_runtime, Mapping):
+                selection.update(self._runtime_selection_from_source(workflow_runtime))
 
         authored_payload = parameters_patch.get("authoredTaskInput")
         if isinstance(authored_payload, Mapping):

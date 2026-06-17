@@ -6928,6 +6928,53 @@ def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> N
     assert dumped["taskSkills"] == ["jira-orchestrate"]
     assert dumped["skillRuntime"]["selectedSkills"] == ["jira-orchestrate"]
 
+def test_serialize_execution_prefers_preset_slug_over_child_skill_display() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "targetRuntime": "codex_cli",
+        "workflow": {
+            "instructions": "Run Jira Implement for MM-901.",
+            "taskTemplate": {
+                "slug": "jira-implement",
+                "version": "1.0.0",
+            },
+            "tool": {
+                "type": "skill",
+                "name": "jira-issue-updater",
+                "version": "1.0.0",
+            },
+            "skill": {
+                "id": "jira-issue-updater",
+                "args": {},
+            },
+            "appliedStepTemplates": [
+                {
+                    "slug": "jira-implement",
+                    "version": "1.0.0",
+                    "stepIds": ["tpl:jira-implement:1.0.0:08"],
+                }
+            ],
+            "steps": [
+                {
+                    "id": "tpl:jira-implement:1.0.0:08",
+                    "title": "Finalize Jira status",
+                    "instructions": "Update Jira with implementation status.",
+                    "skill": {
+                        "id": "jira-issue-updater",
+                        "args": {},
+                    },
+                }
+            ],
+        },
+    }
+
+    payload = _serialize_execution(record)
+    dumped = payload.model_dump(by_alias=True)
+
+    assert dumped["targetSkill"] == "jira-implement"
+    assert dumped["taskSkills"] == ["jira-implement"]
+    assert dumped["skillRuntime"]["selectedSkills"] == ["jira-implement"]
+
 def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
