@@ -14,10 +14,10 @@ def test_executable_tool_registry_hides_pentest_when_disabled() -> None:
     assert registry.has_tool(PENTEST_TOOL_NAME) is False
 
 
-def test_executable_tool_registry_exposes_pentest_by_default() -> None:
+def test_executable_tool_registry_hides_pentest_by_default() -> None:
     registry = ExecutableToolDiscoveryRegistry()
 
-    assert registry.has_tool(PENTEST_TOOL_NAME) is True
+    assert registry.has_tool(PENTEST_TOOL_NAME) is False
 
 
 def test_executable_tool_registry_exposes_enabled_pentest_schema() -> None:
