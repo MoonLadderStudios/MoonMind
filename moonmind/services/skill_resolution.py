@@ -22,7 +22,7 @@ from moonmind.schemas.agent_skill_models import (
 )
 
 _REQUIRED_SKILLS_METADATA_KEY = "required-skills"
-_REQUIRED_CAPABILITIES_METADATA_KEY = "requiredCapabilities"
+_REQUIRED_CAPABILITIES_METADATA_KEY = "required-capabilities"
 _AGENT_SKILL_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
 _CAPABILITY_TOKEN_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_.:-]{0,126}[a-z0-9])?$")
 

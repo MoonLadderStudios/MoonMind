@@ -514,7 +514,7 @@ async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
         "description: Runs orchestration.\n"
         "metadata:\n"
         "  required-skills: \"helper-skill\"\n"
-        "  requiredCapabilities:\n"
+        "  required-capabilities:\n"
         "    - GH\n"
         "    - jira\n"
         "---\n",
@@ -525,7 +525,7 @@ async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
         "name: helper-skill\n"
         "description: Supports orchestration.\n"
         "metadata:\n"
-        "  requiredCapabilities:\n"
+        "  required-capabilities:\n"
         "    - git\n"
         "---\n",
         encoding="utf-8",
@@ -819,7 +819,7 @@ async def test_resolver_rejects_invalid_required_capabilities_metadata(tmp_path)
         "name: orchestrator\n"
         "description: Runs orchestration.\n"
         "metadata:\n"
-        "  requiredCapabilities: jira\n"
+        "  required-capabilities: jira\n"
         "---\n",
         encoding="utf-8",
     )
@@ -834,6 +834,6 @@ async def test_resolver_rejects_invalid_required_capabilities_metadata(tmp_path)
 
     with pytest.raises(
         ValueError,
-        match="metadata.requiredCapabilities must be a list of strings",
+        match="metadata.required-capabilities must be a list of strings",
     ):
         await resolver.resolve(selector, context)

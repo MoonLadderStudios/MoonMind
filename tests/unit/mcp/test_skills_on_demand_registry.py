@@ -97,6 +97,7 @@ async def test_enabled_query_returns_metadata_without_skill_body_refs() -> None:
             "latest_version": "1.0.0",
             "source_kind": "built_in",
             "supported_runtimes": [],
+            "required_capabilities": [],
             "eligible": True,
             "in_current_snapshot": True,
             "eligibility_summary": "Eligible for this runtime and deployment policy.",

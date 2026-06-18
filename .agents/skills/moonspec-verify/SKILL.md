@@ -2,7 +2,7 @@
 name: moonspec-verify
 description: Verify a completed Moon Spec implementation against the original request, one-story `spec.md`, plan, tasks, constitution, source-design mappings, and required tests. Use when the user asks to run or reproduce `/speckit.verify`, perform the final read-only implementation check, audit unit and integration test evidence, classify requirement coverage, or decide whether more code or test work is needed before closing a spec.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - git
 ---
 

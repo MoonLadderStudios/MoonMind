@@ -2,7 +2,7 @@
 name: moonspec-doc-reconcile
 description: Reconcile a canonical declarative document under docs/ with verified implementation discoveries after a FULLY_IMPLEMENTED moonspec-verify verdict. Use when an orchestration run must decide whether implementation discoveries definitely require updating the source design document for function, consistency, or best practices, apply the smallest correct doc update, or escalate a misaligned update as a Jira issue instead of editing.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - git
 ---
 

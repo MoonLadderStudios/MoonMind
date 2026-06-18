@@ -44,7 +44,7 @@ Capability declarations may originate from multiple authoring sources:
 4. step-level Skill selection,
 5. Tool definitions or Tool steps,
 6. preset metadata and preset-expanded child steps,
-7. Skill metadata such as `metadata.requiredCapabilities`,
+7. Skill metadata such as `metadata.required-capabilities`,
 8. explicit advanced authoring fields.
 
 The backend merges all sources into a single normalized, deduplicated, ordered top-level list before launch.
@@ -170,7 +170,7 @@ Agent Skills may declare default capabilities in `SKILL.md` frontmatter:
 name: jira-pr-verify
 description: Verify a GitHub pull request against a Jira issue and post a PR comment.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - jira
     - git
     - gh
@@ -373,7 +373,7 @@ Skill selection may require capabilities, but Skill identity and Tool access rem
 
 Rules:
 
-1. Selecting a Skill contributes the Skill's declared `metadata.requiredCapabilities`.
+1. Selecting a Skill contributes the Skill's declared `metadata.required-capabilities`.
 2. Supporting Skills included through Skill resolution contribute their own declared capabilities.
 3. A Skill-declared capability does not automatically allow every Tool in that integration.
 4. Allowed Tools remain governed by Skill policy, runtime policy, user authorization, and approval rules.
@@ -472,7 +472,7 @@ Minimum coverage:
 4. container-enabled execution contributes `docker`;
 5. Tool-declared capabilities contribute to the normalized top-level list;
 6. preset-declared and preset-expanded capabilities contribute to the normalized top-level list;
-7. Skill `metadata.requiredCapabilities` contributes when a Skill is selected directly;
+7. Skill `metadata.required-capabilities` contributes when a Skill is selected directly;
 8. supporting Skills selected through required-Skill closure contribute their capabilities;
 9. frontend omission of Skill metadata capabilities is corrected by backend normalization;
 10. readiness blocks before launch when `jira`, `gh`, `git`, `docker`, or runtime-mode requirements cannot be satisfied;

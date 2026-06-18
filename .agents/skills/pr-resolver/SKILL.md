@@ -3,7 +3,7 @@ name: pr-resolver
 description: Master orchestrator to resolve a PR by diagnosing state and delegating to specialized skills.
 metadata:
   required-skills: "fix-comments fix-ci fix-merge-conflicts"
-  requiredCapabilities:
+  required-capabilities:
     - git
     - gh
 ---

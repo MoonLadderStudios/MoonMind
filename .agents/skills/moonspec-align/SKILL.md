@@ -2,7 +2,7 @@
 name: moonspec-align
 description: Analyze and automatically remediate Moon Spec artifact inconsistencies across spec.md, plan.md, tasks.md, and related design files. Use when the user asks to run an automated `/speckit.analyze`-style workflow that identifies uncertainty, weighs tradeoffs in project context, edits artifacts without asking follow-up questions, resolves coverage gaps, or aligns generated Moon Spec documents before implementation.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - git
 ---
 

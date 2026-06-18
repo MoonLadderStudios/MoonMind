@@ -9,7 +9,7 @@ description: >-
   when a user asks whether a branch or merged change completes a Jira ticket,
   or needs a Jira-visible verification comment.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - jira
     - git
 ---

@@ -523,7 +523,7 @@ def test_skills_api_include_content_reads_legacy_skill_markdown(
         "---\n"
         "name: speckit-orchestrate\n"
         "metadata:\n"
-        "  requiredCapabilities:\n"
+        "  required-capabilities:\n"
         "    - git\n"
         "---\n"
         "# Speckit Orchestrate\n\nRun the full Moon Spec lifecycle."

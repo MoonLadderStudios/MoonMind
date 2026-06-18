@@ -2,7 +2,7 @@
 name: jira-implement
 description: Implement repository work from a Jira issue. Use when a user gives Codex a Jira issue key or URL and asks it to fetch the issue, pull relevant instructions, comments, linked context, and attachments, implement the requested code/docs/tests, verify the result, and report what changed.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - jira
     - git
 ---

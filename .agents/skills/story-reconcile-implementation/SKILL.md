@@ -2,7 +2,7 @@
 name: story-reconcile-implementation
 description: Compare MoonSpec story breakdown output against the current repository implementation, preserve fully implemented stories as skipped, narrow partially implemented stories to remaining work, and rewrite the story breakdown handoff before Jira issue creation.
 metadata:
-  requiredCapabilities:
+  required-capabilities:
     - git
 ---
 
