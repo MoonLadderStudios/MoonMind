@@ -6,9 +6,12 @@ from moonmind.schemas.step_execution_models import (
     STEP_EXECUTION_CONTENT_TYPE,
     StepExecutionManifestModel,
 )
+import pytest
+
 from moonmind.workflows.temporal.step_executions import (
     already_occurred_non_idempotent_effects,
     compensation_subject_key,
+    external_handoff_gate_decision,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
@@ -490,3 +493,94 @@ def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> 
     assert payload["workspace"]["policy"] == "continue_from_previous_execution"
     assert payload["workspace"]["gitEffect"]["disposition"] == "candidate"
     assert payload["sideEffects"]["records"][0]["disposition"] == "blocked"
+
+
+def test_external_handoff_gate_allows_accepted_and_gate_approved() -> None:
+    decision = external_handoff_gate_decision(
+        operation="repo.publish",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=True,
+        gate_verdict="FULLY_IMPLEMENTED",
+    )
+
+    assert decision["allowed"] is True
+    assert decision["producingStepAccepted"] is True
+    assert decision["gateApproved"] is True
+    assert decision["terminalDisposition"] == "accepted"
+    assert "reason" not in decision
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    [
+        "candidate",
+        "discarded",
+        "superseded",
+        "blocked",
+        "failed_with_remaining_work",
+        "failed_unrecoverable",
+    ],
+)
+def test_external_handoff_gate_blocks_non_accepted_dispositions(
+    disposition: str,
+) -> None:
+    decision = external_handoff_gate_decision(
+        operation="jira.transition",
+        producing_step_terminal_disposition=disposition,
+        gate_approved=True,
+    )
+
+    assert decision["allowed"] is False
+    assert decision["producingStepAccepted"] is False
+    assert decision["gateApproved"] is True
+    assert decision["terminalDisposition"] == disposition
+    assert disposition in decision["reason"]
+    assert "not accepted" in decision["reason"]
+
+
+def test_external_handoff_gate_blocks_unknown_or_blank_disposition_fail_closed() -> None:
+    for disposition in (None, "", "   ", "newly_introduced_state"):
+        decision = external_handoff_gate_decision(
+            operation="repo.merge",
+            producing_step_terminal_disposition=disposition,
+            gate_approved=True,
+        )
+        assert decision["allowed"] is False
+        assert decision["producingStepAccepted"] is False
+        assert "reason" in decision
+
+
+def test_external_handoff_gate_blocks_accepted_without_gate_approval() -> None:
+    decision = external_handoff_gate_decision(
+        operation="deployment.publish",
+        producing_step_terminal_disposition="accepted",
+        gate_approved=False,
+        gate_verdict="ADDITIONAL_WORK_NEEDED",
+    )
+
+    assert decision["allowed"] is False
+    assert decision["producingStepAccepted"] is True
+    assert decision["gateApproved"] is False
+    assert "controlling gate has not approved advancement" in decision["reason"]
+    assert "ADDITIONAL_WORK_NEEDED" in decision["reason"]
+
+
+def test_external_handoff_gate_reports_both_failures() -> None:
+    decision = external_handoff_gate_decision(
+        operation="provider_account.rotate",
+        producing_step_terminal_disposition="candidate",
+        gate_approved=False,
+    )
+
+    assert decision["allowed"] is False
+    assert "not accepted" in decision["reason"]
+    assert "controlling gate has not approved advancement" in decision["reason"]
+
+
+def test_external_handoff_gate_requires_operation() -> None:
+    with pytest.raises(ValueError):
+        external_handoff_gate_decision(
+            operation="   ",
+            producing_step_terminal_disposition="accepted",
+            gate_approved=True,
+        )
