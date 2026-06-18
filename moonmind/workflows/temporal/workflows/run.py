@@ -368,6 +368,7 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_UPDATE_EXECUTE_PATCH = (
 RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
+RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -12099,6 +12100,26 @@ class MoonMindRunWorkflow:
             selection[target_key] = value
         return selection
 
+    @staticmethod
+    def _source_requests_runtime_profile_clear(
+        source: Mapping[str, Any] | None,
+    ) -> bool:
+        if not isinstance(source, Mapping):
+            return False
+        for source_key in (
+            "executionProfileRef",
+            "execution_profile_ref",
+            "profileId",
+            "profile_id",
+            "providerProfile",
+        ):
+            if source_key not in source:
+                continue
+            value = source.get(source_key)
+            if isinstance(value, str) and value.strip().lower() in {"", "auto"}:
+                return True
+        return False
+
     def _runtime_selection_update_payload(
         self, payload: Mapping[str, Any] | None
     ) -> dict[str, Any] | None:
@@ -12110,26 +12131,51 @@ class MoonMindRunWorkflow:
         if not isinstance(parameters_patch, Mapping):
             return None
 
+        preserve_profile_clear = workflow.patched(
+            RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH
+        )
+        profile_clear_requested = False
         selection: dict[str, Any] = {}
         for source in (parameters_patch,):
+            if preserve_profile_clear and self._source_requests_runtime_profile_clear(
+                source
+            ):
+                profile_clear_requested = True
             selection.update(self._runtime_selection_from_source(source))
 
         runtime_block = parameters_patch.get("runtime")
         if isinstance(runtime_block, Mapping):
+            if (
+                preserve_profile_clear
+                and self._source_requests_runtime_profile_clear(runtime_block)
+            ):
+                profile_clear_requested = True
             selection.update(self._runtime_selection_from_source(runtime_block))
 
         workflow_payload = parameters_patch.get("workflow")
         if isinstance(workflow_payload, Mapping):
             workflow_runtime = workflow_payload.get("runtime")
             if isinstance(workflow_runtime, Mapping):
+                if (
+                    preserve_profile_clear
+                    and self._source_requests_runtime_profile_clear(workflow_runtime)
+                ):
+                    profile_clear_requested = True
                 selection.update(self._runtime_selection_from_source(workflow_runtime))
 
         authored_payload = parameters_patch.get("authoredTaskInput")
         if isinstance(authored_payload, Mapping):
             authored_runtime = authored_payload.get("runtime")
             if isinstance(authored_runtime, Mapping):
+                if (
+                    preserve_profile_clear
+                    and self._source_requests_runtime_profile_clear(authored_runtime)
+                ):
+                    profile_clear_requested = True
                 selection.update(self._runtime_selection_from_source(authored_runtime))
 
+        if profile_clear_requested:
+            selection["executionProfileRef"] = ""
         if not selection:
             return None
         selection["parametersPatch"] = dict(parameters_patch)

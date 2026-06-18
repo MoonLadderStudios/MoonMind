@@ -377,6 +377,106 @@ class TestEnsureManagerAutoStart:
         )
         assert "profileSelector" not in request.parameters["workflow"]["runtime"]
 
+    def test_runtime_selection_update_clears_profile_when_profile_patch_is_empty(
+        self,
+    ):
+        """Explicit profile clears must reset exact refs and stale selectors."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            parameters={
+                "targetRuntime": "codex_cli",
+                "profileId": "codex-openrouter",
+                "profileSelector": {"providerId": "openrouter"},
+                "task": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "profileId": "codex-openrouter",
+                        "profileSelector": {"providerId": "openrouter"},
+                    }
+                },
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "profileId": "codex-openrouter",
+                        "profileSelector": {"providerId": "openrouter"},
+                    }
+                },
+                "workflow": {
+                    "runtime": {
+                        "profileId": "codex-openrouter",
+                        "profileSelector": {"providerId": "openrouter"},
+                    }
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "parametersPatch": {
+                    "profileId": "",
+                    "workflow": {"runtime": {"profileId": ""}},
+                },
+            },
+        )
+
+        assert request.agent_id == "codex_cli"
+        assert request.execution_profile_ref is None
+        assert request.profile_selector.provider_id is None
+        assert "profileId" not in request.parameters
+        assert "profileSelector" not in request.parameters
+        assert "profileId" not in request.parameters["task"]["runtime"]
+        assert "profileSelector" not in request.parameters["task"]["runtime"]
+        assert "profileId" not in request.parameters["authoredTaskInput"]["runtime"]
+        assert (
+            "profileSelector"
+            not in request.parameters["authoredTaskInput"]["runtime"]
+        )
+        assert "profileId" not in request.parameters["workflow"]["runtime"]
+        assert "profileSelector" not in request.parameters["workflow"]["runtime"]
+
+    def test_runtime_selection_update_treats_auto_profile_as_clear(self):
+        """The edit form's automatic profile value must not become a literal ID."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            parameters={
+                "targetRuntime": "codex_cli",
+                "profileId": "codex-openrouter",
+                "profileSelector": {"providerId": "openrouter"},
+                "task": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "profileId": "codex-openrouter",
+                        "profileSelector": {"providerId": "openrouter"},
+                    }
+                },
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "codex_cli",
+                        "profileId": "codex-openrouter",
+                        "profileSelector": {"providerId": "openrouter"},
+                    }
+                },
+            },
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {"executionProfileRef": "auto"},
+        )
+
+        assert request.execution_profile_ref is None
+        assert request.profile_selector.provider_id is None
+        assert "profileId" not in request.parameters
+        assert "profileSelector" not in request.parameters
+        assert "profileId" not in request.parameters["task"]["runtime"]
+        assert "profileSelector" not in request.parameters["task"]["runtime"]
+        assert "profileId" not in request.parameters["authoredTaskInput"]["runtime"]
+        assert (
+            "profileSelector"
+            not in request.parameters["authoredTaskInput"]["runtime"]
+        )
+
     def test_runtime_selection_update_clears_profile_known_to_previous_runtime(self):
         """A stale profile echoed by the edit form must not fail the new slot request."""
         workflow_instance = MoonMindAgentRun()
@@ -451,6 +551,73 @@ class TestEnsureManagerAutoStart:
         )
         assert "profileSelector" not in request.parameters["workflow"]["runtime"]
 
+    def test_runtime_selection_update_honors_top_level_selector_on_runtime_change(
+        self,
+    ):
+        """Only an explicit top-level selector should survive a runtime switch."""
+        workflow_instance = MoonMindAgentRun()
+        request = _agent_request(
+            agentId="claude_code",
+            executionProfileRef="claude_anthropic",
+            parameters={
+                "targetRuntime": "claude_code",
+                "profileId": "claude_anthropic",
+                "profileSelector": {"providerId": "anthropic"},
+                "task": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "claude_anthropic",
+                        "profileSelector": {"providerId": "anthropic"},
+                    }
+                },
+                "authoredTaskInput": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "claude_anthropic",
+                        "profileSelector": {"providerId": "anthropic"},
+                    }
+                },
+            },
+            profileSelector={"providerId": "anthropic"},
+        )
+
+        workflow_instance._apply_runtime_selection_update(
+            request,
+            {
+                "targetRuntime": "codex_cli",
+                "profileSelector": {"providerId": "openai"},
+                "parametersPatch": {
+                    "task": {
+                        "runtime": {
+                            "profileSelector": {"providerId": "anthropic"},
+                        }
+                    },
+                    "authoredTaskInput": {
+                        "runtime": {
+                            "profileSelector": {"providerId": "anthropic"},
+                        }
+                    },
+                },
+            },
+        )
+
+        assert request.agent_id == "codex_cli"
+        assert request.execution_profile_ref is None
+        assert request.profile_selector.provider_id == "openai"
+        assert request.parameters["profileSelector"]["providerId"] == "openai"
+        assert request.parameters["task"]["runtime"]["profileSelector"] == {
+            "providerId": "openai",
+            "tagsAny": [],
+            "tagsAll": [],
+        }
+        assert request.parameters["authoredTaskInput"]["runtime"][
+            "profileSelector"
+        ] == {
+            "providerId": "openai",
+            "tagsAny": [],
+            "tagsAll": [],
+        }
+
     def test_runtime_change_validation_clears_profile_missing_from_new_snapshot(self):
         """Runtime-switch edits may clear stale profiles after syncing the new runtime."""
         workflow_instance = MoonMindAgentRun()
@@ -516,6 +683,21 @@ class TestEnsureManagerAutoStart:
             "tagsAny": [],
             "tagsAll": [],
         }
+
+    def test_runtime_selection_signal_preserves_empty_profile_clear(self, monkeypatch):
+        """The signal payload must preserve an explicit top-level profile clear."""
+        monkeypatch.setattr(
+            "moonmind.workflows.temporal.workflows.agent_run.workflow.patched",
+            lambda _patch_id: True,
+        )
+        workflow_instance = MoonMindAgentRun()
+
+        workflow_instance.update_runtime_selection({"executionProfileRef": ""})
+
+        assert workflow_instance._pending_runtime_selection_update == {
+            "executionProfileRef": ""
+        }
+        assert workflow_instance.runtime_selection_updated_event.is_set()
 
     def test_slot_wait_runtime_update_returns_refreshed_manager_and_runtime_ids(self):
         """The slot-wait caller must update local manager/runtime identifiers."""

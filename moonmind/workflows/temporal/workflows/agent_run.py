@@ -149,6 +149,9 @@ SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
 PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-pin-provider-profile-before-slot-request-v1"
 )
+RUNTIME_SELECTION_PROFILE_CLEAR_PATCH_ID = (
+    "agent-run-runtime-selection-profile-clear-v1"
+)
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
@@ -1789,6 +1792,13 @@ class MoonMindAgentRun:
     def update_runtime_selection(self, payload: dict[str, Any] | None = None) -> None:
         payload = payload or {}
         update_payload: dict[str, Any] = {}
+        profile_ref_source_keys = {
+            "executionProfileRef",
+            "execution_profile_ref",
+            "profileId",
+            "profile_id",
+            "providerProfile",
+        }
         for source_key, target_key in (
             ("executionProfileRef", "executionProfileRef"),
             ("execution_profile_ref", "executionProfileRef"),
@@ -1808,6 +1818,12 @@ class MoonMindAgentRun:
             if isinstance(value, str):
                 value = value.strip()
                 if not value:
+                    if (
+                        target_key == "executionProfileRef"
+                        and source_key in profile_ref_source_keys
+                        and workflow.patched(RUNTIME_SELECTION_PROFILE_CLEAR_PATCH_ID)
+                    ):
+                        update_payload[target_key] = ""
                     continue
             update_payload[target_key] = value
         parameters_patch = payload.get("parametersPatch") or payload.get(
@@ -1857,6 +1873,43 @@ class MoonMindAgentRun:
         for key in ("profileSelector", "profile_selector"):
             runtime_payload.pop(key, None)
 
+    @staticmethod
+    def _has_runtime_profile_field(runtime_payload: Mapping[str, Any]) -> bool:
+        return any(
+            key in runtime_payload
+            for key in (
+                "executionProfileRef",
+                "execution_profile_ref",
+                "profileId",
+                "profile_id",
+                "providerProfile",
+                "provider_profile",
+            )
+        )
+
+    def _has_profile_selection_update(
+        self,
+        *,
+        payload: Mapping[str, Any],
+        parameters_patch: Any,
+    ) -> bool:
+        if self._has_runtime_profile_field(payload):
+            return True
+        if not isinstance(parameters_patch, Mapping):
+            return False
+        if self._has_runtime_profile_field(parameters_patch):
+            return True
+        for key in ("task", "authoredTaskInput", "workflow"):
+            nested_payload = parameters_patch.get(key)
+            if not isinstance(nested_payload, Mapping):
+                continue
+            runtime_payload = nested_payload.get("runtime")
+            if isinstance(runtime_payload, Mapping) and self._has_runtime_profile_field(
+                runtime_payload
+            ):
+                return True
+        return False
+
     def _profile_ref_targets_different_runtime(
         self,
         *,
@@ -1879,10 +1932,9 @@ class MoonMindAgentRun:
     def _clear_runtime_profile_selection(
         self,
         request: AgentExecutionRequest,
-        params: dict[str, Any] | None = None,
     ) -> None:
         request.execution_profile_ref = None
-        params = dict(params if params is not None else request.parameters or {})
+        params = dict(request.parameters or {})
         self._drop_runtime_profile_fields(params)
         for key in ("task", "authoredTaskInput", "workflow"):
             payload = self._mapping_copy(params.get(key))
@@ -1927,6 +1979,12 @@ class MoonMindAgentRun:
         workflow_runtime = self._mapping_copy(workflow_payload.get("runtime"))
 
         profile_id = str(payload.get("executionProfileRef") or "").strip()
+        explicit_profile_selection_update = self._has_profile_selection_update(
+            payload=payload,
+            parameters_patch=parameters_patch,
+        )
+        if profile_id.lower() == "auto":
+            profile_id = ""
 
         model = str(payload.get("model") or "").strip()
         if model:
@@ -1975,18 +2033,22 @@ class MoonMindAgentRun:
             self._drop_runtime_profile_fields(task_runtime)
             self._drop_runtime_profile_fields(authored_runtime)
             self._drop_runtime_profile_fields(workflow_runtime)
+        elif explicit_profile_selection_update:
+            request.execution_profile_ref = None
+            self._drop_runtime_profile_fields(params)
+            self._drop_runtime_profile_fields(task_runtime)
+            self._drop_runtime_profile_fields(authored_runtime)
+            self._drop_runtime_profile_fields(workflow_runtime)
 
         profile_selector_payload = payload.get("profileSelector")
-        if not isinstance(profile_selector_payload, Mapping):
-            candidate_selector = (
-                parameters_patch.get("profileSelector")
-                or parameters_patch.get("profile_selector")
-                if isinstance(parameters_patch, Mapping)
-                else None
-            )
-            if isinstance(candidate_selector, Mapping):
-                profile_selector_payload = candidate_selector
-        if not isinstance(profile_selector_payload, Mapping):
+        if not isinstance(profile_selector_payload, Mapping) and not runtime_changed:
+            if isinstance(parameters_patch, Mapping):
+                candidate_selector = parameters_patch.get("profileSelector")
+                if not isinstance(candidate_selector, Mapping):
+                    candidate_selector = parameters_patch.get("profile_selector")
+                if isinstance(candidate_selector, Mapping):
+                    profile_selector_payload = candidate_selector
+        if not isinstance(profile_selector_payload, Mapping) and not runtime_changed:
             task_patch = (
                 parameters_patch.get("task")
                 if isinstance(parameters_patch, Mapping)
@@ -1995,15 +2057,13 @@ class MoonMindAgentRun:
             task_runtime_patch = (
                 task_patch.get("runtime") if isinstance(task_patch, Mapping) else None
             )
-            task_selector = (
-                task_runtime_patch.get("profileSelector")
-                or task_runtime_patch.get("profile_selector")
-                if isinstance(task_runtime_patch, Mapping)
-                else None
-            )
-            if isinstance(task_selector, Mapping):
-                profile_selector_payload = task_selector
-        if not isinstance(profile_selector_payload, Mapping):
+            if isinstance(task_runtime_patch, Mapping):
+                task_selector = task_runtime_patch.get("profileSelector")
+                if not isinstance(task_selector, Mapping):
+                    task_selector = task_runtime_patch.get("profile_selector")
+                if isinstance(task_selector, Mapping):
+                    profile_selector_payload = task_selector
+        if not isinstance(profile_selector_payload, Mapping) and not runtime_changed:
             authored_patch = (
                 parameters_patch.get("authoredTaskInput")
                 if isinstance(parameters_patch, Mapping)
@@ -2014,14 +2074,12 @@ class MoonMindAgentRun:
                 if isinstance(authored_patch, Mapping)
                 else None
             )
-            authored_selector = (
-                authored_runtime_patch.get("profileSelector")
-                or authored_runtime_patch.get("profile_selector")
-                if isinstance(authored_runtime_patch, Mapping)
-                else None
-            )
-            if isinstance(authored_selector, Mapping):
-                profile_selector_payload = authored_selector
+            if isinstance(authored_runtime_patch, Mapping):
+                authored_selector = authored_runtime_patch.get("profileSelector")
+                if not isinstance(authored_selector, Mapping):
+                    authored_selector = authored_runtime_patch.get("profile_selector")
+                if isinstance(authored_selector, Mapping):
+                    profile_selector_payload = authored_selector
 
         if isinstance(profile_selector_payload, Mapping):
             request.profile_selector = ProfileSelector.model_validate(
@@ -2045,20 +2103,20 @@ class MoonMindAgentRun:
             authored_runtime.pop("profile_selector", None)
             workflow_runtime.pop("profileSelector", None)
             workflow_runtime.pop("profile_selector", None)
-        elif runtime_changed:
+        elif runtime_changed or explicit_profile_selection_update:
             request.profile_selector = ProfileSelector()
             self._drop_runtime_profile_selector_fields(params)
             self._drop_runtime_profile_selector_fields(task_runtime)
             self._drop_runtime_profile_selector_fields(authored_runtime)
             self._drop_runtime_profile_selector_fields(workflow_runtime)
 
-        if task_runtime:
+        if task_runtime or "runtime" in task_payload:
             task_payload["runtime"] = task_runtime
             params["task"] = task_payload
-        if authored_runtime:
+        if authored_runtime or "runtime" in authored_payload:
             authored_payload["runtime"] = authored_runtime
             params["authoredTaskInput"] = authored_payload
-        if workflow_runtime:
+        if workflow_runtime or "runtime" in workflow_payload:
             workflow_payload["runtime"] = workflow_runtime
             params["workflow"] = workflow_payload
         request.parameters = params
