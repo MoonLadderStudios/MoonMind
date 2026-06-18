@@ -141,3 +141,52 @@ def test_compensation_is_idempotent_across_successive_reattempts(
         if record.get("kind") == "compensation"
     ]
     assert len(compensation_records) == 1
+
+
+# ---------------------------------------------------------------------------
+# MM-826: external handoff gate payload at the activity call site
+# ---------------------------------------------------------------------------
+
+
+def test_handoff_gate_payload_approves_when_no_verification_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Legacy-equivalent: a run with no MoonSpec verification gate publishes as
+    # before (accepted + gate-approved), so in-flight publish paths are unaffected.
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._moonspec_gate_verdict = None
+
+    gate = wf._external_handoff_gate_payload(operation="repo.create_pr")
+
+    assert gate["gateApproved"] is True
+    assert gate["terminalDisposition"] == "accepted"
+    assert gate["operation"] == "repo.create_pr"
+
+
+def test_handoff_gate_payload_approves_on_passing_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._moonspec_gate_verdict = "FULLY_IMPLEMENTED"
+
+    gate = wf._external_handoff_gate_payload(operation="repo.merge_pr")
+
+    assert gate["gateApproved"] is True
+    assert gate["terminalDisposition"] == "accepted"
+
+
+def test_handoff_gate_payload_blocks_on_failing_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # FR-007 / DESIGN-REQ-022: a non-passing verification verdict yields a
+    # non-accepted disposition so the activity boundary fails closed.
+    _configure_workflow_runtime(monkeypatch)
+    wf = MoonMindRunWorkflow()
+    wf._moonspec_gate_verdict = "ADDITIONAL_WORK_NEEDED"
+
+    gate = wf._external_handoff_gate_payload(operation="repo.create_pr")
+
+    assert gate["gateApproved"] is False
+    assert gate["terminalDisposition"] == "blocked"

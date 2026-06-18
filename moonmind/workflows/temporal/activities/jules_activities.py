@@ -26,8 +26,41 @@ from moonmind.security import scan_outbound_text
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.jules_agent_adapter import JulesAgentAdapter
 from moonmind.workflows.adapters.jules_client import JulesClient
+from moonmind.workflows.temporal.step_executions import (
+    external_handoff_gate_decision,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _external_handoff_gate_block(
+    payload: dict, *, default_operation: str
+) -> dict | None:
+    """Evaluate the optional producing-step gate at an external handoff boundary.
+
+    MM-826: when a ``stepExecutionGate`` is present on the activity payload, the
+    handoff is only allowed when the producing Step Execution is ``accepted`` and
+    gate-approved (and any non-idempotent action is policy-permitted). Returns the
+    denying ``external_handoff_gate_decision`` (carrying a ``blocked`` side-effect
+    record) when the handoff must be refused, or ``None`` to proceed. An absent
+    gate preserves legacy behavior for in-flight runs.
+    """
+
+    if not isinstance(payload, dict):
+        return None
+    gate = payload.get("stepExecutionGate")
+    if not isinstance(gate, dict):
+        return None
+    decision = external_handoff_gate_decision(
+        operation=str(gate.get("operation") or default_operation),
+        effect_class=gate.get("effectClass") or "publication",
+        terminal_disposition=gate.get("terminalDisposition"),
+        gate_approved=bool(gate.get("gateApproved")),
+        policy_permits_non_idempotent=bool(gate.get("policyPermitsNonIdempotent")),
+        target=gate.get("target"),
+        idempotency_key=gate.get("idempotencyKey"),
+    )
+    return None if decision["allowed"] else decision
 
 _JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
 
@@ -301,6 +334,16 @@ async def repo_merge_pr_activity(payload: dict) -> dict:
       current base, the PR base is updated before merging
     - ``merge_method`` (str, optional): merge strategy (default "merge")
     """
+    gate_block = _external_handoff_gate_block(
+        payload, default_operation="repo.merge_pr"
+    )
+    if gate_block is not None:
+        return {
+            "merged": False,
+            "summary": gate_block["reason"],
+            "blockedSideEffect": gate_block["sideEffect"],
+        }
+
     from moonmind.workflows.adapters.github_service import GitHubService
 
     pr_url = payload.get("pr_url") or payload.get("prUrl") or ""
@@ -370,6 +413,17 @@ async def jules_get_auto_answer_config_activity(_args: list | None = None) -> di
 @activity.defn(name="repo.create_pr")
 async def repo_create_pr_activity(payload: dict) -> dict:
     """Create a PR via GitHub REST API (provider-agnostic)."""
+    gate_block = _external_handoff_gate_block(
+        payload, default_operation="repo.create_pr"
+    )
+    if gate_block is not None:
+        return {
+            "created": False,
+            "url": None,
+            "summary": gate_block["reason"],
+            "blockedSideEffect": gate_block["sideEffect"],
+        }
+
     import re
     from pydantic import BaseModel, Field, ValidationError
 

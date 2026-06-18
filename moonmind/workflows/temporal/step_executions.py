@@ -54,6 +54,28 @@ _NON_IDEMPOTENT_SIDE_EFFECT_CLASSES = {
     "publication",
     "provider_account",
 }
+# Side-effect classes that represent an external handoff. A failed or partial
+# Step Execution must never retain one of these as `accepted` (Section 11
+# rule 2, Section 18), and these are exactly the classes whose handoff gates a
+# terminal manifest may only open for an `accepted` disposition.
+_EXTERNAL_HANDOFF_SIDE_EFFECT_CLASSES = {
+    "external_non_idempotent",
+    "publication",
+    "provider_account",
+}
+# Classes/operations that cannot safely repeat and therefore require explicit
+# policy even after accepted + gate approval (Section 11: external_non_idempotent
+# is "Forbidden in autonomous reattempts unless explicit policy permits";
+# provider_account "Requires provider-profile policy"). `publication` is NOT here
+# because publishing accepted, gate-approved work is the intended path.
+_REQUIRES_NON_IDEMPOTENT_POLICY_CLASSES = {
+    "external_non_idempotent",
+    "provider_account",
+}
+_NON_IDEMPOTENT_OPERATION_PREFIXES = (
+    "deployment.",
+    "provider_account.",
+)
 _COMPENSATION_OPERATION_PREFIX = "compensate"
 _GATED_OPERATION_PREFIXES = (
     "jira.transition",
@@ -331,6 +353,128 @@ def side_effect_record(
             dict(memory_effect)
         ).model_dump(by_alias=True, mode="json")
     return record
+
+
+def terminal_side_effect_manifest(
+    *,
+    terminal_disposition: str,
+    git_effect: Mapping[str, Any] | None = None,
+    side_effect_records: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Aggregate a Step Execution's side effects into a terminal manifest.
+
+    Aggregates git plus every side-effect class (external idempotent/non-
+    idempotent, artifact, publication, compensation, memory, retrieval, and
+    record/workspace effects) keyed by class, and enforces the Section 10.2
+    accepted-output rule and the Section 18 failure semantics:
+
+    - ``handoffGatesOpen`` is true only when the terminal disposition is
+      ``accepted`` and the git effect carries an ``accepted`` disposition with
+      accepted-output evidence.
+    - A non-``accepted`` disposition may carry ``candidate``/``discarded``/
+      ``superseded``/``blocked`` records but must not retain an ``accepted``
+      publication, non-idempotent external, or provider-account record; if it
+      does, ``invalidReason`` is set and the gates stay closed.
+    """
+
+    disposition = str(terminal_disposition or "").strip()
+    git = dict(git_effect) if git_effect is not None else None
+    by_class: dict[str, list[dict[str, Any]]] = {}
+    for record in side_effect_records:
+        if not isinstance(record, Mapping):
+            continue
+        effect_class = str(record.get("class") or "unknown")
+        by_class.setdefault(effect_class, []).append(dict(record))
+
+    accepted_git = bool(
+        git
+        and git.get("disposition") == "accepted"
+        and git.get("acceptedOutputPresent")
+    )
+    invalid_reason: str | None = None
+    if disposition == "accepted":
+        if not accepted_git:
+            invalid_reason = "accepted_without_accepted_git_output"
+    else:
+        for effect_class in _EXTERNAL_HANDOFF_SIDE_EFFECT_CLASSES:
+            if any(
+                rec.get("disposition") == "accepted"
+                for rec in by_class.get(effect_class, ())
+            ):
+                invalid_reason = (
+                    "non_accepted_disposition_has_accepted_external_handoff"
+                )
+                break
+
+    handoff_gates_open = (
+        disposition == "accepted" and accepted_git and invalid_reason is None
+    )
+    return {
+        "terminalDisposition": disposition,
+        "git": git,
+        "sideEffects": by_class,
+        "acceptedOutputPresent": accepted_git,
+        "handoffGatesOpen": handoff_gates_open,
+        "invalidReason": invalid_reason,
+    }
+
+
+def external_handoff_gate_decision(
+    *,
+    operation: str,
+    effect_class: SideEffectClass,
+    terminal_disposition: str | None,
+    gate_approved: bool,
+    policy_permits_non_idempotent: bool = False,
+    target: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    """Assert a producing Step Execution is accepted + gate-approved at a handoff.
+
+    This is the producing-step accepted assertion evaluated at the actual
+    external handoff activity boundary (PR creation, Jira transition/comment,
+    merge automation, deployment/publish, provider-account actions). The handoff
+    is allowed only when the producing Step Execution reached an ``accepted``
+    terminal disposition AND the gate is approved (Section 11 rule 2, Section 19
+    rule 6). Terminal-disposition gating is additive to MoonSpec gate-verdict
+    blocking, not a replacement for it.
+
+    Non-idempotent external actions (Section 11 rule 1) are denied unless
+    ``policy_permits_non_idempotent`` is set, failing closed when no policy is
+    supplied. On denial a ``blocked`` side-effect record is returned so the
+    denial is recorded at the activity boundary with a sanitized reason.
+    """
+
+    operation_text = str(operation or "").strip()
+    if not operation_text:
+        raise ValueError("operation must be a non-empty string")
+    operation_lower = operation_text.lower()
+    non_idempotent = effect_class in _REQUIRES_NON_IDEMPOTENT_POLICY_CLASSES or any(
+        operation_lower.startswith(prefix)
+        for prefix in _NON_IDEMPOTENT_OPERATION_PREFIXES
+    )
+
+    reason: str | None = None
+    if terminal_disposition != "accepted":
+        reason = "producing_step_not_accepted"
+    elif gate_approved is not True:
+        reason = "gate_not_approved"
+    elif non_idempotent and not policy_permits_non_idempotent:
+        reason = "non_idempotent_external_action_without_policy"
+
+    if reason is None:
+        return {"allowed": True, "reason": None, "sideEffect": None}
+
+    blocked = side_effect_record(
+        effect_class=effect_class,
+        operation=operation_text,
+        target=target,
+        idempotency_key=idempotency_key,
+        workflow_state_accepted=False,
+        disposition="blocked",
+        reason=reason,
+    )
+    return {"allowed": False, "reason": reason, "sideEffect": blocked}
 
 
 def memory_side_effect_summary(

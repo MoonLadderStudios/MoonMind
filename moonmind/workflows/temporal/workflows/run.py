@@ -2540,6 +2540,32 @@ class MoonMindRunWorkflow:
             "has approved advancement."
         )
 
+    def _external_handoff_gate_payload(
+        self,
+        *,
+        operation: str,
+        effect_class: str = "publication",
+    ) -> dict[str, Any]:
+        """Build the producing-step gate context for an external handoff activity.
+
+        MM-826: terminal-disposition gating wired at the activity boundary, in
+        addition to the existing MoonSpec downstream-handoff blocking. The
+        publish path is only reached after the workflow's own gating, so when no
+        MoonSpec verification gate controls this run the handoff is treated as
+        accepted + gate-approved (legacy-equivalent). When a verification gate
+        exists, the handoff is approved only for a passing verdict; a non-passing
+        verdict produces a non-accepted disposition so the activity fails closed.
+        """
+
+        verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+        gate_approved = verdict is None or verdict in _MOONSPEC_GATE_PASSING_VERDICTS
+        return {
+            "operation": operation,
+            "effectClass": effect_class,
+            "terminalDisposition": "accepted" if gate_approved else "blocked",
+            "gateApproved": bool(gate_approved),
+        }
+
     def _orchestrate_reattempt_compensation(
         self,
         logical_step_id: str,
@@ -6247,6 +6273,9 @@ class MoonMindRunWorkflow:
                         "base": base_branch,
                         "title": pr_title,
                         "body": pr_body,
+                        "stepExecutionGate": self._external_handoff_gate_payload(
+                            operation="repo.create_pr",
+                        ),
                     }
                     try:
                         create_result = await workflow.execute_activity(
@@ -10685,7 +10714,12 @@ class MoonMindRunWorkflow:
                         pr_url,
                         effective_base or starting_branch,
                     )
-                    merge_payload = {"pr_url": pr_url}
+                    merge_payload = {
+                        "pr_url": pr_url,
+                        "stepExecutionGate": self._external_handoff_gate_payload(
+                            operation="repo.merge_pr",
+                        ),
+                    }
                     if effective_base:
                         merge_payload["target_branch"] = effective_base
 

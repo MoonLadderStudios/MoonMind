@@ -9,12 +9,14 @@ from moonmind.schemas.step_execution_models import (
 from moonmind.workflows.temporal.step_executions import (
     already_occurred_non_idempotent_effects,
     compensation_subject_key,
+    external_handoff_gate_decision,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
     side_effect_record,
     step_execution_id,
     step_execution_operation_idempotency_key,
+    terminal_side_effect_manifest,
     validate_workspace_policy_launch,
     workspace_policy_metadata,
 )
@@ -490,3 +492,220 @@ def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> 
     assert payload["workspace"]["policy"] == "continue_from_previous_execution"
     assert payload["workspace"]["gitEffect"]["disposition"] == "candidate"
     assert payload["sideEffects"]["records"][0]["disposition"] == "blocked"
+
+
+# ---------------------------------------------------------------------------
+# MM-826: terminal_side_effect_manifest aggregation
+# ---------------------------------------------------------------------------
+
+
+def _accepted_git_effect() -> dict:
+    return git_effect_metadata(
+        disposition="accepted",
+        baseline_commit="abc123",
+        head_commit="def456",
+    )
+
+
+def test_terminal_manifest_accepted_opens_handoff_gates() -> None:
+    # SCN-1 / FR-001 / FR-002 / DESIGN-REQ-005,013
+    records = [
+        side_effect_record(
+            effect_class="publication",
+            operation="repo.create_pr",
+            workflow_state_accepted=True,
+        ),
+        side_effect_record(
+            effect_class="artifact_write",
+            operation="artifact.write",
+        ),
+    ]
+    manifest = terminal_side_effect_manifest(
+        terminal_disposition="accepted",
+        git_effect=_accepted_git_effect(),
+        side_effect_records=records,
+    )
+    assert manifest["terminalDisposition"] == "accepted"
+    assert manifest["acceptedOutputPresent"] is True
+    assert manifest["handoffGatesOpen"] is True
+    assert manifest["invalidReason"] is None
+    assert manifest["git"]["disposition"] == "accepted"
+    # All classes aggregated under their class key.
+    assert "publication" in manifest["sideEffects"]
+    assert "artifact_write" in manifest["sideEffects"]
+
+
+def test_terminal_manifest_accepted_without_git_evidence_is_invalid() -> None:
+    # Edge case / FR-002: accepted disposition must carry accepted git output.
+    manifest = terminal_side_effect_manifest(
+        terminal_disposition="accepted",
+        git_effect=git_effect_metadata(disposition="candidate"),
+        side_effect_records=[],
+    )
+    assert manifest["invalidReason"] == "accepted_without_accepted_git_output"
+    assert manifest["handoffGatesOpen"] is False
+
+
+def test_terminal_manifest_accepted_without_git_at_all_is_invalid() -> None:
+    manifest = terminal_side_effect_manifest(
+        terminal_disposition="accepted",
+        git_effect=None,
+        side_effect_records=[],
+    )
+    assert manifest["invalidReason"] == "accepted_without_accepted_git_output"
+    assert manifest["handoffGatesOpen"] is False
+
+
+def test_terminal_manifest_non_accepted_dispositions_close_gates() -> None:
+    # SCN-2/3/4 / FR-003 / DESIGN-REQ-022
+    for disposition in (
+        "candidate",
+        "discarded",
+        "superseded",
+        "blocked",
+        "failed_with_remaining_work",
+        "failed_unrecoverable",
+    ):
+        records = [
+            side_effect_record(
+                effect_class="publication",
+                operation="repo.create_pr",
+                workflow_state_accepted=False,
+            ),
+        ]
+        manifest = terminal_side_effect_manifest(
+            terminal_disposition=disposition,
+            git_effect=git_effect_metadata(disposition="candidate"),
+            side_effect_records=records,
+        )
+        assert manifest["handoffGatesOpen"] is False, disposition
+        # The blocked publication record is preserved for audit.
+        assert manifest["sideEffects"]["publication"][0]["disposition"] == "blocked"
+
+
+def test_terminal_manifest_non_accepted_with_accepted_external_is_invalid() -> None:
+    # FR-003 / DESIGN-REQ-022: a failed attempt must not retain an accepted
+    # publication/non-idempotent/provider-account record.
+    records = [
+        side_effect_record(
+            effect_class="publication",
+            operation="repo.publish",
+            workflow_state_accepted=True,  # would be "accepted" — illegal under failure
+        ),
+    ]
+    manifest = terminal_side_effect_manifest(
+        terminal_disposition="failed_with_remaining_work",
+        git_effect=git_effect_metadata(disposition="candidate"),
+        side_effect_records=records,
+    )
+    assert manifest["handoffGatesOpen"] is False
+    assert manifest["invalidReason"] == "non_accepted_disposition_has_accepted_external_handoff"
+
+
+# ---------------------------------------------------------------------------
+# MM-826: external_handoff_gate_decision (activity-boundary assertion)
+# ---------------------------------------------------------------------------
+
+
+def test_handoff_decision_allows_accepted_gate_approved() -> None:
+    # SCN-1 / FR-004
+    decision = external_handoff_gate_decision(
+        operation="repo.create_pr",
+        effect_class="publication",
+        terminal_disposition="accepted",
+        gate_approved=True,
+    )
+    assert decision["allowed"] is True
+    assert decision["reason"] is None
+    assert decision["sideEffect"] is None
+
+
+def test_handoff_decision_denies_non_accepted_dispositions() -> None:
+    # SCN-2/3/4 / FR-004 / FR-005 / SC-001 / SC-002
+    for disposition in (
+        "candidate",
+        "discarded",
+        "superseded",
+        "blocked",
+        "failed_with_remaining_work",
+        "failed_unrecoverable",
+        None,
+    ):
+        decision = external_handoff_gate_decision(
+            operation="repo.create_pr",
+            effect_class="publication",
+            terminal_disposition=disposition,
+            gate_approved=True,
+        )
+        assert decision["allowed"] is False, disposition
+        assert decision["reason"] == "producing_step_not_accepted"
+        assert decision["sideEffect"]["disposition"] == "blocked"
+        assert decision["sideEffect"]["class"] == "publication"
+
+
+def test_handoff_decision_denies_when_gate_not_approved() -> None:
+    # SCN-6 / FR-007: accepted disposition is not enough; gate approval required.
+    decision = external_handoff_gate_decision(
+        operation="jira.transition_issue",
+        effect_class="publication",
+        terminal_disposition="accepted",
+        gate_approved=False,
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "gate_not_approved"
+    assert decision["sideEffect"]["disposition"] == "blocked"
+
+
+def test_handoff_decision_denies_non_idempotent_without_policy() -> None:
+    # SCN-5 / FR-006: non-idempotent external action without explicit policy.
+    decision = external_handoff_gate_decision(
+        operation="provider_account.lease",
+        effect_class="provider_account",
+        terminal_disposition="accepted",
+        gate_approved=True,
+        policy_permits_non_idempotent=False,
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "non_idempotent_external_action_without_policy"
+    assert decision["sideEffect"]["disposition"] == "blocked"
+
+
+def test_handoff_decision_allows_non_idempotent_with_policy() -> None:
+    # SCN-5 / FR-006: explicit policy permits the non-idempotent action, but only
+    # when also accepted + gate-approved.
+    decision = external_handoff_gate_decision(
+        operation="provider_account.lease",
+        effect_class="provider_account",
+        terminal_disposition="accepted",
+        gate_approved=True,
+        policy_permits_non_idempotent=True,
+    )
+    assert decision["allowed"] is True
+    assert decision["reason"] is None
+
+
+def test_handoff_decision_gated_operation_prefix_is_non_idempotent() -> None:
+    # FR-006: gated operation prefix counts as non-idempotent even for a
+    # generic external effect class.
+    decision = external_handoff_gate_decision(
+        operation="deployment.publish",
+        effect_class="external_non_idempotent",
+        terminal_disposition="accepted",
+        gate_approved=True,
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "non_idempotent_external_action_without_policy"
+
+
+def test_handoff_decision_sanitizes_secret_like_target() -> None:
+    # FR-008 / SC-005
+    decision = external_handoff_gate_decision(
+        operation="repo.merge",
+        effect_class="publication",
+        terminal_disposition="candidate",
+        gate_approved=True,
+        target="https://x?token=ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+    )
+    assert decision["allowed"] is False
+    assert "ghp_" not in (decision["sideEffect"]["target"] or "")
+    assert "[REDACTED]" in (decision["sideEffect"]["target"] or "")

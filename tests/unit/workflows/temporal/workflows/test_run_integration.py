@@ -982,7 +982,14 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     # Verify merge_pr payload
     merge_payload = captured[3][1]
     # No target_branch should be passed since we didn't override it
-    assert merge_payload == {"pr_url": "https://github.com/org/repo/pull/123"}
+    assert merge_payload["pr_url"] == "https://github.com/org/repo/pull/123"
+    assert "target_branch" not in merge_payload
+    # MM-826: the merge handoff carries a producing-step gate context. With no
+    # MoonSpec verification gate controlling this run it resolves to accepted +
+    # gate-approved (legacy-equivalent publish behavior).
+    assert merge_payload["stepExecutionGate"]["gateApproved"] is True
+    assert merge_payload["stepExecutionGate"]["terminalDisposition"] == "accepted"
+    assert merge_payload["stepExecutionGate"]["operation"] == "repo.merge_pr"
 
 @pytest.mark.asyncio
 async def test_run_integration_stage_branch_publish_requires_pr_url(
