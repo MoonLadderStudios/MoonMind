@@ -237,6 +237,48 @@ jobs:
           # from wrapper/config failures.
           docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --check-upstream
 
+      - name: Set up Python for rollout gate
+        if: matrix.platform == 'linux/amd64'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install rollout-gate dependencies
+        if: matrix.platform == 'linux/amd64'
+        run: python -m pip install --no-input pydantic pyyaml
+
+      - name: Pentest rollout gate (provenance, self-test, vulnerability)
+        if: matrix.platform == 'linux/amd64'
+        env:
+          SMOKE_IMAGE: moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p _pentest_gate
+          # Provenance/OCI labels actually present on the built image.
+          docker inspect \
+            --format '{{range $k, $v := .Config.Labels}}{{$k}}{{"\n"}}{{end}}' \
+            "$SMOKE_IMAGE" > _pentest_gate/labels.txt
+          # Structured self-test report from the curated runner wrapper.
+          docker run --rm -v "$PWD/_pentest_gate:/out" "$SMOKE_IMAGE" \
+            --self-test --self-test-report /out/selftest.json
+          # Container vulnerability scan -> JSON consumed by the gate's threshold
+          # policy. Trivy itself does not fail the build; the gate is the single
+          # decision point. A missing report fails the gate closed.
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+          trivy image \
+            --format json \
+            --output _pentest_gate/vuln.json \
+            --severity CRITICAL,HIGH,MEDIUM \
+            --exit-code 0 \
+            "$SMOKE_IMAGE"
+          python scripts/ci/check_pentest_rollout_gates.py \
+            --image-only \
+            --policy config/security/pentest_rollout_gates.yaml \
+            --labels-file _pentest_gate/labels.txt \
+            --self-test-report _pentest_gate/selftest.json \
+            --vuln-report _pentest_gate/vuln.json
+
       - name: Build and push runner by digest
         id: build
         uses: docker/build-push-action@v7
