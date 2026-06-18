@@ -1840,11 +1840,65 @@ class MoonMindAgentRun:
     def _mapping_copy(value: Any) -> dict[str, Any]:
         return dict(value) if isinstance(value, Mapping) else {}
 
+    @staticmethod
+    def _drop_runtime_profile_fields(runtime_payload: dict[str, Any]) -> None:
+        for key in (
+            "executionProfileRef",
+            "execution_profile_ref",
+            "profileId",
+            "profile_id",
+            "providerProfile",
+            "provider_profile",
+        ):
+            runtime_payload.pop(key, None)
+
+    @staticmethod
+    def _drop_runtime_profile_selector_fields(runtime_payload: dict[str, Any]) -> None:
+        for key in ("profileSelector", "profile_selector"):
+            runtime_payload.pop(key, None)
+
+    def _profile_ref_targets_different_runtime(
+        self,
+        *,
+        profile_id: str,
+        runtime_id: str,
+    ) -> bool:
+        snapshots = self._profile_snapshots
+        if not isinstance(snapshots, Mapping):
+            return False
+        snapshot = snapshots.get(profile_id)
+        if not isinstance(snapshot, Mapping):
+            return False
+        snapshot_runtime_id = str(snapshot.get("runtime_id") or "").strip()
+        if not snapshot_runtime_id:
+            return False
+        return self._managed_runtime_id(snapshot_runtime_id) != self._managed_runtime_id(
+            runtime_id
+        )
+
+    def _clear_runtime_profile_selection(
+        self,
+        request: AgentExecutionRequest,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        request.execution_profile_ref = None
+        params = dict(params if params is not None else request.parameters or {})
+        self._drop_runtime_profile_fields(params)
+        for key in ("task", "authoredTaskInput", "workflow"):
+            payload = self._mapping_copy(params.get(key))
+            runtime_payload = self._mapping_copy(payload.get("runtime"))
+            if runtime_payload:
+                self._drop_runtime_profile_fields(runtime_payload)
+                payload["runtime"] = runtime_payload
+                params[key] = payload
+        request.parameters = params
+
     def _apply_runtime_selection_update(
         self,
         request: AgentExecutionRequest,
         payload: Mapping[str, Any],
     ) -> None:
+        previous_runtime_id = self._managed_runtime_id(request.agent_id)
         params = dict(request.parameters or {})
         parameters_patch = payload.get("parametersPatch")
         if isinstance(parameters_patch, Mapping):
@@ -1869,13 +1923,10 @@ class MoonMindAgentRun:
         task_runtime = self._mapping_copy(task_payload.get("runtime"))
         authored_payload = self._mapping_copy(params.get("authoredTaskInput"))
         authored_runtime = self._mapping_copy(authored_payload.get("runtime"))
+        workflow_payload = self._mapping_copy(params.get("workflow"))
+        workflow_runtime = self._mapping_copy(workflow_payload.get("runtime"))
 
         profile_id = str(payload.get("executionProfileRef") or "").strip()
-        if profile_id:
-            request.execution_profile_ref = profile_id
-            params["profileId"] = profile_id
-            task_runtime["profileId"] = profile_id
-            authored_runtime["profileId"] = profile_id
 
         model = str(payload.get("model") or "").strip()
         if model:
@@ -1883,12 +1934,14 @@ class MoonMindAgentRun:
             params["requestedModel"] = model
             task_runtime["model"] = model
             authored_runtime["model"] = model
+            workflow_runtime["model"] = model
 
         effort = str(payload.get("effort") or "").strip()
         if effort:
             params["effort"] = effort
             task_runtime["effort"] = effort
             authored_runtime["effort"] = effort
+            workflow_runtime["effort"] = effort
 
         target_runtime = str(payload.get("targetRuntime") or "").strip()
         if target_runtime:
@@ -1896,6 +1949,32 @@ class MoonMindAgentRun:
             params["targetRuntime"] = target_runtime
             task_runtime["mode"] = target_runtime
             authored_runtime["mode"] = target_runtime
+            workflow_runtime["mode"] = target_runtime
+        current_runtime_id = self._managed_runtime_id(request.agent_id)
+        runtime_changed = current_runtime_id != previous_runtime_id
+
+        if (
+            profile_id
+            and runtime_changed
+            and self._profile_ref_targets_different_runtime(
+                profile_id=profile_id,
+                runtime_id=current_runtime_id,
+            )
+        ):
+            profile_id = ""
+
+        if profile_id:
+            request.execution_profile_ref = profile_id
+            params["profileId"] = profile_id
+            task_runtime["profileId"] = profile_id
+            authored_runtime["profileId"] = profile_id
+            workflow_runtime["profileId"] = profile_id
+        elif runtime_changed:
+            request.execution_profile_ref = None
+            self._drop_runtime_profile_fields(params)
+            self._drop_runtime_profile_fields(task_runtime)
+            self._drop_runtime_profile_fields(authored_runtime)
+            self._drop_runtime_profile_fields(workflow_runtime)
 
         profile_selector_payload = payload.get("profileSelector")
         if not isinstance(profile_selector_payload, Mapping):
@@ -1955,6 +2034,7 @@ class MoonMindAgentRun:
             params["profileSelector"] = selector_params
             task_runtime["profileSelector"] = selector_params
             authored_runtime["profileSelector"] = selector_params
+            workflow_runtime["profileSelector"] = selector_params
         elif profile_id:
             request.profile_selector = ProfileSelector()
             params.pop("profileSelector", None)
@@ -1963,6 +2043,14 @@ class MoonMindAgentRun:
             task_runtime.pop("profile_selector", None)
             authored_runtime.pop("profileSelector", None)
             authored_runtime.pop("profile_selector", None)
+            workflow_runtime.pop("profileSelector", None)
+            workflow_runtime.pop("profile_selector", None)
+        elif runtime_changed:
+            request.profile_selector = ProfileSelector()
+            self._drop_runtime_profile_selector_fields(params)
+            self._drop_runtime_profile_selector_fields(task_runtime)
+            self._drop_runtime_profile_selector_fields(authored_runtime)
+            self._drop_runtime_profile_selector_fields(workflow_runtime)
 
         if task_runtime:
             task_payload["runtime"] = task_runtime
@@ -1970,6 +2058,9 @@ class MoonMindAgentRun:
         if authored_runtime:
             authored_payload["runtime"] = authored_runtime
             params["authoredTaskInput"] = authored_payload
+        if workflow_runtime:
+            workflow_payload["runtime"] = workflow_runtime
+            params["workflow"] = workflow_payload
         request.parameters = params
 
     def _validate_synced_profile_selection(
@@ -1978,6 +2069,7 @@ class MoonMindAgentRun:
         profile_count: int,
         runtime_id: str,
         request: AgentExecutionRequest,
+        clear_invalid_profile_for_runtime_change: bool = False,
     ) -> None:
         if profile_count == 0:
             raise ApplicationError(
@@ -1992,6 +2084,9 @@ class MoonMindAgentRun:
                 and self._profile_snapshots
                 and requested_profile_id not in self._profile_snapshots
             ):
+                if clear_invalid_profile_for_runtime_change:
+                    self._clear_runtime_profile_selection(request)
+                    return
                 raise ApplicationError(
                     f"Provider profile '{requested_profile_id}' not found for runtime_id='{runtime_id}'",
                     type="ProfileResolutionError",
@@ -2069,6 +2164,9 @@ class MoonMindAgentRun:
             profile_count=profile_count,
             runtime_id=runtime_id,
             request=request,
+            clear_invalid_profile_for_runtime_change=(
+                manager_id != previous_manager_id
+            ),
         )
         manager_handle = await self._ensure_manager_and_signal(
             manager_id,
