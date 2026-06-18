@@ -232,12 +232,24 @@ def _iso_text(value: object) -> str | None:
     return text or None
 
 
-def _deployment_plan_inputs(record: object) -> dict[str, Any]:
+def _deployment_workflow_payload(record: object) -> dict[str, Any]:
+    """Return the canonical workflow payload for a deployment execution record.
+
+    ``create_execution`` normalizes legacy ``task`` initial parameters into the
+    canonical ``parameters["workflow"]`` key, so deployment action readers must
+    derive plan/operation metadata from ``workflow`` rather than ``task``.
+    """
+
     parameters = getattr(record, "parameters", None)
     if not isinstance(parameters, dict):
         return {}
-    task = parameters.get("task")
-    if not isinstance(task, dict):
+    workflow = parameters.get("workflow")
+    return workflow if isinstance(workflow, dict) else {}
+
+
+def _deployment_plan_inputs(record: object) -> dict[str, Any]:
+    task = _deployment_workflow_payload(record)
+    if not task:
         return {}
     plan = task.get("plan")
     if not isinstance(plan, list):
@@ -256,11 +268,8 @@ def _deployment_plan_inputs(record: object) -> dict[str, Any]:
 
 
 def _deployment_operation(record: object) -> dict[str, Any]:
-    parameters = getattr(record, "parameters", None)
-    if not isinstance(parameters, dict):
-        return {}
-    task = parameters.get("task")
-    if not isinstance(task, dict):
+    task = _deployment_workflow_payload(record)
+    if not task:
         return {}
     operation = task.get("operation")
     return dict(operation) if isinstance(operation, dict) else {}

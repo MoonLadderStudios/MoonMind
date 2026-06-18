@@ -484,7 +484,7 @@ def test_deployment_state_projects_recent_actions_from_execution_history(
             state="failed",
             close_status="failed",
             parameters={
-                "task": {
+                "workflow": {
                     "operation": {"kind": "update"},
                     "plan": [
                         {
