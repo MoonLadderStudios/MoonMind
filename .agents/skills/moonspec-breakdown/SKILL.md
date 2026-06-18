@@ -1,6 +1,9 @@
 ---
 name: moonspec-breakdown
 description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and write breakdown output under artifacts/story-breakdowns (gitignored). Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/speckit.specify`.
+metadata:
+  required-capabilities:
+    - git
 ---
 
 # MoonSpec Breakdown

@@ -9,6 +9,8 @@ tags:
   - pull-request
 requiredCapabilities:
   - git
+  - jira
+  - gh
 annotations:
   sourceSkill: jira-implement
   jiraWorkflow: implementation-to-code-review
@@ -73,6 +75,8 @@ steps:
       Preserve the issue key in the brief so downstream implementation artifacts and the pull request can reference {{ inputs.jira_issue_key }}.
     tool:
       id: jira.load_preset_brief
+      requiredCapabilities:
+        - jira
       args: {}
       inputs:
         issueKey: "{{ inputs.jira_issue_key }}"
@@ -125,6 +129,8 @@ steps:
       linkType: Blocks
     tool:
       id: jira.check_blockers
+      requiredCapabilities:
+        - jira
       args:
         targetIssueKey: "{{ inputs.jira_issue_key }}"
         blockerPreflight:
@@ -141,6 +147,8 @@ steps:
       Otherwise (PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED), change Jira issue {{ inputs.jira_issue_key }} to status In Progress before implementation starts. Use the trusted Jira issue updater workflow and Jira transition tools. Match In Progress against the issue's available transitions or target statuses; do not guess transition IDs. Re-fetch the issue when possible and report the confirmed status.
     skill:
       id: jira-issue-updater
+      requiredCapabilities:
+        - jira
       args: {}
   - title: Implement the Jira issue
     instructions: |-
@@ -234,4 +242,6 @@ steps:
       Note: when this task was submitted with PR merge automation enabled and the work followed the Code Review path, the parent workflow will transition Jira issue {{ inputs.jira_issue_key }} to Done automatically after the pull request merges. This in-task step only owns the explicit Done transition for the already-implemented case and the Code Review transition for the freshly-implemented case.
     skill:
       id: jira-issue-updater
+      requiredCapabilities:
+        - jira
       args: {}

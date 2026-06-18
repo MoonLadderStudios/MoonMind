@@ -1,6 +1,9 @@
 ---
 name: moonspec-tasks
 description: Generate a one-story, TDD-first Moon Spec `tasks.md` from `spec.md`, `plan.md`, and design artifacts. Use when the user asks to run or reproduce `/speckit.tasks`, create or update an executable task breakdown, map one Moon Spec story to implementation tasks, require unit and integration tests before code, preserve source-design traceability, or include final `/speckit.verify` work.
+metadata:
+  required-capabilities:
+    - git
 ---
 
 # MoonSpec Tasks

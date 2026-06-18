@@ -1,6 +1,9 @@
 ---
 name: moonspec-implement
 description: Implement a single-story Moon Spec task breakdown with test-driven development. Use when the user asks to run or reproduce `/speckit.implement`, execute `tasks.md`, build the story from a Moon Spec plan, write failing unit and integration tests before production code, mark tasks complete, or prepare the implementation for `/speckit.verify`.
+metadata:
+  required-capabilities:
+    - git
 ---
 
 # MoonSpec Implement

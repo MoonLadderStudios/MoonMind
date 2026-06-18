@@ -426,6 +426,7 @@ class SkillsOnDemandService:
             name=entry.skill_name,
             latest_version=entry.version,
             source_kind=entry.provenance.source_kind,
+            required_capabilities=list(entry.required_capabilities),
             eligible=eligible,
             in_current_snapshot=in_current_snapshot,
             eligibility_summary=summary,

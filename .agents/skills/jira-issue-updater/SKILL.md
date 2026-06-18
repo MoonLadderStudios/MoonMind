@@ -1,6 +1,9 @@
 ---
 name: jira-issue-updater
 description: Update Jira issues such as tasks, stories, bugs, or subtasks through MoonMind's trusted Jira tool surface. Use when a user asks to edit Jira fields, move workflow status, update descriptions, or publish completion/status summaries back to any Jira issue type.
+metadata:
+  required-capabilities:
+    - jira
 ---
 
 # Jira Issue Updater

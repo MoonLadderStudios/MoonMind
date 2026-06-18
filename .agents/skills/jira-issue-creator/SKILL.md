@@ -1,6 +1,9 @@
 ---
 name: jira-issue-creator
 description: Create Jira issues such as tasks, stories, bugs, or subtasks from user intent. Use when a user asks to open, file, draft, or create a Jira ticket and needs fields validated, issue text composed, Jira API or connector calls made, and the created issue link returned.
+metadata:
+  required-capabilities:
+    - jira
 ---
 
 # Jira Issue Creator

@@ -21,6 +21,7 @@ It maps how the control plane translates user intent from Mission Control — in
 into durable execution under Temporal.
 
 This document is architectural and declarative. Detailed page behavior belongs in `docs/UI/CreatePage.md`. Detailed image-input behavior belongs in `docs/Workflows/ImageSystem.md`.
+Required execution capability declaration, normalization, and pre-launch blocking semantics belong in `docs/Workflows/RequiredCapabilities.md`.
 
 ---
 

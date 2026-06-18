@@ -1,6 +1,9 @@
 ---
 name: batch-dependabot-resolver
 description: Discover open Dependabot version-bump PRs and enqueue one `pr-resolver` workflow for each.
+metadata:
+  required-capabilities:
+    - gh
 ---
 
 # Batch Dependabot Resolver Skill

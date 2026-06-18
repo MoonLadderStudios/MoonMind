@@ -3,7 +3,7 @@
 **Status:** Proposed  
 **Owner:** MoonMind Platform  
 **Audience:** backend, workflow authors, API, Mission Control  
-**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`
+**Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`
 
 ---
 
@@ -18,6 +18,11 @@ This design covers the case where a workflow execution:
 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,
 4. invokes `pr-resolver`,
 5. does not allow the parent workflow to complete until merge automation reaches its terminal outcome.
+
+Resolver templates that declare `requiredCapabilities` such as `git` and `gh`
+must be treated as hard readiness requirements for the child resolver launch.
+The canonical declaration, merge, and blocker semantics are defined in
+`docs/Workflows/RequiredCapabilities.md`.
 
 The goal is to let downstream workflow dependencies wait on the **original parent Workflow Execution** rather than forcing operators to depend on a second top-level workflow created later.
 

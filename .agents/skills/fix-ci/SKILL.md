@@ -1,6 +1,10 @@
 ---
 name: fix-ci
 description: Fix continuous integration (CI) test or build failures for the current PR branch. Fetch CI failure logs, map them to local commands, reproduce the failures, fix the code, verify locally, and commit and push.
+metadata:
+  required-capabilities:
+    - git
+    - gh
 ---
 
 # Fix CI

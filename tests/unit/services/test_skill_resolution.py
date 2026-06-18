@@ -514,6 +514,9 @@ async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
         "description: Runs orchestration.\n"
         "metadata:\n"
         "  required-skills: \"helper-skill\"\n"
+        "  required-capabilities:\n"
+        "    - GH\n"
+        "    - jira\n"
         "---\n",
         encoding="utf-8",
     )
@@ -521,6 +524,9 @@ async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
         "---\n"
         "name: helper-skill\n"
         "description: Supports orchestration.\n"
+        "metadata:\n"
+        "  required-capabilities:\n"
+        "    - git\n"
         "---\n",
         encoding="utf-8",
     )
@@ -543,8 +549,14 @@ async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
     assert by_name["orchestrator"].selection_reason == "selected"
     assert by_name["helper-skill"].selection_reason == "required"
     assert by_name["helper-skill"].required_by == ["orchestrator"]
+    assert by_name["orchestrator"].required_capabilities == ["gh", "jira"]
+    assert by_name["helper-skill"].required_capabilities == ["git"]
     assert result.source_trace["requiredSkillEdges"] == [
         {"requiredBy": "orchestrator", "skill": "helper-skill"}
+    ]
+    assert result.source_trace["requiredCapabilitySources"] == [
+        {"skill": "helper-skill", "capabilities": ["git"]},
+        {"skill": "orchestrator", "capabilities": ["gh", "jira"]},
     ]
 
 async def test_resolver_allows_underscores_in_required_skill_names(tmp_path):
@@ -622,8 +634,11 @@ async def test_resolver_expands_deployment_required_skills_from_artifact_metadat
         "helper_skill": MockDef("helper_skill", "art_helper"),
     }
     artifact_metadata = {
-        "art_primary": {"required_skills": ["helper_skill"]},
-        "art_helper": {"required_skills": []},
+        "art_primary": {
+            "required_skills": ["helper_skill"],
+            "required_capabilities": ["jira"],
+        },
+        "art_helper": {"required_skills": [], "required_capabilities": ["git"]},
     }
     requested_slug_batches: list[set[str]] = []
 
@@ -690,6 +705,8 @@ async def test_resolver_expands_deployment_required_skills_from_artifact_metadat
     assert by_name["primary_skill"].selection_reason == "selected"
     assert by_name["helper_skill"].selection_reason == "required"
     assert by_name["helper_skill"].required_by == ["primary_skill"]
+    assert by_name["primary_skill"].required_capabilities == ["jira"]
+    assert by_name["helper_skill"].required_capabilities == ["git"]
     assert requested_slug_batches == [{"primary_skill"}, {"helper_skill"}]
     assert result.source_trace["requiredSkillEdges"] == [
         {"requiredBy": "primary_skill", "skill": "helper_skill"}
@@ -790,4 +807,33 @@ async def test_resolver_rejects_non_string_required_skills_metadata(tmp_path):
     selector = SkillSelector(include=[{"name": "orchestrator"}])
 
     with pytest.raises(ValueError, match="metadata.required-skills must be a string"):
+        await resolver.resolve(selector, context)
+
+
+async def test_resolver_rejects_invalid_required_capabilities_metadata(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "orchestrator"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-capabilities: jira\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    with pytest.raises(
+        ValueError,
+        match="metadata.required-capabilities must be a list of strings",
+    ):
         await resolver.resolve(selector, context)

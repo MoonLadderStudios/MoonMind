@@ -18,7 +18,10 @@ relevant activity workers, and back. Open migration gaps are tracked in
 
 For broader architecture context see
 [TemporalArchitecture.md](TemporalArchitecture.md) and
-[RemainingWork.md](RemainingWork.md).
+[RemainingWork.md](RemainingWork.md). Required execution capability semantics
+are canonical in [RequiredCapabilities.md](../Workflows/RequiredCapabilities.md):
+the normalized `requiredCapabilities` list is a hard pre-launch readiness
+contract, not an authorization grant or informational label.
 
 ---
 

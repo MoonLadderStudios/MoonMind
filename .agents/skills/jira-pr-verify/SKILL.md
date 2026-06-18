@@ -1,6 +1,11 @@
 ---
 name: jira-pr-verify
 description: Verify a GitHub pull request against a Jira issue's goals, requirements, and acceptance criteria, then post a PR comment with the findings. Use when a user asks Codex or MoonMind to compare a PR to a Jira story/task/bug, confirm whether a PR satisfies Jira requirements, audit implementation coverage from Jira, or publish a Jira-vs-PR verification summary.
+metadata:
+  required-capabilities:
+    - jira
+    - git
+    - gh
 ---
 
 # Jira PR Verify

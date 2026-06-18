@@ -1,6 +1,9 @@
 ---
 name: fix-merge-conflicts
 description: Sync the branch with the latest `origin/main`, merge `origin/main`, resolve conflicts end-to-end, then commit and push the current branch.
+metadata:
+  required-capabilities:
+    - git
 ---
 
 # Fix Merge Conflicts

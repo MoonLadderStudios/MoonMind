@@ -10,6 +10,7 @@ tags:
   - orchestration
 requiredCapabilities:
   - git
+  - jira
 annotations:
   sourceSkill: jira-breakdown
   jiraWorkflow: breakdown-to-dependent-orchestrate
@@ -113,6 +114,8 @@ steps:
         dependencyMode: "{{ inputs.jira_dependency_mode }}"
     skill:
       id: story.create_jira_issues
+      requiredCapabilities:
+        - jira
       args: {}
   - title: Create dependent Jira Orchestrate tasks
     instructions: |-
@@ -138,4 +141,6 @@ steps:
         sourceIssueKey: "{{ inputs.source_issue_key }}"
     skill:
       id: story.create_jira_orchestrate_tasks
+      requiredCapabilities:
+        - jira
       args: {}

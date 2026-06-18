@@ -1,6 +1,9 @@
 ---
 name: batch-pr-resolver
 description: Discover open PRs in a repository and enqueue one `pr-resolver` task for each.
+metadata:
+  required-capabilities:
+    - gh
 ---
 
 # Batch PR Resolver Skill

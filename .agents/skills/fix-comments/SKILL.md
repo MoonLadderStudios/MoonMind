@@ -1,6 +1,10 @@
 ---
 name: fix-comments
 description: Resolve GitHub PR feedback end-to-end for the branch you are on. Use when you need to fetch all comments on the branch PR, evaluate whether each comment still applies, decide whether it should be addressed, implement fixes, run compile/tests with retry-on-failure, then commit and push the result.
+metadata:
+  required-capabilities:
+    - git
+    - gh
 ---
 
 # Fix Comments

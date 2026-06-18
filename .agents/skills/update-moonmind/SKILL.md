@@ -1,6 +1,10 @@
 ---
 name: update-moonmind
 description: Refresh MoonMind services from git by checking out a branch, pulling updates, pulling compose images, then restarting changed containers with optional orchestrator inclusion.
+metadata:
+  required-capabilities:
+    - git
+    - docker
 ---
 
 # Update MoonMind Deployment (default: without restarting orchestrator)

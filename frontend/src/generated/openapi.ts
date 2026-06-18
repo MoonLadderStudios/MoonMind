@@ -3907,6 +3907,11 @@ export interface components {
              */
             id: string;
             /**
+             * Requiredcapabilities
+             * @description Default required capabilities declared by Skill metadata
+             */
+            requiredCapabilities?: string[];
+            /**
              * Markdown
              * @description Markdown content of the skill, if requested
              */

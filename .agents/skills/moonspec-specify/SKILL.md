@@ -1,6 +1,9 @@
 ---
 name: moonspec-specify
 description: Create or update a Moon Spec feature specification from a natural language feature request or referenced declarative design. Use when the user asks to run or reproduce `/speckit.specify`, create a `spec.md`, initialize a feature directory under `specs/`, preserve the original feature request for later verification, map source design requirements, or generate a single-story Moon Spec specification with a requirements quality checklist.
+metadata:
+  required-capabilities:
+    - git
 ---
 
 # MoonSpec Specify

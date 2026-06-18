@@ -1,6 +1,9 @@
 ---
 name: document-update
 description: Align a technical document with the actual code implementation and correct drift. Use when a user asks to update docs to match current behavior, audit a technical document against the repository, or fix stale architecture, API, workflow, or operator documentation.
+metadata:
+  required-capabilities:
+    - git
 ---
 
 # Document Update

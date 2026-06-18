@@ -19,6 +19,13 @@ from pydantic import (
 )
 
 from moonmind.config.settings import settings
+from moonmind.services.skill_resolution import (
+    extract_required_capabilities_from_skill_markdown,
+)
+from moonmind.workflows.skills.resolver import (
+    SkillResolutionError,
+    resolve_skill_markdown_path,
+)
 
 from .job_types import CANONICAL_WORKFLOW_JOB_TYPE, LEGACY_WORKFLOW_JOB_TYPES
 
@@ -115,6 +122,7 @@ _EMBEDDED_ATTACHMENT_DATA_FIELDS = frozenset(
         "rawBytes",
     }
 )
+_SKILL_METADATA_CAPABILITY_CACHE: dict[str, tuple[str, ...]] = {}
 
 class WorkflowContractError(ValueError):
     """Raised when queue payloads violate task contract requirements."""
@@ -133,6 +141,35 @@ def _clean_str(value: object) -> str:
 def _clean_optional_str(value: object) -> str | None:
     cleaned = _clean_str(value)
     return cleaned or None
+
+
+def _skill_metadata_required_capabilities(skill_id: object) -> tuple[str, ...]:
+    normalized = _clean_optional_str(skill_id)
+    if not normalized:
+        return ()
+    cache_key = normalized.strip().lower()
+    cached = _SKILL_METADATA_CAPABILITY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        skill_file = resolve_skill_markdown_path(normalized)
+    except (SkillResolutionError, OSError, ValueError):
+        _SKILL_METADATA_CAPABILITY_CACHE[cache_key] = ()
+        return ()
+    if skill_file is None:
+        _SKILL_METADATA_CAPABILITY_CACHE[cache_key] = ()
+        return ()
+    try:
+        markdown = skill_file.read_text(encoding="utf-8")
+        required = extract_required_capabilities_from_skill_markdown(
+            markdown,
+            skill_name=normalized,
+            source_label=str(skill_file),
+        )
+    except (OSError, ValueError):
+        required = ()
+    _SKILL_METADATA_CAPABILITY_CACHE[cache_key] = tuple(required)
+    return tuple(required)
 
 
 def _normalize_preset_version_alias(value: object) -> object:
@@ -2298,6 +2335,7 @@ def build_canonical_workflow_view(
         required.append("gh")
 
     skill_caps = skill_node.get("requiredCapabilities")
+    required.extend(_skill_metadata_required_capabilities(skill_id))
     if isinstance(skill_caps, list):
         required.extend(skill_caps)
 
@@ -2309,6 +2347,8 @@ def build_canonical_workflow_view(
                 continue
             step_skill_raw = step_raw.get("skill")
             step_skill = step_skill_raw if isinstance(step_skill_raw, Mapping) else {}
+            step_skill_id = step_skill.get("id") or step_skill.get("name")
+            required.extend(_skill_metadata_required_capabilities(step_skill_id))
             step_skill_caps = step_skill.get("requiredCapabilities")
             if isinstance(step_skill_caps, list):
                 required.extend(step_skill_caps)
