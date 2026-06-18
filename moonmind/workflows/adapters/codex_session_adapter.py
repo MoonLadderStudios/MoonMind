@@ -279,7 +279,9 @@ def _is_session_locator_mismatch_error(exc: BaseException) -> bool:
         message = str(getattr(current, "message", "") or current).strip().lower()
         if any(marker in message for marker in _SESSION_LOCATOR_MISMATCH_MARKERS):
             return True
-        current = getattr(current, "cause", None) or current.__cause__
+        current = getattr(current, "cause", None) or getattr(current, "__cause__", None)
+        if not isinstance(current, BaseException):
+            current = None
     return False
 
 def _reset_thread_id_for_empty_turn(locator: CodexManagedSessionLocator) -> str:
@@ -1453,8 +1455,6 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self, binding: CodexManagedSessionBinding
     ) -> CodexManagedSessionLocator:
         snapshot = await self._load_snapshot(binding.workflow_id)
-        if not snapshot.container_id or not snapshot.thread_id:
-            raise ValueError("Workflow-scoped managed session has no runtime handles yet")
         return self._locator_from_snapshot(snapshot)
 
     @staticmethod

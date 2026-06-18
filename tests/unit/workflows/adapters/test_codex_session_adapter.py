@@ -37,6 +37,7 @@ from moonmind.workflows.codex_session_timeouts import (
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionAdapter,
     CodexSessionRunFailedError,
+    _is_session_locator_mismatch_error,
     _jira_skill_blocker_summary,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
@@ -65,6 +66,14 @@ async def _prepare_turn_instructions(payload: dict[str, Any]) -> str:
             if inline:
                 return f"{inline}\n\nManaged Codex CLI note:"
     return f"{instruction_ref}\n\nManaged Codex CLI note:"
+
+
+async def test_session_locator_mismatch_error_ignores_non_exception_cause() -> None:
+    class MetadataCauseError(Exception):
+        cause = {"message": "metadata"}
+
+    assert not _is_session_locator_mismatch_error(MetadataCauseError("wrapper"))
+
 
 def _raise_activity_error_from_application_error(error: ApplicationError) -> None:
     try:
