@@ -9,6 +9,7 @@ from moonmind.schemas.step_execution_models import (
 from moonmind.workflows.temporal.step_executions import (
     already_occurred_non_idempotent_effects,
     compensation_subject_key,
+    external_handoff_gate_decision,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
@@ -18,6 +19,16 @@ from moonmind.workflows.temporal.step_executions import (
     validate_workspace_policy_launch,
     workspace_policy_metadata,
 )
+
+# Named external handoff surfaces from the MM-826 brief (spec SC-001).
+_HANDOFF_OPERATIONS = [
+    ("repo.create_pr", "publication"),
+    ("repo.merge", "publication"),
+    ("jira.transition", "external_non_idempotent"),
+    ("jira.add_comment", "external_idempotent"),
+    ("repo.publish", "publication"),
+    ("provider_account.acquire", "provider_account"),
+]
 
 
 def test_step_execution_id_uses_run_scoped_identity() -> None:
@@ -490,3 +501,107 @@ def test_manifest_payload_embeds_policy_git_effect_and_side_effect_records() -> 
     assert payload["workspace"]["policy"] == "continue_from_previous_execution"
     assert payload["workspace"]["gitEffect"]["disposition"] == "candidate"
     assert payload["sideEffects"]["records"][0]["disposition"] == "blocked"
+
+
+# ---------------------------------------------------------------------------
+# external_handoff_gate_decision (MM-826: FR-004, FR-008, SC-001)
+# ---------------------------------------------------------------------------
+
+import pytest
+
+
+@pytest.mark.parametrize("operation,effect_class", _HANDOFF_OPERATIONS)
+def test_external_handoff_allowed_only_when_accepted_and_gate_approved(
+    operation: str, effect_class: str
+) -> None:
+    decision = external_handoff_gate_decision(
+        operation=operation,
+        effect_class=effect_class,
+        terminal_disposition="accepted",
+        gate_approved=True,
+    )
+    assert decision["allowed"] is True
+    assert decision["reason"] == "accepted_and_gate_approved"
+
+
+@pytest.mark.parametrize("operation,effect_class", _HANDOFF_OPERATIONS)
+def test_external_handoff_denied_when_gate_not_approved(
+    operation: str, effect_class: str
+) -> None:
+    decision = external_handoff_gate_decision(
+        operation=operation,
+        effect_class=effect_class,
+        terminal_disposition="accepted",
+        gate_approved=False,
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "gate_not_approved"
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    [
+        "candidate",
+        "discarded",
+        "superseded",
+        "blocked",
+        "failed_with_remaining_work",
+        "failed_unrecoverable",
+        "retryable",
+        "needs_human",
+    ],
+)
+@pytest.mark.parametrize("operation,effect_class", _HANDOFF_OPERATIONS)
+def test_external_handoff_denied_for_non_accepted_dispositions(
+    disposition: str, operation: str, effect_class: str
+) -> None:
+    decision = external_handoff_gate_decision(
+        operation=operation,
+        effect_class=effect_class,
+        terminal_disposition=disposition,
+        gate_approved=True,
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "terminal_disposition_not_accepted"
+
+
+@pytest.mark.parametrize("disposition", [None, "", "   ", "bogus", "ACCEPTED"])
+def test_external_handoff_fails_closed_on_unknown_disposition(disposition) -> None:
+    decision = external_handoff_gate_decision(
+        operation="repo.create_pr",
+        effect_class="publication",
+        terminal_disposition=disposition,
+        gate_approved=True,
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "unknown_terminal_disposition"
+
+
+def test_external_handoff_policy_permit_alone_does_not_allow() -> None:
+    decision = external_handoff_gate_decision(
+        operation="repo.merge",
+        effect_class="publication",
+        terminal_disposition="candidate",
+        gate_approved=False,
+        policy_permits_non_idempotent=True,
+    )
+    assert decision["allowed"] is False
+    assert decision["reason"] == "terminal_disposition_not_accepted"
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ["jira.transition", "repo.merge", "repo.publish", "provider_account.acquire"],
+)
+def test_side_effect_record_blocks_named_surfaces_when_not_accepted(
+    operation: str,
+) -> None:
+    # T002b: the non-activity surfaces remain gated via side_effect_record's
+    # operation-prefix / class gating when the workflow state is not accepted.
+    record = side_effect_record(
+        effect_class="external_non_idempotent",
+        operation=operation,
+        idempotency_key=None,
+        workflow_state_accepted=False,
+    )
+    assert record["disposition"] == "blocked"

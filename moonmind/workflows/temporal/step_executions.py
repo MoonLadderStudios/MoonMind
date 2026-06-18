@@ -41,6 +41,31 @@ SideEffectClass = Literal[
 ]
 SideEffectDisposition = Literal["accepted", "candidate", "blocked", "discarded"]
 
+# Canonical terminal dispositions (Section 7.3). Only ``accepted`` may advance a
+# logical step and authorize an external handoff. Any value outside this set —
+# including ``None``/blank — is treated as unknown and fails closed.
+_TERMINAL_DISPOSITIONS = frozenset(
+    {
+        "accepted",
+        "retryable",
+        "blocked",
+        "needs_human",
+        "discarded",
+        "superseded",
+        "failed_unrecoverable",
+        "failed_with_remaining_work",
+    }
+)
+# Dispositions the handoff gate recognizes as legitimate non-accepted states.
+# Besides the terminal dispositions (Section 7.3), this includes the git /
+# side-effect "failed or partial attempt" markers (Section 10.1) — ``candidate``
+# and ``none`` — so a recognized failed/partial state denies with the precise
+# ``terminal_disposition_not_accepted`` reason rather than being treated as an
+# unknown/garbage value.
+_RECOGNIZED_NON_ACCEPTED_DISPOSITIONS = (_TERMINAL_DISPOSITIONS | {"candidate", "none"}) - {
+    "accepted"
+}
+
 _GATED_SIDE_EFFECT_CLASSES = {
     "external_non_idempotent",
     "publication",
@@ -331,6 +356,41 @@ def side_effect_record(
             dict(memory_effect)
         ).model_dump(by_alias=True, mode="json")
     return record
+
+
+def external_handoff_gate_decision(
+    *,
+    operation: str,
+    effect_class: SideEffectClass,
+    terminal_disposition: str | None,
+    gate_approved: bool,
+    policy_permits_non_idempotent: bool = False,
+) -> dict[str, Any]:
+    """Decide whether an external handoff may run at the activity boundary.
+
+    Implements Section 11 rules 1–2 and Section 19 rules 5–6: publication,
+    Jira transition/comment, merge, deployment/publish, and provider-account
+    actions require the producing Step Execution to have reached an ``accepted``
+    terminal disposition *and* passed its controlling gate.
+
+    The decision is deterministic and fail-closed: any ``terminal_disposition``
+    other than the literal ``"accepted"`` — including unknown, blank, or
+    ``None`` values — denies. ``policy_permits_non_idempotent`` governs only the
+    reattempt posture of an already-occurred effect; it never authorizes a first
+    external action on its own.
+
+    Returns ``{"allowed": bool, "reason": str}`` with a stable, bounded reason
+    code suitable for blocked side-effect records and operator diagnostics.
+    """
+
+    disposition = str(terminal_disposition or "").strip()
+    if disposition == "accepted":
+        if gate_approved is not True:
+            return {"allowed": False, "reason": "gate_not_approved"}
+        return {"allowed": True, "reason": "accepted_and_gate_approved"}
+    if disposition in _RECOGNIZED_NON_ACCEPTED_DISPOSITIONS:
+        return {"allowed": False, "reason": "terminal_disposition_not_accepted"}
+    return {"allowed": False, "reason": "unknown_terminal_disposition"}
 
 
 def memory_side_effect_summary(

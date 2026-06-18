@@ -107,6 +107,7 @@ from moonmind.workflows.temporal.step_ledger import (
     validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.step_executions import (
+    external_handoff_gate_decision,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
@@ -2539,6 +2540,88 @@ class MoonMindRunWorkflow:
             "verification terminal disposition; no controlling verification gate "
             "has approved advancement."
         )
+
+    def _external_handoff_gate(
+        self,
+        logical_step_id: str,
+        *,
+        operation: str,
+        effect_class: str = "publication",
+        policy_permits_non_idempotent: bool = False,
+    ) -> dict[str, Any]:
+        """Authorize an external handoff at the workflow call site.
+
+        Combines the producing logical step's terminal disposition with the
+        controlling MoonSpec verification gate verdict. The handoff is allowed
+        only when the step is ``accepted`` AND the MoonSpec verdict is passing
+        (FR-004/FR-006/FR-007). This preserves the existing MoonSpec gate-verdict
+        block (it contributes ``gate_approved``) while adding the accepted
+        terminal-disposition requirement.
+
+        On denial, records exactly one blocked side effect at this boundary
+        (FR-005) and returns ``{"allowed": False, ...}`` so the caller skips the
+        external activity. On approval, returns a ``handoffGate`` evidence block
+        to embed in the activity payload.
+        """
+
+        terminal_disposition = self._step_terminal_dispositions.get(logical_step_id)
+        gate_approved = (
+            self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
+            in _MOONSPEC_GATE_PASSING_VERDICTS
+        )
+        decision = external_handoff_gate_decision(
+            operation=operation,
+            effect_class=effect_class,  # type: ignore[arg-type]
+            terminal_disposition=terminal_disposition,
+            gate_approved=gate_approved,
+            policy_permits_non_idempotent=policy_permits_non_idempotent,
+        )
+        if not decision["allowed"]:
+            self._record_step_side_effect(
+                logical_step_id,
+                effect_class=effect_class,
+                operation=operation,
+                workflow_state_accepted=False,
+                reason=decision["reason"],
+            )
+            return {"allowed": False, "reason": decision["reason"]}
+        return {
+            "allowed": True,
+            "reason": decision["reason"],
+            "handoffGate": {
+                "terminalDisposition": "accepted",
+                "gateApproved": True,
+                "operation": operation,
+                "effectClass": effect_class,
+                "policyPermits": bool(policy_permits_non_idempotent),
+            },
+        }
+
+    def _external_handoff_gate_for_publish(self, operation: str) -> dict[str, Any]:
+        """Resolve the publish handoff gate from the controlling MoonSpec step.
+
+        Publication (PR creation / merge) is governed by the MoonSpec
+        verification gate step recorded in ``_publish_context["moonSpecGate"]``.
+        When such a controlling step exists, the producing-step accepted +
+        gate-approved assertion applies and a blocked side effect is recorded on
+        denial. When no MoonSpec gate controls this publish (e.g. a simple Jira
+        issue agent PR with no gated flow), behavior is preserved unchanged
+        (``controlled=False``) so the terminal-disposition gate only augments —
+        never replaces — existing publish gating.
+        """
+
+        gate_ctx = self._publish_context.get("moonSpecGate")
+        logical_step_id = None
+        if isinstance(gate_ctx, Mapping):
+            logical_step_id = self._coerce_text(
+                gate_ctx.get("logicalStepId"), max_chars=200
+            )
+        if not logical_step_id:
+            return {"controlled": False, "allowed": True}
+        decision = self._external_handoff_gate(
+            logical_step_id, operation=operation, effect_class="publication"
+        )
+        return {"controlled": True, **decision}
 
     def _orchestrate_reattempt_compensation(
         self,
@@ -6248,6 +6331,23 @@ class MoonMindRunWorkflow:
                         "title": pr_title,
                         "body": pr_body,
                     }
+                    publish_gate = self._external_handoff_gate_for_publish(
+                        "repo.create_pr"
+                    )
+                    if publish_gate.get("controlled") and not publish_gate.get(
+                        "allowed"
+                    ):
+                        self._publish_status = "not_required"
+                        self._publish_reason = (
+                            "PR creation blocked: producing Step Execution is not "
+                            f"accepted and gate-approved ({publish_gate.get('reason')})"
+                        )
+                        self._publish_context["publicationBlockedBy"] = (
+                            "terminal_disposition_gate"
+                        )
+                        raise ValueError(self._publish_reason)
+                    if publish_gate.get("handoffGate"):
+                        create_payload["handoffGate"] = publish_gate["handoffGate"]
                     try:
                         create_result = await workflow.execute_activity(
                             "repo.create_pr",
@@ -10688,6 +10788,16 @@ class MoonMindRunWorkflow:
                     merge_payload = {"pr_url": pr_url}
                     if effective_base:
                         merge_payload["target_branch"] = effective_base
+
+                    merge_gate = self._external_handoff_gate_for_publish("repo.merge")
+                    if merge_gate.get("controlled") and not merge_gate.get("allowed"):
+                        raise ValueError(
+                            "merge automation blocked: producing Step Execution is "
+                            "not accepted and gate-approved "
+                            f"({merge_gate.get('reason')})"
+                        )
+                    if merge_gate.get("handoffGate"):
+                        merge_payload["handoffGate"] = merge_gate["handoffGate"]
 
                     merge_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
                         "repo.merge_pr"

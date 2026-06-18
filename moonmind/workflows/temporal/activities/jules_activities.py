@@ -10,6 +10,7 @@ import logging
 import os
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from moonmind.config.settings import settings
 from moonmind.jules.runtime import build_runtime_gate_state, JULES_RUNTIME_DISABLED_MESSAGE
@@ -35,6 +36,49 @@ _JULES_FALLBACK_ANSWER = "Proceed with your recommendation."
 def _blocked_message_error(surface: str, diagnostics: list[str]) -> str:
     joined = "; ".join(diagnostics) if diagnostics else surface
     return f"Blocked outbound message send: {joined}"
+
+
+def _enforce_external_handoff_gate(payload: dict, *, default_operation: str) -> None:
+    """Deny an external handoff at the activity boundary unless gate-approved.
+
+    Reads the optional additive ``handoffGate`` payload field carrying the
+    producing Step Execution's terminal disposition and gate-approval evidence.
+    When present and not allowed, raises a non-retryable ``ApplicationError``
+    *before* any external (GitHub) mutation, so a failed/partial/unverified
+    attempt can never publish or merge (MM-826 FR-004/FR-005).
+
+    When ``handoffGate`` is absent the activity preserves prior behavior so
+    in-flight runs that predate this contract keep working (additive,
+    worker-bound invocation compatibility for Temporal payloads).
+    """
+
+    gate = payload.get("handoffGate")
+    if not isinstance(gate, dict):
+        return
+    # Imported lazily to keep the activity import graph light and avoid a
+    # workflow<->activity import cycle.
+    from moonmind.workflows.temporal.step_executions import (
+        external_handoff_gate_decision,
+    )
+
+    operation = str(gate.get("operation") or default_operation)
+    effect_class = str(gate.get("effectClass") or "publication")
+    decision = external_handoff_gate_decision(
+        operation=operation,
+        effect_class=effect_class,  # type: ignore[arg-type]
+        terminal_disposition=gate.get("terminalDisposition"),
+        gate_approved=bool(gate.get("gateApproved")),
+        policy_permits_non_idempotent=bool(gate.get("policyPermits")),
+    )
+    if not decision["allowed"]:
+        reason = decision["reason"]
+        raise ApplicationError(
+            f"External handoff '{operation}' denied at activity boundary: "
+            f"{reason}. The producing Step Execution must be accepted and "
+            f"gate-approved before this action.",
+            type="ExternalHandoffNotAccepted",
+            non_retryable=True,
+        )
 
 def _build_client() -> JulesClient:
     """Build a ``JulesClient`` from environment config.
@@ -301,6 +345,8 @@ async def repo_merge_pr_activity(payload: dict) -> dict:
       current base, the PR base is updated before merging
     - ``merge_method`` (str, optional): merge strategy (default "merge")
     """
+    _enforce_external_handoff_gate(payload, default_operation="repo.merge")
+
     from moonmind.workflows.adapters.github_service import GitHubService
 
     pr_url = payload.get("pr_url") or payload.get("prUrl") or ""
@@ -400,6 +446,8 @@ async def repo_create_pr_activity(payload: dict) -> dict:
     for pattern in _SECRET_PATTERNS:
         if pattern.search(validated.title) or pattern.search(validated.body):
             raise ValueError("PR title or body contains potential secret material. Request blocked.")
+
+    _enforce_external_handoff_gate(payload, default_operation="repo.create_pr")
 
     from moonmind.workflows.adapters.github_service import GitHubService
 
