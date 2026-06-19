@@ -149,21 +149,16 @@ function detailStringValue(...values: unknown[]): string {
   return '';
 }
 
+const PUBLISH_MODE_LABELS: Record<string, string> = {
+  pr_with_merge_automation: 'PR with Merge Automation',
+  pr: 'PR',
+  branch: 'Branch',
+  none: 'None',
+};
+
 function formatPublishModeLabel(value: string | null | undefined): string {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'pr_with_merge_automation') {
-    return 'PR with Merge Automation';
-  }
-  if (normalized === 'pr') {
-    return 'PR';
-  }
-  if (normalized === 'branch') {
-    return 'Branch';
-  }
-  if (normalized === 'none') {
-    return 'None';
-  }
-  return String(value || '').trim();
+  return PUBLISH_MODE_LABELS[normalized] ?? String(value || '').trim();
 }
 
 function runtimeCommandFromExecution(execution: unknown): Record<string, unknown> {

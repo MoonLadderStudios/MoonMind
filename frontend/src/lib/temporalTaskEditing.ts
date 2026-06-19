@@ -1,7 +1,7 @@
 export type TaskSubmitPageMode = 'create' | 'edit' | 'rerun';
 const PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = 'pr_with_merge_automation';
 
-function isPrPublishMode(value: string | null): boolean {
+function isPrPublishMode(value: string | null | undefined): boolean {
   const normalized = String(value || '').trim().toLowerCase();
   return normalized === 'pr' || normalized === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
 }

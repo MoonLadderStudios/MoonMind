@@ -2415,15 +2415,19 @@ function deriveRequiredCapabilities(args: {
 
 const PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = "pr_with_merge_automation";
 
-function normalizePublishModeForSubmit(value: string): string {
-  const normalized = value.trim().toLowerCase();
+function normalizePublishModeSelection(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizePublishModeForSubmit(value: string | null | undefined): string {
+  const normalized = normalizePublishModeSelection(value);
   return normalized === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
     ? "pr"
     : normalized;
 }
 
-function isMergeAutomationPublishMode(value: string): boolean {
-  return value.trim().toLowerCase() === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
+function isMergeAutomationPublishMode(value: string | null | undefined): boolean {
+  return normalizePublishModeSelection(value) === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
 }
 
 function templateEnumOptionLabel(
@@ -8812,6 +8816,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         requestBody.payload = artifactPayload;
       }
       const rerunDraft = temporalDraftData?.draft;
+      const currentPublishModeSelection = normalizePublishModeSelection(publishMode);
+      const rerunDraftPublishModeSelection = normalizePublishModeSelection(
+        rerunDraft?.publishMode,
+      );
+      const rerunDraftEffectivePublishMode = normalizePublishModeForSubmit(
+        rerunDraftPublishModeSelection,
+      );
       const rerunFormChanged = isExactRerunRequest
         ? !rerunDraft ||
           selectedAttachmentFiles.length > 0 ||
@@ -8819,7 +8830,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           normalizedRuntime !== String(rerunDraft.runtime || "").trim() ||
           model.trim() !== String(rerunDraft.model || "").trim() ||
           effort.trim() !== String(rerunDraft.effort || "").trim() ||
-          effectivePublishMode !== String(rerunDraft.publishMode || "").trim() ||
+          effectivePublishMode !== rerunDraftEffectivePublishMode ||
+          currentPublishModeSelection !== rerunDraftPublishModeSelection ||
           produceReport !== Boolean(rerunDraft.reportOutputEnabled) ||
           objectiveInstructionsForSubmit !==
             String(rerunDraft.taskInstructions || "").trim() ||
