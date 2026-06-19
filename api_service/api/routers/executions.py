@@ -5536,7 +5536,11 @@ async def _expand_goal_preset_for_workflow_submission(
     runtime_payload = (
         task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
     )
-    target_runtime = request_payload.get("targetRuntime") or runtime_payload.get("mode")
+    target_runtime = (
+        request_payload.get("targetRuntime")
+        or runtime_payload.get("mode")
+        or normalize_runtime_id(settings.workflow.default_runtime)
+    )
     if isinstance(target_runtime, str) and target_runtime.strip():
         context["targetRuntime"] = target_runtime.strip()
 

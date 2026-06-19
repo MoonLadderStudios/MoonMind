@@ -644,6 +644,39 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
     assert task_payload["appliedStepTemplates"][0]["slug"] == "jira-implement"
 
 
+@pytest.mark.asyncio
+async def test_goal_preset_submission_uses_default_runtime_for_composite_context(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "gemini_cli")
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/goal_preset_default_runtime.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            task_payload = {
+                "title": "Break down feature",
+                "goal": "Split docs/Design.md into Jira stories.",
+            }
+            await _expand_goal_preset_for_workflow_submission(
+                task_payload=task_payload,
+                request_payload={"repository": "MoonLadderStudios/MoonMind"},
+                session=session,
+                user_id=uuid4(),
+            )
+    finally:
+        await engine.dispose()
+
+    downstream_task = task_payload["steps"][3]["jiraOrchestration"]["task"]
+    assert task_payload["presetSchedule"]["presetSlug"] == "jira-breakdown-orchestrate"
+    assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
+    assert downstream_task["runtime"] == {"mode": "gemini_cli"}
+
+
 class _QueryHandle:
     def __init__(
         self,
