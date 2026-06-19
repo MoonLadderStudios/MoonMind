@@ -2776,6 +2776,7 @@ class ExecutionModel(BaseModel):
     provider_id: Optional[str] = Field(None, alias="providerId")
     provider_label: Optional[str] = Field(None, alias="providerLabel")
     effort: Optional[str] = Field(None, alias="effort")
+    priority: Optional[int] = Field(None, alias="priority")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
     repository: Optional[str] = Field(None, alias="repository")

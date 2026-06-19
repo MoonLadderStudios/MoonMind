@@ -566,6 +566,7 @@ const ExecutionDetailSchema = z
     providerId: z.string().nullable().optional(),
     providerLabel: z.string().nullable().optional(),
     effort: z.string().nullable().optional(),
+    priority: z.number().nullable().optional(),
     startingBranch: z.string().nullable().optional(),
     targetBranch: z.string().nullable().optional(),
     repository: z.string().nullable().optional(),
@@ -5436,6 +5437,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
               ) : null}
               {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
+              {execution.priority !== null && execution.priority !== undefined ? (
+                <Fact label="Priority">{execution.priority}</Fact>
+              ) : null}
             </FactGroup>
 
             <FactGroup title="Git & Publish">
