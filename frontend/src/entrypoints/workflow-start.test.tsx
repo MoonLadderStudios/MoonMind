@@ -2820,9 +2820,8 @@ describe.skip("Task Create Entrypoint", () => {
       workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "codex_cli",
       repository: "MoonLadderStudios/MoonMind",
-      publishMode: "pr",
+      publishMode: "pr_with_merge_automation",
       inputParameters: {
-        mergeAutomation: { enabled: true },
         task: {
           instructions: "Preserve PR merge automation state.",
           publish: { mode: "pr" },
@@ -2830,7 +2829,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     });
 
-    expect(draft.publishMode).toBe("pr");
+    expect(draft.publishMode).toBe("pr_with_merge_automation");
     expect(draft.mergeAutomationEnabled).toBe(true);
   });
 

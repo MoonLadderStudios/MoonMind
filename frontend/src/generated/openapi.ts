@@ -4659,11 +4659,6 @@ export interface components {
             prUrl?: string | null;
             /** Publishmode */
             publishMode?: string | null;
-            /**
-             * Mergeautomationselected
-             * @default false
-             */
-            mergeAutomationSelected: boolean;
             mergeAutomation?: components["schemas"]["ExecutionMergeAutomationModel"] | null;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
