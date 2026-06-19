@@ -186,10 +186,26 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
         exit 127
     fi
 
+    VITEST_ROOT="$REPO_ROOT"
+    VITEST_CONFIG="frontend/vite.config.ts"
+    if [[ "$REPO_ROOT" == *:* ]]; then
+        VITEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-vitest.XXXXXX")"
+        cleanup_vitest_root() {
+            rm -rf "$VITEST_ROOT"
+        }
+        trap cleanup_vitest_root EXIT
+        cp -a "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" \
+            "$REPO_ROOT/node_modules" "$REPO_ROOT/frontend" "$VITEST_ROOT/"
+        cp -a "$REPO_ROOT/tailwind.config.cjs" "$VITEST_ROOT/"
+        mkdir -p "$VITEST_ROOT/api_service"
+        cp -a "$REPO_ROOT/api_service/templates" "$VITEST_ROOT/api_service/"
+        VITEST_BIN="$VITEST_ROOT/node_modules/.bin/vitest"
+    fi
+
     # Allow targeted frontend test runs via --ui-args (e.g. --ui-args src/components/App.tsx).
     if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
-        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts "${UI_TEST_ARGS[@]}")
+        (cd "$VITEST_ROOT" && "$VITEST_BIN" run --config "$VITEST_CONFIG" "${UI_TEST_ARGS[@]}")
     else
-        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts)
+        (cd "$VITEST_ROOT" && "$VITEST_BIN" run --config "$VITEST_CONFIG")
     fi
 fi
