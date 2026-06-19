@@ -6,10 +6,14 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from moonmind.config.settings import settings
 from moonmind.workflows.executions.preset_goal_scheduler import (
     goal_from_payloads,
     schedule_preset_from_goal,
     workflow_is_already_authored,
+)
+from moonmind.workflows.executions.runtime_defaults import (
+    resolve_default_workflow_runtime,
 )
 
 
@@ -133,7 +137,11 @@ async def expand_preset_for_child_run(
         template_context["repository"] = repository.strip()
         template_context["repo"] = repository.strip()
     runtime_payload = _coerce_mapping(task_payload.get("runtime"))
-    target_runtime = parameters.get("targetRuntime") or runtime_payload.get("mode")
+    target_runtime = (
+        parameters.get("targetRuntime")
+        or runtime_payload.get("mode")
+        or resolve_default_workflow_runtime(settings.workflow)
+    )
     if isinstance(target_runtime, str) and target_runtime.strip():
         template_context["targetRuntime"] = target_runtime.strip()
     catalog = PresetCatalogService(session)

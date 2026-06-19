@@ -292,6 +292,40 @@ async def test_expand_template_rejects_unknown_template_variable(tmp_path):
                     context={},
                 )
 
+async def test_expand_template_reports_malformed_template_as_validation_error(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="malformed-template",
+                title="Malformed Template",
+                description="Rejects malformed Jinja templates.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "title": "Bad syntax",
+                        "instructions": "Use {{ inputs.missing_value.",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            with pytest.raises(PresetValidationError, match="Template rendering failed"):
+                await service.expand_template(
+                    slug="malformed-template",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                )
+
 async def test_template_rejects_secret_like_schema_defaults(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:

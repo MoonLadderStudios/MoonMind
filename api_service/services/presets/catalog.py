@@ -17,7 +17,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import yaml
-from jinja2 import StrictUndefined, UndefinedError
+from jinja2 import StrictUndefined, TemplateError, UndefinedError
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -618,6 +618,10 @@ def _render_value(
         except UndefinedError as exc:
             raise PresetValidationError(
                 f"Template references an unknown variable: {exc}."
+            ) from exc
+        except TemplateError as exc:
+            raise PresetValidationError(
+                f"Template rendering failed: {exc}."
             ) from exc
         stripped = rendered.strip()
         if _NATIVE_BOOLEAN_TEMPLATE_PATTERN.match(value.strip()):

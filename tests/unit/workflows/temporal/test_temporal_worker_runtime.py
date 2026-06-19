@@ -423,6 +423,36 @@ async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_child_run_goal_scheduled_breakdown_uses_default_runtime_context(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        worker_runtime.settings.workflow, "default_runtime", "gemini_cli"
+    )
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_preset_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "publishMode": "pr",
+                    "task": {
+                        "title": "Break down feature",
+                        "goal": "Split docs/Design.md into Jira stories.",
+                    },
+                },
+            )
+
+    downstream_task = expanded_parameters["task"]["steps"][3]["jiraOrchestration"][
+        "task"
+    ]
+    assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
+    assert downstream_task["runtime"] == {"mode": "gemini_cli"}
+
+
+@pytest.mark.asyncio
 async def test_child_jira_breakdown_implement_expands_workflow_runtime_context(
     tmp_path,
 ):
