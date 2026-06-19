@@ -25,9 +25,21 @@ def _run_script(*paths: str, stdin: str | None = None) -> subprocess.CompletedPr
     [
         "api_service/api/routers/agent_runs.py",
         "api_service/services/temporal_execution_service.py",
+        "moonmind/schemas/agent_runtime_models.py",
+        "moonmind/schemas/agent_skill_models.py",
+        "moonmind/schemas/chat_models.py",
+        "moonmind/schemas/documents_models.py",
+        "moonmind/schemas/manifest_models.py",
+        "moonmind/schemas/manifest_v0_models.py",
+        "moonmind/schemas/manifest_ingest_models.py",
+        "moonmind/schemas/temporal_activity_models.py",
         "moonmind/schemas/temporal_artifact_models.py",
+        "moonmind/schemas/temporal_models.py",
+        "moonmind/schemas/temporal_signal_contracts.py",
         "moonmind/schemas/managed_session_models.py",
         "moonmind/schemas/__init__.py",
+        "moonmind/schemas/workflow_models.py",
+        "moonmind/schemas/workflow_proposal_models.py",
         "tools/export_openapi.py",
         "tools/generate_openapi_types.py",
         "tools/run_repo_python.sh",
@@ -52,6 +64,18 @@ def test_matches_schema_descendants_from_stdin() -> None:
     assert result.returncode == 0
 
 
+def test_managed_session_models_is_openapi_affecting_exported_api_schema() -> None:
+    init_file = REPO_ROOT / "moonmind" / "schemas" / "__init__.py"
+    router_file = REPO_ROOT / "api_service" / "api" / "routers" / "agent_runs.py"
+
+    assert "from .managed_session_models import (" in init_file.read_text()
+    assert "from moonmind.schemas.managed_session_models import" in router_file.read_text()
+
+    result = _run_script("moonmind/schemas/managed_session_models.py")
+
+    assert result.returncode == 0
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -59,6 +83,11 @@ def test_matches_schema_descendants_from_stdin() -> None:
         "moonmind/workflows/temporal/activity_runtime.py",
         "moonmind/core/artifacts.py",
         "moonmind/manifest/interpolation.py",
+        "moonmind/schemas/_validation.py",
+        "moonmind/schemas/jules_models.py",
+        "moonmind/schemas/step_execution_models.py",
+        "moonmind/schemas/temporal_payload_policy.py",
+        "moonmind/schemas/workload_models.py",
         "frontend/src/entrypoints/workflow-detail.tsx",
         "docs/UI/WorkflowConsoleArchitecture.md",
     ],
