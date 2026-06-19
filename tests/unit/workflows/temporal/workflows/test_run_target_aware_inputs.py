@@ -229,6 +229,50 @@ def test_run_request_records_durable_retrieval_manifest_artifact_metadata() -> N
     )
 
 
+def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() -> None:
+    wf = MoonMindRunWorkflow()
+    task_payload = {
+        **_task_payload(),
+        "retrieval": {
+            "query": "execution context",
+            "returnedRefs": ["artifact://retrieved-doc"],
+        },
+    }
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={"task": task_payload},
+        )
+
+    cached_artifact = wf._step_execution_retrieval_manifest_artifacts[
+        ("collect-evidence", 1)
+    ]
+    cached_artifact["persistedArtifactRef"] = "art_retrieval_1"
+    refreshed = wf._request_with_persisted_retrieval_ref(
+        request,
+        logical_step_id="collect-evidence",
+        attempt=1,
+    )
+
+    moonmind_metadata = refreshed.parameters["metadata"]["moonmind"]
+    assert moonmind_metadata["executionContext"]["retrievalManifestRef"] == (
+        "art_retrieval_1"
+    )
+    assert moonmind_metadata["stepExecutionManifestProjection"]["context"][
+        "retrievalManifestRef"
+    ] == "art_retrieval_1"
+    assert moonmind_metadata["retrievalManifestArtifact"]["persistedArtifactRef"] == (
+        "art_retrieval_1"
+    )
+    assert refreshed.step_execution is not None
+    assert refreshed.step_execution.retrieval_manifest_ref == "art_retrieval_1"
+
+
 def test_run_request_projects_matched_fix_patterns_into_attempt_memory() -> None:
     signature = extract_error_signature("RuntimeError: qdrant collection missing")
     assert signature is not None

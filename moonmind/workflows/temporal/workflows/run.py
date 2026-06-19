@@ -824,6 +824,9 @@ class MoonMindRunWorkflow:
         self._step_execution_context_projections: dict[
             tuple[str, int], dict[str, Any]
         ] = {}
+        self._step_execution_retrieval_manifest_artifacts: dict[
+            tuple[str, int], dict[str, Any]
+        ] = {}
         # Side-effect records observed per logical step across attempts, keyed by
         # logical step id. Used to detect already-occurred non-idempotent
         # external effects when a reattempt starts (Section 11, rules 3-4).
@@ -1114,6 +1117,11 @@ class MoonMindRunWorkflow:
             side_effects_payload["records"] = [
                 dict(record) for record in side_effect_records
             ]
+        if phase in {"start", "launch_blocked"}:
+            await self._persist_step_execution_retrieval_manifest(
+                logical_step_id,
+                attempt=identity.execution_ordinal,
+            )
 
         manifest = StepExecutionManifestModel(
             stepExecutionId=step_execution_id,
@@ -1168,6 +1176,52 @@ class MoonMindRunWorkflow:
                 resolved_terminal_disposition
             )
         self._sync_progress_snapshot(updated_at=updated_at)
+        return manifest_ref
+
+    async def _persist_step_execution_retrieval_manifest(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+    ) -> str | None:
+        cache_key = (logical_step_id, attempt)
+        retrieval_artifact = self._step_execution_retrieval_manifest_artifacts.get(
+            cache_key
+        )
+        if not isinstance(retrieval_artifact, Mapping):
+            return None
+        existing_ref = retrieval_artifact.get("persistedArtifactRef")
+        if isinstance(existing_ref, str) and existing_ref.strip():
+            return existing_ref
+
+        payload = retrieval_artifact.get("payload")
+        if not isinstance(payload, Mapping):
+            raise ValueError("retrieval manifest artifact payload must be an object")
+        metadata = retrieval_artifact.get("metadata")
+        metadata_json = dict(metadata) if isinstance(metadata, Mapping) else {}
+        metadata_json.setdefault("artifact_kind", "retrieval_manifest")
+        metadata_json["logicalStepId"] = logical_step_id
+        metadata_json["attempt"] = attempt
+
+        manifest_ref = await self._write_json_artifact(
+            name=f"reports/retrieval_manifests/{logical_step_id}_attempt_{attempt}.json",
+            payload=dict(payload),
+            content_type=str(
+                retrieval_artifact.get("contentType") or "application/json"
+            ),
+            metadata_json=metadata_json,
+        )
+        persisted_artifact = dict(retrieval_artifact)
+        persisted_artifact["persistedArtifactRef"] = manifest_ref
+        self._step_execution_retrieval_manifest_artifacts[cache_key] = (
+            persisted_artifact
+        )
+
+        cached_context = self._step_execution_context_projections.get(cache_key)
+        if isinstance(cached_context, Mapping):
+            updated_context = dict(cached_context)
+            updated_context["retrievalManifestRef"] = manifest_ref
+            self._step_execution_context_projections[cache_key] = updated_context
         return manifest_ref
 
     async def _write_step_execution_manifest(
@@ -5337,7 +5391,10 @@ class MoonMindRunWorkflow:
                         updated_at=workflow.now(),
                     )
 
-                    if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
+                    if (
+                        tool_type != "agent_runtime"
+                        and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)
+                    ):
                         await self._record_step_execution_manifest(
                             node_id,
                             phase="start",
@@ -5373,9 +5430,12 @@ class MoonMindRunWorkflow:
                             if review_gate_active
                             else None,
                         )
-                    if self._is_step_execution_launch_blocked(
-                        node_id,
-                        attempt=current_step_execution,
+                    if (
+                        tool_type != "agent_runtime"
+                        and self._is_step_execution_launch_blocked(
+                            node_id,
+                            attempt=current_step_execution,
+                        )
                     ):
                         execution_result = {
                             "status": "FAILED",
@@ -5417,6 +5477,62 @@ class MoonMindRunWorkflow:
                                 step_execution=current_step_execution,
                                 attempt_reason=attempt_reason,
                             )
+                            if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
+                                await self._record_step_execution_manifest(
+                                    node_id,
+                                    phase="start",
+                                    updated_at=workflow.now(),
+                                    summary=self._summary,
+                                    reason=attempt_reason,
+                                    input_refs=(
+                                        node_inputs.get("inputRefs")
+                                        if isinstance(node_inputs.get("inputRefs"), list)
+                                        else []
+                                    ),
+                                    execution={
+                                        "kind": tool_type,
+                                        "toolName": tool_name,
+                                        "idempotencyKey": step_execution_operation_idempotency_key(
+                                            workflow_id=workflow.info().workflow_id,
+                                            run_id=workflow.info().run_id,
+                                            logical_step_id=node_id,
+                                            execution_ordinal=current_step_execution,
+                                            operation="execute",
+                                        ),
+                                    },
+                                    budget=self._review_gate_budget_metadata(
+                                        max_review_attempts=max_review_attempts,
+                                        review_retry_count=review_retry_count,
+                                        max_consecutive_no_progress_attempts=(
+                                            max_consecutive_no_progress_attempts
+                                        ),
+                                        consecutive_no_progress_attempts=(
+                                            consecutive_no_progress_attempts
+                                        ),
+                                    )
+                                    if review_gate_active
+                                    else None,
+                                )
+                                request = self._request_with_persisted_retrieval_ref(
+                                    request,
+                                    logical_step_id=node_id,
+                                    attempt=current_step_execution,
+                                )
+                            if self._is_step_execution_launch_blocked(
+                                node_id,
+                                attempt=current_step_execution,
+                            ):
+                                execution_result = {
+                                    "status": "FAILED",
+                                    "outputs": {
+                                        "error": "missing_required_checkpoint_evidence",
+                                        "summary": (
+                                            "Workspace policy rejected before launch."
+                                        ),
+                                    },
+                                }
+                                result_status = "FAILED"
+                                break
                             if workflow.patched(RUN_SLOT_CONTINUITY_PATCH):
                                 self._mark_slot_continuity_for_next_step(
                                     request=request,
@@ -5497,6 +5613,20 @@ class MoonMindRunWorkflow:
                                 raise
                             result_status = "FAILED"
                             break
+
+                    elif self._is_step_execution_launch_blocked(
+                        node_id,
+                        attempt=current_step_execution,
+                    ):
+                        execution_result = {
+                            "status": "FAILED",
+                            "outputs": {
+                                "error": "missing_required_checkpoint_evidence",
+                                "summary": "Workspace policy rejected before launch.",
+                            },
+                        }
+                        result_status = "FAILED"
+                        break
 
                     elif tool_type == "skill":
                         snapshot = await load_registry_snapshot()
@@ -10170,6 +10300,9 @@ class MoonMindRunWorkflow:
         )
         if retrieval_manifest_artifact is not None:
             moonmind_payload["retrievalManifestArtifact"] = retrieval_manifest_artifact
+            self._step_execution_retrieval_manifest_artifacts[
+                (node_id, execution_ordinal)
+            ] = dict(retrieval_manifest_artifact)
         metadata_payload["moonmind"] = moonmind_payload
         parameters["metadata"] = metadata_payload
         projection_context = attempt_context.to_manifest_projection().get("context")
@@ -10255,6 +10388,50 @@ class MoonMindRunWorkflow:
             callback_policy=node_inputs.get("callbackPolicy") or {},
             profile_selector=profile_selector,
         )
+
+    def _request_with_persisted_retrieval_ref(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        logical_step_id: str,
+        attempt: int,
+    ) -> AgentExecutionRequest:
+        retrieval_artifact = self._step_execution_retrieval_manifest_artifacts.get(
+            (logical_step_id, attempt)
+        )
+        if not isinstance(retrieval_artifact, Mapping):
+            return request
+        persisted_ref = retrieval_artifact.get("persistedArtifactRef")
+        if not isinstance(persisted_ref, str) or not persisted_ref.strip():
+            return request
+
+        update_payload: dict[str, Any] = {}
+        metadata = dict(request.parameters.get("metadata") or {})
+        moonmind_metadata = dict(metadata.get("moonmind") or {})
+        execution_context = dict(moonmind_metadata.get("executionContext") or {})
+        execution_context["retrievalManifestRef"] = persisted_ref
+        moonmind_metadata["executionContext"] = execution_context
+        projection = dict(moonmind_metadata.get("stepExecutionManifestProjection") or {})
+        projection_context = dict(projection.get("context") or {})
+        projection_context["retrievalManifestRef"] = persisted_ref
+        projection["context"] = projection_context
+        moonmind_metadata["stepExecutionManifestProjection"] = projection
+        retrieval_manifest_artifact = dict(
+            moonmind_metadata.get("retrievalManifestArtifact") or {}
+        )
+        retrieval_manifest_artifact["persistedArtifactRef"] = persisted_ref
+        moonmind_metadata["retrievalManifestArtifact"] = retrieval_manifest_artifact
+        metadata["moonmind"] = moonmind_metadata
+        parameters = dict(request.parameters)
+        parameters["metadata"] = metadata
+        update_payload["parameters"] = parameters
+
+        if request.step_execution is not None:
+            update_payload["step_execution"] = request.step_execution.model_copy(
+                update={"retrieval_manifest_ref": persisted_ref}
+            )
+
+        return request.model_copy(update=update_payload)
 
     def _inherited_execution_profile_ref(
         self,
