@@ -5,18 +5,11 @@ import signal
 from functools import lru_cache
 from pathlib import Path
 
-import api_service.db.models  # noqa: F401  # Preload models to break circular import cycle
-
 import pytest
-
-from moonmind.config.settings import settings
 
 # Mirror the auth module's disabled-mode default user id to avoid importing
 # api_service.auth during global pytest collection.
 _DEFAULT_USER_ID = "00000000-0000-0000-0000-000000000000"
-
-settings.workflow.test_mode = True
-settings.workflow.enable_proposals = False
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -93,6 +86,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 
 @pytest.fixture
 def disabled_env_keys(monkeypatch):
+    from moonmind.config.settings import settings
+
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "disabled", raising=False)
     monkeypatch.setattr(
         settings.oidc, "DEFAULT_USER_ID", _DEFAULT_USER_ID, raising=False
@@ -106,6 +101,8 @@ def disabled_env_keys(monkeypatch):
 
 @pytest.fixture
 def keycloak_mode(monkeypatch):
+    from moonmind.config.settings import settings
+
     monkeypatch.setattr(settings.oidc, "AUTH_PROVIDER", "keycloak", raising=False)
     yield
 @pytest.hookimpl(tryfirst=True)
