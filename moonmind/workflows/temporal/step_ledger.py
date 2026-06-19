@@ -801,6 +801,7 @@ def upsert_step_check(
     summary: str | None = None,
     retry_count: int = 0,
     artifact_ref: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     for row in rows:
         if row.get("logicalStepId") != logical_step_id:
@@ -815,6 +816,8 @@ def upsert_step_check(
             "retryCount": retry_count,
             "artifactRef": artifact_ref,
         }
+        if metadata:
+            check_payload.update(dict(metadata))
         for index, existing in enumerate(checks):
             if isinstance(existing, Mapping) and existing.get("kind") == kind:
                 checks[index] = check_payload

@@ -18,6 +18,13 @@ from moonmind.workflows.skills.tool_plan_contracts import (
     REVIEW_VERDICTS,
 )
 
+_RECOMMENDED_NEXT_ACTIONS = {
+    "advance",
+    "reattempt_current_step",
+    "needs_human",
+    "blocked",
+}
+
 @dataclass(frozen=True, slots=True)
 class ReviewRequest:
     """Input envelope for the ``step.review`` activity."""
@@ -83,6 +90,8 @@ class ReviewVerdict:
     target_logical_step_id: str | None = None
     workspace_policy_recommendation: str | None = None
     recoverable_in_current_runtime: bool = False
+    invalid: bool = False
+    degraded: bool = False
 
     def __post_init__(self) -> None:
         if self.verdict not in REVIEW_VERDICTS:
@@ -103,6 +112,15 @@ class ReviewVerdict:
                 "invalid_review_verdict",
                 "confidence must be numeric 0.0-1.0 or low|medium|high",
             )
+        if (
+            self.recommended_next_action is not None
+            and self.recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
+        ):
+            raise ContractValidationError(
+                "invalid_review_verdict",
+                "recommendedNextAction must be one of "
+                f"{sorted(_RECOMMENDED_NEXT_ACTIONS)}",
+            )
 
     def to_payload(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -111,6 +129,8 @@ class ReviewVerdict:
             "feedback": self.feedback,
             "issues": [dict(issue) for issue in self.issues],
             "recoverableInCurrentRuntime": self.recoverable_in_current_runtime,
+            "invalid": self.invalid,
+            "degraded": self.degraded,
         }
         if self.validated_refs:
             payload["validatedRefs"] = dict(self.validated_refs)
@@ -130,16 +150,154 @@ class ReviewVerdict:
             )
         return payload
 
+    def to_gate_result(self) -> "StepGateResult":
+        return StepGateResult(
+            verdict=self.verdict,
+            confidence=self.confidence,
+            feedback=self.feedback,
+            issues=self.issues,
+            validated_refs=self.validated_refs,
+            invalidated_refs=self.invalidated_refs,
+            remaining_work_ref=self.remaining_work_ref,
+            blocking_evidence_refs=self.blocking_evidence_refs,
+            recommended_next_action=self.recommended_next_action,
+            target_logical_step_id=self.target_logical_step_id,
+            workspace_policy_recommendation=self.workspace_policy_recommendation,
+            recoverable_in_current_runtime=self.recoverable_in_current_runtime,
+            invalid=self.invalid,
+            degraded=self.degraded,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class StepGateResult:
+    """Canonical typed gate result artifact payload."""
+
+    verdict: str
+    confidence: float | str = 0.0
+    feedback: str | None = None
+    issues: tuple[Mapping[str, Any], ...] = ()
+    validated_refs: Mapping[str, Any] | None = None
+    invalidated_refs: tuple[str, ...] = ()
+    remaining_work_ref: str | None = None
+    blocking_evidence_refs: tuple[str, ...] = ()
+    recommended_next_action: str | None = None
+    target_logical_step_id: str | None = None
+    workspace_policy_recommendation: str | None = None
+    recoverable_in_current_runtime: bool = False
+    invalid: bool = False
+    degraded: bool = False
+    schema_version: str = "v1"
+
+    def __post_init__(self) -> None:
+        if self.schema_version != "v1":
+            raise ContractValidationError(
+                "invalid_step_gate_result",
+                "schemaVersion must be v1",
+            )
+        if self.verdict not in REVIEW_VERDICTS:
+            raise ContractValidationError(
+                "invalid_step_gate_result",
+                f"verdict must be one of {sorted(REVIEW_VERDICTS)}",
+            )
+        if isinstance(self.confidence, (int, float)) and not isinstance(
+            self.confidence, bool
+        ):
+            if not (0.0 <= float(self.confidence) <= 1.0):
+                raise ContractValidationError(
+                    "invalid_step_gate_result",
+                    "numeric confidence must be between 0.0 and 1.0",
+                )
+        elif str(self.confidence).strip().lower() not in {"low", "medium", "high"}:
+            raise ContractValidationError(
+                "invalid_step_gate_result",
+                "confidence must be numeric 0.0-1.0 or low|medium|high",
+            )
+        if (
+            self.recommended_next_action is not None
+            and self.recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
+        ):
+            raise ContractValidationError(
+                "invalid_step_gate_result",
+                "recommendedNextAction must be one of "
+                f"{sorted(_RECOMMENDED_NEXT_ACTIONS)}",
+            )
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "schemaVersion": self.schema_version,
+            "verdict": self.verdict,
+            "confidence": self.confidence,
+            "feedback": self.feedback,
+            "issues": [dict(issue) for issue in self.issues],
+            "recoverableInCurrentRuntime": self.recoverable_in_current_runtime,
+            "invalid": self.invalid,
+            "degraded": self.degraded,
+        }
+        if self.validated_refs:
+            payload["validatedRefs"] = dict(self.validated_refs)
+        else:
+            payload["validatedRefs"] = {}
+        if self.invalidated_refs:
+            payload["invalidatedRefs"] = list(self.invalidated_refs)
+        else:
+            payload["invalidatedRefs"] = []
+        if self.remaining_work_ref:
+            payload["remainingWorkRef"] = self.remaining_work_ref
+        if self.blocking_evidence_refs:
+            payload["blockingEvidenceRefs"] = list(self.blocking_evidence_refs)
+        else:
+            payload["blockingEvidenceRefs"] = []
+        if self.recommended_next_action:
+            payload["recommendedNextAction"] = self.recommended_next_action
+        if self.target_logical_step_id:
+            payload["targetLogicalStepId"] = self.target_logical_step_id
+        if self.workspace_policy_recommendation:
+            payload["workspacePolicyRecommendation"] = (
+                self.workspace_policy_recommendation
+            )
+        return payload
+
+    def to_review_verdict(self) -> ReviewVerdict:
+        return ReviewVerdict(
+            verdict=self.verdict,
+            confidence=self.confidence,
+            feedback=self.feedback,
+            issues=self.issues,
+            validated_refs=self.validated_refs,
+            invalidated_refs=self.invalidated_refs,
+            remaining_work_ref=self.remaining_work_ref,
+            blocking_evidence_refs=self.blocking_evidence_refs,
+            recommended_next_action=self.recommended_next_action,
+            target_logical_step_id=self.target_logical_step_id,
+            workspace_policy_recommendation=self.workspace_policy_recommendation,
+            recoverable_in_current_runtime=self.recoverable_in_current_runtime,
+            invalid=self.invalid,
+            degraded=self.degraded,
+        )
+
 def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
     """Parse an LLM response payload into a ``ReviewVerdict``."""
+    return parse_step_gate_result(payload).to_review_verdict()
+
+
+def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
+    """Normalize activity output into the canonical gate result contract."""
     verdict_raw = str(payload.get("verdict") or "INCONCLUSIVE").strip().upper()
     verdict_raw = {
         "PASS": "FULLY_IMPLEMENTED",
         "FAIL": "ADDITIONAL_WORK_NEEDED",
         "INCONCLUSIVE": "NO_DETERMINATION",
     }.get(verdict_raw, verdict_raw)
+    invalid = bool(payload.get("invalid"))
+    degraded = bool(payload.get("degraded"))
     if verdict_raw not in REVIEW_VERDICTS:
         verdict_raw = "NO_DETERMINATION"
+        invalid = True
+        degraded = True
+    elif not str(payload.get("verdict") or "").strip():
+        invalid = True
+        degraded = True
 
     confidence_raw = payload.get("confidence")
     confidence: float | str
@@ -176,7 +334,23 @@ def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
         "blocking_evidence_refs"
     )
 
-    return ReviewVerdict(
+    recommended_next_action = _optional_text(
+        payload.get("recommendedNextAction")
+        or payload.get("recommended_next_action")
+    )
+    if invalid or degraded:
+        recommended_next_action = "blocked"
+    elif not recommended_next_action and verdict_raw == "FULLY_IMPLEMENTED":
+        recommended_next_action = "advance"
+    elif not recommended_next_action and verdict_raw == "ADDITIONAL_WORK_NEEDED":
+        recommended_next_action = "reattempt_current_step"
+    elif not recommended_next_action and verdict_raw in {
+        "BLOCKED",
+        "FAILED_UNRECOVERABLE",
+    }:
+        recommended_next_action = "blocked"
+
+    return StepGateResult(
         verdict=verdict_raw,
         confidence=confidence,
         feedback=feedback,
@@ -201,10 +375,7 @@ def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
         )
         if isinstance(blocking_refs, list)
         else (),
-        recommended_next_action=_optional_text(
-            payload.get("recommendedNextAction")
-            or payload.get("recommended_next_action")
-        ),
+        recommended_next_action=recommended_next_action,
         target_logical_step_id=_optional_text(
             payload.get("targetLogicalStepId") or payload.get("target_logical_step_id")
         ),
@@ -216,6 +387,8 @@ def parse_review_verdict(payload: Mapping[str, Any]) -> ReviewVerdict:
             payload.get("recoverableInCurrentRuntime")
             or payload.get("recoverable_in_current_runtime")
         ),
+        invalid=invalid,
+        degraded=degraded,
     )
 
 
@@ -314,8 +487,10 @@ def build_review_prompt(request: ReviewRequest) -> str:
 __all__ = [
     "ReviewRequest",
     "ReviewVerdict",
+    "StepGateResult",
     "build_feedback_input",
     "build_feedback_instruction",
     "build_review_prompt",
+    "parse_step_gate_result",
     "parse_review_verdict",
 ]

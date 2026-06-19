@@ -85,9 +85,10 @@ from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
 from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
+    StepGateResult,
     build_feedback_input,
     build_feedback_instruction,
-    parse_review_verdict,
+    parse_step_gate_result,
 )
 from moonmind.workflows.temporal.step_ledger import (
     TERMINAL_STEP_STATUSES,
@@ -2716,6 +2717,7 @@ class MoonMindRunWorkflow:
         summary: str | None = None,
         retry_count: int = 0,
         artifact_ref: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> bool:
         try:
             upsert_step_check(
@@ -2726,6 +2728,7 @@ class MoonMindRunWorkflow:
                 summary=summary,
                 retry_count=retry_count,
                 artifact_ref=artifact_ref,
+                metadata=metadata,
             )
         except KeyError:
             self._get_logger().warning(
@@ -2738,6 +2741,25 @@ class MoonMindRunWorkflow:
             )
             return False
         return True
+
+    @staticmethod
+    def _gate_check_metadata(
+        *,
+        gate_result_ref: str,
+        gate: StepGateResult,
+    ) -> dict[str, Any]:
+        return {
+            "gateResultRef": gate_result_ref,
+            "gateVerdict": gate.verdict,
+            "confidence": gate.confidence,
+            "validatedRefs": dict(gate.validated_refs or {}),
+            "remainingWorkRef": gate.remaining_work_ref,
+            "targetLogicalStepId": gate.target_logical_step_id,
+            "workspacePolicyRecommendation": gate.workspace_policy_recommendation,
+            "recommendedNextAction": gate.recommended_next_action,
+            "invalid": gate.invalid,
+            "degraded": gate.degraded,
+        }
 
     def _step_execution_for(self, logical_step_id: str) -> int | None:
         for row in self._step_ledger_rows:
@@ -5659,7 +5681,7 @@ class MoonMindRunWorkflow:
                     previous_feedback=previous_review_feedback,
                 )
                 review_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("step.review")
-                review_verdict = parse_review_verdict(
+                gate_result = parse_step_gate_result(
                     await workflow.execute_activity(
                         "step.review",
                         review_request.to_payload(),
@@ -5667,19 +5689,18 @@ class MoonMindRunWorkflow:
                         **self._execute_kwargs_for_route(review_route),
                     )
                 )
+                review_verdict = gate_result.to_review_verdict()
                 step_execution = self._step_execution_for(node_id) or 0
-                review_artifact_ref = await self._write_json_artifact(
+                gate_result_ref = await self._write_json_artifact(
                     name=(
-                        "reports/review_"
+                        "reports/gate_result_"
                         f"{node_id}_attempt_{step_execution}.json"
                     ),
-                    payload={
-                        "logicalStepId": node_id,
-                        "attempt": step_execution,
-                        "reviewAttempt": current_review_attempt,
-                        "request": review_request.to_payload(),
-                        "verdict": review_verdict.to_payload(),
-                    },
+                    payload=gate_result.to_payload(),
+                )
+                gate_check_metadata = self._gate_check_metadata(
+                    gate_result_ref=gate_result_ref,
+                    gate=gate_result,
                 )
                 review_check_status = self._check_status_for_review_verdict(
                     review_verdict.verdict
@@ -5700,7 +5721,8 @@ class MoonMindRunWorkflow:
                         status=review_check_status,
                         summary=failed_review_summary,
                         retry_count=review_retry_count + 1,
-                        artifact_ref=review_artifact_ref,
+                        artifact_ref=gate_result_ref,
+                        metadata=gate_check_metadata,
                     )
                     if self._review_gate_retry_allowed(
                         verdict=review_verdict,
@@ -5780,7 +5802,11 @@ class MoonMindRunWorkflow:
                         status="failed",
                         summary=missing_evidence_summary,
                         retry_count=review_retry_count,
-                        artifact_ref=review_artifact_ref,
+                        artifact_ref=gate_result_ref,
+                        metadata={
+                            **gate_check_metadata,
+                            "recommendedNextAction": "needs_human",
+                        },
                     )
                     self._mark_step_terminal(
                         node_id,
@@ -5828,7 +5854,13 @@ class MoonMindRunWorkflow:
                         retry_count=review_retry_count,
                     ),
                     retry_count=review_retry_count,
-                    artifact_ref=review_artifact_ref,
+                    artifact_ref=gate_result_ref,
+                    metadata={
+                        **gate_check_metadata,
+                        "recommendedNextAction": (
+                            review_verdict.recommended_next_action or "advance"
+                        ),
+                    },
                 )
                 await self._record_canonical_step_checkpoint(
                     node_id,

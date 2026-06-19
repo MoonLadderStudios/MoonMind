@@ -11,10 +11,12 @@ from moonmind.workflows.skills.tool_plan_contracts import (
 )
 from moonmind.workflows.skills.approval_policy import (
     ReviewRequest,
+    StepGateResult,
     ReviewVerdict,
     build_feedback_input,
     build_feedback_instruction,
     build_review_prompt,
+    parse_step_gate_result,
     parse_review_verdict,
 )
 
@@ -144,6 +146,59 @@ class TestReviewVerdict:
         assert p["verdict"] == "ADDITIONAL_WORK_NEEDED"
         assert len(p["issues"]) == 1
 
+# ── StepGateResult ────────────────────────────────────────────────────
+
+class TestStepGateResult:
+    def test_to_payload_includes_canonical_gate_fields(self):
+        gate = StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            feedback="Tests still fail",
+            validated_refs={"testReportRef": "artifact://tests"},
+            invalidated_refs=("artifact://old-report",),
+            remaining_work_ref="artifact://remaining",
+            blocking_evidence_refs=("artifact://verification",),
+            recommended_next_action="reattempt_current_step",
+            target_logical_step_id="implement",
+            workspace_policy_recommendation=(
+                "apply_previous_execution_diff_to_clean_baseline"
+            ),
+            recoverable_in_current_runtime=True,
+        )
+
+        payload = gate.to_payload()
+
+        assert payload == {
+            "schemaVersion": "v1",
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "confidence": "medium",
+            "feedback": "Tests still fail",
+            "issues": [],
+            "recoverableInCurrentRuntime": True,
+            "invalid": False,
+            "degraded": False,
+            "validatedRefs": {"testReportRef": "artifact://tests"},
+            "invalidatedRefs": ["artifact://old-report"],
+            "remainingWorkRef": "artifact://remaining",
+            "blockingEvidenceRefs": ["artifact://verification"],
+            "recommendedNextAction": "reattempt_current_step",
+            "targetLogicalStepId": "implement",
+            "workspacePolicyRecommendation": (
+                "apply_previous_execution_diff_to_clean_baseline"
+            ),
+        }
+
+    def test_writer_rejects_unknown_verdict(self):
+        with pytest.raises(ContractValidationError, match="verdict"):
+            StepGateResult(verdict="MAYBE")
+
+    def test_writer_rejects_unknown_recommended_action(self):
+        with pytest.raises(ContractValidationError, match="recommendedNextAction"):
+            StepGateResult(
+                verdict="ADDITIONAL_WORK_NEEDED",
+                recommended_next_action="do_whatever",
+            )
+
 # ── parse_review_verdict ──────────────────────────────────────────────
 
 class TestParseReviewVerdict:
@@ -168,10 +223,42 @@ class TestParseReviewVerdict:
     def test_parse_unknown_verdict_becomes_inconclusive(self):
         v = parse_review_verdict({"verdict": "MAYBE"})
         assert v.verdict == "NO_DETERMINATION"
+        assert v.invalid is True
+        assert v.degraded is True
+        assert v.recommended_next_action == "blocked"
 
     def test_parse_missing_verdict(self):
         v = parse_review_verdict({})
         assert v.verdict == "NO_DETERMINATION"
+        assert v.invalid is True
+        assert v.degraded is True
+
+    def test_parse_step_gate_result_legacy_pass_fail(self):
+        passed = parse_step_gate_result({"verdict": "PASS", "confidence": 0.9})
+        failed = parse_step_gate_result({"verdict": "FAIL", "confidence": "low"})
+
+        assert passed.verdict == "FULLY_IMPLEMENTED"
+        assert passed.invalid is False
+        assert failed.verdict == "ADDITIONAL_WORK_NEEDED"
+        assert failed.invalid is False
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"verdict": "approved in prose"},
+            {"verdict": "FUTURE_VERDICT"},
+            {"verdict": ""},
+            {},
+        ],
+    )
+    def test_parse_step_gate_result_unknown_values_fail_closed(self, payload):
+        gate = parse_step_gate_result(payload)
+
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.invalid is True
+        assert gate.degraded is True
+        assert gate.recommended_next_action == "blocked"
+        assert gate.recoverable_in_current_runtime is False
 
     def test_parse_bad_confidence_clamped(self):
         v = parse_review_verdict({"verdict": "PASS", "confidence": 5.0})
