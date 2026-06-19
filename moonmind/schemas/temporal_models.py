@@ -2477,6 +2477,17 @@ class StepLedgerSnapshotModel(BaseModel):
     steps: list[StepLedgerRowModel] = Field(default_factory=list, alias="steps")
 
 
+class CompatibilityBoundaryDecisionModel(BaseModel):
+    """Typed fail-closed decision for degraded persisted boundary values."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    valid: bool = Field(..., alias="valid")
+    decision: Literal["valid", "invalid", "degraded"] = Field(..., alias="decision")
+    failure_code: str | None = Field(None, alias="failureCode", max_length=120)
+    message: str = Field(..., alias="message", max_length=500)
+
+
 class StepExecutionProjectionModel(BaseModel):
     """Bounded Step Execution projection derived from manifest refs."""
 
@@ -2490,8 +2501,8 @@ class StepExecutionProjectionModel(BaseModel):
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
-    reason: StepExecutionReason = Field(..., alias="reason")
-    status: StepExecutionStatus = Field(..., alias="status")
+    reason: StepExecutionReason | None = Field(None, alias="reason")
+    status: StepExecutionStatus | None = Field(None, alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )
@@ -2511,6 +2522,9 @@ class StepExecutionProjectionModel(BaseModel):
     )
     recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
         None, alias="recoveryEligibility"
+    )
+    compatibility_decision: CompatibilityBoundaryDecisionModel | None = Field(
+        None, alias="compatibilityDecision"
     )
 
 

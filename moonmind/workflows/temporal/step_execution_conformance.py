@@ -952,6 +952,49 @@ def _api_decision() -> dict[str, Any]:
     )
 
 
+def api_degraded_projection_decisions() -> list[dict[str, Any]]:
+    cases = (
+        (
+            "api-blank-step-execution-value",
+            "invalid_step_execution_manifest",
+            "blank Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-unknown-step-execution-value",
+            "invalid_step_execution_manifest",
+            "unknown Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-future-step-execution-value",
+            "invalid_step_execution_manifest",
+            "future Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-malformed-step-execution-value",
+            "malformed_step_execution_manifest",
+            "malformed Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-unsupported-step-execution-ref",
+            "invalid_step_execution_manifest_ref",
+            "unsupported Step Execution manifest refs produce typed invalid API decisions",
+        ),
+    )
+    return [
+        _decision(
+            fixture_id=fixture_id,
+            category="api_contract",
+            contract_surface="api",
+            decision="invalid",
+            expected="invalid",
+            failure_code=failure_code,
+            message=message,
+            traceability=("FR-004", "SC-003", "SCN-003", "DESIGN-REQ-021"),
+        )
+        for fixture_id, failure_code, message in cases
+    ]
+
+
 def _family_results(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     families: list[dict[str, Any]] = []
     for family in REQUIRED_CONFORMANCE_FAMILIES:
@@ -999,6 +1042,7 @@ def build_conformance_summary() -> dict[str, Any]:
         + forbidden_decisions
         + _terminology_decisions()
         + [_api_decision()]
+        + api_degraded_projection_decisions()
     )
     families = _family_results(decisions)
     return {

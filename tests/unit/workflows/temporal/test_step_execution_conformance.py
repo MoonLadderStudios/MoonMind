@@ -10,6 +10,7 @@ from moonmind.workflows.temporal.step_execution_conformance import (
     REQUIRED_TRACEABILITY_IDS,
     STEP_EXECUTION_CONFORMANCE_SUITE_ID,
     api_contract_fixture,
+    api_degraded_projection_decisions,
     build_conformance_summary,
     classify_gate_verdict,
     golden_fixture_catalog,
@@ -249,6 +250,31 @@ def test_api_contract_fixture_exposes_refs_and_canonical_terms_only() -> None:
     assert "verificationReport" not in fixture["projection"]
     assert fixture["projection"]["artifactRefs"]["manifestRef"].startswith(
         "artifact://"
+    )
+
+
+def test_api_projection_degraded_values_have_typed_invalid_decisions() -> None:
+    decisions = {
+        decision["fixtureId"]: decision
+        for decision in api_degraded_projection_decisions()
+    }
+
+    assert set(decisions) == {
+        "api-blank-step-execution-value",
+        "api-unknown-step-execution-value",
+        "api-future-step-execution-value",
+        "api-malformed-step-execution-value",
+        "api-unsupported-step-execution-ref",
+    }
+    assert all(decision["decision"] == "invalid" for decision in decisions.values())
+    assert all(decision["expected"] == "invalid" for decision in decisions.values())
+    assert all(decision["failureCode"] for decision in decisions.values())
+    assert all(len(decision["message"]) <= 500 for decision in decisions.values())
+    assert all(
+        {"FR-004", "SC-003", "SCN-003", "DESIGN-REQ-021"}.issubset(
+            set(decision["traceability"])
+        )
+        for decision in decisions.values()
     )
 
 

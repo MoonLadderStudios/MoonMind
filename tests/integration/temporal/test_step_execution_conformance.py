@@ -9,6 +9,7 @@ import pytest
 from moonmind.workflows.temporal.step_execution_conformance import (
     REQUIRED_CONFORMANCE_FAMILIES,
     api_contract_fixture,
+    api_degraded_projection_decisions,
     build_conformance_summary,
     classify_gate_verdict,
     golden_fixture_catalog,
@@ -147,6 +148,29 @@ def test_api_fixtures_expose_artifact_refs_not_inline_evidence() -> None:
     )
     for forbidden in ("transcript", "diff --git", "providerPayload", "credentials"):
         assert forbidden not in rendered
+
+
+def test_api_projection_degraded_values_are_conformance_evidence() -> None:
+    decisions = {
+        decision["fixtureId"]: decision
+        for decision in api_degraded_projection_decisions()
+    }
+
+    assert {
+        "api-blank-step-execution-value",
+        "api-unknown-step-execution-value",
+        "api-future-step-execution-value",
+        "api-malformed-step-execution-value",
+        "api-unsupported-step-execution-ref",
+    }.issubset(decisions)
+    assert all(decision["decision"] == "invalid" for decision in decisions.values())
+    assert all(decision["failureCode"] for decision in decisions.values())
+    assert all(
+        {"FR-004", "SC-003", "SCN-003", "DESIGN-REQ-021"}.issubset(
+            set(decision["traceability"])
+        )
+        for decision in decisions.values()
+    )
 
 
 def test_writer_fixtures_reject_superseded_content_type_spellings() -> None:

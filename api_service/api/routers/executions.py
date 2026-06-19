@@ -4561,15 +4561,12 @@ async def _read_step_execution_manifest(
     artifact_service: Any,
     artifact_ref: str,
     principal: str,
-) -> StepExecutionManifestModel:
+) -> tuple[StepExecutionManifestModel | None, dict[str, Any] | None]:
     artifact_id = _artifact_id_from_ref(artifact_ref)
     if not artifact_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "code": "invalid_step_execution_manifest_ref",
-                "message": "Step Execution manifest ref is invalid.",
-            },
+        return None, _step_execution_compatibility_decision(
+            failure_code="invalid_step_execution_manifest_ref",
+            message="Step Execution manifest ref is invalid.",
         )
     try:
         _artifact, body = await artifact_service.read(
@@ -4578,7 +4575,7 @@ async def _read_step_execution_manifest(
             allow_restricted_raw=True,
         )
         payload = json.loads(body.decode("utf-8"))
-        return StepExecutionManifestModel.model_validate(payload)
+        return StepExecutionManifestModel.model_validate(payload), None
     except (PermissionError, TemporalArtifactAuthorizationError) as exc:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -4587,14 +4584,61 @@ async def _read_step_execution_manifest(
                 "message": "Not authorized to read Step Execution manifest evidence.",
             },
         ) from exc
-    except (json.JSONDecodeError, UnicodeDecodeError, ValidationError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={
-                "code": "invalid_step_execution_manifest",
-                "message": "Step Execution manifest artifact is invalid.",
-            },
-        ) from exc
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None, _step_execution_compatibility_decision(
+            failure_code="malformed_step_execution_manifest",
+            message="Step Execution manifest artifact is malformed.",
+        )
+    except ValidationError:
+        return None, _step_execution_compatibility_decision(
+            failure_code="invalid_step_execution_manifest",
+            message="Step Execution manifest artifact is invalid.",
+        )
+
+
+def _step_execution_compatibility_decision(
+    *,
+    failure_code: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "valid": False,
+        "decision": "invalid",
+        "failureCode": failure_code,
+        "message": _safe_display_text(message) or "Step Execution value is invalid.",
+    }
+
+
+def _degraded_step_execution_projection_payload(
+    *,
+    ledger: StepLedgerSnapshotModel,
+    row: Any,
+    logical_step_id: str,
+    manifest_artifact_ref: str,
+    compatibility_decision: Mapping[str, Any],
+    fallback_ordinal: int,
+) -> dict[str, Any]:
+    raw_ordinal = getattr(row, "execution_ordinal", None)
+    execution_ordinal = raw_ordinal if isinstance(raw_ordinal, int) and raw_ordinal > 0 else fallback_ordinal
+    return {
+        "manifestArtifactRef": manifest_artifact_ref,
+        "stepExecutionId": (
+            f"{ledger.workflow_id}:{ledger.run_id}:{logical_step_id}:"
+            f"execution:{execution_ordinal}:invalid"
+        ),
+        "workflowId": ledger.workflow_id,
+        "runId": ledger.run_id,
+        "logicalStepId": logical_step_id,
+        "executionOrdinal": execution_ordinal,
+        "reason": None,
+        "status": None,
+        "summary": "Step Execution manifest is unavailable as a valid current projection.",
+        "manifestRefs": {"manifestArtifactRef": manifest_artifact_ref},
+        "outputRefs": {},
+        "stepEvidence": None,
+        "recoveryEligibility": None,
+        "compatibilityDecision": dict(compatibility_decision),
+    }
 
 
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
@@ -8859,7 +8903,7 @@ async def describe_execution_step_executions(
     artifact_service = get_temporal_artifact_service(session)
     principal = str(getattr(user, "id", "") or "system")
     manifest_refs = _step_execution_manifest_refs(row)
-    manifests = await asyncio.gather(
+    manifest_results = await asyncio.gather(
         *(
             _read_step_execution_manifest(
                 artifact_service=artifact_service,
@@ -8869,15 +8913,31 @@ async def describe_execution_step_executions(
             for manifest_ref in manifest_refs
         )
     )
-    step_executions = [
-        StepExecutionProjectionModel.model_validate(
+    step_executions: list[StepExecutionProjectionModel] = []
+    for index, ((manifest, decision), manifest_ref) in enumerate(
+        zip(manifest_results, manifest_refs, strict=True),
+        start=1,
+    ):
+        payload = (
             _step_execution_projection_payload(
                 manifest,
                 manifest_artifact_ref=manifest_ref,
             )
+            if manifest is not None
+            else _degraded_step_execution_projection_payload(
+                ledger=ledger,
+                row=row,
+                logical_step_id=logical_step_id,
+                manifest_artifact_ref=manifest_ref,
+                compatibility_decision=decision
+                or _step_execution_compatibility_decision(
+                    failure_code="invalid_step_execution_manifest",
+                    message="Step Execution manifest artifact is invalid.",
+                ),
+                fallback_ordinal=index,
+            )
         )
-        for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True)
-    ]
+        step_executions.append(StepExecutionProjectionModel.model_validate(payload))
     step_executions.sort(key=lambda item: item.execution_ordinal)
     return StepExecutionListModel(
         workflowId=ledger.workflow_id,
@@ -8943,7 +9003,7 @@ async def describe_execution_step_execution(
     artifact_service = get_temporal_artifact_service(session)
     principal = str(getattr(user, "id", "") or "system")
     manifest_refs = _step_execution_manifest_refs(row)
-    manifests = await asyncio.gather(
+    manifest_results = await asyncio.gather(
         *(
             _read_step_execution_manifest(
                 artifact_service=artifact_service,
@@ -8953,15 +9013,41 @@ async def describe_execution_step_execution(
             for manifest_ref in manifest_refs
         )
     )
-    for manifest, manifest_ref in zip(manifests, manifest_refs, strict=True):
-        if manifest.execution_ordinal != execution_ordinal:
+    for index, ((manifest, decision), manifest_ref) in enumerate(
+        zip(manifest_results, manifest_refs, strict=True),
+        start=1,
+    ):
+        candidate_ordinal = (
+            manifest.execution_ordinal
+            if manifest is not None
+            else (
+                row.execution_ordinal
+                if isinstance(row.execution_ordinal, int) and row.execution_ordinal > 0
+                else index
+            )
+        )
+        if candidate_ordinal != execution_ordinal:
             continue
-        return StepExecutionDetailModel.model_validate(
+        payload = (
             _step_execution_detail_payload(
                 manifest,
                 manifest_artifact_ref=manifest_ref,
             )
+            if manifest is not None
+            else _degraded_step_execution_projection_payload(
+                ledger=ledger,
+                row=row,
+                logical_step_id=logical_step_id,
+                manifest_artifact_ref=manifest_ref,
+                compatibility_decision=decision
+                or _step_execution_compatibility_decision(
+                    failure_code="invalid_step_execution_manifest",
+                    message="Step Execution manifest artifact is invalid.",
+                ),
+                fallback_ordinal=index,
+            )
         )
+        return StepExecutionDetailModel.model_validate(payload)
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail={
