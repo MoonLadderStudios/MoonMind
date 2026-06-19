@@ -3170,6 +3170,7 @@ describe('Workflow Detail Entrypoint', () => {
       profileId: 'profile:gemini-default',
       providerId: 'google',
       providerLabel: 'Google',
+      priority: 4,
       title: 'Example task',
       summary: 'Did work',
       taskInstructions: 'Inspect the repository.\n\nThen run the focused UI tests.',
@@ -3233,6 +3234,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByText('FULL SKILL BODY SHOULD NOT LEAK')).toBeNull();
       expect(screen.getByText('Google')).toBeTruthy();
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
+      expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
     });
 

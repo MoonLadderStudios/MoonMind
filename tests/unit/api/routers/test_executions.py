@@ -6866,8 +6866,8 @@ def test_serialize_execution_falls_back_to_updated_at_without_scheduled_time() -
     assert payload.created_at == updated_at
     assert payload.scheduled_for is None
 
-def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> None:
-    """Ensure runtime/model/effort stored in record.parameters are surfaced."""
+def test_serialize_execution_surfaces_runtime_model_effort_priority_from_parameters() -> None:
+    """Ensure runtime/model/effort/priority stored in record.parameters are surfaced."""
     record = SimpleNamespace(
         close_status=None,
         search_attributes={"mm_entry": "run"},
@@ -6889,6 +6889,7 @@ def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> 
             "targetRuntime": "codex",
             "model": "gpt-5-codex",
             "effort": "high",
+            "priority": 4,
         },
         paused=False,
         waiting_reason=None,
@@ -6901,12 +6902,27 @@ def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> 
     assert payload.target_runtime == "codex"
     assert payload.model == "gpt-5-codex"
     assert payload.effort == "high"
+    assert payload.priority == 4
 
     # Verify JSON serialization uses camelCase aliases (what the frontend sees)
     dumped = payload.model_dump(by_alias=True)
     assert dumped["targetRuntime"] == "codex"
     assert dumped["model"] == "gpt-5-codex"
     assert dumped["effort"] == "high"
+    assert dumped["priority"] == 4
+
+def test_serialize_execution_handles_missing_and_malformed_priority_sources() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = None
+
+    payload = _serialize_execution(record)
+
+    assert payload.priority is None
+
+    record.parameters = {"task": "not-a-task-payload"}
+    payload = _serialize_execution(record)
+
+    assert payload.priority is None
 
 def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key() -> None:
     """Some payloads store mode under parameters.runtime.mode without top-level targetRuntime."""
