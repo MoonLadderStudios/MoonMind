@@ -186,10 +186,47 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
         exit 127
     fi
 
+    UI_REPO_ROOT="$REPO_ROOT"
+    UI_VITEST_BIN="$VITEST_BIN"
+    UI_TEST_CONFIG="frontend/vite.config.ts"
+    UI_CLEANUP_DIR=""
+    if [[ "$REPO_ROOT" == *:* ]]; then
+        UI_CLEANUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-ui-tests.XXXXXX")"
+        cp "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$UI_CLEANUP_DIR/"
+        if [[ -f "$REPO_ROOT/tailwind.config.cjs" ]]; then
+            cp "$REPO_ROOT/tailwind.config.cjs" "$UI_CLEANUP_DIR/"
+        fi
+        if [[ -d "$REPO_ROOT/api_service/templates" ]]; then
+            mkdir -p "$UI_CLEANUP_DIR/api_service"
+            cp -a "$REPO_ROOT/api_service/templates" "$UI_CLEANUP_DIR/api_service/templates"
+        fi
+        cp -a "$REPO_ROOT/frontend" "$UI_CLEANUP_DIR/frontend"
+        ln -s "$REPO_ROOT/node_modules" "$UI_CLEANUP_DIR/node_modules"
+        UI_REPO_ROOT="$UI_CLEANUP_DIR"
+        UI_VITEST_BIN="$UI_REPO_ROOT/node_modules/.bin/vitest"
+    fi
+    cleanup_ui_test_root() {
+        if [[ -n "$UI_CLEANUP_DIR" ]]; then
+            rm -rf "$UI_CLEANUP_DIR"
+        fi
+    }
+    trap cleanup_ui_test_root EXIT
+
+    NORMALIZED_UI_TEST_ARGS=()
+    if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
+        for arg in "${UI_TEST_ARGS[@]}"; do
+            if [[ -n "$UI_CLEANUP_DIR" && "$arg" == "$REPO_ROOT/"* ]]; then
+                NORMALIZED_UI_TEST_ARGS+=("$UI_REPO_ROOT/${arg#"$REPO_ROOT/"}")
+            else
+                NORMALIZED_UI_TEST_ARGS+=("$arg")
+            fi
+        done
+    fi
+
     # Allow targeted frontend test runs via --ui-args (e.g. --ui-args src/components/App.tsx).
     if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
-        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts "${UI_TEST_ARGS[@]}")
+        (cd "$UI_REPO_ROOT" && "$UI_VITEST_BIN" run --config "$UI_TEST_CONFIG" "${NORMALIZED_UI_TEST_ARGS[@]}")
     else
-        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts)
+        (cd "$UI_REPO_ROOT" && "$UI_VITEST_BIN" run --config "$UI_TEST_CONFIG")
     fi
 fi

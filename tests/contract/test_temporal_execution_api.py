@@ -1256,11 +1256,10 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                                 }
                             ],
                             "steps": [
-                                    {
-                                        "id": "step-review-screenshot",
-                                        "instructions": "Review the step screenshot.",
-                                        "dependsOn": ["MM-638"],
-                                        "inputAttachments": [
+                                {
+                                    "id": "step-review-screenshot",
+                                    "instructions": "Review the step screenshot.",
+                                    "inputAttachments": [
                                         {
                                             "artifactId": step_artifact,
                                             "filename": "same-name.png",
@@ -1402,7 +1401,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                 assert authored["publish"] == {"mode": "branch"}
                 assert authored["repository"] == "MoonLadderStudios/MoonMind"
                 assert authored["branch"] == "feature/mm-639"
-                assert authored["steps"][0]["dependencies"] == ["MM-638"]
+                assert "dependencies" not in authored["steps"][0]
                 assert authored["finalSubmittedOrder"] == [
                     {"stepId": "step-review-screenshot", "ordinal": 0}
                 ]
