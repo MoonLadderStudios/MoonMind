@@ -4646,6 +4646,8 @@ export interface components {
             providerLabel?: string | null;
             /** Effort */
             effort?: string | null;
+            /** Priority */
+            priority?: number | null;
             /** Startingbranch */
             startingBranch?: string | null;
             /** Targetbranch */

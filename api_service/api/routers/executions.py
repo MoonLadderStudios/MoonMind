@@ -1866,6 +1866,11 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_runtime_payload.get("executionProfileRef"))
             or _coerce_temporal_scalar(task_runtime_payload.get("execution_profile_ref"))
         ) or None
+    priority = _int_or_none(
+        params.get("priority")
+        if params.get("priority") is not None
+        else task_payload.get("priority")
+    )
 
     dependencies_block = (
         memo.get("dependencies") if isinstance(memo.get("dependencies"), dict) else {}
@@ -2096,6 +2101,7 @@ def _serialize_execution(
         model_source=param_model_source,
         profile_id=param_profile_id,
         effort=param_effort,
+        priority=priority,
         starting_branch=starting_branch,
         target_branch=target_branch,
         repository=repository,
