@@ -25,6 +25,7 @@ def _run_script(*paths: str, stdin: str | None = None) -> subprocess.CompletedPr
     [
         "api_service/api/routers/agent_runs.py",
         "api_service/services/temporal_execution_service.py",
+        "moonmind/core/artifacts.py",
         "moonmind/schemas/agent_runtime_models.py",
         "moonmind/schemas/agent_skill_models.py",
         "moonmind/schemas/chat_models.py",
@@ -68,8 +69,10 @@ def test_managed_session_models_is_openapi_affecting_exported_api_schema() -> No
     init_file = REPO_ROOT / "moonmind" / "schemas" / "__init__.py"
     router_file = REPO_ROOT / "api_service" / "api" / "routers" / "agent_runs.py"
 
-    assert "from .managed_session_models import (" in init_file.read_text()
-    assert "from moonmind.schemas.managed_session_models import" in router_file.read_text()
+    assert "from .managed_session_models import (" in init_file.read_text(encoding="utf-8")
+    assert "from moonmind.schemas.managed_session_models import" in router_file.read_text(
+        encoding="utf-8"
+    )
 
     result = _run_script("moonmind/schemas/managed_session_models.py")
 
@@ -81,7 +84,6 @@ def test_managed_session_models_is_openapi_affecting_exported_api_schema() -> No
     [
         "moonmind/workflows/temporal/runtime/codex_session_runtime.py",
         "moonmind/workflows/temporal/activity_runtime.py",
-        "moonmind/core/artifacts.py",
         "moonmind/manifest/interpolation.py",
         "moonmind/schemas/_validation.py",
         "moonmind/schemas/jules_models.py",
