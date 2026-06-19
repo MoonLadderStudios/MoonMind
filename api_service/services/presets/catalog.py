@@ -17,6 +17,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import yaml
+from jinja2 import StrictUndefined, UndefinedError
 from jinja2.sandbox import SandboxedEnvironment
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -612,7 +613,12 @@ def _render_value(
     variables: dict[str, Any],
 ) -> Any:
     if isinstance(value, str):
-        rendered = env.from_string(value).render(**variables)
+        try:
+            rendered = env.from_string(value).render(**variables)
+        except UndefinedError as exc:
+            raise PresetValidationError(
+                f"Template references an unknown variable: {exc}."
+            ) from exc
         stripped = rendered.strip()
         if _NATIVE_BOOLEAN_TEMPLATE_PATTERN.match(value.strip()):
             lowered = stripped.lower()
@@ -1012,7 +1018,10 @@ class PresetCatalogService:
 
     def __init__(self, session: AsyncSession):
         self._session = session
-        self._template_env = SandboxedEnvironment(autoescape=False)
+        self._template_env = SandboxedEnvironment(
+            autoescape=False,
+            undefined=StrictUndefined,
+        )
 
     async def _get_template_for_scope(
         self,
@@ -1766,11 +1775,6 @@ class PresetCatalogService:
                 raise PresetValidationError(
                     f"Expanded step instructions may not be empty at "
                     f"{_format_include_path(path)}."
-                )
-            if _UNRESOLVED_PLACEHOLDER_PATTERN.search(instructions):
-                raise PresetValidationError(
-                    f"Expanded instructions still contain unresolved template "
-                    f"placeholders at {_format_include_path(path)}."
                 )
             step_type = _normalize_step_type(rendered, index=source_index)
             next_index = len(resolved_steps) + 1

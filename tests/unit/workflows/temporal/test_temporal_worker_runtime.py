@@ -422,6 +422,49 @@ async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_p
     assert downstream_task["runtime"] == {"mode": "jules"}
 
 
+@pytest.mark.asyncio
+async def test_child_jira_breakdown_implement_expands_workflow_runtime_context(
+    tmp_path,
+):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_preset_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "workflow",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "publishMode": "none",
+                    "workflow": {
+                        "title": "Break down and implement docs/Design.md",
+                        "instructions": "Create Jira stories and implement tasks.",
+                        "runtime": {"mode": "codex_cli"},
+                        "inputs": {
+                            "feature_request": "docs/Designs/RuntimeTypes.md",
+                            "jira_project_key": "MM",
+                            "jira_issue_type": "Story",
+                            "jira_board_id": "",
+                            "jira_dependency_mode": "linear_blocker_chain",
+                            "publish_mode": "pr_with_merge_automation",
+                            "source_issue_key": "MM-404",
+                        },
+                        "taskTemplate": {
+                            "slug": "jira-breakdown-implement",
+                            "version": "1.0.0",
+                        },
+                    },
+                },
+            )
+
+    task = expanded_parameters["workflow"]
+    downstream_task = task["steps"][3]["jiraOrchestration"]["task"]
+    assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
+    assert downstream_task["runtime"] == {"mode": "codex_cli"}
+    assert downstream_task["publish"] == {
+        "mode": "pr",
+        "mergeAutomation": {"enabled": True},
+    }
+
+
 def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

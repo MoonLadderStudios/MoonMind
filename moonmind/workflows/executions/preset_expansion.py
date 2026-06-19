@@ -132,7 +132,8 @@ async def expand_preset_for_child_run(
     if isinstance(repository, str) and repository.strip():
         template_context["repository"] = repository.strip()
         template_context["repo"] = repository.strip()
-    target_runtime = parameters.get("targetRuntime")
+    runtime_payload = _coerce_mapping(task_payload.get("runtime"))
+    target_runtime = parameters.get("targetRuntime") or runtime_payload.get("mode")
     if isinstance(target_runtime, str) and target_runtime.strip():
         template_context["targetRuntime"] = target_runtime.strip()
     catalog = PresetCatalogService(session)
