@@ -1866,10 +1866,12 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_runtime_payload.get("executionProfileRef"))
             or _coerce_temporal_scalar(task_runtime_payload.get("execution_profile_ref"))
         ) or None
+    params_for_priority = params if isinstance(params, Mapping) else {}
+    task_payload_for_priority = task_payload if isinstance(task_payload, Mapping) else {}
     priority = _int_or_none(
-        params.get("priority")
-        if params.get("priority") is not None
-        else task_payload.get("priority")
+        params_for_priority.get("priority")
+        if params_for_priority.get("priority") is not None
+        else task_payload_for_priority.get("priority")
     )
 
     dependencies_block = (

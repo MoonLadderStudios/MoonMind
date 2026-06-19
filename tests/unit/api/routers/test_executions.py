@@ -6911,6 +6911,19 @@ def test_serialize_execution_surfaces_runtime_model_effort_priority_from_paramet
     assert dumped["effort"] == "high"
     assert dumped["priority"] == 4
 
+def test_serialize_execution_handles_missing_and_malformed_priority_sources() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = None
+
+    payload = _serialize_execution(record)
+
+    assert payload.priority is None
+
+    record.parameters = {"task": "not-a-task-payload"}
+    payload = _serialize_execution(record)
+
+    assert payload.priority is None
+
 def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key() -> None:
     """Some payloads store mode under parameters.runtime.mode without top-level targetRuntime."""
     record = SimpleNamespace(
