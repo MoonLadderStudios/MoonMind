@@ -498,6 +498,41 @@ def test_execution_context_records_required_attempt_contract_fields() -> None:
     ]
 
 
+def test_with_retrieval_manifest_ref_recomputes_digest() -> None:
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=1,
+        retrieval={
+            "status": "captured",
+            "query": "execution context",
+            "returnedRefs": ["artifact://doc-1"],
+        },
+    )
+
+    assert bundle.retrieval_manifest_ref is not None
+    swapped = bundle.with_retrieval_manifest_ref("art_retrieval_persisted")
+
+    assert swapped.retrieval_manifest_ref == "art_retrieval_persisted"
+    # retrievalManifestRef participates in the digest, so the digest-addressed
+    # refs must change and stay self-consistent rather than going stale.
+    assert swapped.context_bundle_digest != bundle.context_bundle_digest
+    assert swapped.context_bundle_ref == (
+        f"execution-context-bundle://{swapped.context_bundle_digest}"
+    )
+    assert swapped.to_manifest_projection()["context"]["contextBundleDigest"] == (
+        swapped.context_bundle_digest
+    )
+    # Every other field is preserved unchanged.
+    assert swapped.logical_step_id == bundle.logical_step_id
+    assert swapped.runtime_selection == bundle.runtime_selection
+    # Re-applying the same ref is idempotent.
+    assert swapped.with_retrieval_manifest_ref(
+        "art_retrieval_persisted"
+    ).context_bundle_digest == swapped.context_bundle_digest
+
+
 def test_retrieval_manifest_records_explicit_statuses() -> None:
     captured = build_retrieval_manifest(
         {

@@ -13,7 +13,10 @@ from moonmind.memory.procedural import (
     FixPattern,
     extract_error_signature,
 )
-from moonmind.workflows.executions.prepared_context import build_memory_manifest
+from moonmind.workflows.executions.prepared_context import (
+    ExecutionContextBundle,
+    build_memory_manifest,
+)
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -249,6 +252,9 @@ def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() ->
             workflow_parameters={"task": task_payload},
         )
 
+    original_context = request.parameters["metadata"]["moonmind"]["executionContext"]
+    original_digest = original_context["contextBundleDigest"]
+
     cached_artifact = wf._step_execution_retrieval_manifest_artifacts[
         ("collect-evidence", 1)
     ]
@@ -260,9 +266,8 @@ def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() ->
     )
 
     moonmind_metadata = refreshed.parameters["metadata"]["moonmind"]
-    assert moonmind_metadata["executionContext"]["retrievalManifestRef"] == (
-        "art_retrieval_1"
-    )
+    refreshed_context = moonmind_metadata["executionContext"]
+    assert refreshed_context["retrievalManifestRef"] == "art_retrieval_1"
     assert moonmind_metadata["stepExecutionManifestProjection"]["context"][
         "retrievalManifestRef"
     ] == "art_retrieval_1"
@@ -271,6 +276,27 @@ def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() ->
     )
     assert refreshed.step_execution is not None
     assert refreshed.step_execution.retrieval_manifest_ref == "art_retrieval_1"
+
+    # The context-bundle digest must be recomputed after swapping the retrieval
+    # ref, not left stale: it changes and stays self-consistent between the
+    # execution context and its manifest projection.
+    refreshed_digest = refreshed_context["contextBundleDigest"]
+    assert refreshed_digest != original_digest
+    assert refreshed_context["contextBundleRef"] == (
+        f"execution-context-bundle://{refreshed_digest}"
+    )
+    assert moonmind_metadata["stepExecutionManifestProjection"]["context"][
+        "contextBundleDigest"
+    ] == refreshed_digest
+    assert moonmind_metadata["stepExecutionManifestProjection"]["context"][
+        "contextBundleRef"
+    ] == refreshed_context["contextBundleRef"]
+    # Re-deriving the digest from the swapped content reproduces it, proving the
+    # digest addresses the current bundle rather than the pre-swap content.
+    rebuilt = ExecutionContextBundle.model_validate(
+        refreshed_context
+    ).with_retrieval_manifest_ref("art_retrieval_1")
+    assert rebuilt.context_bundle_digest == refreshed_digest
 
 
 def test_run_request_projects_matched_fix_patterns_into_attempt_memory() -> None:

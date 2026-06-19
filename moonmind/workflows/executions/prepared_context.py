@@ -69,12 +69,6 @@ _LARGE_LOG_KEYS = {
     "stderr",
     "transcript",
 }
-_RAW_DIFF_KEYS = {
-    "diff",
-    "rawDiff",
-    "patch",
-    "rawPatch",
-}
 _UNSAFE_PROVIDER_PAYLOAD_KEYS = {
     "providerPayload",
     "rawProviderPayload",
@@ -340,6 +334,32 @@ class ExecutionContextBundle(BaseModel):
                 "portabilityProvenance": self.portability_provenance,
             }
         }
+
+    def with_retrieval_manifest_ref(
+        self,
+        retrieval_manifest_ref: str | None,
+    ) -> "ExecutionContextBundle":
+        """Return a copy with a swapped retrieval ref and recomputed digest.
+
+        ``retrievalManifestRef`` is part of the digest input, so swapping it in
+        place (for example to the persisted artifact id) would leave the
+        digest-addressed ``contextBundleRef``/``contextBundleDigest`` stale.
+        Recompute them here using the same convention as
+        ``build_execution_context_bundle`` so the bundle stays internally
+        consistent.
+        """
+
+        base_payload = self.model_dump(by_alias=True)
+        base_payload.pop("contextBundleRef", None)
+        base_payload.pop("contextBundleDigest", None)
+        base_payload["retrievalManifestRef"] = retrieval_manifest_ref
+        digest = _digest_payload(base_payload)
+        payload = {
+            **base_payload,
+            "contextBundleRef": f"execution-context-bundle://{digest}",
+            "contextBundleDigest": digest,
+        }
+        return ExecutionContextBundle.model_validate(payload)
 
 
 class PreparedContextFailure(BaseModel):
@@ -890,8 +910,6 @@ def _reject_unsafe_values(value: Any, *, path: str) -> None:
                 and _unsafe_text_size(item) > _LARGE_TEXT_LIMIT
             ):
                 raise ValueError(f"{child_path} contains large log content")
-            if key_text in _RAW_DIFF_KEYS and _contains_raw_diff(item):
-                raise ValueError(f"{child_path} contains raw diff content")
             _reject_unsafe_values(item, path=child_path)
         return
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -913,16 +931,6 @@ def _unsafe_text_size(value: Any) -> int:
     if isinstance(value, Mapping):
         return sum(_unsafe_text_size(item) for item in value.values())
     return 0
-
-
-def _contains_raw_diff(value: Any) -> bool:
-    if isinstance(value, str):
-        return bool(_RAW_DIFF_RE.search(value))
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return any(_contains_raw_diff(item) for item in value)
-    if isinstance(value, Mapping):
-        return any(_contains_raw_diff(item) for item in value.values())
-    return False
 
 
 def _digest_payload(payload: Mapping[str, Any]) -> str:

@@ -207,7 +207,13 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
             mkdir -p "$UI_MIRROR_ROOT/api_service"
             cp -a "$REPO_ROOT/api_service/templates" "$UI_MIRROR_ROOT/api_service/templates"
         fi
-        cp -a --reflink=auto "$REPO_ROOT/node_modules" "$UI_MIRROR_ROOT/node_modules"
+        # --reflink is a GNU coreutils extension; fall back to a plain copy on
+        # platforms whose cp (e.g. BSD/macOS) does not support it.
+        if cp --help 2>&1 | grep -q "reflink"; then
+            cp -a --reflink=auto "$REPO_ROOT/node_modules" "$UI_MIRROR_ROOT/node_modules"
+        else
+            cp -a "$REPO_ROOT/node_modules" "$UI_MIRROR_ROOT/node_modules"
+        fi
         UI_REPO_ROOT="$UI_MIRROR_ROOT"
         UI_VITEST_BIN="$UI_MIRROR_ROOT/node_modules/.bin/vitest"
         if [[ ${#UI_TEST_ARGS_EFFECTIVE[@]} -gt 0 ]]; then

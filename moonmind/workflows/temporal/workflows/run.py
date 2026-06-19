@@ -41,6 +41,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.executions.routing import _coerce_bool
     from moonmind.workflows.executions.prepared_context import (
+        ExecutionContextBundle,
         build_durable_retrieval_manifest_artifact,
         build_execution_context_bundle,
         build_prepared_input_manifest,
@@ -2781,6 +2782,11 @@ class MoonMindRunWorkflow:
         reason: str,
         execution: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        cached_context = self._step_execution_context_projections.get(
+            (logical_step_id, attempt)
+        )
+        if isinstance(cached_context, Mapping):
+            return dict(cached_context)
         runtime_selection: dict[str, Any] = {}
         if isinstance(execution, Mapping):
             for source_key, target_key in (
@@ -2815,11 +2821,6 @@ class MoonMindRunWorkflow:
         ).to_manifest_projection()
         context = projection.get("context")
         if isinstance(context, Mapping):
-            cached_context = self._step_execution_context_projections.get(
-                (logical_step_id, attempt)
-            )
-            if isinstance(cached_context, Mapping):
-                return dict(cached_context)
             return dict(context)
         return {}
 
@@ -10409,13 +10410,21 @@ class MoonMindRunWorkflow:
         metadata = dict(request.parameters.get("metadata") or {})
         moonmind_metadata = dict(metadata.get("moonmind") or {})
         execution_context = dict(moonmind_metadata.get("executionContext") or {})
-        execution_context["retrievalManifestRef"] = persisted_ref
-        moonmind_metadata["executionContext"] = execution_context
-        projection = dict(moonmind_metadata.get("stepExecutionManifestProjection") or {})
-        projection_context = dict(projection.get("context") or {})
-        projection_context["retrievalManifestRef"] = persisted_ref
-        projection["context"] = projection_context
-        moonmind_metadata["stepExecutionManifestProjection"] = projection
+        if execution_context:
+            # ``retrievalManifestRef`` is part of the context-bundle digest, so
+            # rebuild through the model to recompute ``contextBundleRef`` /
+            # ``contextBundleDigest`` instead of swapping the ref in place and
+            # leaving a stale, internally inconsistent digest.
+            rebuilt_context = ExecutionContextBundle.model_validate(
+                execution_context
+            ).with_retrieval_manifest_ref(persisted_ref)
+            moonmind_metadata["executionContext"] = rebuilt_context.model_dump(
+                by_alias=True,
+                exclude_none=True,
+            )
+            moonmind_metadata["stepExecutionManifestProjection"] = (
+                rebuilt_context.to_manifest_projection()
+            )
         retrieval_manifest_artifact = dict(
             moonmind_metadata.get("retrievalManifestArtifact") or {}
         )
