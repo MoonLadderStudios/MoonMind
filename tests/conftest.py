@@ -29,8 +29,23 @@ _COMPONENT_TEST_PATH_PREFIXES = (
     Path("tests/component/api"),
 )
 
-_TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES = (
-    Path("tests/unit/workflows/temporal"),
+_TEMPORAL_BOUNDARY_TEST_PATHS = {
+    Path("tests/unit/workflows/temporal/test_agent_runtime_activities.py"),
+    Path("tests/unit/workflows/temporal/test_agent_session_replayer.py"),
+    Path("tests/unit/workflows/temporal/test_openclaw_activities.py"),
+    Path("tests/unit/workflows/temporal/test_run_replayer.py"),
+    Path("tests/unit/workflows/temporal/test_run_ungated_continuation_disposition.py"),
+    Path("tests/unit/workflows/temporal/test_typed_activity_boundaries.py"),
+    Path("tests/unit/workflows/temporal/workflows/test_run_dependency_signals.py"),
+    Path(
+        "tests/unit/workflows/temporal/workflows/"
+        "test_run_dependency_wait_through_rerun.py"
+    ),
+    Path("tests/unit/workflows/temporal/workflows/test_run_scheduling.py"),
+    Path("tests/unit/workflows/temporal/workflows/test_run_signals_updates.py"),
+}
+
+_TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES: tuple[Path, ...] = (
 )
 
 
@@ -42,7 +57,10 @@ def _relative_test_path(path: Path) -> Path:
 
 
 def _path_is_relative_to(path: Path, prefix: Path) -> bool:
-    return path == prefix or prefix in path.parents
+    try:
+        return path.is_relative_to(prefix)
+    except ValueError:
+        return False
 
 
 def _is_component_test_path(path: Path) -> bool:
@@ -53,7 +71,7 @@ def _is_component_test_path(path: Path) -> bool:
 
 
 def _is_temporal_boundary_test_path(path: Path) -> bool:
-    return any(
+    return path in _TEMPORAL_BOUNDARY_TEST_PATHS or any(
         _path_is_relative_to(path, prefix)
         for prefix in _TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES
     )
