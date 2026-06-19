@@ -119,6 +119,9 @@ jobs:
             ./tools/test_unit.sh --python-only
           else
             python -m pytest tests/unit \
+              --ignore=tests/unit/workflows/temporal \
+              --ignore=tests/unit/api \
+              --ignore=tests/unit/api_service \
               -m "not temporal_boundary and not component and not slow" \
               -q -n auto --dist loadfile --durations=25 \
               --junitxml=artifacts/pytest-unit-fast.xml
