@@ -14,9 +14,18 @@ def test_executable_tool_registry_hides_pentest_when_disabled() -> None:
     assert registry.has_tool(PENTEST_TOOL_NAME) is False
 
 
-def test_executable_tool_registry_hides_pentest_by_default() -> None:
+def test_executable_tool_registry_exposes_pentest_by_default(monkeypatch) -> None:
+    monkeypatch.setattr(settings.pentest, "enabled", True)
     registry = ExecutableToolDiscoveryRegistry()
 
+    assert registry.has_tool(PENTEST_TOOL_NAME) is True
+
+
+def test_executable_tool_registry_honors_disable_override(monkeypatch) -> None:
+    monkeypatch.setattr(settings.pentest, "enabled", False)
+    registry = ExecutableToolDiscoveryRegistry()
+
+    assert registry.list_tools() == []
     assert registry.has_tool(PENTEST_TOOL_NAME) is False
 
 

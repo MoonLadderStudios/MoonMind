@@ -1478,7 +1478,13 @@ async def test_pentest_heartbeat_helper_emits_compact_redacted_payload(
     assert "secret-value" not in str(payload)
     assert "raw stdout body" not in str(payload)
 
-async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_default():
+async def test_security_pentest_execute_fails_closed_before_runner_when_disabled_by_operator_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Discovery/execution defaults to enabled (MM-845); the operator disable
+    # override (MOONMIND_PENTEST_ENABLED=false) must still fail closed before
+    # the runner when the policy flag is omitted and falls back to settings.
+    monkeypatch.setattr(settings.pentest, "enabled", False)
     launcher = _FakePentestLauncher()
     activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
 
@@ -1492,6 +1498,25 @@ async def test_security_pentest_execute_fails_closed_before_runner_when_disabled
     assert result["failure_classification"]["failure_kind"] == "policy_denied"
     assert result["failure_classification"]["interaction_state"] == "pre_interaction"
     assert result["terminal_cleanup"]["terminal_reason"] == "failure"
+    assert launcher.requests == []
+
+
+async def test_security_pentest_execute_honors_explicit_disabled_payload_flag(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # In-flight payloads that recorded an explicit pentest_enabled=False must
+    # keep failing closed even though discovery now defaults to enabled.
+    monkeypatch.setattr(settings.pentest, "enabled", True)
+    launcher = _FakePentestLauncher()
+    activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
+
+    payload = _pentest_activity_payload(pentest_enabled=False)["request"]
+
+    result = await activities.security_pentest_execute({"request": payload})
+
+    assert result["status"] == "policy_denied"
+    assert result["failure_classification"]["failure_kind"] == "policy_denied"
+    assert result["failure_classification"]["interaction_state"] == "pre_interaction"
     assert launcher.requests == []
 
 async def test_security_pentest_execute_malformed_attempt_returns_validation_failure():
