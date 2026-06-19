@@ -64,20 +64,17 @@ def test_canonical_docs_are_declarative_not_migration_tracking_surfaces() -> Non
 
 
 def test_manifest_consolidation_claims_follow_current_code_evidence() -> None:
-    temp_text = _read(TEMP_PLAN)
     canonical_text = "\n".join(_read(path) for path in (STEP_DOC, LEDGER_DOC, ROADMAP_DOC))
 
+    assert not TEMP_PLAN.exists()
     if _manifest_builder_is_live():
-        assert "Legacy duplicate start manifest path | Still present" in temp_text
-        assert "WP1" in temp_text
         assert not re.search(
             r"manifest (?:writer |)consolidation(?: is| remains)? unfinished",
             canonical_text,
             flags=re.IGNORECASE,
         )
     else:
-        assert "build_step_execution_manifest_payload" not in temp_text
-        assert "Consolidate manifest writers (completed)" in temp_text
+        assert "Manifest writer consolidation is completed" in canonical_text
 
 
 def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
@@ -93,21 +90,16 @@ def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
     assert "Gated on:** 12.1" in text
 
 
-def test_temp_plan_cleanup_guard_retains_active_plan_when_final_dod_is_open() -> None:
-    assert TEMP_PLAN.exists()
-    text = _read(TEMP_PLAN)
+def test_temp_plan_cleanup_guard_removes_plan_after_final_dod_closes() -> None:
+    assert not TEMP_PLAN.exists()
 
-    assert "Status: Execution plan (disposable; not canonical)" in text
-    assert "Final definition of done" in text
-    if _manifest_builder_is_live():
-        assert "deleted in the closing PR" in text
-        assert "build_step_execution_manifest_payload" in text
-    else:
-        assert "build_step_execution_manifest_payload" not in text
+    canonical_text = "\n".join(_read(path) for path in CANONICAL_DOCS)
+    assert "Status: Execution plan (disposable; not canonical)" not in canonical_text
+    assert "Final definition of done" not in canonical_text
 
 
 def test_docs_do_not_inline_secrets_or_raw_evidence() -> None:
-    checked_paths = [*CANONICAL_DOCS, ROADMAP_DOC, TEMP_PLAN]
+    checked_paths = [*CANONICAL_DOCS, ROADMAP_DOC]
     for path in checked_paths:
         text = _read(path)
         for pattern in SECRET_PATTERNS:
@@ -116,9 +108,7 @@ def test_docs_do_not_inline_secrets_or_raw_evidence() -> None:
         assert "```diff" not in text, path
 
 
-def test_conditional_docs_are_left_untouched_without_behavioral_impact() -> None:
-    temp_text = _read(TEMP_PLAN)
-
+def test_conditional_docs_remain_present_after_temp_plan_cleanup() -> None:
+    assert not TEMP_PLAN.exists()
     for path in CONDITIONAL_DOCS:
         assert path.exists()
-        assert f"`{path.relative_to(REPO_ROOT).as_posix()}`: no Phase 12 update required" in temp_text
