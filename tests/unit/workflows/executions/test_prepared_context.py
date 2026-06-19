@@ -437,6 +437,158 @@ def test_execution_context_records_retrieval_and_memory_manifest_refs() -> None:
     assert bundle.memory_manifest_ref == memory.memory_manifest_ref
 
 
+def test_execution_context_records_required_attempt_contract_fields() -> None:
+    bundle = build_execution_context_bundle(
+        workflow_id="workflow-1",
+        run_id="run-1",
+        logical_step_id="collect-evidence",
+        execution_ordinal=2,
+        reason="quality_gate_failed",
+        task_input_snapshot_ref="artifact://task-input",
+        plan_ref="artifact://plan",
+        plan_digest="sha256:plan",
+        workspace_policy="apply_previous_execution_diff_to_clean_baseline",
+        workspace_baseline={"kind": "git_commit", "commit": "abc123"},
+        checkpoint_refs={
+            "before": "artifact://checkpoint-before",
+            "after": "artifact://checkpoint-after",
+        },
+        prior_evidence_refs=["artifact://attempt-1-manifest"],
+        quality_gate_profile="repo-default",
+        policy_refs={
+            "providerProfileRef": "provider-profile://default",
+            "skillSourcePolicyRef": "skill-policy://resolver",
+        },
+    )
+
+    dumped = bundle.model_dump(by_alias=True, exclude_none=True)
+
+    assert dumped["taskInputSnapshotRef"] == "artifact://task-input"
+    assert dumped["planRef"] == "artifact://plan"
+    assert dumped["planDigest"] == "sha256:plan"
+    assert dumped["workspacePolicy"] == (
+        "apply_previous_execution_diff_to_clean_baseline"
+    )
+    assert dumped["workspaceBaseline"] == {
+        "kind": "git_commit",
+        "commit": "abc123",
+    }
+    assert dumped["checkpointRefs"] == {
+        "before": "artifact://checkpoint-before",
+        "after": "artifact://checkpoint-after",
+    }
+    assert dumped["priorEvidenceRefs"] == ["artifact://attempt-1-manifest"]
+    assert dumped["qualityGateProfile"] == "repo-default"
+    assert dumped["policyRefs"]["providerProfileRef"] == (
+        "provider-profile://default"
+    )
+    assert bundle.context_bundle_digest.startswith("sha256:")
+    projection = bundle.to_manifest_projection()
+    assert projection["context"]["taskInputSnapshotRef"] == "artifact://task-input"
+    assert projection["context"]["checkpointRefs"] == {
+        "before": "artifact://checkpoint-before",
+        "after": "artifact://checkpoint-after",
+    }
+    assert projection["context"]["priorEvidenceRefs"] == [
+        "artifact://attempt-1-manifest"
+    ]
+
+
+def test_retrieval_manifest_records_explicit_statuses() -> None:
+    captured = build_retrieval_manifest(
+        {
+            "status": "captured",
+            "query": "execution context bundle",
+            "returnedRefs": ["artifact://doc-1"],
+            "excludedRefs": ["artifact://doc-secret"],
+        }
+    )
+    skipped = build_retrieval_manifest({"status": "skipped"})
+    unavailable = build_retrieval_manifest(
+        {"status": "unavailable", "selector": {"reason": "index_offline"}}
+    )
+
+    assert captured.status == "captured"
+    assert captured.excluded_refs == ["artifact://doc-secret"]
+    assert skipped.status == "skipped"
+    assert skipped.retrieval_manifest_ref.startswith(
+        "attempt-retrieval-manifest://sha256:"
+    )
+    assert unavailable.status == "unavailable"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "match"),
+    [
+        ("runtime_selection", {"token": "ghp_secret"}, "raw secret"),
+        ("workspace_baseline", {"log": "line\n" * 600}, "large log"),
+        (
+            "workspace_baseline",
+            {"diff": "diff --git a/a b/a\n@@ -1 +1 @@"},
+            "raw diff",
+        ),
+        (
+            "policy_refs",
+            {"providerPayload": {"messages": ["raw"]}},
+            "provider payload",
+        ),
+    ],
+)
+def test_execution_context_rejects_unsafe_payloads(
+    field: str,
+    value: object,
+    match: str,
+) -> None:
+    kwargs = {
+        "workflow_id": "workflow-1",
+        "run_id": "run-1",
+        "logical_step_id": "collect-evidence",
+        "execution_ordinal": 1,
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=match):
+        build_execution_context_bundle(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("retrieval", "match"),
+    [
+        ({"query": "ghp_secret"}, "raw secret"),
+        (
+            {
+                "status": "captured",
+                "query": "ok",
+                "filters": {"log": "line\n" * 600},
+            },
+            "large log",
+        ),
+        (
+            {
+                "status": "captured",
+                "query": "ok",
+                "filters": {"diff": "diff --git a/a b/a\n@@ -1 +1 @@"},
+            },
+            "raw diff",
+        ),
+        (
+            {
+                "status": "captured",
+                "query": "ok",
+                "selector": {"providerPayload": {"messages": ["raw"]}},
+            },
+            "provider payload",
+        ),
+    ],
+)
+def test_retrieval_manifest_rejects_unsafe_payloads(
+    retrieval: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        build_retrieval_manifest(retrieval)
+
+
 def test_execution_context_records_budgeted_memory_context_ref() -> None:
     bundle = build_execution_context_bundle(
         workflow_id="workflow-1",

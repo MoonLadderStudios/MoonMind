@@ -86,6 +86,12 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     assert attempt_context["logicalStepId"] == "collect-evidence"
     assert attempt_context["executionOrdinal"] == 1
     assert attempt_context["preparedInputRefs"] == prepared_context["inputRefs"]
+    assert attempt_context["workspacePolicy"] == "fresh_branch_from_source"
+    assert attempt_context["priorEvidenceRefs"] == []
+    assert attempt_context["qualityGateProfile"] == "repo-default"
+    assert attempt_context["policyRefs"]["skillSourcePolicy"]["repoSkills"] == (
+        "resolver_policy_enforced"
+    )
     assert attempt_context["contextBundleDigest"].startswith("sha256:")
     assert attempt_context["contextBundleRef"] == (
         f"execution-context-bundle://{attempt_context['contextBundleDigest']}"
@@ -94,6 +100,11 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     assert projection["context"]["contextBundleDigest"] == (
         attempt_context["contextBundleDigest"]
     )
+    assert projection["context"]["workspacePolicy"] == (
+        attempt_context["workspacePolicy"]
+    )
+    assert projection["context"]["priorEvidenceRefs"] == []
+    assert projection["context"]["qualityGateProfile"] == "repo-default"
     assert "preparedInputRefs" not in projection["context"]
 
 
@@ -169,6 +180,9 @@ def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -
 
     assert attempt_context["retrievalManifestRef"].startswith(
         "attempt-retrieval-manifest://sha256:"
+    )
+    assert attempt_context["retrievalManifestRef"] == (
+        projection["context"]["retrievalManifestRef"]
     )
     assert attempt_context["memoryManifestRef"].startswith(
         "attempt-memory-manifest://sha256:"

@@ -2624,6 +2624,97 @@ class MoonMindRunWorkflow:
                 refs.append(candidate)
         return refs
 
+    def _step_execution_prior_evidence_refs(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+    ) -> list[str]:
+        if attempt <= 1:
+            return []
+        row = self._step_ledger_row_for(logical_step_id)
+        refs = row.get("refs") if isinstance(row, Mapping) else None
+        evidence_refs: list[str] = []
+        if isinstance(refs, Mapping):
+            for ref in refs.get("stepExecutionManifestRefs", ()):
+                if isinstance(ref, str) and ref.strip():
+                    evidence_refs.append(ref.strip())
+            latest_ref = refs.get("latestStepExecutionManifestRef")
+            if isinstance(latest_ref, str) and latest_ref.strip():
+                evidence_refs.append(latest_ref.strip())
+        checkpoint_ref = self._previous_step_checkpoint_refs.get(
+            logical_step_id
+        ) or self._step_checkpoint_refs.get(logical_step_id)
+        if checkpoint_ref:
+            evidence_refs.append(checkpoint_ref)
+        return list(dict.fromkeys(evidence_refs))
+
+    def _step_execution_checkpoint_refs(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, Any]:
+        refs: dict[str, Any] = {}
+        current_ref = self._step_checkpoint_refs.get(logical_step_id)
+        previous_ref = self._previous_step_checkpoint_refs.get(logical_step_id)
+        if current_ref:
+            refs["current"] = current_ref
+        if previous_ref:
+            refs["previous"] = previous_ref
+        for boundary, ref in self._step_checkpoint_refs_by_boundary.get(
+            logical_step_id,
+            {},
+        ).items():
+            if ref:
+                refs[str(boundary)] = ref
+        return refs
+
+    def _step_execution_context_kwargs(
+        self,
+        logical_step_id: str,
+        *,
+        attempt: int,
+        workspace: Mapping[str, Any] | None = None,
+        policy_refs: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        resolved_workspace = dict(workspace or {})
+        workspace_policy = (
+            resolved_workspace.get("workspacePolicy")
+            or resolved_workspace.get("policy")
+            or (
+                "continue_from_previous_execution"
+                if attempt > 1
+                else "fresh_branch_from_source"
+            )
+        )
+        workspace_baseline = {
+            key: value
+            for key, value in resolved_workspace.items()
+            if key
+            in {
+                "workspaceRef",
+                "checkpointRef",
+                "checkpointValid",
+                "stateCheckpointRef",
+                "checkpointBeforeRef",
+                "checkpointAfterRef",
+                "sourceExecutionOrdinal",
+            }
+            and value is not None
+        }
+        return {
+            "task_input_snapshot_ref": self._input_ref,
+            "plan_ref": self._plan_ref,
+            "workspace_policy": str(workspace_policy) if workspace_policy else None,
+            "workspace_baseline": workspace_baseline,
+            "checkpoint_refs": self._step_execution_checkpoint_refs(logical_step_id),
+            "prior_evidence_refs": self._step_execution_prior_evidence_refs(
+                logical_step_id,
+                attempt=attempt,
+            ),
+            "quality_gate_profile": "repo-default",
+            "policy_refs": dict(policy_refs or {}),
+        }
+
     def _step_execution_manifest_context_projection(
         self,
         logical_step_id: str,
@@ -2651,6 +2742,18 @@ class MoonMindRunWorkflow:
             execution_ordinal=attempt,
             reason=reason,
             runtime_selection=runtime_selection,
+            **self._step_execution_context_kwargs(
+                logical_step_id,
+                attempt=attempt,
+                workspace=self._step_execution_workspace(
+                    logical_step_id,
+                    attempt=attempt,
+                    source_execution_ordinal=self._step_execution_source_identity(
+                        logical_step_id,
+                        attempt=attempt,
+                    ),
+                ),
+            ),
         ).to_manifest_projection()
         context = projection.get("context")
         if isinstance(context, Mapping):
@@ -9949,6 +10052,29 @@ class MoonMindRunWorkflow:
             runtime_selection["executionProfileRef"] = execution_profile_ref
         if selected_skill:
             runtime_selection["skillId"] = selected_skill
+        skill_source_policy: dict[str, Any] = {
+            "repoSkills": "resolver_policy_enforced",
+            "localSkills": "resolver_policy_enforced",
+            "checkedInSkillMutation": "prohibited",
+        }
+        if resolved_skillset_ref:
+            skill_source_policy["resolvedSkillsetRef"] = resolved_skillset_ref
+        if selected_skill:
+            skill_source_policy["selectedSkill"] = selected_skill
+        execution_ordinal = step_execution or 1
+        context_workspace = self._step_execution_workspace(
+            node_id,
+            attempt=execution_ordinal,
+            source_execution_ordinal=self._step_execution_source_identity(
+                node_id,
+                attempt=execution_ordinal,
+            ),
+        )
+        context_policy_refs: dict[str, Any] = {
+            "skillSourcePolicy": skill_source_policy,
+        }
+        if execution_profile_ref:
+            context_policy_refs["executionProfileRef"] = execution_profile_ref
         retrieval_context = None
         memory_proposals = None
         memory_context = None
@@ -9998,8 +10124,14 @@ class MoonMindRunWorkflow:
             workflow_id=wf_info.workflow_id,
             run_id=wf_info.run_id,
             logical_step_id=node_id,
-            execution_ordinal=step_execution or 1,
+            execution_ordinal=execution_ordinal,
             prepared_context=prepared_context,
+            **self._step_execution_context_kwargs(
+                node_id,
+                attempt=execution_ordinal,
+                workspace=context_workspace,
+                policy_refs=context_policy_refs,
+            ),
             runtime_selection=runtime_selection,
             retrieval=retrieval_context,
             memory_proposals=memory_proposals,
@@ -10036,15 +10168,6 @@ class MoonMindRunWorkflow:
             if agent_kind == "managed"
             else "external_provider_continuation"
         )
-        skill_source_policy: dict[str, Any] = {
-            "repoSkills": "resolver_policy_enforced",
-            "localSkills": "resolver_policy_enforced",
-            "checkedInSkillMutation": "prohibited",
-        }
-        if resolved_skillset_ref:
-            skill_source_policy["resolvedSkillsetRef"] = resolved_skillset_ref
-        if selected_skill:
-            skill_source_policy["selectedSkill"] = selected_skill
         step_execution_payload: dict[str, Any] = {
             "schemaVersion": "v1",
             "workflowId": wf_info.workflow_id,
