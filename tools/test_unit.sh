@@ -186,10 +186,51 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
         exit 127
     fi
 
+    UI_REPO_ROOT="$REPO_ROOT"
+    UI_VITEST_BIN="$VITEST_BIN"
+    UI_TEST_ARGS_EFFECTIVE=("${UI_TEST_ARGS[@]}")
+    UI_MIRROR_ROOT=""
+    if [[ "$REPO_ROOT" == *:* ]]; then
+        UI_MIRROR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-ui-tests.XXXXXX")"
+        cleanup_ui_mirror() {
+            rm -rf "$UI_MIRROR_ROOT"
+        }
+        trap cleanup_ui_mirror EXIT
+        cp "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$UI_MIRROR_ROOT/"
+        for config_file in tailwind.config.cjs postcss.config.cjs; do
+            if [[ -f "$REPO_ROOT/$config_file" ]]; then
+                cp "$REPO_ROOT/$config_file" "$UI_MIRROR_ROOT/"
+            fi
+        done
+        cp -a "$REPO_ROOT/frontend" "$UI_MIRROR_ROOT/frontend"
+        if [[ -d "$REPO_ROOT/api_service/templates" ]]; then
+            mkdir -p "$UI_MIRROR_ROOT/api_service"
+            cp -a "$REPO_ROOT/api_service/templates" "$UI_MIRROR_ROOT/api_service/templates"
+        fi
+        # --reflink is a GNU coreutils extension; fall back to a plain copy on
+        # platforms whose cp (e.g. BSD/macOS) does not support it.
+        if cp --help 2>&1 | grep -q "reflink"; then
+            cp -a --reflink=auto "$REPO_ROOT/node_modules" "$UI_MIRROR_ROOT/node_modules"
+        else
+            cp -a "$REPO_ROOT/node_modules" "$UI_MIRROR_ROOT/node_modules"
+        fi
+        UI_REPO_ROOT="$UI_MIRROR_ROOT"
+        UI_VITEST_BIN="$UI_MIRROR_ROOT/node_modules/.bin/vitest"
+        if [[ ${#UI_TEST_ARGS_EFFECTIVE[@]} -gt 0 ]]; then
+            for i in "${!UI_TEST_ARGS_EFFECTIVE[@]}"; do
+                case "${UI_TEST_ARGS_EFFECTIVE[$i]}" in
+                    "$REPO_ROOT"/*)
+                        UI_TEST_ARGS_EFFECTIVE[$i]="$UI_MIRROR_ROOT/${UI_TEST_ARGS_EFFECTIVE[$i]#"$REPO_ROOT"/}"
+                        ;;
+                esac
+            done
+        fi
+    fi
+
     # Allow targeted frontend test runs via --ui-args (e.g. --ui-args src/components/App.tsx).
     if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
-        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts "${UI_TEST_ARGS[@]}")
+        (cd "$UI_REPO_ROOT" && "$UI_VITEST_BIN" run --config frontend/vite.config.ts "${UI_TEST_ARGS_EFFECTIVE[@]}")
     else
-        (cd "$REPO_ROOT" && "$VITEST_BIN" run --config frontend/vite.config.ts)
+        (cd "$UI_REPO_ROOT" && "$UI_VITEST_BIN" run --config frontend/vite.config.ts)
     fi
 fi

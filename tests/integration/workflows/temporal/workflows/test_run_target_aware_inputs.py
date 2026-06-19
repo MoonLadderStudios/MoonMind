@@ -132,6 +132,49 @@ def test_run_boundary_projects_memory_context_ref() -> None:
     )
 
 
+def test_run_boundary_projects_durable_retrieval_manifest_status_refs() -> None:
+    statuses = [
+        ("captured", {"query": "step context", "returnedRefs": ["artifact://doc"]}),
+        ("skipped", {}),
+        ("unavailable", {"selector": {"reason": "index_offline"}}),
+    ]
+
+    for status, extra in statuses:
+        wf = MoonMindRunWorkflow()
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=SimpleNamespace(
+                workflow_id=f"run-retrieval-{status}",
+                run_id="run-id-1",
+                namespace="default",
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={"runtime": {"mode": "codex_cli"}},
+                node_id="first-step",
+                tool_name="codex_cli",
+                workflow_parameters={
+                    "task": {
+                        "retrieval": {"status": status, **extra},
+                        "steps": [{"id": "first-step"}],
+                    }
+                },
+            )
+
+        moonmind_metadata = request.parameters["metadata"]["moonmind"]
+        attempt_context = moonmind_metadata["executionContext"]
+        projection = moonmind_metadata["stepExecutionManifestProjection"]
+        artifact = moonmind_metadata["retrievalManifestArtifact"]
+
+        assert artifact["payload"]["status"] == status
+        assert artifact["artifactRef"].startswith(
+            "artifact://retrieval-manifests/sha256:"
+        )
+        assert attempt_context["retrievalManifestRef"] == artifact["artifactRef"]
+        assert projection["context"]["retrievalManifestRef"] == artifact["artifactRef"]
+        assert "providerPayload" not in str(moonmind_metadata)
+
+
 def test_agent_run_child_input_scope_is_parent_selected() -> None:
     wf = MoonMindRunWorkflow()
     with patch(

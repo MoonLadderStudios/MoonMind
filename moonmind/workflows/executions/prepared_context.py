@@ -16,6 +16,7 @@ from moonmind.memory.context_pack import build_memory_context_pack
 from moonmind.memory.procedural import fix_patterns_to_memory_proposals
 
 TargetKind = Literal["objective", "step"]
+RetrievalStatus = Literal["captured", "skipped", "unavailable"]
 MemoryProposalState = Literal[
     "proposed",
     "accepted_for_run_context",
@@ -57,6 +58,28 @@ _SECRETISH_RE = re.compile(
     r"-----BEGIN [A-Z ]*PRIVATE KEY-----)",
     re.IGNORECASE,
 )
+_RAW_DIFF_RE = re.compile(r"(^diff --git |\n@@ [-+0-9, ]+@@)", re.MULTILINE)
+_LARGE_TEXT_LIMIT = 2_000
+_LARGE_LOG_KEYS = {
+    "log",
+    "logs",
+    "rawLog",
+    "rawLogs",
+    "stdout",
+    "stderr",
+    "transcript",
+}
+_UNSAFE_PROVIDER_PAYLOAD_KEYS = {
+    "providerPayload",
+    "rawProviderPayload",
+    "providerResponse",
+    "rawProviderResponse",
+    "providerRequest",
+    "rawProviderRequest",
+    "messages",
+    "toolCalls",
+    "tool_calls",
+}
 _SAFE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9._:-]+")
 
 
@@ -143,11 +166,13 @@ class RetrievalManifest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
+    status: RetrievalStatus = "captured"
     query: str | None = None
     selector: dict[str, Any] | None = None
     index_version: str | None = Field(default=None, alias="indexVersion")
     returned_refs: list[str] = Field(default_factory=list, alias="returnedRefs")
     filters: dict[str, Any] = Field(default_factory=dict)
+    excluded_refs: list[str] = Field(default_factory=list, alias="excludedRefs")
     compact_summaries: list[str] = Field(
         default_factory=list,
         alias="compactSummaries",
@@ -156,11 +181,16 @@ class RetrievalManifest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_manifest(self) -> "RetrievalManifest":
-        if not self.query and not self.selector and not self.returned_refs:
+        if (
+            self.status == "captured"
+            and not self.query
+            and not self.selector
+            and not self.returned_refs
+        ):
             raise ValueError(
                 "retrieval manifest requires query, selector, or returnedRefs"
             )
-        _reject_secretish_values(self.model_dump(by_alias=True), path="retrieval")
+        _reject_unsafe_values(self.model_dump(by_alias=True), path="retrieval")
         return self
 
 
@@ -219,6 +249,25 @@ class ExecutionContextBundle(BaseModel):
         default_factory=list,
         alias="preparedInputRefs",
     )
+    task_input_snapshot_ref: str | None = Field(
+        default=None,
+        alias="taskInputSnapshotRef",
+    )
+    plan_ref: str | None = Field(default=None, alias="planRef")
+    plan_digest: str | None = Field(default=None, alias="planDigest")
+    workspace_policy: str | None = Field(default=None, alias="workspacePolicy")
+    workspace_baseline: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="workspaceBaseline",
+    )
+    checkpoint_refs: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="checkpointRefs",
+    )
+    prior_evidence_refs: list[str] = Field(
+        default_factory=list,
+        alias="priorEvidenceRefs",
+    )
     retrieval_manifest_ref: str | None = Field(
         default=None,
         alias="retrievalManifestRef",
@@ -229,6 +278,11 @@ class ExecutionContextBundle(BaseModel):
         default_factory=dict,
         alias="runtimeSelection",
     )
+    quality_gate_profile: str | None = Field(
+        default=None,
+        alias="qualityGateProfile",
+    )
+    policy_refs: dict[str, Any] = Field(default_factory=dict, alias="policyRefs")
     cost_policy: dict[str, Any] = Field(default_factory=dict, alias="costPolicy")
     portability_provenance: dict[str, Any] = Field(
         default_factory=dict,
@@ -255,7 +309,7 @@ class ExecutionContextBundle(BaseModel):
 
     @model_validator(mode="after")
     def _validate_safe_content(self) -> "ExecutionContextBundle":
-        _reject_secretish_values(self.model_dump(by_alias=True), path="executionContext")
+        _reject_unsafe_values(self.model_dump(by_alias=True), path="executionContext")
         return self
 
     def to_manifest_projection(self) -> dict[str, Any]:
@@ -264,13 +318,48 @@ class ExecutionContextBundle(BaseModel):
                 "contextBundleRef": self.context_bundle_ref,
                 "contextBundleDigest": self.context_bundle_digest,
                 "builderVersion": self.builder_version,
+                "taskInputSnapshotRef": self.task_input_snapshot_ref,
+                "planRef": self.plan_ref,
+                "planDigest": self.plan_digest,
+                "workspacePolicy": self.workspace_policy,
+                "workspaceBaseline": self.workspace_baseline,
+                "checkpointRefs": self.checkpoint_refs,
+                "priorEvidenceRefs": list(self.prior_evidence_refs),
                 "retrievalManifestRef": self.retrieval_manifest_ref,
                 "memoryManifestRef": self.memory_manifest_ref,
                 "memoryContextRef": self.memory_context_ref,
+                "qualityGateProfile": self.quality_gate_profile,
+                "policyRefs": self.policy_refs,
                 "costPolicy": self.cost_policy,
                 "portabilityProvenance": self.portability_provenance,
             }
         }
+
+    def with_retrieval_manifest_ref(
+        self,
+        retrieval_manifest_ref: str | None,
+    ) -> "ExecutionContextBundle":
+        """Return a copy with a swapped retrieval ref and recomputed digest.
+
+        ``retrievalManifestRef`` is part of the digest input, so swapping it in
+        place (for example to the persisted artifact id) would leave the
+        digest-addressed ``contextBundleRef``/``contextBundleDigest`` stale.
+        Recompute them here using the same convention as
+        ``build_execution_context_bundle`` so the bundle stays internally
+        consistent.
+        """
+
+        base_payload = self.model_dump(by_alias=True)
+        base_payload.pop("contextBundleRef", None)
+        base_payload.pop("contextBundleDigest", None)
+        base_payload["retrievalManifestRef"] = retrieval_manifest_ref
+        digest = _digest_payload(base_payload)
+        payload = {
+            **base_payload,
+            "contextBundleRef": f"execution-context-bundle://{digest}",
+            "contextBundleDigest": digest,
+        }
+        return ExecutionContextBundle.model_validate(payload)
 
 
 class PreparedContextFailure(BaseModel):
@@ -372,8 +461,17 @@ def build_execution_context_bundle(
     logical_step_id: str,
     execution_ordinal: int | None = None,
     reason: str = "initial_execution",
+    task_input_snapshot_ref: str | None = None,
+    plan_ref: str | None = None,
+    plan_digest: str | None = None,
     prepared_context: StepPreparedContext | None = None,
+    workspace_policy: str | None = None,
+    workspace_baseline: Mapping[str, Any] | None = None,
+    checkpoint_refs: Mapping[str, Any] | None = None,
+    prior_evidence_refs: Sequence[Any] | None = None,
     runtime_selection: Mapping[str, Any] | None = None,
+    quality_gate_profile: str | None = None,
+    policy_refs: Mapping[str, Any] | None = None,
     retrieval: Mapping[str, Any] | None = None,
     memory_proposals: Sequence[Mapping[str, Any]] | None = None,
     memory_context: Mapping[str, Any] | None = None,
@@ -388,7 +486,7 @@ def build_execution_context_bundle(
     retrieval_manifest_ref = None
     if isinstance(retrieval, Mapping) and retrieval:
         retrieval_manifest_ref = (
-            build_retrieval_manifest(retrieval).retrieval_manifest_ref
+            build_durable_retrieval_manifest_artifact(retrieval)["artifactRef"]
         )
     memory_manifest_ref = None
     effective_memory_proposals = list(memory_proposals or [])
@@ -421,11 +519,20 @@ def build_execution_context_bundle(
         "logicalStepId": logical_step_id,
         "executionOrdinal": execution_ordinal or 1,
         "reason": reason,
+        "taskInputSnapshotRef": _optional_text(task_input_snapshot_ref),
+        "planRef": _optional_text(plan_ref),
+        "planDigest": _optional_text(plan_digest),
         "preparedInputRefs": list(prepared_input_refs),
+        "workspacePolicy": _optional_text(workspace_policy),
+        "workspaceBaseline": _compact_mapping(workspace_baseline),
+        "checkpointRefs": _compact_mapping(checkpoint_refs),
+        "priorEvidenceRefs": _clean_existing_refs(prior_evidence_refs),
         "retrievalManifestRef": retrieval_manifest_ref,
         "memoryManifestRef": memory_manifest_ref,
         "memoryContextRef": memory_context_ref,
         "runtimeSelection": dict(runtime_selection or {}),
+        "qualityGateProfile": _optional_text(quality_gate_profile),
+        "policyRefs": _compact_mapping(policy_refs),
         "costPolicy": _build_cost_policy(runtime_selection or {}),
         "portabilityProvenance": _build_portability_provenance(
             runtime_selection or {},
@@ -496,6 +603,7 @@ def _build_portability_provenance(
 
 def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
     payload = {
+        "status": _retrieval_status(retrieval.get("status")),
         "query": _optional_text(retrieval.get("query")),
         "selector": _optional_mapping(retrieval.get("selector")),
         "indexVersion": _optional_text(
@@ -508,6 +616,9 @@ def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
             or retrieval.get("retrieved_refs")
         ),
         "filters": _optional_mapping(retrieval.get("filters")) or {},
+        "excludedRefs": _clean_existing_refs(
+            retrieval.get("excludedRefs") or retrieval.get("excluded_refs")
+        ),
         "compactSummaries": _bounded_summaries(
             retrieval.get("compactSummaries") or retrieval.get("compact_summaries")
         ),
@@ -515,6 +626,35 @@ def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
     digest = _digest_payload(payload)
     payload["retrievalManifestRef"] = f"attempt-retrieval-manifest://{digest}"
     return RetrievalManifest.model_validate(payload)
+
+
+def build_durable_retrieval_manifest_artifact(
+    retrieval: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build an artifact-ready retrieval manifest with a stable ref."""
+
+    manifest = build_retrieval_manifest(retrieval)
+    payload = manifest.model_dump(by_alias=True, exclude_none=True)
+    digest = _digest_payload(
+        {
+            key: value
+            for key, value in payload.items()
+            if key != "retrievalManifestRef"
+        }
+    )
+    artifact_ref = f"artifact://retrieval-manifests/{digest}"
+    payload["retrievalManifestDigest"] = digest
+    payload["retrievalManifestRef"] = artifact_ref
+    return {
+        "artifactRef": artifact_ref,
+        "contentType": "application/json",
+        "payload": payload,
+        "metadata": {
+            "artifact_kind": "retrieval_manifest",
+            "retrievalStatus": payload["status"],
+            "retrievalManifestDigest": digest,
+        },
+    }
 
 
 def build_memory_manifest(
@@ -753,6 +893,46 @@ def _reject_secretish_values(value: Any, *, path: str) -> None:
         raise ValueError(f"{path} contains raw secret material")
 
 
+def _reject_unsafe_values(value: Any, *, path: str) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key)
+            child_path = f"{path}.{key_text}"
+            if key_text in _UNSAFE_PROVIDER_PAYLOAD_KEYS and item not in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                raise ValueError(f"{child_path} contains unsafe provider payload")
+            if (
+                key_text in _LARGE_LOG_KEYS
+                and _unsafe_text_size(item) > _LARGE_TEXT_LIMIT
+            ):
+                raise ValueError(f"{child_path} contains large log content")
+            _reject_unsafe_values(item, path=child_path)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, item in enumerate(value):
+            _reject_unsafe_values(item, path=f"{path}[{index}]")
+        return
+    if isinstance(value, str):
+        if _SECRETISH_RE.search(value):
+            raise ValueError(f"{path} contains raw secret material")
+        if _RAW_DIFF_RE.search(value):
+            raise ValueError(f"{path} contains raw diff content")
+
+
+def _unsafe_text_size(value: Any) -> int:
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return sum(_unsafe_text_size(item) for item in value)
+    if isinstance(value, Mapping):
+        return sum(_unsafe_text_size(item) for item in value.values())
+    return 0
+
+
 def _digest_payload(payload: Mapping[str, Any]) -> str:
     encoded = json.dumps(
         payload,
@@ -767,6 +947,19 @@ def _optional_mapping(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     return dict(value)
+
+
+def _compact_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return dict(value)
+
+
+def _retrieval_status(value: Any) -> RetrievalStatus:
+    candidate = str(value or "captured").strip().lower()
+    if candidate in {"captured", "skipped", "unavailable"}:
+        return candidate  # type: ignore[return-value]
+    raise ValueError("retrieval status must be captured, skipped, or unavailable")
 
 
 def _bounded_summaries(value: Any) -> list[str]:
