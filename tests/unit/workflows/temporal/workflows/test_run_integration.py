@@ -2408,6 +2408,37 @@ def test_handoff_blocked_when_producing_step_not_accepted_despite_passing_verdic
     assert blocked["operation"] == "repo.publish"
 
 
+def test_handoff_blocked_side_effect_recording_is_idempotent(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = "candidate"
+
+    node = _handoff_node()
+    first_reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        node
+    )
+    second_reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        node
+    )
+
+    assert first_reason == second_reason
+    records = mock_run_workflow._step_side_effect_records.get("pr-handoff", [])
+    assert len(records) == 1
+    assert records[0]["class"] == "external_non_idempotent"
+    assert records[0]["operation"] == "repo.publish"
+    assert records[0]["disposition"] == "blocked"
+
+
 @pytest.mark.parametrize(
     "disposition",
     ["candidate", "discarded", "superseded", "blocked", "failed_with_remaining_work"],

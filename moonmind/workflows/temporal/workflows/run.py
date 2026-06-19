@@ -2612,7 +2612,17 @@ class MoonMindRunWorkflow:
         )
         node_id = str(node.get("id") or "external-handoff").strip() or "external-handoff"
         # Record the denied non-idempotent external action as a blocked side
-        # effect at the actual handoff boundary (Section 11 rule 2).
+        # effect at the actual handoff boundary (Section 11 rule 2). Repeated
+        # gate evaluations for the same node must not duplicate the record.
+        existing_records = self._step_side_effect_records.get(node_id, ())
+        already_recorded = any(
+            record.get("class") == "external_non_idempotent"
+            and record.get("operation") == operation
+            and record.get("disposition") == "blocked"
+            for record in existing_records
+        )
+        if already_recorded:
+            return reason
         self._record_step_side_effect(
             node_id,
             effect_class="external_non_idempotent",
