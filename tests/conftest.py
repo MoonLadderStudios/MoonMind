@@ -30,6 +30,14 @@ _TEMPORAL_BOUNDARY_PATTERNS = (
 )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def global_test_settings():
+    from moonmind.config.settings import settings
+
+    settings.workflow.test_mode = True
+    settings.workflow.enable_proposals = False
+
+
 @lru_cache(maxsize=None)
 def _test_source(path: str) -> str:
     try:

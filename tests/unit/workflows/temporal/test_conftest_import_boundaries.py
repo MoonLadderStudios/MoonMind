@@ -16,7 +16,7 @@ async def test_temporal_unit_guard_mocks_lifecycle_calls() -> None:
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     result = await TemporalClientAdapter().start_workflow(
-        "workflow", id="mm:guarded-unit-test"
+        "workflow", workflow_id="mm:guarded-unit-test"
     )
 
     assert result.workflow_id == "mm:guarded-unit-test"
