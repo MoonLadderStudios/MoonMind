@@ -4440,7 +4440,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalStatus: 'running',
       closeStatus: null,
       summaryArtifactRef: 'art-summary-merge',
-      mergeAutomationSelected: true,
+      publishMode: 'pr_with_merge_automation',
       createdAt: '2026-03-28T00:00:00Z',
       startedAt: '2026-03-28T00:00:01Z',
       updatedAt: '2026-03-28T00:00:02Z',
@@ -4493,11 +4493,8 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Merge Automation').length).toBeGreaterThan(0);
-      expect(
-        screen
-          .getAllByText('Merge Automation')
-          .some((node) => node.closest('div')?.textContent?.includes('Selected')),
-      ).toBe(true);
+      expect(screen.getByText('PR with Merge Automation')).toBeTruthy();
+      expect(screen.queryByText('Selected')).toBeNull();
       expect(screen.getByText('blocked')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/354' })).toBeTruthy();
       expect(screen.getByText('abc123')).toBeTruthy();
@@ -4526,7 +4523,7 @@ describe('Workflow Detail Entrypoint', () => {
       rawState: 'awaiting_external',
       temporalStatus: 'running',
       closeStatus: null,
-      mergeAutomationSelected: true,
+      publishMode: 'pr_with_merge_automation',
       mergeAutomation: {
         enabled: true,
         workflowId: 'merge-automation:test-live-merge-visibility',
@@ -4594,7 +4591,7 @@ describe('Workflow Detail Entrypoint', () => {
       rawState: 'awaiting_external',
       temporalStatus: 'running',
       closeStatus: null,
-      mergeAutomationSelected: true,
+      publishMode: 'pr_with_merge_automation',
       mergeAutomation: {
         enabled: true,
         workflowId: 'merge-automation:test-null-merge-artifact-refs',

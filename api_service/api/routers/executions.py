@@ -1989,12 +1989,14 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_payload.get("repository"))
         ) or None
 
-    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
+    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none", "pr_with_merge_automation"}
     raw_publish_mode = str(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
-    merge_automation_selected = _merge_automation_selected_from_parameters(params)
+    merge_automation_enabled = _merge_automation_enabled_from_parameters(params)
+    if publish_mode == "pr" and merge_automation_enabled:
+        publish_mode = "pr_with_merge_automation"
     merge_automation = _normalize_merge_automation_visibility_payload(
         memo.get("merge_automation") or memo.get("mergeAutomation")
     )
@@ -2099,7 +2101,6 @@ def _serialize_execution(
         repository=repository,
         pr_url=pr_url,
         publish_mode=publish_mode,
-        merge_automation_selected=merge_automation_selected,
         merge_automation=merge_automation,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,
@@ -5809,7 +5810,7 @@ def _validate_pr_base_branch_submission(
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
-def _merge_automation_selected_from_parameters(
+def _merge_automation_enabled_from_parameters(
     parameters: Mapping[str, Any],
 ) -> bool:
     raw_publish_payload = _coerce_mapping(parameters.get("publish"))

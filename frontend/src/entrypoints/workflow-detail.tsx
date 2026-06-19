@@ -149,6 +149,18 @@ function detailStringValue(...values: unknown[]): string {
   return '';
 }
 
+const PUBLISH_MODE_LABELS: Record<string, string> = {
+  pr_with_merge_automation: 'PR with Merge Automation',
+  pr: 'PR',
+  branch: 'Branch',
+  none: 'None',
+};
+
+function formatPublishModeLabel(value: string | null | undefined): string {
+  const normalized = String(value || '').trim().toLowerCase();
+  return PUBLISH_MODE_LABELS[normalized] ?? String(value || '').trim();
+}
+
 function runtimeCommandFromExecution(execution: unknown): Record<string, unknown> {
   const detail = detailObjectValue(execution);
   const direct = firstDetailObjectValue(detail.runtimeCommand, detail.runtime_command);
@@ -562,7 +574,6 @@ const ExecutionDetailSchema = z
     taskSkills: z.array(z.string()).nullable().optional(),
     skillRuntime: SkillRuntimeSchema.nullable().optional(),
     publishMode: z.string().nullable().optional(),
-    mergeAutomationSelected: z.boolean().optional().default(false),
     mergeAutomation: MergeAutomationSchema.nullable().optional(),
     summaryArtifactRef: z.string().nullable().optional(),
     summary_artifact_ref: z.string().nullable().optional(),
@@ -5435,7 +5446,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               ) : null}
               {execution.publishMode ? (
                 <Fact label="Publish Mode">
-                  <code className="text-xs">{execution.publishMode}</code>
+                  {formatPublishModeLabel(execution.publishMode)}
                 </Fact>
               ) : null}
               {execution.startingBranch ? (
@@ -5448,7 +5459,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                   <code className="text-xs break-all">{execution.targetBranch}</code>
                 </Fact>
               ) : null}
-              <Fact label="Merge Automation">{execution.mergeAutomationSelected ? 'Selected' : '—'}</Fact>
               {prUrl ? (
                 <Fact label="PR Link">
                   <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">

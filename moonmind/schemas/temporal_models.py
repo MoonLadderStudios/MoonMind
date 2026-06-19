@@ -2785,7 +2785,6 @@ class ExecutionModel(BaseModel):
         description="URL of the pull request associated with this execution.",
     )
     publish_mode: Optional[str] = Field(None, alias="publishMode")
-    merge_automation_selected: bool = Field(False, alias="mergeAutomationSelected")
     merge_automation: ExecutionMergeAutomationModel | None = Field(
         None,
         alias="mergeAutomation",

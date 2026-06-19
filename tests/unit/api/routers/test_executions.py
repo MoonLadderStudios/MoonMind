@@ -3821,7 +3821,7 @@ def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
         "mergeMethod": "rebase",
     }
 
-def test_serialize_execution_exposes_merge_automation_selection() -> None:
+def test_serialize_execution_exposes_merge_automation_as_publish_mode() -> None:
     record = _build_execution_record()
     record.parameters = {
         "publishMode": "pr",
@@ -3835,7 +3835,8 @@ def test_serialize_execution_exposes_merge_automation_selection() -> None:
 
     payload = _serialize_execution(record)
 
-    assert payload.merge_automation_selected is True
+    assert payload.publish_mode == "pr_with_merge_automation"
+    assert "mergeAutomationSelected" not in payload.model_dump(by_alias=True)
 
 
 def test_serialize_execution_exposes_proposal_outcome_summary() -> None:
@@ -4007,7 +4008,7 @@ def test_serialize_execution_handles_mixed_timezone_duration_inputs() -> None:
     }
 
 
-def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
+def test_serialize_execution_exposes_snake_case_publish_merge_automation_as_publish_mode() -> None:
     record = _build_execution_record()
     record.parameters = {
         "publishMode": "pr",
@@ -4019,17 +4020,17 @@ def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> No
 
     payload = _serialize_execution(record)
 
-    assert payload.merge_automation_selected is True
-    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
+    assert payload.publish_mode == "pr_with_merge_automation"
+    assert "mergeAutomationSelected" not in payload.model_dump(by_alias=True)
 
-def test_serialize_execution_defaults_merge_automation_selection_to_false() -> None:
+def test_serialize_execution_keeps_plain_pr_publish_mode_without_merge_automation() -> None:
     record = _build_execution_record()
     record.parameters = {"publishMode": "pr", "mergeAutomation": {"enabled": False}}
 
     payload = _serialize_execution(record)
 
-    assert payload.merge_automation_selected is False
-    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is False
+    assert payload.publish_mode == "pr"
+    assert "mergeAutomationSelected" not in payload.model_dump(by_alias=True)
 
 def test_create_task_shaped_execution_preserves_story_output_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
