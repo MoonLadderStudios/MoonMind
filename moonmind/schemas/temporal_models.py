@@ -2307,7 +2307,7 @@ class WorkflowInputSnapshotDescriptorModel(BaseModel):
 class StepLedgerCheckModel(BaseModel):
     """Structured step-level review or check result."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     kind: str = Field(..., alias="kind", min_length=1)
     status: str = Field(..., alias="status", min_length=1)

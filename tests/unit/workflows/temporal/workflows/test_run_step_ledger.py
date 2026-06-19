@@ -223,6 +223,50 @@ def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch)
     assert progress["ready"] == 1
     assert progress["pending"] == 1
 
+
+def test_review_gate_retry_requires_reattempt_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="needs_human",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is False
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="blocked",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is False
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="reattempt_current_step",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is True
+
+
 def test_run_progress_query_exposes_current_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1925,25 +1969,38 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     ]
     step = workflow.get_step_ledger()["steps"][0]
     assert step["status"] == "succeeded"
-    assert step["checks"] == [
-        {
-            "kind": "approval_policy",
-            "status": "passed",
-            "summary": "Approved by structured review",
-            "retryCount": 0,
-            "artifactRef": "art_review_1",
-        }
-    ]
+    assert step["checks"][0] == {
+        "kind": "approval_policy",
+        "status": "passed",
+        "summary": "Approved by structured review",
+        "retryCount": 0,
+        "artifactRef": "art_review_1",
+        "gateResultRef": "art_review_1",
+        "gateVerdict": "FULLY_IMPLEMENTED",
+        "confidence": 0.91,
+        "validatedRefs": {},
+        "remainingWorkRef": None,
+        "targetLogicalStepId": None,
+        "workspacePolicyRecommendation": None,
+        "recommendedNextAction": "advance",
+        "invalid": False,
+        "degraded": False,
+    }
     review_payloads = [
-        payload for payload in written_review_payloads if "verdict" in payload
+        payload
+        for payload in written_review_payloads
+        if payload.get("schemaVersion") == "v1" and "verdict" in payload
     ]
-    assert review_payloads[0]["verdict"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert review_payloads[0]["verdict"] == "FULLY_IMPLEMENTED"
+    assert review_payloads[0]["recommendedNextAction"] == "advance"
     attempt_payloads = [
         payload for payload in written_review_payloads if payload.get("stepExecutionId")
     ]
     assert attempt_payloads[0]["stepExecutionId"] == (
         "wf-run-review-1:run-review-1:apply-patch:execution:1"
     )
+    assert attempt_payloads[-1]["checks"][0]["gateResultRef"] == "art_review_1"
+    assert attempt_payloads[-1]["checks"][0]["gateVerdict"] == "FULLY_IMPLEMENTED"
     assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_1_terminal"
 
 @pytest.mark.asyncio
@@ -2089,20 +2146,32 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
     assert step["status"] == "succeeded"
-    assert step["checks"] == [
-        {
-            "kind": "approval_policy",
-            "status": "passed",
-            "summary": "Approved after 1 retry",
-            "retryCount": 1,
-            "artifactRef": "art_review_2",
-        }
-    ]
+    assert step["checks"][0] == {
+        "kind": "approval_policy",
+        "status": "passed",
+        "summary": "Approved after 1 retry",
+        "retryCount": 1,
+        "artifactRef": "art_review_2",
+        "gateResultRef": "art_review_2",
+        "gateVerdict": "FULLY_IMPLEMENTED",
+        "confidence": 0.93,
+        "validatedRefs": {},
+        "remainingWorkRef": None,
+        "targetLogicalStepId": None,
+        "workspacePolicyRecommendation": None,
+        "recommendedNextAction": "advance",
+        "invalid": False,
+        "degraded": False,
+    }
     review_payloads = [
-        payload for payload in written_review_payloads if "verdict" in payload
+        payload
+        for payload in written_review_payloads
+        if payload.get("schemaVersion") == "v1" and "verdict" in payload
     ]
-    assert review_payloads[0]["verdict"]["verdict"] == "ADDITIONAL_WORK_NEEDED"
-    assert review_payloads[1]["verdict"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert review_payloads[0]["verdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert review_payloads[0]["remainingWorkRef"] == "art_remaining_work_1"
+    assert review_payloads[0]["recommendedNextAction"] == "reattempt_current_step"
+    assert review_payloads[1]["verdict"] == "FULLY_IMPLEMENTED"
     assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2_terminal"
     assert step["artifacts"]["stepExecutionManifestRefs"] == [
         "art_attempt_1",
@@ -2237,8 +2306,21 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     assert workflow._publish_reason == (
         "Structured gate stopped before downstream handoff."
     )
+    failed_check = step["checks"][0]
+    assert failed_check["gateResultRef"] == "art_review_1"
+    assert failed_check["gateVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert failed_check["confidence"] == "medium"
+    assert failed_check["remainingWorkRef"] == "art_remaining_work_1"
+    assert failed_check["recommendedNextAction"] == "needs_human"
     assert step_execution_payloads[-1]["terminalDisposition"] == (
         "failed_with_remaining_work"
+    )
+    assert step_execution_payloads[-1]["checks"][0]["gateResultRef"] == "art_review_1"
+    assert step_execution_payloads[-1]["checks"][0]["gateVerdict"] == (
+        "ADDITIONAL_WORK_NEEDED"
+    )
+    assert step_execution_payloads[-1]["checks"][0]["remainingWorkRef"] == (
+        "art_remaining_work_1"
     )
     assert step_execution_payloads[-1]["budget"] == {
         "gate": "approval_policy",
@@ -2701,18 +2783,29 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
     assert step["status"] == "succeeded"
-    assert step["checks"] == [
-        {
-            "kind": "approval_policy",
-            "status": "passed",
-            "summary": "Approved after 1 retry",
-            "retryCount": 1,
-            "artifactRef": "art_review_2",
-        }
-    ]
+    assert step["checks"][0] == {
+        "kind": "approval_policy",
+        "status": "passed",
+        "summary": "Approved after 1 retry",
+        "retryCount": 1,
+        "artifactRef": "art_review_2",
+        "gateResultRef": "art_review_2",
+        "gateVerdict": "FULLY_IMPLEMENTED",
+        "confidence": 0.93,
+        "validatedRefs": {},
+        "remainingWorkRef": None,
+        "targetLogicalStepId": None,
+        "workspacePolicyRecommendation": None,
+        "recommendedNextAction": "advance",
+        "invalid": False,
+        "degraded": False,
+    }
     review_payloads = [
-        payload for payload in written_review_payloads if "verdict" in payload
+        payload
+        for payload in written_review_payloads
+        if payload.get("schemaVersion") == "v1" and "verdict" in payload
     ]
-    assert review_payloads[0]["attempt"] == 1
-    assert review_payloads[1]["attempt"] == 2
+    assert review_payloads[0]["verdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert review_payloads[0]["recommendedNextAction"] == "reattempt_current_step"
+    assert review_payloads[1]["verdict"] == "FULLY_IMPLEMENTED"
     assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2_terminal"

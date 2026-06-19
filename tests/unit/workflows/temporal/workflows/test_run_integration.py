@@ -2166,7 +2166,7 @@ def test_moonspec_verify_gate_detects_remaining_remediation_budget(
     )
 
 
-def test_moonspec_verify_text_verdict_uses_first_matching_occurrence(
+def test_moonspec_verify_text_verdict_parser_is_not_a_branch_boundary(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
     verdict = mock_run_workflow._extract_moonspec_verify_verdict_from_text(
@@ -2174,6 +2174,12 @@ def test_moonspec_verify_text_verdict_uses_first_matching_occurrence(
     )
 
     assert verdict == "ADDITIONAL_WORK_NEEDED"
+    assert (
+        mock_run_workflow._extract_moonspec_verify_verdict(
+            {"summary": "Current verdict: ADDITIONAL_WORK_NEEDED."}
+        )
+        is None
+    )
 
 
 def test_moonspec_verify_gate_records_nested_summary_and_report(
@@ -2186,6 +2192,7 @@ def test_moonspec_verify_gate_records_nested_summary_and_report(
                 "verdict": "ADDITIONAL_WORK_NEEDED",
                 "operator_summary": "Nested verifier summary.",
                 "diagnostics_ref": "art_nested_verify_report",
+                "gateResultRef": "art_nested_gate_result",
             }
         },
     )
@@ -2193,6 +2200,34 @@ def test_moonspec_verify_gate_records_nested_summary_and_report(
     gate_context = mock_run_workflow._publish_context["moonSpecGate"]
     assert gate_context["summary"] == "Nested verifier summary."
     assert gate_context["diagnosticsRef"] == "art_nested_verify_report"
+    assert gate_context["gateResultRef"] == "art_nested_gate_result"
+    assert gate_context["recommendedNextAction"] == "reattempt_current_step"
+    assert gate_context["invalid"] is False
+    assert gate_context["degraded"] is False
+
+
+def test_moonspec_verify_gate_fails_closed_for_verdict_looking_prose_output(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "operator_summary": (
+                "Verdict: ADDITIONAL_WORK_NEEDED. The implementation still has "
+                "unchecked gaps."
+            ),
+            "diagnostics_ref": "art_verify_prose_only",
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["verdict"] == "NO_DETERMINATION"
+    assert gate_context["recommendedNextAction"] == "blocked"
+    assert gate_context["invalid"] is True
+    assert gate_context["degraded"] is True
+    assert gate_context["diagnosticsRef"] == "art_verify_prose_only"
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert "NO_DETERMINATION" in (mock_run_workflow._plan_blocked_message or "")
 
 
 def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(
@@ -2254,6 +2289,9 @@ def test_moonspec_verify_gate_degrades_unknown_verdict_to_no_determination(
 
     gate_context = mock_run_workflow._publish_context["moonSpecGate"]
     assert gate_context["verdict"] == "NO_DETERMINATION"
+    assert gate_context["recommendedNextAction"] == "blocked"
+    assert gate_context["invalid"] is True
+    assert gate_context["degraded"] is True
     assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
     assert "NO_DETERMINATION" in (mock_run_workflow._plan_blocked_message or "")
     assert "art_unknown_verdict" in (mock_run_workflow._plan_blocked_message or "")

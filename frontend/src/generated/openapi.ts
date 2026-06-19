@@ -7845,6 +7845,8 @@ export interface components {
             retryCount: number;
             /** Artifactref */
             artifactRef?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * StepLedgerRefsModel

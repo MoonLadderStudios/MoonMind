@@ -311,6 +311,102 @@ async def test_terminal_manifest_aggregates_required_side_effect_groups(
     assert len(terminal["sideEffects"]["records"]) == 6
 
 
+async def test_terminal_manifest_projects_step_gate_result_check_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+    now = datetime(2026, 5, 17, 12, 0, tzinfo=UTC)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return f"artifact-execution-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "verify", "title": "Verify"}],
+        dependency_map={"verify": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("verify", updated_at=now, summary="Verifying")
+    await workflow._record_step_execution_manifest(
+        "verify",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    workflow._upsert_step_check(
+        "verify",
+        kind="approval_policy",
+        status="failed",
+        summary="Structured gate did not approve advancement",
+        retry_count=1,
+        artifact_ref="artifact://gate/result-1",
+        metadata={
+            "gateResultRef": "artifact://gate/result-1",
+            "gateVerdict": "ADDITIONAL_WORK_NEEDED",
+            "confidence": "medium",
+            "validatedRefs": {"testReportRef": "artifact://tests/report-1"},
+            "remainingWorkRef": "artifact://remaining/work-1",
+            "targetLogicalStepId": "implement",
+            "workspacePolicyRecommendation": (
+                "apply_previous_execution_diff_to_clean_baseline"
+            ),
+            "recommendedNextAction": "reattempt_current_step",
+            "invalid": False,
+            "degraded": False,
+        },
+    )
+    workflow._mark_step_terminal(
+        "verify",
+        status="failed",
+        updated_at=now,
+        summary="Verification gaps remain",
+    )
+
+    await workflow._record_step_execution_manifest(
+        "verify",
+        phase="terminal",
+        updated_at=now,
+        reason="quality_gate_failed",
+        status="failed",
+        terminal_disposition="failed_with_remaining_work",
+        budget={
+            "gate": "approval_policy",
+            "maxAttempts": 2,
+            "attemptsConsumed": 2,
+            "remainingExecutions": 0,
+            "gateVerdict": "ADDITIONAL_WORK_NEEDED",
+            "recommendedNextAction": "reattempt_current_step",
+        },
+    )
+
+    terminal = writes[-1]["payload"]
+    check = terminal["checks"][0]
+    assert check["artifactRef"] == "artifact://gate/result-1"
+    assert check["gateResultRef"] == "artifact://gate/result-1"
+    assert check["gateVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert check["confidence"] == "medium"
+    assert check["validatedRefs"] == {"testReportRef": "artifact://tests/report-1"}
+    assert check["remainingWorkRef"] == "artifact://remaining/work-1"
+    assert check["targetLogicalStepId"] == "implement"
+    assert check["workspacePolicyRecommendation"] == (
+        "apply_previous_execution_diff_to_clean_baseline"
+    )
+    assert check["recommendedNextAction"] == "reattempt_current_step"
+    assert check["invalid"] is False
+    assert check["degraded"] is False
+    assert terminal["budget"]["gateVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert terminal["budget"]["recommendedNextAction"] == "reattempt_current_step"
+
+
 async def test_terminal_manifest_projects_structured_memory_side_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
