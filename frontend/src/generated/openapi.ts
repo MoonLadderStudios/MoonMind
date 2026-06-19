@@ -7852,6 +7852,28 @@ export interface components {
             artifactRef?: string | null;
         };
         /**
+         * StepLedgerDownstreamInvalidationModel
+         * @description Bounded downstream dependency state for compact Step Execution rows.
+         */
+        StepLedgerDownstreamInvalidationModel: {
+            /**
+             * Status
+             * @default none
+             * @enum {string}
+             */
+            status: "none" | "blocked" | "invalidated" | "requires_revalidation" | "preserved";
+            /** Invalidatedlogicalstepids */
+            invalidatedLogicalStepIds?: string[];
+            /** Revalidationrequired */
+            revalidationRequired?: string[];
+            /** Blockedlogicalstepids */
+            blockedLogicalStepIds?: string[];
+            /** Preservedlogicalstepids */
+            preservedLogicalStepIds?: string[];
+            /** Evidenceref */
+            evidenceRef?: string | null;
+        };
+        /**
          * StepLedgerRefsModel
          * @description Stable ref slots for child workflow and managed agent-run linkage.
          */
@@ -7945,6 +7967,7 @@ export interface components {
             /** Stepcheckpointref */
             stepCheckpointRef?: string | null;
             recoveryPreservation?: components["schemas"]["StepLedgerResumePreservationModel"] | null;
+            downstreamInvalidation?: components["schemas"]["StepLedgerDownstreamInvalidationModel"] | null;
             workload?: components["schemas"]["StepLedgerWorkloadModel"] | null;
             /** Lasterror */
             lastError?: string | null;

@@ -734,6 +734,351 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
   });
 
+  it('MM-831 renders compact rows, expanded Step Execution history, downstream state, and ref-only evidence', async () => {
+    window.history.pushState({}, 'Step Execution Evidence Test', '/workflows/test-123/steps?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Step evidence task',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    const evidenceSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'plan',
+          order: 1,
+          title: 'Plan work',
+          tool: { type: 'skill', name: 'plan.generate', version: '1' },
+          dependsOn: [],
+          status: 'succeeded',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 1,
+          startedAt: '2026-04-08T00:00:01Z',
+          updatedAt: '2026-04-08T00:00:02Z',
+          summary: 'Plan complete',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: 'artifact://outputs/plan',
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+            stepExecutionManifestRefs: ['artifact://manifest/plan-1'],
+          },
+          stateCheckpointRef: 'artifact://checkpoint/plan',
+          preservedFrom: {
+            workflowId: 'source-wf',
+            runId: 'source-run',
+            logicalStepId: 'plan',
+            executionOrdinal: 1,
+          },
+          downstreamInvalidation: {
+            status: 'preserved',
+            invalidatedLogicalStepIds: [],
+            revalidationRequired: [],
+            blockedLogicalStepIds: [],
+            preservedLogicalStepIds: ['plan'],
+            evidenceRef: 'artifact://dependency/preserved',
+          },
+          lastError: null,
+        },
+        {
+          logicalStepId: 'apply',
+          order: 2,
+          title: 'Apply patch',
+          tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
+          dependsOn: ['plan'],
+          status: 'failed',
+          waitingReason: null,
+          attentionRequired: true,
+          executionOrdinal: 2,
+          startedAt: '2026-04-09T00:00:03Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          summary: 'Gate requested more work',
+          checks: [
+            {
+              kind: 'quality_gate',
+              status: 'failed',
+              summary: 'Additional work needed',
+              retryCount: 1,
+              artifactRef: 'artifact://gate/verdict',
+            },
+          ],
+          refs: {
+            childWorkflowId: 'child-wf-2',
+            childRunId: 'child-run-2',
+            agentRunId: 'agent-run-step-2',
+          },
+          artifacts: {
+            outputSummary: 'artifact://outputs/apply-summary',
+            outputPrimary: 'artifact://outputs/apply',
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: 'artifact://diagnostics/apply',
+            providerSnapshot: null,
+            stepExecutionManifestRefs: ['artifact://manifest/apply-1', 'artifact://manifest/apply-2'],
+          },
+          downstreamInvalidation: {
+            status: 'requires_revalidation',
+            invalidatedLogicalStepIds: ['verify'],
+            revalidationRequired: ['verify'],
+            blockedLogicalStepIds: ['publish'],
+            preservedLogicalStepIds: ['plan'],
+            evidenceRef: 'artifact://dependency/effects',
+          },
+          lastError: null,
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps/apply/step-executions/2')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            manifestArtifactRef: 'artifact://manifest/apply-2',
+            stepExecutionId: 'test-123:02-run:apply:execution:2',
+            workflowId: 'test-123',
+            runId: '02-run',
+            logicalStepId: 'apply',
+            executionOrdinal: 2,
+            sourceExecutionOrdinal: 1,
+            lineage: {
+              sourceWorkflowId: 'test-123',
+              sourceRunId: '01-run',
+              sourceLogicalStepId: 'apply',
+              sourceExecutionOrdinal: 1,
+              relationship: 'recover_from_failed_step',
+              lineageExecutionOrdinal: 2,
+            },
+            reason: 'recover_from_failed_step',
+            status: 'failed',
+            terminalDisposition: 'retryable',
+            contextRefs: {
+              contextBundleRef: 'artifact://context/apply-2',
+              retrievalManifestRef: 'artifact://retrieval/apply-2',
+              memoryManifestRef: 'artifact://memory/apply-2',
+            },
+            workspacePolicy: 'continue_from_previous_execution',
+            gitDisposition: 'candidate',
+            qualityGateVerdict: 'ADDITIONAL_WORK_NEEDED',
+            outputRefs: { outputPrimaryRef: 'artifact://outputs/apply-2' },
+            workspaceRefs: { checkpointBeforeRef: 'artifact://checkpoint/apply-before' },
+            executionRefs: {
+              childWorkflowId: 'child-wf-2',
+              childRunId: 'child-run-2',
+              agentRunId: 'agent-run-step-2',
+            },
+            checkRefs: [{ artifactRef: 'artifact://gate/verdict-2' }],
+            sideEffectRefs: { publicationRef: 'artifact://side-effects/apply-2' },
+            dependencyEffectRefs: {
+              invalidatedLogicalStepIds: ['verify'],
+              evidenceRef: 'artifact://dependency/effects',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps/apply/step-executions')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            workflowId: 'test-123',
+            runId: '02-run',
+            runScope: 'latest',
+            logicalStepId: 'apply',
+            stepExecutions: [
+              {
+                manifestArtifactRef: 'artifact://manifest/apply-1',
+                stepExecutionId: 'test-123:02-run:apply:execution:1',
+                workflowId: 'test-123',
+                runId: '02-run',
+                logicalStepId: 'apply',
+                executionOrdinal: 1,
+                reason: 'initial_execution',
+                status: 'failed',
+                terminalDisposition: 'retryable',
+                runtimeChildRefs: { childWorkflowId: 'child-wf-1', childRunId: 'child-run-1' },
+                workspacePolicy: 'fresh_workspace',
+                gitDisposition: 'discarded',
+                qualityGateVerdict: 'ADDITIONAL_WORK_NEEDED',
+                outputRefs: { outputPrimaryRef: 'artifact://outputs/apply-1' },
+              },
+              {
+                manifestArtifactRef: 'artifact://manifest/apply-2',
+                stepExecutionId: 'test-123:02-run:apply:execution:2',
+                workflowId: 'test-123',
+                runId: '02-run',
+                logicalStepId: 'apply',
+                executionOrdinal: 2,
+                sourceExecutionOrdinal: 1,
+                reason: 'recover_from_failed_step',
+                status: 'failed',
+                terminalDisposition: 'retryable',
+                runtimeChildRefs: {
+                  childWorkflowId: 'child-wf-2',
+                  childRunId: 'child-run-2',
+                  agentRunId: 'agent-run-step-2',
+                },
+                workspacePolicy: 'continue_from_previous_execution',
+                gitDisposition: 'candidate',
+                qualityGateVerdict: 'ADDITIONAL_WORK_NEEDED',
+                outputRefs: { outputPrimaryRef: 'artifact://outputs/apply-2' },
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => evidenceSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getByText('Execution 2')).toBeTruthy();
+    expect(screen.getByText('quality gate: Failed')).toBeTruthy();
+    expect(screen.getByText('artifact://gate/verdict')).toBeTruthy();
+    expect(screen.getByText(/Requires revalidation: verify/)).toBeTruthy();
+    expect(screen.getByText(/Blocked: publish/)).toBeTruthy();
+    expect(screen.getByText(/Preserved: plan/)).toBeTruthy();
+    expect(screen.getByText('artifact://dependency/effects')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
+    expect(await screen.findByRole('heading', { name: 'Step Execution History' })).toBeTruthy();
+    expect(screen.getByText('Execution ordinal: 1')).toBeTruthy();
+    expect(screen.getByText('Execution ordinal: 2')).toBeTruthy();
+    expect(screen.getByText(/Source execution: 1/)).toBeTruthy();
+    expect(screen.getByText(/Reason: Recover From Failed Step/)).toBeTruthy();
+    expect(screen.getByText(/Runtime child: child-wf-2/)).toBeTruthy();
+    expect(screen.getByText(/Workspace policy: Continue From Previous Execution/)).toBeTruthy();
+    expect(screen.getByText(/Git disposition: Candidate/)).toBeTruthy();
+    expect(screen.getAllByText(/Gate verdict: Additional Work Needed/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Terminal disposition: Retryable/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show Step Execution 2 refs' }));
+    expect(await screen.findByText('artifact://context/apply-2')).toBeTruthy();
+    expect(screen.getByText('artifact://retrieval/apply-2')).toBeTruthy();
+    expect(screen.getByText('artifact://memory/apply-2')).toBeTruthy();
+    expect(screen.getByText('artifact://outputs/apply-2')).toBeTruthy();
+    expect(screen.getByText('artifact://gate/verdict-2')).toBeTruthy();
+    expect(screen.getByText('artifact://side-effects/apply-2')).toBeTruthy();
+    expect(screen.queryByText(/raw transcript body/i)).toBeNull();
+
+    const requestedUrls = fetchSpy.mock.calls.map(([input]) => String(input));
+    expect(requestedUrls).toContain('/api/executions/test-123/steps/apply/step-executions?source=temporal');
+    expect(requestedUrls).toContain('/api/executions/test-123/steps/apply/step-executions/2?source=temporal');
+    expect(requestedUrls.some((url) => url.includes('/attempts'))).toBe(false);
+  });
+
+  it('MM-831 shows typed disabled Resume reasons and keeps full retry separate', async () => {
+    window.history.pushState({}, 'Recovery Disabled Test', '/workflows/test-123?source=temporal');
+    const failedStepsSnapshot = {
+      ...latestStepsSnapshot,
+      steps: latestStepsSnapshot.steps.map((step) =>
+        step.logicalStepId === 'apply'
+          ? { ...step, status: 'failed', executionOrdinal: 2 }
+          : step,
+      ),
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Recovery task',
+      summary: 'Needs recovery',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      resume: {
+        available: true,
+        failedStepId: 'apply',
+      },
+      actions: {},
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps/apply/step-executions/2')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            logicalStepId: 'apply',
+            executionOrdinal: 2,
+            recoveryEligibility: {
+              eligible: false,
+              defaultAction: 'full_retry',
+              disabledReasonCode: 'missing_required_checkpoint_boundary',
+              requiredBoundary: 'before_execution',
+              checkpointRef: null,
+              operatorGuidance: 'full_retry',
+              evidence: [
+                {
+                  category: 'checkpoint',
+                  status: 'missing',
+                  boundary: 'before_execution',
+                  reasonCode: 'missing_required_checkpoint_boundary',
+                },
+              ],
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => failedStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Recovery evidence' })).toBeTruthy();
+    expect(screen.getByText(/Resume from checkpoint unavailable/)).toBeTruthy();
+    expect(screen.getByText(/missing required checkpoint boundary/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Resume from checkpoint/i })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: /Full retry/i })).toBeTruthy();
+  });
+
   it('MM-801 renders Artifacts as the focused report and artifact route', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     mockWorkflowDetailSubrouteFetch();

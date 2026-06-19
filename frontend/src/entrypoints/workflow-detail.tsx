@@ -974,6 +974,17 @@ const StepLedgerRecoveryPreservationSchema = z
   })
   .passthrough();
 
+const StepLedgerDownstreamInvalidationSchema = z
+  .object({
+    status: z.string().default('none'),
+    invalidatedLogicalStepIds: z.array(z.string()).default([]),
+    revalidationRequired: z.array(z.string()).default([]),
+    blockedLogicalStepIds: z.array(z.string()).default([]),
+    preservedLogicalStepIds: z.array(z.string()).default([]),
+    evidenceRef: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const StepLedgerWorkloadSchema = z
   .object({
     agentRunId: z.string().nullable().optional(),
@@ -1029,6 +1040,7 @@ const StepLedgerRowSchema = z
     workload: StepLedgerWorkloadSchema.nullable().optional(),
     stateCheckpointRef: z.string().nullable().optional(),
     recoveryPreservation: StepLedgerRecoveryPreservationSchema.nullable().optional(),
+    downstreamInvalidation: StepLedgerDownstreamInvalidationSchema.nullable().optional(),
     lastError: z.unknown().nullable().optional(),
   })
   .passthrough();
@@ -1040,10 +1052,46 @@ const StepLedgerSnapshotSchema = z.object({
   steps: z.array(StepLedgerRowSchema).default([]),
 });
 
-const StepExecutionDetailSchema = z
+const StepExecutionProjectionSchema = z
   .object({
+    manifestArtifactRef: z.string().nullable().optional(),
+    stepExecutionId: z.string().nullable().optional(),
+    workflowId: z.string().nullable().optional(),
+    runId: z.string().nullable().optional(),
     logicalStepId: z.string(),
     executionOrdinal: z.number(),
+    sourceExecutionOrdinal: z.number().nullable().optional(),
+    lineage: z.record(z.string(), z.unknown()).nullable().optional(),
+    reason: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    terminalDisposition: z.string().nullable().optional(),
+    runtimeChildRefs: z.record(z.string(), z.unknown()).default({}),
+    workspacePolicy: z.string().nullable().optional(),
+    gitDisposition: z.string().nullable().optional(),
+    qualityGateVerdict: z.string().nullable().optional(),
+    outputRefs: z.record(z.string(), z.unknown()).default({}),
+  })
+  .passthrough();
+
+const StepExecutionListSchema = z
+  .object({
+    workflowId: z.string(),
+    runId: z.string(),
+    runScope: z.string().default('latest'),
+    logicalStepId: z.string(),
+    stepExecutions: z.array(StepExecutionProjectionSchema).default([]),
+  })
+  .passthrough();
+
+const StepExecutionDetailSchema = StepExecutionProjectionSchema.extend({
+    inputRefs: z.record(z.string(), z.unknown()).default({}),
+    contextRefs: z.record(z.string(), z.unknown()).default({}),
+    workspaceRefs: z.record(z.string(), z.unknown()).default({}),
+    executionRefs: z.record(z.string(), z.unknown()).default({}),
+    checkRefs: z.unknown().optional(),
+    sideEffectRefs: z.record(z.string(), z.unknown()).default({}),
+    dependencyEffectRefs: z.record(z.string(), z.unknown()).default({}),
+    preservedStepProvenance: z.array(z.record(z.string(), z.unknown())).default([]),
     recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
   })
   .passthrough();
@@ -2670,10 +2718,10 @@ function stepStatusIcon(status: string): { icon: string; cssClass: string } {
   return { icon: '○', cssClass: 'step-icon-pending' };
 }
 
-// MM-815: Collect the latest attempt's evidence refs for the default (collapsed)
+// MM-815: Collect the latest Step Execution's evidence refs for the default (collapsed)
 // step row. These are ref-only pointers (artifact + gate refs) derived from the
 // current row; no transcripts, diffs, or provider payloads are inlined, and no
-// prior-attempt history is mixed in.
+// prior Step Execution history is mixed in.
 function collectStepEvidenceRefs(
   row: z.infer<typeof StepLedgerRowSchema>,
 ): Array<{ label: string; ref: string }> {
@@ -2716,6 +2764,200 @@ function StepEvidenceRefs({ row }: { row: z.infer<typeof StepLedgerRowSchema> })
   );
 }
 
+function StepDownstreamInvalidation({
+  downstream,
+}: {
+  downstream: z.infer<typeof StepLedgerDownstreamInvalidationSchema> | null | undefined;
+}) {
+  if (!downstream || !downstream.status || downstream.status === 'none') return null;
+  const rows = (
+    [
+      ['Invalidated', downstream.invalidatedLogicalStepIds],
+      ['Requires revalidation', downstream.revalidationRequired],
+      ['Blocked', downstream.blockedLogicalStepIds],
+      ['Preserved', downstream.preservedLogicalStepIds],
+    ] as Array<[string, string[]]>
+  ).filter(([, values]) => values.length > 0);
+  return (
+    <div className="step-downstream-state" aria-label="Downstream Step Execution state">
+      <span className="step-evidence-label">Downstream</span>
+      <span className="step-evidence-ref">Status: {formatStatusLabel(downstream.status)}</span>
+      {rows.map(([label, values]) => (
+        <span className="step-evidence-ref" key={label}>
+          {label}: {values.join(', ')}
+        </span>
+      ))}
+      {downstream.evidenceRef ? (
+        <span className="step-evidence-ref">
+          Evidence: <code className="text-xs break-all">{downstream.evidenceRef}</code>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function renderRefEntries(value: unknown): Array<[string, string]> {
+  if (!value || typeof value !== 'object') return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) =>
+      renderRefEntries(item).map(([label, ref]) => [`${index + 1} ${label}`, ref] as [string, string]),
+    );
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([key, raw]) => {
+    if (typeof raw === 'string' && raw.trim()) return [[formatStatusLabel(key), raw.trim()] as [string, string]];
+    if (Array.isArray(raw)) {
+      return raw
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .map((item, index) => [`${formatStatusLabel(key)} ${index + 1}`, item.trim()] as [string, string]);
+    }
+    return [];
+  });
+}
+
+function StepExecutionDetailRefs({
+  apiBase,
+  workflowId,
+  logicalStepId,
+  executionOrdinal,
+  sourceTemporal,
+}: {
+  apiBase: string;
+  workflowId: string;
+  logicalStepId: string;
+  executionOrdinal: number;
+  sourceTemporal: boolean;
+}) {
+  const suffix = sourceTemporal ? '?source=temporal' : '';
+  const detailQuery = useQuery({
+    queryKey: ['workflow-detail-step-execution-detail', workflowId, logicalStepId, executionOrdinal, sourceTemporal],
+    queryFn: async () => {
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(logicalStepId)}/step-executions/${encodeURIComponent(String(executionOrdinal))}${suffix}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) {
+        const statusText = response.statusText.trim();
+        throw new Error(`Step Execution detail: ${response.status}${statusText ? ` ${statusText}` : ''}`);
+      }
+      return StepExecutionDetailSchema.parse(await response.json());
+    },
+  });
+
+  if (detailQuery.isLoading) return <p className="small">Loading Step Execution refs...</p>;
+  if (detailQuery.isError) return <p className="small step-tl-error">{(detailQuery.error as Error).message}</p>;
+  const detail = detailQuery.data;
+  if (!detail) return null;
+  const sections: Array<[string, unknown]> = [
+    ['Context refs', detail.contextRefs],
+    ['Workspace refs', detail.workspaceRefs],
+    ['Execution refs', detail.executionRefs],
+    ['Output refs', detail.outputRefs],
+    ['Check refs', detail.checkRefs],
+    ['Side effect refs', detail.sideEffectRefs],
+    ['Dependency effect refs', detail.dependencyEffectRefs],
+  ];
+  const entries = sections.flatMap(([section, refs]) =>
+    renderRefEntries(refs).map(([label, ref]) => [`${section} ${label}`, ref] as [string, string]),
+  );
+  if (entries.length === 0) return <p className="small">No Step Execution refs linked yet.</p>;
+  return (
+    <ul className="step-detail-list">
+      {entries.map(([label, ref], index) => (
+        <li key={`${label}-${ref}-${index}`}>
+          <strong>{label}:</strong> <code className="text-xs break-all">{ref}</code>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function StepExecutionHistory({
+  apiBase,
+  workflowId,
+  logicalStepId,
+  sourceTemporal,
+}: {
+  apiBase: string;
+  workflowId: string;
+  logicalStepId: string;
+  sourceTemporal: boolean;
+}) {
+  const [expandedOrdinal, setExpandedOrdinal] = useState<number | null>(null);
+  const suffix = sourceTemporal ? '?source=temporal' : '';
+  const historyQuery = useQuery({
+    queryKey: ['workflow-detail-step-executions', workflowId, logicalStepId, sourceTemporal],
+    queryFn: async () => {
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(logicalStepId)}/step-executions${suffix}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) {
+        const statusText = response.statusText.trim();
+        throw new Error(`Step Executions: ${response.status}${statusText ? ` ${statusText}` : ''}`);
+      }
+      return StepExecutionListSchema.parse(await response.json());
+    },
+  });
+
+  return (
+    <section className="step-tl-detail-section">
+      <h4>Step Execution History</h4>
+      {historyQuery.isLoading ? <p className="small">Loading Step Executions...</p> : null}
+      {historyQuery.isError ? <p className="small step-tl-error">{(historyQuery.error as Error).message}</p> : null}
+      {historyQuery.data && historyQuery.data.stepExecutions.length === 0 ? (
+        <p className="small">No Step Executions linked yet.</p>
+      ) : null}
+      {historyQuery.data ? (
+        <ul className="step-detail-list">
+          {historyQuery.data.stepExecutions.map((execution) => {
+            const runtimeChild = Object.values(execution.runtimeChildRefs || {}).find(
+              (value): value is string => typeof value === 'string' && value.trim().length > 0,
+            );
+            return (
+              <li key={`${execution.logicalStepId}-${execution.executionOrdinal}`}>
+                <div className="stack">
+                  <span>Execution ordinal: {execution.executionOrdinal}</span>
+                  {execution.sourceExecutionOrdinal ? <span>Source execution: {execution.sourceExecutionOrdinal}</span> : null}
+                  {execution.reason ? <span>Reason: {formatStatusLabel(execution.reason)}</span> : null}
+                  {execution.status ? <span>Status: {formatStatusLabel(execution.status)}</span> : null}
+                  {execution.terminalDisposition ? <span>Terminal disposition: {formatStatusLabel(execution.terminalDisposition)}</span> : null}
+                  {runtimeChild ? <span>Runtime child: {runtimeChild}</span> : null}
+                  {execution.workspacePolicy ? <span>Workspace policy: {formatStatusLabel(execution.workspacePolicy)}</span> : null}
+                  {execution.gitDisposition ? <span>Git disposition: {formatStatusLabel(execution.gitDisposition)}</span> : null}
+                  {execution.qualityGateVerdict ? <span>Gate verdict: {formatStatusLabel(execution.qualityGateVerdict)}</span> : null}
+                  {execution.manifestArtifactRef ? (
+                    <span>Manifest: <code className="text-xs break-all">{execution.manifestArtifactRef}</code></span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      setExpandedOrdinal((current) =>
+                        current === execution.executionOrdinal ? null : execution.executionOrdinal,
+                      )
+                    }
+                  >
+                    {expandedOrdinal === execution.executionOrdinal ? 'Hide' : 'Show'} Step Execution {execution.executionOrdinal} refs
+                  </button>
+                  {expandedOrdinal === execution.executionOrdinal ? (
+                    <StepExecutionDetailRefs
+                      apiBase={apiBase}
+                      workflowId={workflowId}
+                      logicalStepId={logicalStepId}
+                      executionOrdinal={execution.executionOrdinal}
+                      sourceTemporal={sourceTemporal}
+                    />
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
 function StepProvenanceMarker({ row }: { row: z.infer<typeof StepLedgerRowSchema> }) {
   if (!row.preservedFrom) return null;
   const source = row.preservedFrom;
@@ -2731,6 +2973,8 @@ function StepProvenanceMarker({ row }: { row: z.infer<typeof StepLedgerRowSchema
 
 function StepLedgerRowCard({
   apiBase,
+  workflowId,
+  sourceTemporal,
   logStreamingEnabled,
   sessionTimelineEnabled,
   structuredHistoryEnabled,
@@ -2742,6 +2986,8 @@ function StepLedgerRowCard({
   routes,
 }: {
   apiBase: string;
+  workflowId: string;
+  sourceTemporal: boolean;
   logStreamingEnabled: boolean;
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
@@ -2793,6 +3039,7 @@ function StepLedgerRowCard({
             </div>
           ) : null}
           {!expanded ? <StepEvidenceRefs row={row} /> : null}
+          {!expanded ? <StepDownstreamInvalidation downstream={row.downstreamInvalidation} /> : null}
         </button>
         {expanded ? (
           <div className="step-tl-details">
@@ -2807,6 +3054,7 @@ function StepLedgerRowCard({
                 </p>
               ) : null}
               {lastError ? <p className="small step-tl-error">Last error: {lastError}</p> : null}
+              <StepDownstreamInvalidation downstream={row.downstreamInvalidation} />
             </section>
             {row.checks.length > 0 ? (
               <section className="step-tl-detail-section">
@@ -2842,6 +3090,14 @@ function StepLedgerRowCard({
               <h4>Metadata</h4>
               <StepMetadataList row={row} runId={runId} />
             </section>
+            {workflowId && row.executionOrdinal > 0 ? (
+              <StepExecutionHistory
+                apiBase={apiBase}
+                workflowId={workflowId}
+                logicalStepId={row.logicalStepId}
+                sourceTemporal={sourceTemporal}
+              />
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -3570,8 +3826,13 @@ function RecoveryEvidencePanel({
       ) : null}
 
       <div className="action-row">
-        {taskEditingOn && recovery?.eligible ? (
-          <button type="button" className="queue-action" disabled={busy} onClick={onResumeFromFailedStep}>
+        {taskEditingOn ? (
+          <button
+            type="button"
+            className="queue-action"
+            disabled={busy || !recovery?.eligible}
+            onClick={onResumeFromFailedStep}
+          >
             Resume from checkpoint
           </button>
         ) : null}
@@ -5650,6 +5911,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                       <StepLedgerRowCard
                         key={row.logicalStepId}
                         apiBase={payload.apiBase}
+                        workflowId={workflowId}
+                        sourceTemporal={sourceTemporal}
                         logStreamingEnabled={logStreamingEnabled}
                         sessionTimelineEnabled={sessionTimelineEnabled}
                         structuredHistoryEnabled={structuredHistoryEnabled}

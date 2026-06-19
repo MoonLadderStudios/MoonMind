@@ -2281,6 +2281,16 @@ class MoonMindRunWorkflow:
         self._step_dependency_effects[logical_step_id] = {
             "invalidatedLogicalStepIds": list(invalidated),
         }
+        row = self._step_ledger_row_for(logical_step_id)
+        if row is not None:
+            row["downstreamInvalidation"] = {
+                "status": "requires_revalidation" if invalidated else "none",
+                "invalidatedLogicalStepIds": list(invalidated),
+                "revalidationRequired": list(invalidated),
+                "blockedLogicalStepIds": [],
+                "preservedLogicalStepIds": [],
+                "evidenceRef": None,
+            }
         return invalidated
 
     def _step_ledger_row_for(self, logical_step_id: str) -> dict[str, Any] | None:

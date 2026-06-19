@@ -2373,6 +2373,33 @@ class StepLedgerResumePreservationModel(BaseModel):
     message: str | None = Field(None, alias="message")
 
 
+class StepLedgerDownstreamInvalidationModel(BaseModel):
+    """Bounded downstream dependency state for compact Step Execution rows."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal[
+        "none",
+        "blocked",
+        "invalidated",
+        "requires_revalidation",
+        "preserved",
+    ] = Field("none", alias="status")
+    invalidated_logical_step_ids: list[str] = Field(
+        default_factory=list, alias="invalidatedLogicalStepIds"
+    )
+    revalidation_required: list[str] = Field(
+        default_factory=list, alias="revalidationRequired"
+    )
+    blocked_logical_step_ids: list[str] = Field(
+        default_factory=list, alias="blockedLogicalStepIds"
+    )
+    preserved_logical_step_ids: list[str] = Field(
+        default_factory=list, alias="preservedLogicalStepIds"
+    )
+    evidence_ref: str | None = Field(None, alias="evidenceRef")
+
+
 class StepLedgerWorkloadModel(BaseModel):
     """Bounded Docker-backed workload metadata linked to a producing step."""
 
@@ -2459,6 +2486,9 @@ class StepLedgerRowModel(BaseModel):
     step_checkpoint_ref: str | None = Field(None, alias="stepCheckpointRef")
     resume_preservation: StepLedgerResumePreservationModel | None = Field(
         None, alias="recoveryPreservation"
+    )
+    downstream_invalidation: StepLedgerDownstreamInvalidationModel | None = Field(
+        None, alias="downstreamInvalidation"
     )
     workload: StepLedgerWorkloadModel | None = Field(None, alias="workload")
     last_error: str | None = Field(None, alias="lastError")

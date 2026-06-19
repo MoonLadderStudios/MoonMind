@@ -8012,6 +8012,85 @@ def test_get_execution_steps_enriches_missing_agent_run_ids_once() -> None:
     )
 
 
+def test_get_execution_steps_projects_compact_downstream_invalidation() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "dependsOn": [],
+                    "status": "failed",
+                    "waitingReason": None,
+                    "attentionRequired": True,
+                    "executionOrdinal": 2,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": "Gate requested more work",
+                    "checks": [
+                        {
+                            "kind": "quality_gate",
+                            "status": "failed",
+                            "summary": "Additional work needed",
+                            "retryCount": 1,
+                            "artifactRef": "artifact://gate/verdict",
+                        }
+                    ],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "agentRunId": None,
+                    },
+                    "artifacts": {
+                        "outputSummary": None,
+                        "outputPrimary": None,
+                        "runtimeStdout": None,
+                        "runtimeStderr": None,
+                        "runtimeMergedLogs": None,
+                        "runtimeDiagnostics": "artifact://diagnostics/runtime",
+                        "providerSnapshot": None,
+                    },
+                    "downstreamInvalidation": {
+                        "status": "requires_revalidation",
+                        "invalidatedLogicalStepIds": ["verify"],
+                        "revalidationRequired": ["verify"],
+                        "blockedLogicalStepIds": ["publish"],
+                        "preservedLogicalStepIds": ["plan"],
+                        "evidenceRef": "artifact://dependency/effects",
+                    },
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    row = response.json()["steps"][0]
+    assert row["downstreamInvalidation"] == {
+        "status": "requires_revalidation",
+        "invalidatedLogicalStepIds": ["verify"],
+        "revalidationRequired": ["verify"],
+        "blockedLogicalStepIds": ["publish"],
+        "preservedLogicalStepIds": ["plan"],
+        "evidenceRef": "artifact://dependency/effects",
+    }
+
+
 def _step_execution_manifest_payload(
     *,
     artifact_ref: str,
