@@ -3232,19 +3232,6 @@ class MoonMindRunWorkflow:
                     return verdict
                 if isinstance(raw_verdict, str) and raw_verdict.strip():
                     return "NO_DETERMINATION"
-        for key in (
-            "operator_summary",
-            "operatorSummary",
-            "summary",
-            "message",
-            "stdout_tail",
-            "stderr_tail",
-            "lastAssistantText",
-            "last_assistant_text",
-        ):
-            verdict = self._extract_moonspec_verify_verdict_from_text(outputs.get(key))
-            if verdict:
-                return verdict
         return None
 
     def _moonspec_verify_sources(
@@ -3311,23 +3298,25 @@ class MoonMindRunWorkflow:
                     payload["verdict"] = source.get(key)
                     return parse_step_gate_result(payload)
 
-        for key in (
-            "operator_summary",
-            "operatorSummary",
-            "summary",
-            "message",
-            "stdout_tail",
-            "stderr_tail",
-            "lastAssistantText",
-            "last_assistant_text",
-        ):
-            verdict = self._extract_moonspec_verify_verdict_from_text(outputs.get(key))
-            if verdict:
-                payload = dict(outputs)
-                payload["verdict"] = verdict
-                return parse_step_gate_result(payload)
-
         return parse_step_gate_result({})
+
+    def _moonspec_verify_gate_result_ref(
+        self,
+        outputs: Mapping[str, Any],
+    ) -> str | None:
+        for source in self._moonspec_verify_sources(outputs):
+            for key in (
+                "gateResultRef",
+                "gate_result_ref",
+                "stepGateResultRef",
+                "step_gate_result_ref",
+                "artifactRef",
+                "artifact_ref",
+            ):
+                gate_result_ref = self._coerce_text(source.get(key), max_chars=400)
+                if gate_result_ref:
+                    return gate_result_ref
+        return None
 
     def _record_moonspec_verify_gate(
         self,
@@ -3381,6 +3370,9 @@ class MoonMindRunWorkflow:
             "invalid": gate_result.invalid,
             "degraded": gate_result.degraded,
         }
+        gate_result_ref = self._moonspec_verify_gate_result_ref(outputs)
+        if gate_result_ref:
+            gate_context["gateResultRef"] = gate_result_ref
         if reason:
             gate_context["summary"] = reason
         if diagnostics_ref:
@@ -3484,8 +3476,13 @@ class MoonMindRunWorkflow:
             >= max_consecutive_no_progress_attempts
         ):
             return False
+        recommended_next_action = (
+            str(getattr(verdict, "recommended_next_action", "") or "")
+            .strip()
+            .lower()
+        )
         if normalized == "ADDITIONAL_WORK_NEEDED":
-            return True
+            return recommended_next_action == "reattempt_current_step"
         return normalized == "NO_DETERMINATION" and bool(
             getattr(verdict, "recoverable_in_current_runtime", False)
         )

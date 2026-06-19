@@ -223,6 +223,50 @@ def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch)
     assert progress["ready"] == 1
     assert progress["pending"] == 1
 
+
+def test_review_gate_retry_requires_reattempt_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="needs_human",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is False
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="blocked",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is False
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="reattempt_current_step",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is True
+
+
 def test_run_progress_query_exposes_current_run_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
