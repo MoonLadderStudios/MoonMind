@@ -2,7 +2,6 @@ import asyncio
 import inspect
 import os
 import signal
-from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -17,17 +16,29 @@ _SLOW_TEST_MODULES = {
     Path("tests/unit/api/routers/test_agent_runs.py"),
 }
 
-_COMPONENT_PATTERNS = (
-    "TestClient",
-    "dependency_overrides",
+_COMPONENT_TEST_PATH_PREFIXES = (
+    Path("tests/unit/api"),
+    Path("tests/unit/api_service"),
+    Path("tests/component/api"),
 )
 
-_TEMPORAL_BOUNDARY_PATTERNS = (
-    "WorkflowEnvironment",
-    "Replayer",
-    "temporalio.testing",
-    "temporalio.worker",
-)
+_TEMPORAL_BOUNDARY_TEST_PATHS = {
+    Path("tests/unit/workflows/temporal/test_agent_runtime_activities.py"),
+    Path("tests/unit/workflows/temporal/test_agent_session_replayer.py"),
+    Path("tests/unit/workflows/temporal/test_openclaw_activities.py"),
+    Path("tests/unit/workflows/temporal/test_run_replayer.py"),
+    Path("tests/unit/workflows/temporal/test_run_ungated_continuation_disposition.py"),
+    Path("tests/unit/workflows/temporal/test_typed_activity_boundaries.py"),
+    Path("tests/unit/workflows/temporal/workflows/test_run_dependency_signals.py"),
+    Path(
+        "tests/unit/workflows/temporal/workflows/"
+        "test_run_dependency_wait_through_rerun.py"
+    ),
+    Path("tests/unit/workflows/temporal/workflows/test_run_scheduling.py"),
+    Path("tests/unit/workflows/temporal/workflows/test_run_signals_updates.py"),
+}
+
+_TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES: tuple[Path, ...] = ()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -38,19 +49,32 @@ def global_test_settings():
     settings.workflow.enable_proposals = False
 
 
-@lru_cache(maxsize=None)
-def _test_source(path: str) -> str:
-    try:
-        return Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return ""
-
-
 def _relative_test_path(path: Path) -> Path:
     try:
         return path.resolve().relative_to(_REPO_ROOT)
     except ValueError:
         return path
+
+
+def _path_is_relative_to(path: Path, prefix: Path) -> bool:
+    try:
+        return path.is_relative_to(prefix)
+    except ValueError:
+        return False
+
+
+def _is_component_test_path(path: Path) -> bool:
+    return any(
+        _path_is_relative_to(path, prefix)
+        for prefix in _COMPONENT_TEST_PATH_PREFIXES
+    )
+
+
+def _is_temporal_boundary_test_path(path: Path) -> bool:
+    return path in _TEMPORAL_BOUNDARY_TEST_PATHS or any(
+        _path_is_relative_to(path, prefix)
+        for prefix in _TEMPORAL_BOUNDARY_TEST_PATH_PREFIXES
+    )
 
 
 def _item_has_marker(item: pytest.Item, name: str) -> bool:
@@ -63,13 +87,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         path = Path(str(item.fspath))
         rel_path = _relative_test_path(path)
-        source = _test_source(str(path))
 
-        is_component = _item_has_marker(item, "component") or any(
-            pattern in source for pattern in _COMPONENT_PATTERNS
+        is_component = _item_has_marker(item, "component") or _is_component_test_path(
+            rel_path
         )
-        is_temporal_boundary = _item_has_marker(item, "temporal_boundary") or any(
-            pattern in source for pattern in _TEMPORAL_BOUNDARY_PATTERNS
+        is_temporal_boundary = (
+            _item_has_marker(item, "temporal_boundary")
+            or _is_temporal_boundary_test_path(rel_path)
         )
         is_slow = _item_has_marker(item, "slow") or rel_path in _SLOW_TEST_MODULES
 
