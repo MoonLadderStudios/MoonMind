@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_LEASE_CONFLICT_GATE_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+    RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
@@ -2359,6 +2360,147 @@ def test_jira_orchestrate_external_handoff_uses_preserved_verify_gate_state(
                     "annotations": {"jiraOrchestrateRole": "code-review-handoff"},
                 },
             }
+        )
+        is None
+    )
+
+
+def _handoff_node(role: str = "pull-request-handoff", node_id: str = "pr-handoff") -> dict[str, Any]:
+    return {
+        "id": node_id,
+        "inputs": {"annotations": {"jiraOrchestrateRole": role}},
+    }
+
+
+def test_handoff_blocked_when_producing_step_not_accepted_despite_passing_verdict(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Strengthened gate: a passing verdict alone is not enough — the producing
+    # MoonSpec verify Step Execution must also be at the accepted terminal
+    # disposition.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    # Producing step did not reach accepted (e.g. failed/partial attempt).
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = "candidate"
+
+    node = _handoff_node()
+    reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(node)
+
+    assert reason is not None
+    assert "accepted terminal disposition" in reason
+    assert "candidate" in reason
+
+    # The denied non-idempotent external action is recorded as a blocked side
+    # effect at the boundary.
+    records = mock_run_workflow._step_side_effect_records.get("pr-handoff", [])
+    assert records, "expected a blocked side-effect record at the handoff boundary"
+    blocked = records[-1]
+    assert blocked["disposition"] == "blocked"
+    assert blocked["class"] == "external_non_idempotent"
+    assert blocked["operation"] == "repo.publish"
+
+
+def test_handoff_blocked_side_effect_recording_is_idempotent(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = "candidate"
+
+    node = _handoff_node()
+    first_reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        node
+    )
+    second_reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        node
+    )
+
+    assert first_reason == second_reason
+    records = mock_run_workflow._step_side_effect_records.get("pr-handoff", [])
+    assert len(records) == 1
+    assert records[0]["class"] == "external_non_idempotent"
+    assert records[0]["operation"] == "repo.publish"
+    assert records[0]["disposition"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    ["candidate", "discarded", "superseded", "blocked", "failed_with_remaining_work"],
+)
+def test_handoff_blocked_for_each_non_accepted_disposition(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = disposition
+
+    reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        _handoff_node(node_id=f"handoff-{disposition}")
+    )
+    assert reason is not None
+
+
+def test_handoff_allowed_when_producing_step_accepted_and_gate_approved(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = "accepted"
+
+    node = _handoff_node()
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(node) is None
+    )
+    # No blocked record is created for an allowed handoff.
+    assert not mock_run_workflow._step_side_effect_records.get("pr-handoff")
+
+
+def test_handoff_accepted_disposition_gate_is_replay_guarded(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    # Default fixture leaves workflow.patched -> False, so in-flight runs keep
+    # the legacy verdict-only decision even when the producing step is not yet
+    # recorded as accepted.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            _handoff_node()
         )
         is None
     )

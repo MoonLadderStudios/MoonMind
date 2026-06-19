@@ -107,6 +107,7 @@ from moonmind.workflows.temporal.step_ledger import (
     validate_preserved_dependency_outputs,
 )
 from moonmind.workflows.temporal.step_executions import (
+    external_handoff_gate_decision,
     git_effect_metadata,
     logical_step_success_allowed,
     plan_reattempt_compensation,
@@ -382,6 +383,13 @@ NATIVE_PR_PUSH_STATUS_GATE_PATCH = "native-pr-push-status-gate-v1"
 NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
 RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
     "run-stop-on-publish-handoff-failure-v1"
+)
+# Assert the producing Step Execution reached the `accepted` terminal
+# disposition before an external handoff runs, in addition to the existing
+# MoonSpec gate verdict block. Guarded for replay safety so in-flight runs keep
+# their original verdict-only decisions.
+RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH = (
+    "run-handoff-accepted-disposition-gate-v1"
 )
 RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
@@ -2517,7 +2525,11 @@ class MoonMindRunWorkflow:
             return None
         verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
         if verdict in _MOONSPEC_GATE_PASSING_VERDICTS:
-            return None
+            # The MoonSpec gate verdict approved advancement. Keep that block in
+            # place and additionally assert the producing Step Execution reached
+            # the `accepted` terminal disposition before any external handoff
+            # runs (publication / Jira / merge / deploy / provider-account).
+            return self._external_handoff_accepted_disposition_block_reason(node)
         gate_context = self._publish_context.get("moonSpecGate")
         logical_step_id = None
         if isinstance(gate_context, Mapping):
@@ -2540,6 +2552,85 @@ class MoonMindRunWorkflow:
             "verification terminal disposition; no controlling verification gate "
             "has approved advancement."
         )
+
+    def _external_handoff_operation(self, node: Mapping[str, Any]) -> str:
+        """Map a Jira Orchestrate handoff node to its external operation id."""
+
+        node_inputs = self._node_inputs_mapping(node)
+        annotations = node_inputs.get("annotations") or node.get("annotations")
+        role = ""
+        if isinstance(annotations, Mapping):
+            role = str(annotations.get("jiraOrchestrateRole") or "").strip().lower()
+        if role == "pull-request-handoff":
+            return "repo.publish"
+        if role == "code-review-handoff":
+            return "jira.add_comment"
+        return "external.handoff"
+
+    def _external_handoff_accepted_disposition_block_reason(
+        self,
+        node: Mapping[str, Any],
+    ) -> str | None:
+        """Assert the producing Step Execution is accepted before a handoff.
+
+        Layered on top of the MoonSpec verdict block: a passing verdict alone is
+        not sufficient. The producing verification Step Execution must also have
+        reached the ``accepted`` terminal disposition (Section 7.3) before any
+        external handoff (PR creation, Jira transition/comment, merge automation,
+        deployment/publish, provider-account action) runs. A denied handoff is
+        recorded as a blocked side effect at the boundary. Guarded for replay
+        safety so in-flight runs keep their original verdict-only decisions.
+        """
+
+        if not workflow.patched(RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH):
+            return None
+        gate_context = self._publish_context.get("moonSpecGate")
+        gate_logical_step_id = None
+        if isinstance(gate_context, Mapping):
+            gate_logical_step_id = self._coerce_text(
+                gate_context.get("logicalStepId"),
+                max_chars=200,
+            )
+        terminal = (
+            self._step_terminal_dispositions.get(gate_logical_step_id)
+            if gate_logical_step_id
+            else None
+        )
+        operation = self._external_handoff_operation(node)
+        decision = external_handoff_gate_decision(
+            operation=operation,
+            producing_step_terminal_disposition=terminal,
+            gate_approved=True,
+            gate_verdict=self._moonspec_gate_verdict,
+        )
+        if decision.get("allowed"):
+            return None
+        reason = (
+            "Jira Orchestrate external handoff requires the producing MoonSpec "
+            "verification Step Execution to reach an accepted terminal "
+            f"disposition; {decision.get('reason')}."
+        )
+        node_id = str(node.get("id") or "external-handoff").strip() or "external-handoff"
+        # Record the denied non-idempotent external action as a blocked side
+        # effect at the actual handoff boundary (Section 11 rule 2). Repeated
+        # gate evaluations for the same node must not duplicate the record.
+        existing_records = self._step_side_effect_records.get(node_id, ())
+        already_recorded = any(
+            record.get("class") == "external_non_idempotent"
+            and record.get("operation") == operation
+            and record.get("disposition") == "blocked"
+            for record in existing_records
+        )
+        if already_recorded:
+            return reason
+        self._record_step_side_effect(
+            node_id,
+            effect_class="external_non_idempotent",
+            operation=operation,
+            workflow_state_accepted=False,
+            reason=reason,
+        )
+        return reason
 
     def _orchestrate_reattempt_compensation(
         self,

@@ -333,6 +333,66 @@ def side_effect_record(
     return record
 
 
+def external_handoff_gate_decision(
+    *,
+    operation: str,
+    producing_step_terminal_disposition: str | None,
+    gate_approved: bool,
+    gate_verdict: str | None = None,
+) -> dict[str, Any]:
+    """Decide whether an external handoff activity may run at its boundary.
+
+    Fail-closed assertion for Section 11 rule 2 and Section 19 rule 6: PR
+    creation, Jira transition/comment, merge automation, deployment/publish, and
+    provider-account handoffs may proceed only when the producing Step Execution
+    reached the ``accepted`` terminal disposition (Section 7.3) AND the
+    controlling gate approved advancement. Either condition failing — including
+    an unknown, blank, or newly introduced terminal disposition, or a missing
+    controlling gate — blocks the handoff.
+
+    The decision is deterministic and reusable by every external handoff surface
+    so terminal-disposition gating is not limited to the structured-review
+    downstream flow or helper-level side-effect records.
+    """
+
+    operation_text = str(operation or "").strip()
+    if not operation_text:
+        raise ValueError("operation must be a non-empty string")
+    disposition = str(producing_step_terminal_disposition or "").strip() or None
+    producing_step_accepted = disposition == "accepted"
+    gate_approved_bool = bool(gate_approved)
+    allowed = producing_step_accepted and gate_approved_bool
+
+    reason: str | None = None
+    if not allowed:
+        parts: list[str] = []
+        if not producing_step_accepted:
+            parts.append(
+                "producing step execution terminal disposition "
+                f"{disposition!r} is not accepted"
+                if disposition is not None
+                else "producing step execution has no accepted terminal disposition"
+            )
+        if not gate_approved_bool:
+            verdict_text = str(gate_verdict or "").strip()
+            parts.append(
+                "controlling gate has not approved advancement"
+                + (f" (verdict {verdict_text})" if verdict_text else "")
+            )
+        reason = "; ".join(parts)
+
+    decision: dict[str, Any] = {
+        "operation": operation_text,
+        "allowed": allowed,
+        "producingStepAccepted": producing_step_accepted,
+        "gateApproved": gate_approved_bool,
+        "terminalDisposition": disposition,
+    }
+    if reason:
+        decision["reason"] = reason
+    return decision
+
+
 def memory_side_effect_summary(
     *,
     state: str,
