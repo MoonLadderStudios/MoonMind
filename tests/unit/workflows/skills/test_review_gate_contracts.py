@@ -260,6 +260,34 @@ class TestParseReviewVerdict:
         assert gate.recommended_next_action == "blocked"
         assert gate.recoverable_in_current_runtime is False
 
+    def test_parse_unknown_recommended_action_fails_closed(self):
+        # An unrecognized recommendedNextAction must not raise a hard
+        # ContractValidationError; it should downgrade the gate to a
+        # blocked/invalid/degraded result instead.
+        gate = parse_step_gate_result(
+            {
+                "verdict": "FULLY_IMPLEMENTED",
+                "confidence": 0.95,
+                "recommendedNextAction": "do_whatever",
+            }
+        )
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.invalid is True
+        assert gate.degraded is True
+        assert gate.recommended_next_action == "blocked"
+
+    @pytest.mark.parametrize("flag", ["invalid", "degraded"])
+    def test_parse_passing_verdict_with_failure_flag_downgrades(self, flag):
+        # A passing verdict that arrives already marked invalid/degraded must
+        # not retain FULLY_IMPLEMENTED, since downstream branching keys on the
+        # verdict alone and would otherwise approve publication.
+        gate = parse_step_gate_result(
+            {"verdict": "FULLY_IMPLEMENTED", "confidence": 0.99, flag: True}
+        )
+        assert gate.verdict == "NO_DETERMINATION"
+        assert gate.recommended_next_action == "blocked"
+        assert getattr(gate, flag) is True
+
     def test_parse_bad_confidence_clamped(self):
         v = parse_review_verdict({"verdict": "PASS", "confidence": 5.0})
         assert v.confidence == 1.0

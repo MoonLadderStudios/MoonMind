@@ -3293,7 +3293,7 @@ class MoonMindRunWorkflow:
                 "verificationVerdict",
                 "verification_verdict",
             ):
-                if key in source:
+                if source.get(key):
                     payload = dict(source)
                     payload["verdict"] = source.get(key)
                     return parse_step_gate_result(payload)

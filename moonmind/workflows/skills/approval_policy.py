@@ -338,7 +338,21 @@ def parse_step_gate_result(payload: Mapping[str, Any]) -> StepGateResult:
         payload.get("recommendedNextAction")
         or payload.get("recommended_next_action")
     )
+    if (
+        recommended_next_action
+        and recommended_next_action not in _RECOMMENDED_NEXT_ACTIONS
+    ):
+        # Fail closed gracefully on an unrecognized recommended action instead
+        # of raising a hard ContractValidationError from StepGateResult.
+        invalid = True
+        degraded = True
     if invalid or degraded:
+        # An invalid/degraded gate result must not retain a passing verdict:
+        # downstream branching keys on ``verdict`` alone (see run.py), so a
+        # malformed/degraded result that still says FULLY_IMPLEMENTED would
+        # otherwise approve publication. Downgrade the verdict and force a
+        # blocking action so the gate fails closed.
+        verdict_raw = "NO_DETERMINATION"
         recommended_next_action = "blocked"
     elif not recommended_next_action and verdict_raw == "FULLY_IMPLEMENTED":
         recommended_next_action = "advance"
