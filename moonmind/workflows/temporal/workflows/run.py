@@ -3291,15 +3291,52 @@ class MoonMindRunWorkflow:
             return None
         return self._normalize_moonspec_verify_verdict(match.group(1))
 
+    def _moonspec_verify_gate_result(
+        self,
+        outputs: Mapping[str, Any],
+    ) -> StepGateResult:
+        payload: dict[str, Any] = {}
+        for source in self._moonspec_verify_sources(outputs):
+            for key in (
+                "verdict",
+                "gateVerdict",
+                "gate_verdict",
+                "moonSpecVerdict",
+                "moonspecVerdict",
+                "verificationVerdict",
+                "verification_verdict",
+            ):
+                if key in source:
+                    payload = dict(source)
+                    payload["verdict"] = source.get(key)
+                    return parse_step_gate_result(payload)
+
+        for key in (
+            "operator_summary",
+            "operatorSummary",
+            "summary",
+            "message",
+            "stdout_tail",
+            "stderr_tail",
+            "lastAssistantText",
+            "last_assistant_text",
+        ):
+            verdict = self._extract_moonspec_verify_verdict_from_text(outputs.get(key))
+            if verdict:
+                payload = dict(outputs)
+                payload["verdict"] = verdict
+                return parse_step_gate_result(payload)
+
+        return parse_step_gate_result({})
+
     def _record_moonspec_verify_gate(
         self,
         *,
         node_id: str,
         outputs: Mapping[str, Any],
     ) -> None:
-        verdict = self._extract_moonspec_verify_verdict(outputs)
-        if not verdict:
-            return
+        gate_result = self._moonspec_verify_gate_result(outputs)
+        verdict = gate_result.verdict
         reason = None
         for source in self._moonspec_verify_sources(outputs):
             reason = self._sanitize_operator_summary(
@@ -3330,6 +3367,19 @@ class MoonMindRunWorkflow:
         gate_context: dict[str, Any] = {
             "logicalStepId": node_id,
             "verdict": verdict,
+            "confidence": gate_result.confidence,
+            "validatedRefs": dict(gate_result.validated_refs or {}),
+            "remainingWorkRef": gate_result.remaining_work_ref,
+            "recommendedNextAction": gate_result.recommended_next_action,
+            "targetLogicalStepId": gate_result.target_logical_step_id,
+            "workspacePolicyRecommendation": (
+                gate_result.workspace_policy_recommendation
+            ),
+            "recoverableInCurrentRuntime": (
+                gate_result.recoverable_in_current_runtime
+            ),
+            "invalid": gate_result.invalid,
+            "degraded": gate_result.degraded,
         }
         if reason:
             gate_context["summary"] = reason
