@@ -148,6 +148,90 @@ def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
     assert source.index(guard) < source.index(start_manifest_call)
 
 
+@pytest.mark.asyncio
+async def test_start_manifest_uses_launch_context_projection_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return "artifact-attempt-1"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "collect-evidence",
+                "tool": {"type": "agent_runtime", "name": "codex_cli", "version": ""},
+                "inputs": {"title": "Collect evidence"},
+            }
+        ],
+        dependency_map={"collect-evidence": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "collect-evidence",
+        updated_at=now,
+        summary="Launching child runtime",
+    )
+    request = workflow._build_agent_execution_request(
+        node_inputs={"runtime": {"mode": "codex_cli"}},
+        node_id="collect-evidence",
+        tool_name="codex_cli",
+        workflow_parameters={
+            "task": {
+                "retrieval": {
+                    "query": "step context bundle",
+                    "returnedRefs": ["artifact://retrieved-doc"],
+                },
+                "memoryProposals": [
+                    {
+                        "proposalRef": "memory://proposal-1",
+                        "state": "proposed",
+                    }
+                ],
+                "steps": [{"id": "collect-evidence"}],
+            }
+        },
+    )
+    expected_context = request.parameters["metadata"]["moonmind"][
+        "stepExecutionManifestProjection"
+    ]["context"]
+
+    await workflow._record_step_execution_manifest(
+        "collect-evidence",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    assert writes[0]["payload"]["context"] == expected_context
+    assert writes[0]["payload"]["context"]["retrievalManifestRef"].startswith(
+        "artifact://retrieval-manifests/sha256:"
+    )
+    assert writes[0]["payload"]["context"]["memoryManifestRef"].startswith(
+        "attempt-memory-manifest://sha256:"
+    )
+    assert writes[0]["payload"]["context"] != {}
+
+
 def test_canonical_step_checkpoint_writes_keep_replay_patch_guard() -> None:
     source = Path(run_module.__file__).read_text()
 

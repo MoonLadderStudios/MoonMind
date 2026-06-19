@@ -41,6 +41,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.executions.routing import _coerce_bool
     from moonmind.workflows.executions.prepared_context import (
+        build_durable_retrieval_manifest_artifact,
         build_execution_context_bundle,
         build_prepared_input_manifest,
         build_recovery_prepared_artifact_refs,
@@ -820,6 +821,9 @@ class MoonMindRunWorkflow:
         self._step_execution_launch_blocks: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
+        self._step_execution_context_projections: dict[
+            tuple[str, int], dict[str, Any]
+        ] = {}
         # Side-effect records observed per logical step across attempts, keyed by
         # logical step id. Used to detect already-occurred non-idempotent
         # external effects when a reattempt starts (Section 11, rules 3-4).
@@ -2757,6 +2761,11 @@ class MoonMindRunWorkflow:
         ).to_manifest_projection()
         context = projection.get("context")
         if isinstance(context, Mapping):
+            cached_context = self._step_execution_context_projections.get(
+                (logical_step_id, attempt)
+            )
+            if isinstance(cached_context, Mapping):
+                return dict(cached_context)
             return dict(context)
         return {}
 
@@ -10076,6 +10085,7 @@ class MoonMindRunWorkflow:
         if execution_profile_ref:
             context_policy_refs["executionProfileRef"] = execution_profile_ref
         retrieval_context = None
+        retrieval_manifest_artifact = None
         memory_proposals = None
         memory_context = None
         fix_patterns = None
@@ -10087,6 +10097,9 @@ class MoonMindRunWorkflow:
             )
             if isinstance(raw_retrieval_context, Mapping):
                 retrieval_context = raw_retrieval_context
+                retrieval_manifest_artifact = build_durable_retrieval_manifest_artifact(
+                    retrieval_context
+                )
             raw_memory_proposals = (
                 task_payload_for_context.get("memoryProposals")
                 or task_payload_for_context.get("memoryEffects")
@@ -10155,8 +10168,15 @@ class MoonMindRunWorkflow:
         moonmind_payload["stepExecutionManifestProjection"] = (
             attempt_context.to_manifest_projection()
         )
+        if retrieval_manifest_artifact is not None:
+            moonmind_payload["retrievalManifestArtifact"] = retrieval_manifest_artifact
         metadata_payload["moonmind"] = moonmind_payload
         parameters["metadata"] = metadata_payload
+        projection_context = attempt_context.to_manifest_projection().get("context")
+        if isinstance(projection_context, Mapping):
+            self._step_execution_context_projections[
+                (node_id, execution_ordinal)
+            ] = dict(projection_context)
         step_execution_identity = StepExecutionIdentityModel(
             workflowId=wf_info.workflow_id,
             runId=wf_info.run_id,
@@ -10184,6 +10204,18 @@ class MoonMindRunWorkflow:
             "runtimeSelection": dict(runtime_selection),
             "skillSourcePolicy": skill_source_policy,
         }
+        if attempt_context.retrieval_manifest_ref:
+            step_execution_payload["retrievalManifestRef"] = (
+                attempt_context.retrieval_manifest_ref
+            )
+        if attempt_context.memory_manifest_ref:
+            step_execution_payload["memoryManifestRef"] = (
+                attempt_context.memory_manifest_ref
+            )
+        if attempt_context.memory_context_ref:
+            step_execution_payload["memoryContextRef"] = (
+                attempt_context.memory_context_ref
+            )
         if agent_kind == "managed":
             session_reset = self._managed_reattempt_session_reset_evidence(
                 node_id,

@@ -179,7 +179,7 @@ def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -
     ]
 
     assert attempt_context["retrievalManifestRef"].startswith(
-        "attempt-retrieval-manifest://sha256:"
+        "artifact://retrieval-manifests/sha256:"
     )
     assert attempt_context["retrievalManifestRef"] == (
         projection["context"]["retrievalManifestRef"]
@@ -194,6 +194,39 @@ def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -
         attempt_context["memoryManifestRef"]
     )
     assert "Relevant design summary." not in str(projection)
+
+
+def test_run_request_records_durable_retrieval_manifest_artifact_metadata() -> None:
+    wf = MoonMindRunWorkflow()
+    task_payload = {
+        **_task_payload(),
+        "retrieval": {
+            "status": "unavailable",
+            "selector": {"reason": "index_offline"},
+        },
+    }
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={"task": task_payload},
+        )
+
+    moonmind_metadata = request.parameters["metadata"]["moonmind"]
+    retrieval_artifact = moonmind_metadata["retrievalManifestArtifact"]
+    attempt_context = moonmind_metadata["executionContext"]
+    projection = moonmind_metadata["stepExecutionManifestProjection"]
+
+    assert retrieval_artifact["artifactRef"] == attempt_context["retrievalManifestRef"]
+    assert retrieval_artifact["payload"]["status"] == "unavailable"
+    assert retrieval_artifact["payload"]["selector"] == {"reason": "index_offline"}
+    assert projection["context"]["retrievalManifestRef"] == (
+        retrieval_artifact["artifactRef"]
+    )
 
 
 def test_run_request_projects_matched_fix_patterns_into_attempt_memory() -> None:

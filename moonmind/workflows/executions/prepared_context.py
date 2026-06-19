@@ -59,7 +59,7 @@ _SECRETISH_RE = re.compile(
     re.IGNORECASE,
 )
 _RAW_DIFF_RE = re.compile(r"(^diff --git |\n@@ [-+0-9, ]+@@)", re.MULTILINE)
-_LARGE_TEXT_LIMIT = 4_000
+_LARGE_TEXT_LIMIT = 2_000
 _LARGE_LOG_KEYS = {
     "log",
     "logs",
@@ -466,7 +466,7 @@ def build_execution_context_bundle(
     retrieval_manifest_ref = None
     if isinstance(retrieval, Mapping) and retrieval:
         retrieval_manifest_ref = (
-            build_retrieval_manifest(retrieval).retrieval_manifest_ref
+            build_durable_retrieval_manifest_artifact(retrieval)["artifactRef"]
         )
     memory_manifest_ref = None
     effective_memory_proposals = list(memory_proposals or [])
@@ -606,6 +606,35 @@ def build_retrieval_manifest(retrieval: Mapping[str, Any]) -> RetrievalManifest:
     digest = _digest_payload(payload)
     payload["retrievalManifestRef"] = f"attempt-retrieval-manifest://{digest}"
     return RetrievalManifest.model_validate(payload)
+
+
+def build_durable_retrieval_manifest_artifact(
+    retrieval: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build an artifact-ready retrieval manifest with a stable ref."""
+
+    manifest = build_retrieval_manifest(retrieval)
+    payload = manifest.model_dump(by_alias=True, exclude_none=True)
+    digest = _digest_payload(
+        {
+            key: value
+            for key, value in payload.items()
+            if key != "retrievalManifestRef"
+        }
+    )
+    artifact_ref = f"artifact://retrieval-manifests/{digest}"
+    payload["retrievalManifestDigest"] = digest
+    payload["retrievalManifestRef"] = artifact_ref
+    return {
+        "artifactRef": artifact_ref,
+        "contentType": "application/json",
+        "payload": payload,
+        "metadata": {
+            "artifact_kind": "retrieval_manifest",
+            "retrievalStatus": payload["status"],
+            "retrievalManifestDigest": digest,
+        },
+    }
 
 
 def build_memory_manifest(

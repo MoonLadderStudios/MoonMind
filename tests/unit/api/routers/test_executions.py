@@ -8040,7 +8040,11 @@ def _step_execution_manifest_payload(
         "startedAt": "2026-05-19T10:00:00Z",
         "updatedAt": "2026-05-19T10:01:00Z",
         "input": {"preparedInputRef": f"art-input-{attempt}"},
-        "context": {"contextBundleRef": f"art-context-{attempt}"},
+        "context": {
+            "contextBundleRef": f"art-context-{attempt}",
+            "retrievalManifestRef": f"artifact://retrieval-manifests/{attempt}",
+            "memoryManifestRef": f"attempt-memory-manifest://sha256:{attempt}",
+        },
         "workspace": {
             "workspacePolicy": "continue_from_previous_execution",
             "baselineRef": f"art-workspace-{attempt}",
@@ -8321,7 +8325,13 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     assert body["sourceExecutionOrdinal"] == 2
     assert body["lineage"]["relationship"] == "recover_from_failed_step"
     assert body["inputRefs"] == {"preparedInputRef": "art-input-2"}
-    assert body["contextRefs"] == {"contextBundleRef": "art-context-2"}
+    assert body["contextRefs"] == {
+        "contextBundleRef": "art-context-2",
+        "retrievalManifestRef": "artifact://retrieval-manifests/2",
+        "memoryManifestRef": "attempt-memory-manifest://sha256:2",
+    }
+    assert "retrievalContent" not in body["contextRefs"]
+    assert "providerPayload" not in response.text
     assert body["workspaceRefs"] == {
         "baselineRef": "art-workspace-2",
     }

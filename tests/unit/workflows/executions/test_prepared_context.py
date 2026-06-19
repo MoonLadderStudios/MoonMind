@@ -12,6 +12,7 @@ from moonmind.workflows.executions.prepared_context import (
     PreparedContextFailure,
     PreparedInputEntry,
     PreparedInputManifest,
+    build_durable_retrieval_manifest_artifact,
     build_execution_context_bundle,
     build_memory_manifest,
     build_recovery_prepared_artifact_refs,
@@ -433,7 +434,10 @@ def test_execution_context_records_retrieval_and_memory_manifest_refs() -> None:
     assert memory.proposals[0].state == "proposed"
     assert memory.proposals[1].state == "rejected"
     assert memory.memory_manifest_ref.startswith("attempt-memory-manifest://sha256:")
-    assert bundle.retrieval_manifest_ref == retrieval.retrieval_manifest_ref
+    assert bundle.retrieval_manifest_ref.startswith(
+        "artifact://retrieval-manifests/sha256:"
+    )
+    assert bundle.retrieval_manifest_ref != retrieval.retrieval_manifest_ref
     assert bundle.memory_manifest_ref == memory.memory_manifest_ref
 
 
@@ -515,6 +519,49 @@ def test_retrieval_manifest_records_explicit_statuses() -> None:
         "attempt-retrieval-manifest://sha256:"
     )
     assert unavailable.status == "unavailable"
+
+
+def test_durable_retrieval_manifest_artifact_preserves_captured_status() -> None:
+    artifact = build_durable_retrieval_manifest_artifact(
+        {
+            "status": "captured",
+            "query": "execution context bundle",
+            "indexVersion": "rag-index-1",
+            "returnedRefs": ["artifact://doc-1"],
+            "filters": {"source": "docs"},
+            "excludedRefs": ["artifact://doc-secret"],
+            "compactSummaries": ["Relevant source design section."],
+        }
+    )
+
+    payload = artifact["payload"]
+
+    assert artifact["artifactRef"] == payload["retrievalManifestRef"]
+    assert artifact["contentType"] == "application/json"
+    assert artifact["metadata"]["artifact_kind"] == "retrieval_manifest"
+    assert payload["status"] == "captured"
+    assert payload["query"] == "execution context bundle"
+    assert payload["indexVersion"] == "rag-index-1"
+    assert payload["returnedRefs"] == ["artifact://doc-1"]
+    assert payload["excludedRefs"] == ["artifact://doc-secret"]
+    assert payload["compactSummaries"] == ["Relevant source design section."]
+    assert payload["retrievalManifestDigest"].startswith("sha256:")
+    assert payload["retrievalManifestRef"].startswith(
+        "artifact://retrieval-manifests/sha256:"
+    )
+
+
+def test_durable_retrieval_manifest_artifact_preserves_absent_statuses() -> None:
+    skipped = build_durable_retrieval_manifest_artifact({"status": "skipped"})
+    unavailable = build_durable_retrieval_manifest_artifact(
+        {"status": "unavailable", "selector": {"reason": "index_offline"}}
+    )
+
+    assert skipped["payload"]["status"] == "skipped"
+    assert skipped["payload"]["returnedRefs"] == []
+    assert unavailable["payload"]["status"] == "unavailable"
+    assert unavailable["payload"]["selector"] == {"reason": "index_offline"}
+    assert skipped["artifactRef"] != unavailable["artifactRef"]
 
 
 @pytest.mark.parametrize(
