@@ -5,6 +5,7 @@ import json
 import pytest
 
 from moonmind.workflows.temporal.step_execution_conformance import (
+    CLEANUP_GATE_REQUIRED_CONDITIONS,
     FORBIDDEN_INLINE_EVIDENCE_FIXTURES,
     REQUIRED_CONFORMANCE_FAMILIES,
     REQUIRED_TRACEABILITY_IDS,
@@ -12,6 +13,7 @@ from moonmind.workflows.temporal.step_execution_conformance import (
     api_contract_fixture,
     api_degraded_projection_decisions,
     build_conformance_summary,
+    cleanup_gate_decision,
     classify_gate_verdict,
     golden_fixture_catalog,
     run_step_execution_conformance,
@@ -276,6 +278,43 @@ def test_api_projection_degraded_values_have_typed_invalid_decisions() -> None:
         )
         for decision in decisions.values()
     )
+
+
+def test_cleanup_gate_retains_temp_plan_while_closure_blockers_remain() -> None:
+    conditions = {condition: True for condition in CLEANUP_GATE_REQUIRED_CONDITIONS}
+    conditions["docs_match_implemented_behavior"] = False
+
+    decision = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=True,
+        expected="invalid",
+    )
+
+    assert decision["decision"] == "invalid"
+    assert decision["expected"] == "invalid"
+    assert decision["failureCode"] == "cleanup_blockers_remaining"
+    assert "docs_match_implemented_behavior" in decision["message"]
+    assert {"FR-007", "FR-008", "SC-004", "DESIGN-REQ-024"}.issubset(
+        set(decision["traceability"])
+    )
+
+
+def test_cleanup_gate_requires_temp_plan_deletion_after_closure() -> None:
+    conditions = {condition: True for condition in CLEANUP_GATE_REQUIRED_CONDITIONS}
+
+    lingering_plan = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=True,
+    )
+    closed = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=False,
+    )
+
+    assert lingering_plan["decision"] == "invalid"
+    assert lingering_plan["failureCode"] == "obsolete_gap_plan_present"
+    assert closed["decision"] == "valid"
+    assert closed["failureCode"] is None
 
 
 def test_api_contract_fixture_covers_phase_11_recovery_evidence_panels() -> None:
