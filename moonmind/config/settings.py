@@ -1438,9 +1438,13 @@ class PentestSettings(BaseSettings):
     """Policy and deployment settings for the curated PentestGPT tool."""
 
     enabled: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices("MOONMIND_PENTEST_ENABLED"),
-        description="Enable discovery and execution of security.pentest.run.",
+        description=(
+            "Enable discovery and execution of security.pentest.run. Discovery is "
+            "enabled by default; set MOONMIND_PENTEST_ENABLED=false to disable it "
+            "as an operator override."
+        ),
         json_schema_extra={
             "moonmind": {
                 "expose": True,
