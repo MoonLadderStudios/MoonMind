@@ -220,7 +220,7 @@ def mock_google_chat_response():
     return mock_response
 
 # Test with model_cache integration
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.AsyncOpenAI")  # Corrected patch target
 @patch("api_service.api.routers.chat.get_current_user")  # Added patch
@@ -263,7 +263,7 @@ def test_chat_completions_openai_via_cache(
     mock_client_instance.chat.completions.create.assert_called_once()
 
 # Test with model_cache integration and corrected path
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.AsyncOpenAI")  # Corrected patch target
 def test_chat_completions_endpoint_success_corrected_path(
@@ -299,8 +299,8 @@ def test_chat_completions_endpoint_success_corrected_path(
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
 
-@patch("api_service.api.routers.chat.get_openai_model", return_value="gpt-3.5-turbo")
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.factories.openai_factory.get_openai_model", return_value="gpt-3.5-turbo")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.AsyncOpenAI")
 def test_chat_completions_blocks_secret_before_provider_send(
@@ -323,8 +323,8 @@ def test_chat_completions_blocks_secret_before_provider_send(
     mock_async_openai_client.assert_not_called()
 
 
-@patch("api_service.api.routers.chat.get_openai_model", return_value="gpt-3.5-turbo")
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.factories.openai_factory.get_openai_model", return_value="gpt-3.5-turbo")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.AsyncOpenAI")
 def test_chat_completions_blocks_secret_before_provider_send(
@@ -369,8 +369,8 @@ def test_openai_response_normalization_preserves_zero_token_usage() -> None:
 
 
 @patch("google.generativeai.configure")
-@patch("api_service.api.routers.chat.get_google_model")
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.factories.google_factory.get_google_model")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch(
     "api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock
 )  # Patching the helper
@@ -446,7 +446,7 @@ async def test_handle_openai_request_blocks_secret_before_provider_call(
 
 
 @pytest.mark.asyncio
-@patch("api_service.api.routers.chat.get_google_model")
+@patch("moonmind.factories.google_factory.get_google_model")
 async def test_handle_google_request_blocks_secret_before_provider_call(
     mock_get_google_model,
     monkeypatch,
@@ -472,7 +472,7 @@ async def test_handle_google_request_blocks_secret_before_provider_call(
 
 
 @pytest.mark.asyncio
-@patch("api_service.api.routers.chat.AnthropicFactory.create_anthropic_model")
+@patch("moonmind.factories.anthropic_factory.AnthropicFactory.create_anthropic_model")
 async def test_handle_anthropic_request_blocks_secret_before_provider_call(
     mock_create_anthropic_model,
     monkeypatch,
@@ -524,9 +524,9 @@ def test_chat_outbound_scan_blocks_dict_messages_with_high_security(monkeypatch)
 
 
 @patch("api_service.api.routers.chat.get_rag_context", new_callable=AsyncMock)
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
-@patch("api_service.api.routers.chat.get_openai_model")
+@patch("moonmind.factories.openai_factory.get_openai_model")
 @patch("api_service.api.routers.chat.AsyncOpenAI")
 def test_responses_endpoint_blocks_secret_before_openai_provider_call(
     mock_async_openai_client,
@@ -559,8 +559,8 @@ def test_responses_endpoint_blocks_secret_before_openai_provider_call(
 
 # Refined Google Error Handling Tests
 @patch("google.generativeai.configure")
-@patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.factories.google_factory.get_google_model")  # CORRECTED TARGET
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 # Removed patch for get_user_api_key
 def test_chat_completions_google_value_error_invalid_role(
     # mock_get_user_api_key, # Removed
@@ -588,8 +588,8 @@ def test_chat_completions_google_value_error_invalid_role(
     assert "Role or turn order error with Gemini API" in json_response["detail"]
 
 @patch("google.generativeai.configure")
-@patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.factories.google_factory.get_google_model")  # CORRECTED TARGET
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch(
     "api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock
 )  # Patch get_user_api_key
@@ -619,9 +619,9 @@ def test_chat_completions_google_value_error_other_argument(
     assert f"Google Gemini API error: {error_message}" in json_response["detail"]
 
 # Cache behavior for unknown models
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch(
-    "api_service.api.routers.chat.model_cache.refresh_models_sync"
+    "moonmind.models_cache.model_cache.refresh_models_sync"
 )  # Mock the sync refresh
 def test_chat_completions_model_not_found_initial_and_after_refresh(
     mock_refresh_sync, mock_get_provider, chat_request_unknown_model
@@ -639,8 +639,8 @@ def test_chat_completions_model_not_found_initial_and_after_refresh(
     mock_refresh_sync.assert_called_once()  # Ensure refresh was attempted
     assert mock_get_provider.call_count == 2
 
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
-@patch("api_service.api.routers.chat.model_cache.refresh_models_sync")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.refresh_models_sync")
 @patch("openai.ChatCompletion.acreate", new_callable=AsyncMock)  # For the retry path
 def test_chat_completions_model_found_after_refresh_openai(
     mock_acreate,
@@ -668,7 +668,7 @@ def test_chat_completions_model_found_after_refresh_openai(
     # mock_acreate.assert_called_once() # This would be called if retry was fully implemented and led to a 200
 
 # API Key Checks (still relevant with cache)
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 def test_chat_completions_openai_no_api_key_with_cache(
     mock_get_user_api_key_helper, mock_get_provider, chat_request_openai_model
@@ -683,7 +683,7 @@ def test_chat_completions_openai_no_api_key_with_cache(
     assert response.status_code == 400
     assert "Provide a key" in response.json()["detail"]
 
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 def test_chat_completions_google_no_api_key_with_cache(
     mock_get_user_api_key_helper, mock_get_provider, chat_request_google_model
@@ -699,7 +699,7 @@ def test_chat_completions_google_no_api_key_with_cache(
     assert "Provide a key" in response.json()["detail"]
 
 # General API errors after successful routing by cache
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.AsyncOpenAI")  # Corrected patch target
 def test_chat_completions_openai_api_error_with_cache(
@@ -728,8 +728,8 @@ def test_chat_completions_openai_api_error_with_cache(
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
 
 @patch("google.generativeai.configure")
-@patch("api_service.api.routers.chat.get_google_model")  # CORRECTED TARGET
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.factories.google_factory.get_google_model")  # CORRECTED TARGET
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch(
     "api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock
 )  # Patch get_user_api_key
@@ -769,7 +769,7 @@ def chat_request_no_model():
     )
 
 # Tests for provider enablement functionality
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 def test_chat_completions_openai_provider_disabled(
     mock_get_user_api_key_helper, mock_get_provider, chat_request_openai_model
@@ -790,7 +790,7 @@ def test_chat_completions_openai_provider_disabled(
     # The error message comes from handle_openai_request in chat.py
     assert "OpenAI provider is disabled on the server." in json_response["detail"]
 
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 # Removed patch for get_user_api_key
 def test_chat_completions_google_provider_disabled(
     # mock_get_user_api_key, # Removed
@@ -812,7 +812,7 @@ def test_chat_completions_google_provider_disabled(
     assert "Google provider is disabled on the server." in json_response["detail"]
 
 # Test default model functionality
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
 @patch("api_service.api.routers.chat.AsyncOpenAI")  # Corrected patch target
 def test_chat_completions_uses_default_model(
@@ -854,9 +854,9 @@ def test_chat_completions_uses_default_model(
     mock_async_openai_client.assert_called_once_with(api_key="sk-test-user-key")
     mock_client_instance.chat.completions.create.assert_called_once()
 
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
-@patch("api_service.api.routers.chat.get_openai_model")
+@patch("moonmind.factories.openai_factory.get_openai_model")
 @patch("api_service.api.routers.chat.AsyncOpenAI")
 def test_responses_endpoint_uses_openai_responses_api(
     mock_async_openai_client,
@@ -919,9 +919,9 @@ def test_responses_endpoint_uses_openai_responses_api(
     )
 
 @patch("api_service.api.routers.chat.get_rag_context", new_callable=AsyncMock)
-@patch("api_service.api.routers.chat.model_cache.get_model_provider")
+@patch("moonmind.models_cache.model_cache.get_model_provider")
 @patch("api_service.api.routers.chat.get_user_api_key", new_callable=AsyncMock)
-@patch("api_service.api.routers.chat.get_openai_model")
+@patch("moonmind.factories.openai_factory.get_openai_model")
 @patch("api_service.api.routers.chat.AsyncOpenAI")
 def test_responses_endpoint_sends_processed_rag_context_to_openai(
     mock_async_openai_client,

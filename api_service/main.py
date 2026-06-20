@@ -92,48 +92,14 @@ _PRESET_SEED_DIR = (
 )
 _LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
 
-
-def build_embed_model(*args, **kwargs):
-    from moonmind.factories.embed_model_factory import build_embed_model as _build
-
-    return _build(*args, **kwargs)
-
-
-def build_vector_store(*args, **kwargs):
-    from moonmind.factories.vector_store_factory import build_vector_store as _build
-
-    return _build(*args, **kwargs)
-
-
-def build_storage_context(*args, **kwargs):
-    from moonmind.factories.storage_context_factory import build_storage_context as _build
-
-    return _build(*args, **kwargs)
-
-
-def build_service_context(*args, **kwargs):
-    from moonmind.factories.service_context_factory import build_service_context as _build
-
-    return _build(*args, **kwargs)
-
-
-def build_context_retrieval_service(*args, **kwargs):
-    from moonmind.rag.service import ContextRetrievalService
-
-    return ContextRetrievalService(*args, **kwargs)
-
-
-def build_rag_runtime_settings_from_env():
-    from moonmind.rag.settings import RagRuntimeSettings
-
-    return RagRuntimeSettings.from_env()
-
 def _initialize_embedding_model(app_state, app_settings):
     """Initializes the embedding model and records its dimensionality on app_state."""
     logger.info("Initializing embedding model...")
 
     # Build the model and get any dimension configured in settings
     try:
+        from moonmind.factories.embed_model_factory import build_embed_model
+
         app_state.embed_model, configured_dims = build_embed_model(app_settings)
     except Exception as e:
         logger.error("Embedding model initialization failed: %s", e)
@@ -190,6 +156,8 @@ def _initialize_vector_store(app_state, app_settings):
     """Initializes and sets the vector store on app_state."""
     logger.info("Initializing vector store...")
     try:
+        from moonmind.factories.vector_store_factory import build_vector_store
+
         app_state.vector_store = build_vector_store(
             app_settings, app_state.embed_model, app_state.embed_dimensions
         )
@@ -201,6 +169,9 @@ def _initialize_vector_store(app_state, app_settings):
 def _initialize_contexts(app_state, app_settings):
     """Initializes and sets storage and service contexts on app_state."""
     logger.info("Initializing storage and service contexts...")
+    from moonmind.factories.service_context_factory import build_service_context
+    from moonmind.factories.storage_context_factory import build_storage_context
+
     app_state.storage_context = build_storage_context(
         app_settings, app_state.vector_store
     )
@@ -1121,8 +1092,11 @@ async def startup_event():
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     _register_settings_change_subscribers()
     try:
-        app.state.retrieval_service = build_context_retrieval_service(
-            settings=build_rag_runtime_settings_from_env()
+        from moonmind.rag.service import ContextRetrievalService
+        from moonmind.rag.settings import RagRuntimeSettings
+
+        app.state.retrieval_service = ContextRetrievalService(
+            settings=RagRuntimeSettings.from_env()
         )
     except Exception as exc:
         logger.warning(

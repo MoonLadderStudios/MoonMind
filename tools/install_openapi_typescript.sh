@@ -10,7 +10,7 @@ fi
 
 version="$(
     cd "$repo_root"
-    node -e "console.log(require('./package-lock.json').packages['node_modules/openapi-typescript'].version)"
+    node -e "const lock = require('./package-lock.json'); const ver = (lock.packages && lock.packages['node_modules/openapi-typescript'] || {}).version || (lock.dependencies && lock.dependencies['openapi-typescript'] || {}).version; if (!ver) { console.error('Error: openapi-typescript not found in package-lock.json'); process.exit(1); } console.log(ver);"
 )"
 
 cd "$repo_root"

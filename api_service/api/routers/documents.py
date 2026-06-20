@@ -22,26 +22,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-class ConfluenceIndexer:
-    def __new__(cls, *args, **kwargs):
-        from moonmind.indexers.confluence_indexer import ConfluenceIndexer as _Indexer
-
-        return _Indexer(*args, **kwargs)
-
-
-class GitHubIndexer:
-    def __new__(cls, *args, **kwargs):
-        from moonmind.indexers.github_indexer import GitHubIndexer as _Indexer
-
-        return _Indexer(*args, **kwargs)
-
-
-class GoogleDriveIndexer:
-    def __new__(cls, *args, **kwargs):
-        from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer as _Indexer
-
-        return _Indexer(*args, **kwargs)
-
 @router.post("/confluence/load")  # Path relative to the /v1/documents prefix
 async def load_confluence_documents(
     request: ConfluenceLoadRequest,
@@ -54,6 +34,8 @@ async def load_confluence_documents(
 
     """Load documents from Confluence workspace"""
     try:
+        from moonmind.indexers.confluence_indexer import ConfluenceIndexer
+
         confluence_indexer = ConfluenceIndexer(
             base_url=settings.atlassian.atlassian_url,
             user_name=settings.atlassian.atlassian_username,
@@ -121,6 +103,8 @@ async def load_github_repo(
 ):
     """Load documents from a GitHub repository."""
     try:
+        from moonmind.indexers.github_indexer import GitHubIndexer
+
         github_indexer = GitHubIndexer(github_token=request.github_token, logger=logger)
 
         # GitHubIndexer.index is synchronous
@@ -167,6 +151,8 @@ async def load_google_drive_documents(
 ):
     """Load documents from Google Drive."""
     try:
+        from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
+
         sa_key_path = request.service_account_key_path
         if (
             not sa_key_path

@@ -22,11 +22,6 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def get_google_model(*args, **kwargs):
-    from moonmind.factories.google_factory import get_google_model as _get
-
-    return _get(*args, **kwargs)
-
 # Model Context Protocol Schema Definitions
 class ContextMessage(BaseModel):
     role: str
@@ -179,6 +174,8 @@ async def process_context(
         )
 
         # Fetch the Google LLM and generate content
+        from moonmind.factories.google_factory import get_google_model
+
         chat_model = get_google_model(request.model)
 
         # Set generation parameters if provided

@@ -45,35 +45,6 @@ responses_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-class _ModelCacheProxy:
-    def __getattr__(self, name: str):
-        from moonmind.models_cache import model_cache as _model_cache
-
-        return getattr(_model_cache, name)
-
-
-model_cache = _ModelCacheProxy()
-
-
-def get_openai_model(*args, **kwargs):
-    from moonmind.factories.openai_factory import get_openai_model as _get
-
-    return _get(*args, **kwargs)
-
-
-def get_google_model(*args, **kwargs):
-    from moonmind.factories.google_factory import get_google_model as _get
-
-    return _get(*args, **kwargs)
-
-
-class AnthropicFactory:
-    @staticmethod
-    def create_anthropic_model(*args, **kwargs):
-        from moonmind.factories.anthropic_factory import AnthropicFactory as _Factory
-
-        return _Factory.create_anthropic_model(*args, **kwargs)
-
 def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
     for index, msg in enumerate(messages):
         if isinstance(msg, dict):
@@ -459,6 +430,8 @@ async def chat_completions(
     user: User = Depends(get_current_user()),
 ):
     try:
+        from moonmind.models_cache import model_cache
+
         # Extract the last user message as the query for RAG
         user_query = ""
         if request.messages:
@@ -559,6 +532,8 @@ async def create_response(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ):
+    from moonmind.models_cache import model_cache
+
     if request.stream:
         raise HTTPException(
             status_code=400,
@@ -612,6 +587,8 @@ async def create_response(
         )
 
     if provider == "OpenAI":
+        from moonmind.factories.openai_factory import get_openai_model
+
         if (
             not settings.is_provider_enabled("openai")
             and not settings.openai.openai_enabled
@@ -694,6 +671,8 @@ async def handle_openai_request(
         raise HTTPException(
             status_code=400, detail="OpenAI API key not provided for the user."
         )
+
+    from moonmind.factories.openai_factory import get_openai_model
 
     openai_model_name = get_openai_model(
         model_to_use
@@ -827,6 +806,8 @@ async def handle_google_request(
     # Let's proceed by calling a modified get_google_model that handles this.
     # We will adjust get_google_model in a later step or assume it's done.
     # For the purpose of this step, we pass api_key to get_google_model.
+    from moonmind.factories.google_factory import get_google_model
+
     chat_model = get_google_model(model_name=model_to_use, api_key=api_key)
     try:
         response_gemini = chat_model.generate_content(contents)
@@ -908,6 +889,8 @@ async def handle_anthropic_request(
 
     # The AnthropicFactory.create_anthropic_model currently uses global settings.
     # We need to pass the api_key to it.
+    from moonmind.factories.anthropic_factory import AnthropicFactory
+
     anthropic_model = AnthropicFactory.create_anthropic_model(
         api_key=api_key, model_name=model_to_use
     )
