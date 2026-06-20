@@ -2852,8 +2852,8 @@ function StepExecutionRefList({ entries }: { entries: Array<[string, string]> })
   if (entries.length === 0) return null;
   return (
     <span className="step-execution-ref-list">
-      {entries.map(([label, ref]) => (
-        <span className="step-execution-ref" key={`${label}-${ref}`}>
+      {entries.map(([label, ref], index) => (
+        <span className="step-execution-ref" key={`${label}-${ref}-${index}`}>
           <span className="small">{formatStatusLabel(label)}:</span>{' '}
           <code className="text-xs break-all">{ref}</code>
         </span>
