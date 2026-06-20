@@ -53,9 +53,9 @@ These need real secret values / a verified digest and cannot be committed:
 
 2. **Pin the preflight/runner image to a digest** and set it for the worker:
    ```
-   # obtain once, with a token that can read the package:
-   docker manifest inspect ghcr.io/moonladderstudios/tactics-ue-base:latest \
-     --verbose | sha256-of-the-manifest
+   # obtain once, with a token that can read the package (without pulling the multi-GB layers):
+   docker buildx imagetools inspect ghcr.io/moonladderstudios/tactics-ue-base:latest
+   # Use the Digest printed at the top of the output:
    MOONMIND_UNREAL_ENGINE_IMAGE=ghcr.io/moonladderstudios/tactics-ue-base@sha256:<digest>
    ```
    The preflight rejects unpinned `:latest`, so a digest (or non-latest tag) is
