@@ -75,17 +75,17 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
     detector_steps = detector_job["steps"]
     detector_checkout = detector_steps[0]
     assert detector_checkout["uses"].startswith("actions/checkout@")
-    assert detector_checkout["with"]["fetch-depth"] == 1
+    assert int(detector_checkout["with"]["fetch-depth"]) == 1
     assert any(
-        "tools/check_openapi_affecting_changes.sh" in step.get("run", "")
+        "tools/check_openapi_affecting_changes.sh" in (step.get("run") or "")
         for step in detector_steps
     )
     assert not any(
-        step.get("uses", "").startswith("actions/setup-node@")
-        or step.get("uses", "").startswith("actions/setup-python@")
-        or "npm ci" in step.get("run", "")
-        or "uv pip install" in step.get("run", "")
-        or "apt-get install" in step.get("run", "")
+        (step.get("uses") or "").startswith("actions/setup-node@")
+        or (step.get("uses") or "").startswith("actions/setup-python@")
+        or "npm ci" in (step.get("run") or "")
+        or "uv pip install" in (step.get("run") or "")
+        or "apt-get install" in (step.get("run") or "")
         for step in detector_steps
     )
 
@@ -97,14 +97,17 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
     )
     contract_steps = contract_job["steps"]
     assert any(
-        step.get("uses", "").startswith("actions/setup-node@")
+        (step.get("uses") or "").startswith("actions/setup-node@")
         for step in contract_steps
     )
     assert any(
-        step.get("uses", "").startswith("actions/setup-python@")
+        (step.get("uses") or "").startswith("actions/setup-python@")
         for step in contract_steps
     )
-    assert any("npm run contracts:check" in step.get("run", "") for step in contract_steps)
+    assert any(
+        "npm run contracts:check" in (step.get("run") or "")
+        for step in contract_steps
+    )
     assert not any(step.get("if") for step in contract_steps)
 
     required_job = jobs["check-generated-contracts"]
@@ -114,7 +117,7 @@ def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> 
     ]
     assert required_job["if"] == "always()"
     required_script = "\n".join(
-        step.get("run", "") for step in required_job["steps"] if "run" in step
+        (step.get("run") or "") for step in required_job["steps"] if "run" in step
     )
     assert "needs.detect-openapi-contract-impact.result" in required_script
     assert "needs.detect-openapi-contract-impact.outputs.run_check" in required_script
