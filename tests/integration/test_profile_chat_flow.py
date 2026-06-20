@@ -51,7 +51,7 @@ async def test_ui_keys_used_in_chat(disabled_env_keys, tmp_path):
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         with (
             patch(
-                "api_service.api.routers.chat.model_cache.get_model_provider",
+                "moonmind.models_cache.model_cache.get_model_provider",
                 return_value="OpenAI",
             ),
             patch("api_service.api.routers.chat.AsyncOpenAI") as mock_ai,

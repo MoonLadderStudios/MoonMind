@@ -1,23 +1,26 @@
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException
-from llama_index.core import Settings, StorageContext
 
 from api_service.api.dependencies import get_service_context, get_storage_context
 from api_service.auth_providers import get_current_user  # Auth dependency
 from api_service.db.models import User  # User model for type hinting
 from moonmind.config.settings import settings
-from moonmind.indexers.confluence_indexer import ConfluenceIndexer
-from moonmind.indexers.github_indexer import GitHubIndexer
-from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer  # Added import
 from moonmind.schemas.documents_models import (  # Updated import path with GoogleDriveLoadRequest
     ConfluenceLoadRequest,
     GitHubLoadRequest,
     GoogleDriveLoadRequest,
 )
 
+if TYPE_CHECKING:
+    from llama_index.core import Settings, StorageContext
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
 
 @router.post("/confluence/load")  # Path relative to the /v1/documents prefix
 async def load_confluence_documents(
@@ -31,6 +34,8 @@ async def load_confluence_documents(
 
     """Load documents from Confluence workspace"""
     try:
+        from moonmind.indexers.confluence_indexer import ConfluenceIndexer
+
         confluence_indexer = ConfluenceIndexer(
             base_url=settings.atlassian.atlassian_url,
             user_name=settings.atlassian.atlassian_username,
@@ -98,6 +103,8 @@ async def load_github_repo(
 ):
     """Load documents from a GitHub repository."""
     try:
+        from moonmind.indexers.github_indexer import GitHubIndexer
+
         github_indexer = GitHubIndexer(github_token=request.github_token, logger=logger)
 
         # GitHubIndexer.index is synchronous
@@ -144,6 +151,8 @@ async def load_google_drive_documents(
 ):
     """Load documents from Google Drive."""
     try:
+        from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer
+
         sa_key_path = request.service_account_key_path
         if (
             not sa_key_path

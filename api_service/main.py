@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from llama_index.core import VectorStoreIndex, load_index_from_storage
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
@@ -84,14 +83,6 @@ from api_service.auth import (
     fastapi_users,
 )
 from moonmind.config.settings import settings
-from moonmind.factories.embed_model_factory import build_embed_model
-
-# Removed unused import: build_indexers
-from moonmind.factories.service_context_factory import build_service_context
-from moonmind.factories.storage_context_factory import build_storage_context
-from moonmind.factories.vector_store_factory import build_vector_store
-from moonmind.rag.service import ContextRetrievalService
-from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
@@ -107,6 +98,8 @@ def _initialize_embedding_model(app_state, app_settings):
 
     # Build the model and get any dimension configured in settings
     try:
+        from moonmind.factories.embed_model_factory import build_embed_model
+
         app_state.embed_model, configured_dims = build_embed_model(app_settings)
     except Exception as e:
         logger.error("Embedding model initialization failed: %s", e)
@@ -163,6 +156,8 @@ def _initialize_vector_store(app_state, app_settings):
     """Initializes and sets the vector store on app_state."""
     logger.info("Initializing vector store...")
     try:
+        from moonmind.factories.vector_store_factory import build_vector_store
+
         app_state.vector_store = build_vector_store(
             app_settings, app_state.embed_model, app_state.embed_dimensions
         )
@@ -174,6 +169,9 @@ def _initialize_vector_store(app_state, app_settings):
 def _initialize_contexts(app_state, app_settings):
     """Initializes and sets storage and service contexts on app_state."""
     logger.info("Initializing storage and service contexts...")
+    from moonmind.factories.service_context_factory import build_service_context
+    from moonmind.factories.storage_context_factory import build_storage_context
+
     app_state.storage_context = build_storage_context(
         app_settings, app_state.vector_store
     )
@@ -324,6 +322,8 @@ async def _initialize_oidc_provider(app: FastAPI):
 
 def _load_or_create_vector_index(app_state):
     """Loads an existing vector index or creates a new one if loading fails."""
+    from llama_index.core import VectorStoreIndex, load_index_from_storage
+
     logger.info("Attempting to load VectorStoreIndex from storage_context...")
     try:
         app_state.vector_index = load_index_from_storage(
@@ -1092,6 +1092,9 @@ async def startup_event():
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     _register_settings_change_subscribers()
     try:
+        from moonmind.rag.service import ContextRetrievalService
+        from moonmind.rag.settings import RagRuntimeSettings
+
         app.state.retrieval_service = ContextRetrievalService(
             settings=RagRuntimeSettings.from_env()
         )

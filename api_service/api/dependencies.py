@@ -1,16 +1,15 @@
+from __future__ import annotations
+
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException, Request, status
-from llama_index.core import (
-    Settings,
-    StorageContext,
-    VectorStoreIndex,
-    load_index_from_storage,
-)
 
 from api_service.db.models import User
 from moonmind.config.settings import settings
+
+if TYPE_CHECKING:
+    from llama_index.core import Settings, StorageContext, VectorStoreIndex
 
 def get_chat_provider(request: Request):
     return request.app.state.chat_provider
@@ -32,6 +31,8 @@ def get_service_context(request: Request):
     return request.app.state.settings
 
 def get_vector_index(request: Request) -> Optional[VectorStoreIndex]:
+    from llama_index.core import load_index_from_storage
+
     logger_dep = logging.getLogger(__name__)
     storage_context: Optional[StorageContext] = getattr(
         request.app.state, "storage_context", None
@@ -135,4 +136,3 @@ def resolve_template_scope_for_user(
                 },
             )
         return "personal", normalized_scope_ref
-

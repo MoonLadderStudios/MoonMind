@@ -28,7 +28,7 @@ def _fast_context_protocol_app(monkeypatch) -> None:
 @pytest.fixture
 def client():
     # Patch build_embed_model in the context of api_service.main where the app's startup sequence calls it.
-    with patch("api_service.main.build_embed_model") as MockBuildEmbedModel:
+    with patch("moonmind.factories.embed_model_factory.build_embed_model") as MockBuildEmbedModel:
         # Configure the mock embed_model instance that build_embed_model will return
         mock_embed_instance = MagicMock(spec=BaseEmbedding)
 
@@ -76,7 +76,7 @@ def mock_qdrant_client_autouse():
 @pytest.fixture
 def mock_google_model():
     # Patch where get_google_model is looked up by the context_protocol router
-    with patch("api_service.api.routers.context_protocol.get_google_model") as mock:
+    with patch("moonmind.factories.google_factory.get_google_model") as mock:
         model_mock = MagicMock()
         response_mock = MagicMock()
         candidate_mock = MagicMock()

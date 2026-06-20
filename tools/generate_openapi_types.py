@@ -14,6 +14,7 @@ DEFAULT_OUTPUT = REPO_ROOT / "frontend" / "src" / "generated" / "openapi.ts"
 OPENAPI_TYPESCRIPT_CLI = (
     REPO_ROOT / "node_modules" / "openapi-typescript" / "bin" / "cli.js"
 )
+OPENAPI_TYPESCRIPT_INSTALL = REPO_ROOT / "tools" / "install_openapi_typescript.sh"
 
 def _run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True)
@@ -25,6 +26,13 @@ def _forward_streams(result: subprocess.CompletedProcess[str]) -> None:
         sys.stderr.write(result.stderr)
 
 def main() -> int:
+    if not OPENAPI_TYPESCRIPT_CLI.exists():
+        sys.stderr.write(
+            "openapi-typescript is not installed. Run "
+            f"`bash {OPENAPI_TYPESCRIPT_INSTALL.relative_to(REPO_ROOT)}` first.\n"
+        )
+        return 127
+
     with tempfile.TemporaryDirectory(prefix="moonmind-openapi-") as temp_dir:
         openapi_path = Path(temp_dir) / "openapi.json"
         export_result = _run([sys.executable, str(OPENAPI_EXPORT)], cwd=REPO_ROOT)
