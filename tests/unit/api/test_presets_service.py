@@ -210,6 +210,122 @@ async def test_template_serializes_normalized_capability_input_contract(tmp_path
     assert created["uiSchema"]["jira_issue"]["widget"] == "jira.issue-picker"
     assert created["defaults"] == {}
 
+async def test_expand_template_preserves_literal_placeholders_from_user_input(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="literal-placeholder-input",
+                title="Literal Placeholder Input",
+                description="Allows user-provided handlebars content.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[
+                    {
+                        "name": "feature_request",
+                        "label": "Feature Request",
+                        "type": "markdown",
+                        "required": True,
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Use request",
+                        "instructions": (
+                            "Implement this request:\n\n{{ inputs.feature_request }}"
+                        ),
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            expanded = await service.expand_template(
+                slug="literal-placeholder-input",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": (
+                        "Preserve the literal {{ downstream.value }} token."
+                    )
+                },
+                context={},
+            )
+
+    assert "{{ downstream.value }}" in expanded["steps"][0]["instructions"]
+
+async def test_expand_template_rejects_unknown_template_variable(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="unknown-template-variable",
+                title="Unknown Template Variable",
+                description="Rejects template authoring mistakes.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "title": "Bad template",
+                        "instructions": "Use {{ inputs.missing_value }}.",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            with pytest.raises(PresetValidationError, match="unknown variable"):
+                await service.expand_template(
+                    slug="unknown-template-variable",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                )
+
+async def test_expand_template_reports_malformed_template_as_validation_error(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="malformed-template",
+                title="Malformed Template",
+                description="Rejects malformed Jinja templates.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "title": "Bad syntax",
+                        "instructions": "Use {{ inputs.missing_value.",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+            with pytest.raises(PresetValidationError, match="Template rendering failed"):
+                await service.expand_template(
+                    slug="malformed-template",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={},
+                    context={},
+                )
+
 async def test_template_rejects_secret_like_schema_defaults(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
@@ -2541,6 +2657,54 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(tmp_path):
                 "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
+
+async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="jira-breakdown-implement",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "feature_request": "docs/Designs/RuntimeTypes.md",
+                    "jira_project_key": "MM",
+                    "jira_issue_type": "Story",
+                    "jira_board_id": "84",
+                    "jira_dependency_mode": "linear_blocker_chain",
+                    "publish_mode": "pr_with_merge_automation",
+                    "source_issue_key": "MM-404",
+                },
+                context={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+            )
+
+    assert len(expanded["steps"]) == 4
+    assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
+    assert expanded["steps"][1]["skill"]["id"] == "story-reconcile-implementation"
+    assert expanded["steps"][2]["skill"]["id"] == "story.create_jira_issues"
+    downstream = expanded["steps"][3]
+    assert downstream["skill"]["id"] == "story.create_jira_implement_tasks"
+    assert downstream["jiraOrchestration"]["task"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "runtime": {"mode": "codex_cli"},
+        "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+    }
+    assert downstream["jiraOrchestration"]["traceability"] == {
+        "sourceIssueKey": "MM-404"
+    }
 
 async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path):
     seed_dir = (

@@ -262,6 +262,28 @@ def _is_empty_assistant_turn_failure(metadata: Mapping[str, Any] | None) -> bool
         "codex app-server turn/completed produced no assistant output",
     }
 
+
+_SESSION_LOCATOR_MISMATCH_MARKERS = (
+    "sessionid does not match the active managed session",
+    "sessionepoch does not match the active managed session",
+    "containerid does not match the active managed session",
+    "threadid does not match the active managed session",
+)
+
+
+def _is_session_locator_mismatch_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(getattr(current, "message", "") or current).strip().lower()
+        if any(marker in message for marker in _SESSION_LOCATOR_MISMATCH_MARKERS):
+            return True
+        current = getattr(current, "cause", None) or getattr(current, "__cause__", None)
+        if not isinstance(current, BaseException):
+            current = None
+    return False
+
 def _reset_thread_id_for_empty_turn(locator: CodexManagedSessionLocator) -> str:
     return f"{locator.thread_id}:empty-output-reset"
 
@@ -1224,16 +1246,24 @@ class CodexSessionAdapter(ManagedAgentAdapter):
     ) -> CodexManagedSessionHandle:
         snapshot = await self._load_snapshot(binding.workflow_id)
         if snapshot.container_id and snapshot.thread_id:
-            handle = await self._coerce_handle(
-                self._session_status(
-                    CodexManagedSessionLocator(
-                        sessionId=binding.session_id,
-                        sessionEpoch=snapshot.binding.session_epoch,
-                        containerId=snapshot.container_id,
-                        threadId=snapshot.thread_id,
-                    )
+            locator = self._locator_from_snapshot(snapshot)
+            try:
+                handle = await self._coerce_handle(self._session_status(locator))
+            except Exception as exc:
+                if not _is_session_locator_mismatch_error(exc):
+                    raise
+                refreshed_snapshot = await self._load_snapshot(binding.workflow_id)
+                if not refreshed_snapshot.container_id or not refreshed_snapshot.thread_id:
+                    raise
+                refreshed_locator = self._locator_from_snapshot(refreshed_snapshot)
+                logger.warning(
+                    "Retrying managed-session resume status after locator mismatch "
+                    "using refreshed workflow snapshot for session %s",
+                    refreshed_locator.session_id,
                 )
-            )
+                handle = await self._coerce_handle(
+                    self._session_status(refreshed_locator)
+                )
             await self._signal_control_action(
                 action="resume_session",
                 reason=None,
@@ -1425,10 +1455,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         self, binding: CodexManagedSessionBinding
     ) -> CodexManagedSessionLocator:
         snapshot = await self._load_snapshot(binding.workflow_id)
+        return self._locator_from_snapshot(snapshot)
+
+    @staticmethod
+    def _locator_from_snapshot(
+        snapshot: CodexManagedSessionSnapshot,
+    ) -> CodexManagedSessionLocator:
         if not snapshot.container_id or not snapshot.thread_id:
             raise ValueError("Workflow-scoped managed session has no runtime handles yet")
         return CodexManagedSessionLocator(
-            sessionId=binding.session_id,
+            sessionId=snapshot.binding.session_id,
             sessionEpoch=snapshot.binding.session_epoch,
             containerId=snapshot.container_id,
             threadId=snapshot.thread_id,

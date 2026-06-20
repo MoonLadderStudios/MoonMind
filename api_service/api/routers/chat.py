@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import logging
 import time
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import uuid4
 
 # Multi-provider imports from main branch
@@ -8,9 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 
 # RAG imports from feat/rag branch
-from llama_index.core import Settings as LlamaSettings
-from llama_index.core import VectorStoreIndex
-from llama_index.core.schema import NodeWithScore
 from openai import AsyncOpenAI  # Moved import to top
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +19,7 @@ from api_service.auth_providers import get_auth_manager, get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
-from moonmind.factories.anthropic_factory import AnthropicFactory
-from moonmind.factories.google_factory import get_google_model
-from moonmind.factories.openai_factory import get_openai_model
-from moonmind.models_cache import model_cache
 from moonmind.billing.costs import emit_llm_cost_telemetry, estimate_model_cost
-from moonmind.rag.retriever import QdrantRAG
 from moonmind.security import scan_outbound_text
 from moonmind.schemas.chat_models import (
     ChatCompletionRequest,
@@ -41,9 +35,15 @@ from moonmind.schemas.chat_models import (
     Usage,
 )
 
+if TYPE_CHECKING:
+    from llama_index.core import Settings as LlamaSettings
+    from llama_index.core import VectorStoreIndex
+    from llama_index.core.schema import NodeWithScore
+
 router = APIRouter()
 responses_router = APIRouter()
 logger = logging.getLogger(__name__)
+
 
 def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
     for index, msg in enumerate(messages):
@@ -161,6 +161,8 @@ async def get_rag_context(
         return ""
 
     logger.info(f"RAG enabled. Retrieving context for query: '{user_query[:100]}...'")
+    from moonmind.rag.retriever import QdrantRAG
+
     rag_instance = QdrantRAG(
         index=vector_index,
         service_settings=llama_settings,
@@ -428,6 +430,8 @@ async def chat_completions(
     user: User = Depends(get_current_user()),
 ):
     try:
+        from moonmind.models_cache import model_cache
+
         # Extract the last user message as the query for RAG
         user_query = ""
         if request.messages:
@@ -528,6 +532,8 @@ async def create_response(
     db: AsyncSession = Depends(get_async_session),
     user: User = Depends(get_current_user()),
 ):
+    from moonmind.models_cache import model_cache
+
     if request.stream:
         raise HTTPException(
             status_code=400,
@@ -581,6 +587,8 @@ async def create_response(
         )
 
     if provider == "OpenAI":
+        from moonmind.factories.openai_factory import get_openai_model
+
         if (
             not settings.is_provider_enabled("openai")
             and not settings.openai.openai_enabled
@@ -663,6 +671,8 @@ async def handle_openai_request(
         raise HTTPException(
             status_code=400, detail="OpenAI API key not provided for the user."
         )
+
+    from moonmind.factories.openai_factory import get_openai_model
 
     openai_model_name = get_openai_model(
         model_to_use
@@ -796,6 +806,8 @@ async def handle_google_request(
     # Let's proceed by calling a modified get_google_model that handles this.
     # We will adjust get_google_model in a later step or assume it's done.
     # For the purpose of this step, we pass api_key to get_google_model.
+    from moonmind.factories.google_factory import get_google_model
+
     chat_model = get_google_model(model_name=model_to_use, api_key=api_key)
     try:
         response_gemini = chat_model.generate_content(contents)
@@ -877,6 +889,8 @@ async def handle_anthropic_request(
 
     # The AnthropicFactory.create_anthropic_model currently uses global settings.
     # We need to pass the api_key to it.
+    from moonmind.factories.anthropic_factory import AnthropicFactory
+
     anthropic_model = AnthropicFactory.create_anthropic_model(
         api_key=api_key, model_name=model_to_use
     )

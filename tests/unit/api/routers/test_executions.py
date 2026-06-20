@@ -644,6 +644,39 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
     assert task_payload["appliedStepTemplates"][0]["slug"] == "jira-implement"
 
 
+@pytest.mark.asyncio
+async def test_goal_preset_submission_uses_default_runtime_for_composite_context(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings.workflow, "default_runtime", "gemini_cli")
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/goal_preset_default_runtime.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            task_payload = {
+                "title": "Break down feature",
+                "goal": "Split docs/Design.md into Jira stories.",
+            }
+            await _expand_goal_preset_for_workflow_submission(
+                task_payload=task_payload,
+                request_payload={"repository": "MoonLadderStudios/MoonMind"},
+                session=session,
+                user_id=uuid4(),
+            )
+    finally:
+        await engine.dispose()
+
+    downstream_task = task_payload["steps"][3]["jiraOrchestration"]["task"]
+    assert task_payload["presetSchedule"]["presetSlug"] == "jira-breakdown-orchestrate"
+    assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
+    assert downstream_task["runtime"] == {"mode": "gemini_cli"}
+
+
 class _QueryHandle:
     def __init__(
         self,
@@ -3788,7 +3821,7 @@ def test_create_task_shaped_execution_preserves_nested_merge_automation_request(
         "mergeMethod": "rebase",
     }
 
-def test_serialize_execution_exposes_merge_automation_selection() -> None:
+def test_serialize_execution_exposes_merge_automation_as_publish_mode() -> None:
     record = _build_execution_record()
     record.parameters = {
         "publishMode": "pr",
@@ -3802,7 +3835,8 @@ def test_serialize_execution_exposes_merge_automation_selection() -> None:
 
     payload = _serialize_execution(record)
 
-    assert payload.merge_automation_selected is True
+    assert payload.publish_mode == "pr_with_merge_automation"
+    assert "mergeAutomationSelected" not in payload.model_dump(by_alias=True)
 
 
 def test_serialize_execution_exposes_proposal_outcome_summary() -> None:
@@ -3974,7 +4008,7 @@ def test_serialize_execution_handles_mixed_timezone_duration_inputs() -> None:
     }
 
 
-def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> None:
+def test_serialize_execution_exposes_snake_case_publish_merge_automation_as_publish_mode() -> None:
     record = _build_execution_record()
     record.parameters = {
         "publishMode": "pr",
@@ -3986,17 +4020,17 @@ def test_serialize_execution_exposes_snake_case_publish_merge_automation() -> No
 
     payload = _serialize_execution(record)
 
-    assert payload.merge_automation_selected is True
-    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is True
+    assert payload.publish_mode == "pr_with_merge_automation"
+    assert "mergeAutomationSelected" not in payload.model_dump(by_alias=True)
 
-def test_serialize_execution_defaults_merge_automation_selection_to_false() -> None:
+def test_serialize_execution_keeps_plain_pr_publish_mode_without_merge_automation() -> None:
     record = _build_execution_record()
     record.parameters = {"publishMode": "pr", "mergeAutomation": {"enabled": False}}
 
     payload = _serialize_execution(record)
 
-    assert payload.merge_automation_selected is False
-    assert payload.model_dump(by_alias=True)["mergeAutomationSelected"] is False
+    assert payload.publish_mode == "pr"
+    assert "mergeAutomationSelected" not in payload.model_dump(by_alias=True)
 
 def test_create_task_shaped_execution_preserves_story_output_contract(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
@@ -6832,8 +6866,8 @@ def test_serialize_execution_falls_back_to_updated_at_without_scheduled_time() -
     assert payload.created_at == updated_at
     assert payload.scheduled_for is None
 
-def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> None:
-    """Ensure runtime/model/effort stored in record.parameters are surfaced."""
+def test_serialize_execution_surfaces_runtime_model_effort_priority_from_parameters() -> None:
+    """Ensure runtime/model/effort/priority stored in record.parameters are surfaced."""
     record = SimpleNamespace(
         close_status=None,
         search_attributes={"mm_entry": "run"},
@@ -6855,6 +6889,7 @@ def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> 
             "targetRuntime": "codex",
             "model": "gpt-5-codex",
             "effort": "high",
+            "priority": 4,
         },
         paused=False,
         waiting_reason=None,
@@ -6867,12 +6902,27 @@ def test_serialize_execution_surfaces_runtime_model_effort_from_parameters() -> 
     assert payload.target_runtime == "codex"
     assert payload.model == "gpt-5-codex"
     assert payload.effort == "high"
+    assert payload.priority == 4
 
     # Verify JSON serialization uses camelCase aliases (what the frontend sees)
     dumped = payload.model_dump(by_alias=True)
     assert dumped["targetRuntime"] == "codex"
     assert dumped["model"] == "gpt-5-codex"
     assert dumped["effort"] == "high"
+    assert dumped["priority"] == 4
+
+def test_serialize_execution_handles_missing_and_malformed_priority_sources() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = None
+
+    payload = _serialize_execution(record)
+
+    assert payload.priority is None
+
+    record.parameters = {"task": "not-a-task-payload"}
+    payload = _serialize_execution(record)
+
+    assert payload.priority is None
 
 def test_serialize_execution_surfaces_runtime_from_nested_parameters_runtime_key() -> None:
     """Some payloads store mode under parameters.runtime.mode without top-level targetRuntime."""
@@ -8040,7 +8090,11 @@ def _step_execution_manifest_payload(
         "startedAt": "2026-05-19T10:00:00Z",
         "updatedAt": "2026-05-19T10:01:00Z",
         "input": {"preparedInputRef": f"art-input-{attempt}"},
-        "context": {"contextBundleRef": f"art-context-{attempt}"},
+        "context": {
+            "contextBundleRef": f"art-context-{attempt}",
+            "retrievalManifestRef": f"artifact://retrieval-manifests/{attempt}",
+            "memoryManifestRef": f"attempt-memory-manifest://sha256:{attempt}",
+        },
         "workspace": {
             "workspacePolicy": "continue_from_previous_execution",
             "baselineRef": f"art-workspace-{attempt}",
@@ -8321,7 +8375,13 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     assert body["sourceExecutionOrdinal"] == 2
     assert body["lineage"]["relationship"] == "recover_from_failed_step"
     assert body["inputRefs"] == {"preparedInputRef": "art-input-2"}
-    assert body["contextRefs"] == {"contextBundleRef": "art-context-2"}
+    assert body["contextRefs"] == {
+        "contextBundleRef": "art-context-2",
+        "retrievalManifestRef": "artifact://retrieval-manifests/2",
+        "memoryManifestRef": "attempt-memory-manifest://sha256:2",
+    }
+    assert "retrievalContent" not in body["contextRefs"]
+    assert "providerPayload" not in response.text
     assert body["workspaceRefs"] == {
         "baselineRef": "art-workspace-2",
     }

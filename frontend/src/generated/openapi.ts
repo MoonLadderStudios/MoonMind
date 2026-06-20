@@ -4663,6 +4663,8 @@ export interface components {
             providerLabel?: string | null;
             /** Effort */
             effort?: string | null;
+            /** Priority */
+            priority?: number | null;
             /** Startingbranch */
             startingBranch?: string | null;
             /** Targetbranch */
@@ -4676,11 +4678,6 @@ export interface components {
             prUrl?: string | null;
             /** Publishmode */
             publishMode?: string | null;
-            /**
-             * Mergeautomationselected
-             * @default false
-             */
-            mergeAutomationSelected: boolean;
             mergeAutomation?: components["schemas"]["ExecutionMergeAutomationModel"] | null;
             /** Resolvedskillsetref */
             resolvedSkillsetRef?: string | null;
@@ -7853,6 +7850,8 @@ export interface components {
             retryCount: number;
             /** Artifactref */
             artifactRef?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * StepLedgerRefsModel

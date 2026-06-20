@@ -13,7 +13,10 @@ from moonmind.memory.procedural import (
     FixPattern,
     extract_error_signature,
 )
-from moonmind.workflows.executions.prepared_context import build_memory_manifest
+from moonmind.workflows.executions.prepared_context import (
+    ExecutionContextBundle,
+    build_memory_manifest,
+)
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
 
@@ -86,6 +89,12 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     assert attempt_context["logicalStepId"] == "collect-evidence"
     assert attempt_context["executionOrdinal"] == 1
     assert attempt_context["preparedInputRefs"] == prepared_context["inputRefs"]
+    assert attempt_context["workspacePolicy"] == "fresh_branch_from_source"
+    assert attempt_context["priorEvidenceRefs"] == []
+    assert attempt_context["qualityGateProfile"] == "repo-default"
+    assert attempt_context["policyRefs"]["skillSourcePolicy"]["repoSkills"] == (
+        "resolver_policy_enforced"
+    )
     assert attempt_context["contextBundleDigest"].startswith("sha256:")
     assert attempt_context["contextBundleRef"] == (
         f"execution-context-bundle://{attempt_context['contextBundleDigest']}"
@@ -94,6 +103,11 @@ def test_run_request_records_prepared_manifest_before_step_dispatch() -> None:
     assert projection["context"]["contextBundleDigest"] == (
         attempt_context["contextBundleDigest"]
     )
+    assert projection["context"]["workspacePolicy"] == (
+        attempt_context["workspacePolicy"]
+    )
+    assert projection["context"]["priorEvidenceRefs"] == []
+    assert projection["context"]["qualityGateProfile"] == "repo-default"
     assert "preparedInputRefs" not in projection["context"]
 
 
@@ -168,7 +182,10 @@ def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -
     ]
 
     assert attempt_context["retrievalManifestRef"].startswith(
-        "attempt-retrieval-manifest://sha256:"
+        "artifact://retrieval-manifests/sha256:"
+    )
+    assert attempt_context["retrievalManifestRef"] == (
+        projection["context"]["retrievalManifestRef"]
     )
     assert attempt_context["memoryManifestRef"].startswith(
         "attempt-memory-manifest://sha256:"
@@ -180,6 +197,106 @@ def test_run_request_records_retrieval_and_memory_refs_in_attempt_projection() -
         attempt_context["memoryManifestRef"]
     )
     assert "Relevant design summary." not in str(projection)
+
+
+def test_run_request_records_durable_retrieval_manifest_artifact_metadata() -> None:
+    wf = MoonMindRunWorkflow()
+    task_payload = {
+        **_task_payload(),
+        "retrieval": {
+            "status": "unavailable",
+            "selector": {"reason": "index_offline"},
+        },
+    }
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={"task": task_payload},
+        )
+
+    moonmind_metadata = request.parameters["metadata"]["moonmind"]
+    retrieval_artifact = moonmind_metadata["retrievalManifestArtifact"]
+    attempt_context = moonmind_metadata["executionContext"]
+    projection = moonmind_metadata["stepExecutionManifestProjection"]
+
+    assert retrieval_artifact["artifactRef"] == attempt_context["retrievalManifestRef"]
+    assert retrieval_artifact["payload"]["status"] == "unavailable"
+    assert retrieval_artifact["payload"]["selector"] == {"reason": "index_offline"}
+    assert projection["context"]["retrievalManifestRef"] == (
+        retrieval_artifact["artifactRef"]
+    )
+
+
+def test_run_request_refreshes_runtime_metadata_after_retrieval_persistence() -> None:
+    wf = MoonMindRunWorkflow()
+    task_payload = {
+        **_task_payload(),
+        "retrieval": {
+            "query": "execution context",
+            "returnedRefs": ["artifact://retrieved-doc"],
+        },
+    }
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=_workflow_info(),
+    ):
+        request = wf._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "codex_cli"}},
+            node_id="collect-evidence",
+            tool_name="codex_cli",
+            workflow_parameters={"task": task_payload},
+        )
+
+    original_context = request.parameters["metadata"]["moonmind"]["executionContext"]
+    original_digest = original_context["contextBundleDigest"]
+
+    cached_artifact = wf._step_execution_retrieval_manifest_artifacts[
+        ("collect-evidence", 1)
+    ]
+    cached_artifact["persistedArtifactRef"] = "art_retrieval_1"
+    refreshed = wf._request_with_persisted_retrieval_ref(
+        request,
+        logical_step_id="collect-evidence",
+        attempt=1,
+    )
+
+    moonmind_metadata = refreshed.parameters["metadata"]["moonmind"]
+    refreshed_context = moonmind_metadata["executionContext"]
+    assert refreshed_context["retrievalManifestRef"] == "art_retrieval_1"
+    assert moonmind_metadata["stepExecutionManifestProjection"]["context"][
+        "retrievalManifestRef"
+    ] == "art_retrieval_1"
+    assert moonmind_metadata["retrievalManifestArtifact"]["persistedArtifactRef"] == (
+        "art_retrieval_1"
+    )
+    assert refreshed.step_execution is not None
+    assert refreshed.step_execution.retrieval_manifest_ref == "art_retrieval_1"
+
+    # The context-bundle digest must be recomputed after swapping the retrieval
+    # ref, not left stale: it changes and stays self-consistent between the
+    # execution context and its manifest projection.
+    refreshed_digest = refreshed_context["contextBundleDigest"]
+    assert refreshed_digest != original_digest
+    assert refreshed_context["contextBundleRef"] == (
+        f"execution-context-bundle://{refreshed_digest}"
+    )
+    assert moonmind_metadata["stepExecutionManifestProjection"]["context"][
+        "contextBundleDigest"
+    ] == refreshed_digest
+    assert moonmind_metadata["stepExecutionManifestProjection"]["context"][
+        "contextBundleRef"
+    ] == refreshed_context["contextBundleRef"]
+    # Re-deriving the digest from the swapped content reproduces it, proving the
+    # digest addresses the current bundle rather than the pre-swap content.
+    rebuilt = ExecutionContextBundle.model_validate(
+        refreshed_context
+    ).with_retrieval_manifest_ref("art_retrieval_1")
+    assert rebuilt.context_bundle_digest == refreshed_digest
 
 
 def test_run_request_projects_matched_fix_patterns_into_attempt_memory() -> None:

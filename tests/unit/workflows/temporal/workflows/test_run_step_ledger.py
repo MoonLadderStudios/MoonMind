@@ -13,6 +13,9 @@ from moonmind.schemas.temporal_models import (
     STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
     StepExecutionIdentityModel,
 )
+from moonmind.workflows.executions.prepared_context import (
+    build_durable_retrieval_manifest_artifact,
+)
 from moonmind.workflows.temporal.workflows import run as run_module
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
@@ -138,7 +141,7 @@ def test_run_exposes_one_canonical_step_execution_manifest_record_surface() -> N
 def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
     source = Path(run_module.__file__).read_text()
 
-    guard = "if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):"
+    guard = "and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)"
     start_manifest_call = (
         "await self._record_step_execution_manifest(\n"
         "                            node_id,\n"
@@ -146,6 +149,172 @@ def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
     )
 
     assert source.index(guard) < source.index(start_manifest_call)
+
+
+@pytest.mark.asyncio
+async def test_start_manifest_uses_launch_context_projection_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(run_module.workflow, "patched", lambda _patch_id: True)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"artifact-write-{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "collect-evidence",
+                "tool": {"type": "agent_runtime", "name": "codex_cli", "version": ""},
+                "inputs": {"title": "Collect evidence"},
+            }
+        ],
+        dependency_map={"collect-evidence": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "collect-evidence",
+        updated_at=now,
+        summary="Launching child runtime",
+    )
+    request = workflow._build_agent_execution_request(
+        node_inputs={"runtime": {"mode": "codex_cli"}},
+        node_id="collect-evidence",
+        tool_name="codex_cli",
+        workflow_parameters={
+            "task": {
+                "retrieval": {
+                    "query": "step context bundle",
+                    "returnedRefs": ["artifact://retrieved-doc"],
+                },
+                "memoryProposals": [
+                    {
+                        "proposalRef": "memory://proposal-1",
+                        "state": "proposed",
+                    }
+                ],
+                "steps": [{"id": "collect-evidence"}],
+            }
+        },
+    )
+    expected_context = request.parameters["metadata"]["moonmind"][
+        "stepExecutionManifestProjection"
+    ]["context"]
+
+    await workflow._record_step_execution_manifest(
+        "collect-evidence",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    assert writes[0]["name"] == (
+        "reports/retrieval_manifests/collect-evidence_attempt_1.json"
+    )
+    assert writes[0]["payload"]["status"] == "captured"
+    assert writes[0]["payload"]["retrievalManifestDigest"].startswith("sha256:")
+    assert writes[0]["metadata_json"]["artifact_kind"] == "retrieval_manifest"
+    assert writes[0]["metadata_json"]["retrievalStatus"] == "captured"
+    assert writes[1]["name"] == (
+        "reports/step_executions/collect-evidence_attempt_1.json"
+    )
+    expected_context = dict(expected_context)
+    expected_context["retrievalManifestRef"] = "artifact-write-1"
+    assert writes[1]["payload"]["context"] == expected_context
+    assert writes[1]["payload"]["context"]["retrievalManifestRef"] == (
+        "artifact-write-1"
+    )
+    assert writes[1]["payload"]["context"]["memoryManifestRef"].startswith(
+        "attempt-memory-manifest://sha256:"
+    )
+    assert writes[1]["payload"]["context"] != {}
+
+
+@pytest.mark.asyncio
+async def test_retrieval_manifest_persistence_writes_status_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return f"art_retrieval_{len(writes)}"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    retrievals = [
+        ("captured", {"query": "step context", "returnedRefs": ["artifact://doc"]}),
+        ("skipped", {}),
+        ("unavailable", {"selector": {"reason": "index_offline"}}),
+    ]
+    for index, (status, extra) in enumerate(retrievals, start=1):
+        key = ("collect-evidence", index)
+        workflow._step_execution_retrieval_manifest_artifacts[key] = (
+            build_durable_retrieval_manifest_artifact({"status": status, **extra})
+        )
+        workflow._step_execution_context_projections[key] = {
+            "retrievalManifestRef": workflow._step_execution_retrieval_manifest_artifacts[
+                key
+            ]["artifactRef"]
+        }
+
+        persisted_ref = await workflow._persist_step_execution_retrieval_manifest(
+            "collect-evidence",
+            attempt=index,
+        )
+
+        assert persisted_ref == f"art_retrieval_{index}"
+        assert workflow._step_execution_context_projections[key][
+            "retrievalManifestRef"
+        ] == persisted_ref
+
+    assert [write["payload"]["status"] for write in writes] == [
+        "captured",
+        "skipped",
+        "unavailable",
+    ]
+    assert all(
+        write["name"].startswith("reports/retrieval_manifests/")
+        for write in writes
+    )
+    assert all(
+        write["metadata_json"]["artifact_kind"] == "retrieval_manifest"
+        for write in writes
+    )
+    assert all(
+        write["payload"]["retrievalManifestDigest"].startswith("sha256:")
+        for write in writes
+    )
 
 
 def test_canonical_step_checkpoint_writes_keep_replay_patch_guard() -> None:
@@ -222,6 +391,50 @@ def test_run_initializes_latest_run_step_ledger(monkeypatch: pytest.MonkeyPatch)
     assert progress["total"] == 2
     assert progress["ready"] == 1
     assert progress["pending"] == 1
+
+
+def test_review_gate_retry_requires_reattempt_recommendation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="needs_human",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is False
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="blocked",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is False
+
+    assert workflow._review_gate_retry_allowed(
+        verdict=SimpleNamespace(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            recommended_next_action="reattempt_current_step",
+            recoverable_in_current_runtime=True,
+        ),
+        review_retry_count=0,
+        max_review_attempts=2,
+        consecutive_no_progress_attempts=0,
+        max_consecutive_no_progress_attempts=2,
+    ) is True
+
 
 def test_run_progress_query_exposes_current_run_id(
     monkeypatch: pytest.MonkeyPatch,
@@ -1925,25 +2138,38 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
     ]
     step = workflow.get_step_ledger()["steps"][0]
     assert step["status"] == "succeeded"
-    assert step["checks"] == [
-        {
-            "kind": "approval_policy",
-            "status": "passed",
-            "summary": "Approved by structured review",
-            "retryCount": 0,
-            "artifactRef": "art_review_1",
-        }
-    ]
+    assert step["checks"][0] == {
+        "kind": "approval_policy",
+        "status": "passed",
+        "summary": "Approved by structured review",
+        "retryCount": 0,
+        "artifactRef": "art_review_1",
+        "gateResultRef": "art_review_1",
+        "gateVerdict": "FULLY_IMPLEMENTED",
+        "confidence": 0.91,
+        "validatedRefs": {},
+        "remainingWorkRef": None,
+        "targetLogicalStepId": None,
+        "workspacePolicyRecommendation": None,
+        "recommendedNextAction": "advance",
+        "invalid": False,
+        "degraded": False,
+    }
     review_payloads = [
-        payload for payload in written_review_payloads if "verdict" in payload
+        payload
+        for payload in written_review_payloads
+        if payload.get("schemaVersion") == "v1" and "verdict" in payload
     ]
-    assert review_payloads[0]["verdict"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert review_payloads[0]["verdict"] == "FULLY_IMPLEMENTED"
+    assert review_payloads[0]["recommendedNextAction"] == "advance"
     attempt_payloads = [
         payload for payload in written_review_payloads if payload.get("stepExecutionId")
     ]
     assert attempt_payloads[0]["stepExecutionId"] == (
         "wf-run-review-1:run-review-1:apply-patch:execution:1"
     )
+    assert attempt_payloads[-1]["checks"][0]["gateResultRef"] == "art_review_1"
+    assert attempt_payloads[-1]["checks"][0]["gateVerdict"] == "FULLY_IMPLEMENTED"
     assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_1_terminal"
 
 @pytest.mark.asyncio
@@ -2089,20 +2315,32 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
     assert step["status"] == "succeeded"
-    assert step["checks"] == [
-        {
-            "kind": "approval_policy",
-            "status": "passed",
-            "summary": "Approved after 1 retry",
-            "retryCount": 1,
-            "artifactRef": "art_review_2",
-        }
-    ]
+    assert step["checks"][0] == {
+        "kind": "approval_policy",
+        "status": "passed",
+        "summary": "Approved after 1 retry",
+        "retryCount": 1,
+        "artifactRef": "art_review_2",
+        "gateResultRef": "art_review_2",
+        "gateVerdict": "FULLY_IMPLEMENTED",
+        "confidence": 0.93,
+        "validatedRefs": {},
+        "remainingWorkRef": None,
+        "targetLogicalStepId": None,
+        "workspacePolicyRecommendation": None,
+        "recommendedNextAction": "advance",
+        "invalid": False,
+        "degraded": False,
+    }
     review_payloads = [
-        payload for payload in written_review_payloads if "verdict" in payload
+        payload
+        for payload in written_review_payloads
+        if payload.get("schemaVersion") == "v1" and "verdict" in payload
     ]
-    assert review_payloads[0]["verdict"]["verdict"] == "ADDITIONAL_WORK_NEEDED"
-    assert review_payloads[1]["verdict"]["verdict"] == "FULLY_IMPLEMENTED"
+    assert review_payloads[0]["verdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert review_payloads[0]["remainingWorkRef"] == "art_remaining_work_1"
+    assert review_payloads[0]["recommendedNextAction"] == "reattempt_current_step"
+    assert review_payloads[1]["verdict"] == "FULLY_IMPLEMENTED"
     assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2_terminal"
     assert step["artifacts"]["stepExecutionManifestRefs"] == [
         "art_attempt_1",
@@ -2237,8 +2475,21 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     assert workflow._publish_reason == (
         "Structured gate stopped before downstream handoff."
     )
+    failed_check = step["checks"][0]
+    assert failed_check["gateResultRef"] == "art_review_1"
+    assert failed_check["gateVerdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert failed_check["confidence"] == "medium"
+    assert failed_check["remainingWorkRef"] == "art_remaining_work_1"
+    assert failed_check["recommendedNextAction"] == "needs_human"
     assert step_execution_payloads[-1]["terminalDisposition"] == (
         "failed_with_remaining_work"
+    )
+    assert step_execution_payloads[-1]["checks"][0]["gateResultRef"] == "art_review_1"
+    assert step_execution_payloads[-1]["checks"][0]["gateVerdict"] == (
+        "ADDITIONAL_WORK_NEEDED"
+    )
+    assert step_execution_payloads[-1]["checks"][0]["remainingWorkRef"] == (
+        "art_remaining_work_1"
     )
     assert step_execution_payloads[-1]["budget"] == {
         "gate": "approval_policy",
@@ -2701,18 +2952,29 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     step = workflow.get_step_ledger()["steps"][0]
     assert step["executionOrdinal"] == 2
     assert step["status"] == "succeeded"
-    assert step["checks"] == [
-        {
-            "kind": "approval_policy",
-            "status": "passed",
-            "summary": "Approved after 1 retry",
-            "retryCount": 1,
-            "artifactRef": "art_review_2",
-        }
-    ]
+    assert step["checks"][0] == {
+        "kind": "approval_policy",
+        "status": "passed",
+        "summary": "Approved after 1 retry",
+        "retryCount": 1,
+        "artifactRef": "art_review_2",
+        "gateResultRef": "art_review_2",
+        "gateVerdict": "FULLY_IMPLEMENTED",
+        "confidence": 0.93,
+        "validatedRefs": {},
+        "remainingWorkRef": None,
+        "targetLogicalStepId": None,
+        "workspacePolicyRecommendation": None,
+        "recommendedNextAction": "advance",
+        "invalid": False,
+        "degraded": False,
+    }
     review_payloads = [
-        payload for payload in written_review_payloads if "verdict" in payload
+        payload
+        for payload in written_review_payloads
+        if payload.get("schemaVersion") == "v1" and "verdict" in payload
     ]
-    assert review_payloads[0]["attempt"] == 1
-    assert review_payloads[1]["attempt"] == 2
+    assert review_payloads[0]["verdict"] == "ADDITIONAL_WORK_NEEDED"
+    assert review_payloads[0]["recommendedNextAction"] == "reattempt_current_step"
+    assert review_payloads[1]["verdict"] == "FULLY_IMPLEMENTED"
     assert step["artifacts"]["stepExecutionManifestRef"] == "art_attempt_2_terminal"

@@ -5213,3 +5213,34 @@ def test_update_memo_persists_pull_request_url_under_canonical_key(
 
     assert captured_memo[-1]["pull_request_url"] == "https://github.com/MoonLadderStudios/MoonMind/pull/321"
     assert "pullRequestUrl" not in captured_memo[-1]
+
+
+def test_moonspec_verify_gate_result_skips_empty_verdict_key() -> None:
+    # A blank verdict key must not short-circuit the gate to a degraded
+    # result when another key in the same source carries the real verdict.
+    workflow = MoonMindRunWorkflow()
+    outputs = {
+        "moonSpecVerify": {
+            "verdict": "",
+            "gateVerdict": "FULLY_IMPLEMENTED",
+            "confidence": 0.95,
+        }
+    }
+
+    gate = workflow._moonspec_verify_gate_result(outputs)
+
+    assert gate.verdict == "FULLY_IMPLEMENTED"
+    assert gate.invalid is False
+    assert gate.degraded is False
+
+
+def test_moonspec_verify_gate_result_fails_closed_without_verdict() -> None:
+    # When no source carries a truthy verdict, the gate still fails closed.
+    workflow = MoonMindRunWorkflow()
+    outputs = {"moonSpecVerify": {"verdict": "", "gateVerdict": None}}
+
+    gate = workflow._moonspec_verify_gate_result(outputs)
+
+    assert gate.verdict == "NO_DETERMINATION"
+    assert gate.invalid is True
+    assert gate.degraded is True

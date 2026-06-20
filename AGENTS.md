@@ -330,6 +330,8 @@ Key diagnostics:
 - Existing Temporal execution records, memo/search/projection data, and artifact-backed task snapshots only; no new storage. (001-workflow-actions-menu)
 - Python 3.12; TypeScript/React present but no frontend code change is expected unless terminology surfaces fail. + Pydantic v2, FastAPI, SQLAlchemy async ORM, Temporal Python SDK, pytest, existing MoonMind artifact/checkpoint/conformance helpers. (001-finalize-step-cleanup)
 - Existing Temporal workflow history, artifact store, and repairable API/DB projections only; no new persistent tables. (001-finalize-step-cleanup)
+- Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind workflow helpers (001-typed-gate-result-branching)
+- Artifact-backed JSON contracts; existing workflow history and step ledger state only (001-typed-gate-result-branching)
 
 ## Recent Changes
 - 176-temporal-type-gates: Added Python 3.12 + Pydantic v2, Temporal Python SDK, pytest, existing MoonMind Temporal workflow test helpers

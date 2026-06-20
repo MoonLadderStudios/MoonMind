@@ -80,6 +80,9 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
     )
     context_bundle_ref: str | None = Field(None, alias="contextBundleRef")
     context_bundle_digest: str | None = Field(None, alias="contextBundleDigest")
+    retrieval_manifest_ref: str | None = Field(None, alias="retrievalManifestRef")
+    memory_manifest_ref: str | None = Field(None, alias="memoryManifestRef")
+    memory_context_ref: str | None = Field(None, alias="memoryContextRef")
     prepared_input_refs: list[str] = Field(
         default_factory=list, alias="preparedInputRefs"
     )

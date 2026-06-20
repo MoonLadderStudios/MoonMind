@@ -18,7 +18,7 @@ def client():
 @pytest.fixture
 def mock_confluence_indexer():
     with patch(
-        "api_service.api.routers.documents.ConfluenceIndexer"
+        "moonmind.indexers.confluence_indexer.ConfluenceIndexer"
     ) as mock_indexer_class:
         mock_indexer_instance = MagicMock()
         mock_indexer_instance.index.return_value = {"total_nodes_indexed": 5}

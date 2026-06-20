@@ -1,4 +1,11 @@
 export type TaskSubmitPageMode = 'create' | 'edit' | 'rerun';
+const PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE = 'pr_with_merge_automation';
+
+function isPrPublishMode(value: string | null | undefined): boolean {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'pr' || normalized === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
+}
+
 export type TaskSubmitPageIntent =
   | 'create'
   | 'edit'
@@ -836,7 +843,7 @@ function normalizeLegacyBranchDraft({
         "This older task only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
     };
   }
-  if (startingBranch && targetBranch && publishMode === "pr") {
+  if (startingBranch && targetBranch && isPrPublishMode(publishMode)) {
     return { branch: startingBranch, warning: null };
   }
   if (startingBranch && targetBranch) {
@@ -982,7 +989,8 @@ export function buildTemporalSubmissionDraftFromExecution(
     legacyBranchWarning: legacyBranchDraft.warning,
     publishMode,
     mergeAutomationEnabled: Boolean(
-      mergeAutomation.enabled ||
+      publishMode === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE ||
+        mergeAutomation.enabled ||
         artifactMergeAutomation.enabled ||
         taskMergeAutomation.enabled ||
         artifactTaskMergeAutomation.enabled,

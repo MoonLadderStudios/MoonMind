@@ -1866,6 +1866,13 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_runtime_payload.get("executionProfileRef"))
             or _coerce_temporal_scalar(task_runtime_payload.get("execution_profile_ref"))
         ) or None
+    params_for_priority = params if isinstance(params, Mapping) else {}
+    task_payload_for_priority = task_payload if isinstance(task_payload, Mapping) else {}
+    priority = _int_or_none(
+        params_for_priority.get("priority")
+        if params_for_priority.get("priority") is not None
+        else task_payload_for_priority.get("priority")
+    )
 
     dependencies_block = (
         memo.get("dependencies") if isinstance(memo.get("dependencies"), dict) else {}
@@ -1989,12 +1996,14 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_payload.get("repository"))
         ) or None
 
-    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none"}
+    _ALLOWED_PUBLISH_MODES = {"branch", "pr", "none", "pr_with_merge_automation"}
     raw_publish_mode = str(
         params.get("publishMode") or publish_payload.get("mode") or ""
     ).strip() or None
     publish_mode = raw_publish_mode if raw_publish_mode in _ALLOWED_PUBLISH_MODES else None
-    merge_automation_selected = _merge_automation_selected_from_parameters(params)
+    merge_automation_enabled = _merge_automation_enabled_from_parameters(params)
+    if publish_mode == "pr" and merge_automation_enabled:
+        publish_mode = "pr_with_merge_automation"
     merge_automation = _normalize_merge_automation_visibility_payload(
         memo.get("merge_automation") or memo.get("mergeAutomation")
     )
@@ -2094,12 +2103,12 @@ def _serialize_execution(
         model_source=param_model_source,
         profile_id=param_profile_id,
         effort=param_effort,
+        priority=priority,
         starting_branch=starting_branch,
         target_branch=target_branch,
         repository=repository,
         pr_url=pr_url,
         publish_mode=publish_mode,
-        merge_automation_selected=merge_automation_selected,
         merge_automation=merge_automation,
         resolved_skillset_ref=resolved_skillset_ref,
         task_skills=task_skills,
@@ -5584,7 +5593,11 @@ async def _expand_goal_preset_for_workflow_submission(
     runtime_payload = (
         task_payload.get("runtime") if isinstance(task_payload.get("runtime"), Mapping) else {}
     )
-    target_runtime = request_payload.get("targetRuntime") or runtime_payload.get("mode")
+    target_runtime = (
+        request_payload.get("targetRuntime")
+        or runtime_payload.get("mode")
+        or normalize_runtime_id(settings.workflow.default_runtime)
+    )
     if isinstance(target_runtime, str) and target_runtime.strip():
         context["targetRuntime"] = target_runtime.strip()
 
@@ -5853,7 +5866,7 @@ def _validate_pr_base_branch_submission(
 def _normalize_merge_automation_payload(raw_merge_automation: Any) -> dict[str, Any]:
     return _coerce_mapping(raw_merge_automation)
 
-def _merge_automation_selected_from_parameters(
+def _merge_automation_enabled_from_parameters(
     parameters: Mapping[str, Any],
 ) -> bool:
     raw_publish_payload = _coerce_mapping(parameters.get("publish"))

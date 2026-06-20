@@ -1259,6 +1259,41 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Amerge-automation-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:merge-automation-rerun",
+              workflowType: "MoonMind.UserWorkflow",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              profileId: "profile:codex-secondary",
+              model: "gpt-5.4",
+              effort: "medium",
+              repository: "MoonLadderStudios/MoonMind",
+              publishMode: "pr_with_merge_automation",
+              inputArtifactRef: "merge-automation-input",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                mergeAutomation: { enabled: true },
+                task: {
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              },
+              actions: {
+                canUpdateInputs: false,
+                canRerun: true,
+              },
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Atarget-only-branch-rerun?source=temporal") {
           return Promise.resolve({
             ok: true,
@@ -1730,6 +1765,18 @@ describe.skip("Task Create Entrypoint", () => {
             }),
           } as Response);
         }
+        if (url === "/api/executions/mm%3Amerge-automation-rerun/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "continue_as_new",
+              message: "Rerun requested. New execution created.",
+              execution: { workflowId: "mm:merge-automation-rerun-created" },
+              continueAsNewCause: "manual_rerun",
+            }),
+          } as Response);
+        }
         if (url === "/api/executions/mm%3Acomplex-rerun/update") {
           return Promise.resolve({
             ok: true,
@@ -1973,6 +2020,27 @@ describe.skip("Task Create Entrypoint", () => {
                 repository: "MoonLadderStudios/MoonMind",
                 task: {
                   instructions: "Rerun from artifact-backed instructions.",
+                  runtime: {
+                    mode: "codex_cli",
+                    model: "gpt-5.4",
+                    effort: "medium",
+                    profileId: "profile:codex-secondary",
+                  },
+                  publish: { mode: "pr" },
+                  tool: { type: "skill", name: "speckit-orchestrate" },
+                },
+              }),
+          } as Response);
+        }
+        if (url === "/api/artifacts/merge-automation-input/download") {
+          return Promise.resolve({
+            ok: true,
+            text: async () =>
+              JSON.stringify({
+                repository: "MoonLadderStudios/MoonMind",
+                mergeAutomation: { enabled: true },
+                task: {
+                  instructions: "Rerun merge automation unchanged.",
                   runtime: {
                     mode: "codex_cli",
                     model: "gpt-5.4",
@@ -2820,9 +2888,8 @@ describe.skip("Task Create Entrypoint", () => {
       workflowType: "MoonMind.UserWorkflow",
       targetRuntime: "codex_cli",
       repository: "MoonLadderStudios/MoonMind",
-      publishMode: "pr",
+      publishMode: "pr_with_merge_automation",
       inputParameters: {
-        mergeAutomation: { enabled: true },
         task: {
           instructions: "Preserve PR merge automation state.",
           publish: { mode: "pr" },
@@ -2830,7 +2897,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     });
 
-    expect(draft.publishMode).toBe("pr");
+    expect(draft.publishMode).toBe("pr_with_merge_automation");
     expect(draft.mergeAutomationEnabled).toBe(true);
   });
 
@@ -3923,6 +3990,45 @@ describe.skip("Task Create Entrypoint", () => {
     });
     const updateCall = fetchSpy.mock.calls
       .filter(([url]) => String(url) === "/api/executions/mm%3Arerun-123/update")
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body));
+    expect(request).toEqual({
+      updateName: "RequestRerun",
+    });
+  });
+
+  it("treats unchanged merge automation reruns as exact rerun requests", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/workflows/new?rerunExecutionId=mm%3Amerge-automation-rerun",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe("Rerun merge automation unchanged.");
+      const publishSelect = screen.getByLabelText(
+        "Publish Mode",
+      ) as HTMLSelectElement;
+      expect(publishSelect.value).toBe("pr_with_merge_automation");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Amerge-automation-rerun/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Amerge-automation-rerun/update",
+      )
       .at(-1);
     const request = JSON.parse(String(updateCall?.[1]?.body));
     expect(request).toEqual({

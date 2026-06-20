@@ -2317,7 +2317,7 @@ class WorkflowInputSnapshotDescriptorModel(BaseModel):
 class StepLedgerCheckModel(BaseModel):
     """Structured step-level review or check result."""
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     kind: str = Field(..., alias="kind", min_length=1)
     status: str = Field(..., alias="status", min_length=1)
@@ -2800,6 +2800,7 @@ class ExecutionModel(BaseModel):
     provider_id: Optional[str] = Field(None, alias="providerId")
     provider_label: Optional[str] = Field(None, alias="providerLabel")
     effort: Optional[str] = Field(None, alias="effort")
+    priority: Optional[int] = Field(None, alias="priority")
     starting_branch: Optional[str] = Field(None, alias="startingBranch")
     target_branch: Optional[str] = Field(None, alias="targetBranch")
     repository: Optional[str] = Field(None, alias="repository")
@@ -2809,7 +2810,6 @@ class ExecutionModel(BaseModel):
         description="URL of the pull request associated with this execution.",
     )
     publish_mode: Optional[str] = Field(None, alias="publishMode")
-    merge_automation_selected: bool = Field(False, alias="mergeAutomationSelected")
     merge_automation: ExecutionMergeAutomationModel | None = Field(
         None,
         alias="mergeAutomation",
