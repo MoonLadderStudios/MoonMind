@@ -119,6 +119,9 @@ jobs:
             ./tools/test_unit.sh --python-only
           else
             python -m pytest tests/unit \
+              --ignore=tests/unit/workflows/temporal \
+              --ignore=tests/unit/api \
+              --ignore=tests/unit/api_service \
               -m "not temporal_boundary and not component and not slow" \
               -q -n auto --dist loadfile --durations=25 \
               --junitxml=artifacts/pytest-unit-fast.xml
@@ -166,7 +169,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
-            -m "component and not temporal_boundary and not slow" \
+            -m "not temporal_boundary and not slow" \
             -q -n auto --dist loadfile --durations=25 \
             --junitxml=artifacts/pytest-api-component.xml
 
@@ -337,28 +340,45 @@ jobs:
         path: api_service/static/workflow_console/dist/
         if-no-files-found: error
 
-  check-generated-contracts:
+  detect-openapi-contract-impact:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      run_check: ${{ steps.detect.outputs.run_check }}
     steps:
     - name: Check out code
       uses: actions/checkout@v6
       with:
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
         token: ${{ secrets.GITHUB_TOKEN }}
-        fetch-depth: 0
+        fetch-depth: 1
     - name: Detect OpenAPI-affecting changes
       id: detect
+      shell: bash
       run: |
         set -euo pipefail
+
+        ensure_commit_available() {
+          local sha="$1"
+
+          if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            return 0
+          fi
+
+          git fetch --no-tags --depth=1 origin "$sha"
+        }
 
         if [[ "${{ github.event_name }}" == "pull_request" ]]; then
           base_sha="${{ github.event.pull_request.base.sha }}"
           head_sha="${{ github.event.pull_request.head.sha }}"
-          changed_files="$(git diff --name-only "$base_sha...$head_sha")"
+          ensure_commit_available "$base_sha"
+          ensure_commit_available "$head_sha"
+          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
         elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
           base_sha="${{ github.event.before }}"
           head_sha="${{ github.sha }}"
+          ensure_commit_available "$base_sha"
+          ensure_commit_available "$head_sha"
           changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
         else
           echo "run_check=true" >> "$GITHUB_OUTPUT"
@@ -370,27 +390,35 @@ jobs:
         else
           echo "run_check=false" >> "$GITHUB_OUTPUT"
         fi
+
+  run-generated-contracts:
+    needs: detect-openapi-contract-impact
+    if: needs.detect-openapi-contract-impact.outputs.run_check == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
     - name: Set up Node.js
-      if: steps.detect.outputs.run_check == 'true'
       uses: actions/setup-node@v6
       with:
         node-version: '20'
         cache: npm
     - name: Install OpenAPI TypeScript generator
-      if: steps.detect.outputs.run_check == 'true'
       run: bash tools/install_openapi_typescript.sh
     - name: Set up Python for OpenAPI generation
-      if: steps.detect.outputs.run_check == 'true'
       uses: actions/setup-python@v6
       with:
         python-version: '3.12'
     - name: Install system dependencies for backend API check
-      if: steps.detect.outputs.run_check == 'true'
       run: |
         sudo apt-get update
         sudo apt-get install -y libcairo2-dev pkg-config
     - name: Cache pip dependencies
-      if: steps.detect.outputs.run_check == 'true'
       uses: actions/cache@v5
       with:
         path: ~/.cache/pip
@@ -398,13 +426,36 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
     - name: Install backend dependencies via uv
-      if: steps.detect.outputs.run_check == 'true'
       run: |
         python -m pip install --upgrade pip uv
         uv pip install --system -e .
     - name: Verify generated frontend API types are in sync
-      if: steps.detect.outputs.run_check == 'true'
       run: npm run contracts:check
-    - name: Skip generated contract check
-      if: steps.detect.outputs.run_check != 'true'
-      run: echo "No backend/OpenAPI-affecting files changed; skipping generated contract verification."
+
+  check-generated-contracts:
+    needs:
+      - detect-openapi-contract-impact
+      - run-generated-contracts
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Verify generated contract status
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ "${{ needs.detect-openapi-contract-impact.result }}" != "success" ]]; then
+          echo "::error::detect-openapi-contract-impact ended with result=${{ needs.detect-openapi-contract-impact.result }}"
+          exit 1
+        fi
+
+        if [[ "${{ needs.detect-openapi-contract-impact.outputs.run_check }}" == "true" ]]; then
+          if [[ "${{ needs.run-generated-contracts.result }}" != "success" ]]; then
+            echo "::error::run-generated-contracts was selected but ended with result=${{ needs.run-generated-contracts.result }}"
+            exit 1
+          fi
+          echo "Generated contract verification passed."
+        else
+          echo "No backend/OpenAPI-affecting files changed; generated contract verification skipped intentionally."
+        fi

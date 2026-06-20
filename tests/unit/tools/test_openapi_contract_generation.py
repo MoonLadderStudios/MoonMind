@@ -15,7 +15,7 @@ def test_mm852_contract_job_uses_minimal_generator_setup() -> None:
 
     workflow = WORKFLOW.read_text(encoding="utf-8")
     contract_job_match = re.search(
-        r"(?ms)^  check-generated-contracts:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        r"(?ms)^  run-generated-contracts:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
         workflow,
     )
     assert contract_job_match is not None

@@ -7,6 +7,10 @@ on:
 
 env:
   REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}
+  # Configured vulnerability-severity threshold for the curated PentestGPT
+  # runner image. The build fails when the image scan reports a fixable
+  # vulnerability at or above any listed severity.
+  PENTEST_RUNNER_VULN_SEVERITY_THRESHOLD: "CRITICAL,HIGH"
 
 jobs:
   metadata:
@@ -226,7 +230,87 @@ jobs:
         if: matrix.platform == 'linux/amd64'
         run: |
           docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --version
-          docker run --rm moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }} --self-test
+
+      - name: Validate runner provenance labels
+        if: matrix.platform == 'linux/amd64'
+        run: |
+          IMAGE="moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }}"
+          missing=0
+          for label in \
+            org.opencontainers.image.source \
+            org.opencontainers.image.version \
+            org.opencontainers.image.revision \
+            org.opencontainers.image.title; do
+            value="$(docker inspect --format "{{ index .Config.Labels \"${label}\" }}" "${IMAGE}")"
+            if [ -z "${value}" ] || [ "${value}" = "<no value>" ]; then
+              echo "::error::Runner image is missing required provenance label: ${label}" >&2
+              missing=1
+            else
+              echo "provenance ${label}=${value}"
+            fi
+          done
+          if [ "${missing}" -ne 0 ]; then
+            echo "::error::Runner image provenance labels are incomplete; failing build" >&2
+            exit 1
+          fi
+
+      - name: Validate runner self-test report output
+        if: matrix.platform == 'linux/amd64'
+        run: |
+          IMAGE="moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }}"
+          # The runner --self-test validates its own report artifacts and emits
+          # a machine-readable report line. Re-validate that report content here
+          # so CI explicitly fails on invalid self-test report output.
+          selftest_out="$(docker run --rm "${IMAGE}" --self-test)"
+          printf '%s\n' "${selftest_out}"
+          report_line="$(printf '%s\n' "${selftest_out}" | grep '"self_test"' | tail -n1)"
+          if [ -z "${report_line}" ]; then
+            echo "::error::Runner self-test did not emit a machine-readable report" >&2
+            exit 1
+          fi
+          # Pass the report JSON via the environment instead of a pipe: a heredoc
+          # is the program source on stdin for `python3 -`, so a piped stdin would
+          # be consumed as the script and json.loads would see an empty string.
+          REPORT_LINE="${report_line}" python3 <<'PY'
+          import json
+          import os
+          import sys
+
+          report = json.loads(os.environ["REPORT_LINE"])
+          problems = []
+          if report.get("self_test") != "ok":
+              problems.append(f"self_test status is {report.get('self_test')!r}")
+          if report.get("runner_contract_v") != 1:
+              problems.append(f"runner_contract_v drift: {report.get('runner_contract_v')!r}")
+          required = {"report.primary", "report.summary", "report.structured", "report.evidence"}
+          present = set(report.get("report_artifacts") or [])
+          missing = required - present
+          if missing:
+              problems.append(f"missing report artifacts: {sorted(missing)}")
+          if not report.get("redaction_ok"):
+              problems.append("redaction not verified in normalized findings")
+          if not report.get("no_canary_leak"):
+              problems.append("redaction canary leaked into report output")
+          if report.get("failure_category") != "success":
+              problems.append(f"failure_category is {report.get('failure_category')!r}")
+          if int(report.get("findings_count") or 0) < 1:
+              problems.append("self-test produced no findings")
+          if problems:
+              print("::error::Invalid self-test report output: " + "; ".join(problems), file=sys.stderr)
+              raise SystemExit(1)
+          print("self-test report output validated")
+          PY
+
+      - name: Scan runner image for vulnerabilities
+        if: matrix.platform == 'linux/amd64'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: moonmind-pentestgpt-smoke:${{ needs.metadata.outputs.version_tag }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: ${{ env.PENTEST_RUNNER_VULN_SEVERITY_THRESHOLD }}
 
       - name: Validate upstream PentestGPT CLI compatibility
         if: matrix.platform == 'linux/amd64'

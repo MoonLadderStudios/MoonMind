@@ -66,6 +66,66 @@ def test_required_pytest_unit_workflow_selects_integration_ci_for_prs() -> None:
     assert "integration-ci" in required_job["needs"]
 
 
+def test_generated_contracts_use_cheap_detector_and_stable_required_status() -> None:
+    workflow = _load_unit_workflow()
+    jobs = workflow["jobs"]
+
+    detector_job = jobs["detect-openapi-contract-impact"]
+    assert detector_job["outputs"]["run_check"] == "${{ steps.detect.outputs.run_check }}"
+    detector_steps = detector_job["steps"]
+    detector_checkout = detector_steps[0]
+    assert detector_checkout["uses"].startswith("actions/checkout@")
+    assert int(detector_checkout["with"]["fetch-depth"]) == 1
+    assert any(
+        "tools/check_openapi_affecting_changes.sh" in (step.get("run") or "")
+        for step in detector_steps
+    )
+    assert not any(
+        (step.get("uses") or "").startswith("actions/setup-node@")
+        or (step.get("uses") or "").startswith("actions/setup-python@")
+        or "npm ci" in (step.get("run") or "")
+        or "uv pip install" in (step.get("run") or "")
+        or "apt-get install" in (step.get("run") or "")
+        for step in detector_steps
+    )
+
+    contract_job = jobs["run-generated-contracts"]
+    assert contract_job["needs"] == "detect-openapi-contract-impact"
+    assert (
+        contract_job["if"]
+        == "needs.detect-openapi-contract-impact.outputs.run_check == 'true'"
+    )
+    contract_steps = contract_job["steps"]
+    assert any(
+        (step.get("uses") or "").startswith("actions/setup-node@")
+        for step in contract_steps
+    )
+    assert any(
+        (step.get("uses") or "").startswith("actions/setup-python@")
+        for step in contract_steps
+    )
+    assert any(
+        "npm run contracts:check" in (step.get("run") or "")
+        for step in contract_steps
+    )
+    assert not any(step.get("if") for step in contract_steps)
+
+    required_job = jobs["check-generated-contracts"]
+    assert required_job["needs"] == [
+        "detect-openapi-contract-impact",
+        "run-generated-contracts",
+    ]
+    assert required_job["if"] == "always()"
+    required_script = "\n".join(
+        (step.get("run") or "") for step in required_job["steps"] if "run" in step
+    )
+    assert "needs.detect-openapi-contract-impact.result" in required_script
+    assert "needs.detect-openapi-contract-impact.outputs.run_check" in required_script
+    assert "needs.run-generated-contracts.result" in required_script
+    assert "Generated contract verification passed." in required_script
+    assert "skipped intentionally" in required_script
+
+
 def test_required_pytest_integration_ci_workflow_runs_hermetic_runner_and_uploads_failure_diagnostics() -> None:
     workflow = _load_workflow()
 
