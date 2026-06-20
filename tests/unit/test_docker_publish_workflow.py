@@ -113,3 +113,15 @@ def test_runner_publish_validates_selftest_report_output() -> None:
     for token in ("report.primary", "report.structured", "no_secret_leak", "redaction_ok"):
         assert token in run, f"self-test validation does not check {token}"
     assert "exit 1" in run or "SystemExit(1)" in run
+
+
+def test_runner_selftest_report_is_passed_without_clobbering_stdin() -> None:
+    # MM-839 regression: a heredoc is the program source on stdin for python, so
+    # piping the report into `python3 - <<'PY'` discards it and json.loads sees an
+    # empty string. The report must be passed via the environment instead.
+    step = _pentest_step("Validate runner self-test report output")
+    run = step["run"]
+    assert "REPORT_LINE=" in run, "report JSON must be passed via the environment"
+    assert 'os.environ["REPORT_LINE"]' in run
+    assert "sys.stdin.read()" not in run, "report must not be read from clobbered stdin"
+    assert "python3 - <<" not in run, "do not feed the program on stdin while piping data"

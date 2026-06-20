@@ -268,11 +268,15 @@ jobs:
             echo "::error::Runner self-test did not emit a machine-readable report" >&2
             exit 1
           fi
-          printf '%s' "${report_line}" | python3 - <<'PY'
+          # Pass the report JSON via the environment instead of a pipe: a heredoc
+          # is the program source on stdin for `python3 -`, so a piped stdin would
+          # be consumed as the script and json.loads would see an empty string.
+          REPORT_LINE="${report_line}" python3 <<'PY'
           import json
+          import os
           import sys
 
-          report = json.loads(sys.stdin.read())
+          report = json.loads(os.environ["REPORT_LINE"])
           problems = []
           if report.get("self_test") != "ok":
               problems.append(f"self_test status is {report.get('self_test')!r}")
