@@ -8338,6 +8338,118 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
     assert "outputs" not in body
 
 
+def test_get_execution_step_executions_degraded_older_ref_uses_per_ref_ordinal() -> None:
+    """A degraded older ref must keep its per-ref ordinal, not the row-level
+    latest attempt count, so it cannot shadow the valid latest attempt or
+    produce duplicate ordinals (PR #2530 review P2)."""
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_query_client(
+        app,
+        ledger={
+            "workflowId": "mm:wf-1",
+            "runId": "run-99",
+            "runScope": "latest",
+            "steps": [
+                {
+                    "logicalStepId": "implement",
+                    "order": 1,
+                    "title": "Implement",
+                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "dependsOn": [],
+                    "status": "succeeded",
+                    "waitingReason": None,
+                    "attentionRequired": False,
+                    # Row-level latest attempt count is 2; the older ref is
+                    # degraded. The buggy path mapped it onto ordinal 2.
+                    "attempt": 2,
+                    "startedAt": "2026-05-19T10:00:00Z",
+                    "updatedAt": "2026-05-19T10:01:00Z",
+                    "summary": "Done",
+                    "checks": [],
+                    "refs": {
+                        "childWorkflowId": None,
+                        "childRunId": None,
+                        "agentRunId": None,
+                        "latestStepExecutionManifestRef": "art-attempt-2",
+                        "stepExecutionManifestRefs": ["art-attempt-1", "art-attempt-2"],
+                    },
+                    "artifacts": {},
+                    "lastError": None,
+                }
+            ],
+        },
+    )
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def _read_artifact(**kwargs):
+        artifact_id = kwargs["artifact_id"]
+        if artifact_id == "art-attempt-1":
+            # Malformed body -> degraded projection.
+            return SimpleNamespace(artifact_id=artifact_id), b"{not-json"
+        payload = _step_execution_manifest_payload(
+            artifact_ref=artifact_id,
+            attempt=2,
+        )
+        return SimpleNamespace(artifact_id=artifact_id), json.dumps(payload).encode()
+
+    artifact_service = SimpleNamespace(read=AsyncMock(side_effect=_read_artifact))
+    app.dependency_overrides[get_async_session] = _empty_session_override
+
+    with patch(
+        "api_service.api.routers.executions.get_temporal_artifact_service",
+        return_value=artifact_service,
+    ):
+        with TestClient(app) as test_client:
+            list_response = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/step-executions"
+            )
+            detail_latest = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/step-executions/2"
+            )
+            detail_degraded = test_client.get(
+                "/api/executions/mm:wf-1/steps/implement/step-executions/1"
+            )
+
+    assert list_response.status_code == 200
+    items = list_response.json()["stepExecutions"]
+    ordinals = [item["executionOrdinal"] for item in items]
+    # No duplicate ordinals: degraded older ref keeps ordinal 1.
+    assert ordinals == [1, 2]
+    degraded_item = items[0]
+    assert degraded_item["manifestArtifactRef"] == "art-attempt-1"
+    assert degraded_item["executionOrdinal"] == 1
+    assert degraded_item["stepExecutionId"].endswith(":execution:1:invalid")
+    assert (
+        degraded_item["compatibilityDecision"]["failureCode"]
+        == "malformed_step_execution_manifest"
+    )
+    valid_item = items[1]
+    assert valid_item["manifestArtifactRef"] == "art-attempt-2"
+    assert valid_item["executionOrdinal"] == 2
+    assert valid_item.get("compatibilityDecision") is None
+    assert valid_item["status"] == "succeeded"
+
+    # The valid latest attempt must win at ordinal 2, not the degraded ref.
+    assert detail_latest.status_code == 200
+    latest_body = detail_latest.json()
+    assert latest_body["executionOrdinal"] == 2
+    assert latest_body["status"] == "succeeded"
+    assert latest_body.get("compatibilityDecision") is None
+
+    # The degraded older ref is addressable at its own ordinal 1.
+    assert detail_degraded.status_code == 200
+    degraded_body = detail_degraded.json()
+    assert degraded_body["executionOrdinal"] == 1
+    assert (
+        degraded_body["compatibilityDecision"]["failureCode"]
+        == "malformed_step_execution_manifest"
+    )
+
+
 def test_get_execution_step_executions_preserves_artifact_authorization() -> None:
     app = FastAPI()
     app.include_router(router)

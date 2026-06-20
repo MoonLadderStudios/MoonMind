@@ -3616,6 +3616,23 @@ export interface components {
             artifact_id: string;
         };
         /**
+         * CompatibilityBoundaryDecisionModel
+         * @description Typed fail-closed decision for degraded persisted boundary values.
+         */
+        CompatibilityBoundaryDecisionModel: {
+            /** Valid */
+            valid: boolean;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "valid" | "invalid" | "degraded";
+            /** Failurecode */
+            failureCode?: string | null;
+            /** Message */
+            message: string;
+        };
+        /**
          * CompleteArtifactPartModel
          * @description Multipart completion part descriptor (reserved for compatibility).
          */
@@ -6811,8 +6828,6 @@ export interface components {
             operatorMetadata?: {
                 [key: string]: unknown;
             };
-        } & {
-            [key: string]: unknown;
         };
         /**
          * RecoverFromFailedStepResponse
@@ -6881,8 +6896,6 @@ export interface components {
             };
             /** Selectedstartstepid */
             selectedStartStepId: string;
-        } & {
-            [key: string]: unknown;
         };
         /**
          * RecoveryEligibilityDiagnosticModel
@@ -7640,16 +7653,10 @@ export interface components {
             /** Sourceexecutionordinal */
             sourceExecutionOrdinal?: number | null;
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
-            /**
-             * Reason
-             * @enum {string}
-             */
-            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded";
+            /** Reason */
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            /** Status */
+            status?: ("pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
@@ -7678,6 +7685,7 @@ export interface components {
             };
             stepEvidence?: components["schemas"]["StepEvidenceSummaryModel"] | null;
             recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
+            compatibilityDecision?: components["schemas"]["CompatibilityBoundaryDecisionModel"] | null;
             /** Inputrefs */
             inputRefs?: {
                 [key: string]: unknown;
@@ -7769,16 +7777,10 @@ export interface components {
             /** Sourceexecutionordinal */
             sourceExecutionOrdinal?: number | null;
             lineage?: components["schemas"]["StepExecutionLineageModel"] | null;
-            /**
-             * Reason
-             * @enum {string}
-             */
-            reason: "initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation";
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded";
+            /** Reason */
+            reason?: ("initial_execution" | "quality_gate_failed" | "tests_failed" | "runtime_recovered" | "recover_from_failed_step" | "remediation_context" | "operator_requested" | "dependency_invalidated" | "policy_revalidation") | null;
+            /** Status */
+            status?: ("pending" | "preparing" | "running" | "checking" | "succeeded" | "failed" | "blocked" | "canceled" | "superseded") | null;
             /** Terminaldisposition */
             terminalDisposition?: ("accepted" | "retryable" | "blocked" | "needs_human" | "discarded" | "superseded" | "failed_unrecoverable" | "failed_with_remaining_work") | null;
             /** Startedat */
@@ -7807,6 +7809,7 @@ export interface components {
             };
             stepEvidence?: components["schemas"]["StepEvidenceSummaryModel"] | null;
             recoveryEligibility?: components["schemas"]["RecoveryEligibilityDiagnosticModel"] | null;
+            compatibilityDecision?: components["schemas"]["CompatibilityBoundaryDecisionModel"] | null;
         };
         /**
          * StepLedgerArtifactsModel

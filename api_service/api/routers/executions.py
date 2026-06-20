@@ -4612,14 +4612,18 @@ def _step_execution_compatibility_decision(
 def _degraded_step_execution_projection_payload(
     *,
     ledger: StepLedgerSnapshotModel,
-    row: Any,
     logical_step_id: str,
     manifest_artifact_ref: str,
     compatibility_decision: Mapping[str, Any],
     fallback_ordinal: int,
 ) -> dict[str, Any]:
-    raw_ordinal = getattr(row, "execution_ordinal", None)
-    execution_ordinal = raw_ordinal if isinstance(raw_ordinal, int) and raw_ordinal > 0 else fallback_ordinal
+    # A degraded manifest carries no trustworthy ordinal of its own, and
+    # ``row.execution_ordinal`` is the row-level latest attempt count rather
+    # than this ref's ordinal. Using it would map a degraded older ref onto
+    # the latest ordinal, shadowing the valid attempt at that ordinal and
+    # producing duplicate ordinals. Use the per-ref fallback index instead so
+    # each degraded ref keeps its own position.
+    execution_ordinal = fallback_ordinal
     return {
         "manifestArtifactRef": manifest_artifact_ref,
         "stepExecutionId": (
@@ -8926,7 +8930,6 @@ async def describe_execution_step_executions(
             if manifest is not None
             else _degraded_step_execution_projection_payload(
                 ledger=ledger,
-                row=row,
                 logical_step_id=logical_step_id,
                 manifest_artifact_ref=manifest_ref,
                 compatibility_decision=decision
@@ -9017,14 +9020,12 @@ async def describe_execution_step_execution(
         zip(manifest_results, manifest_refs, strict=True),
         start=1,
     ):
+        # Degraded refs have no manifest ordinal; fall back to the per-ref
+        # index so matching mirrors the list projection. Using
+        # ``row.execution_ordinal`` here would let a degraded older ref claim
+        # the latest ordinal and shadow the valid attempt at that ordinal.
         candidate_ordinal = (
-            manifest.execution_ordinal
-            if manifest is not None
-            else (
-                row.execution_ordinal
-                if isinstance(row.execution_ordinal, int) and row.execution_ordinal > 0
-                else index
-            )
+            manifest.execution_ordinal if manifest is not None else index
         )
         if candidate_ordinal != execution_ordinal:
             continue
@@ -9036,7 +9037,6 @@ async def describe_execution_step_execution(
             if manifest is not None
             else _degraded_step_execution_projection_payload(
                 ledger=ledger,
-                row=row,
                 logical_step_id=logical_step_id,
                 manifest_artifact_ref=manifest_ref,
                 compatibility_decision=decision
