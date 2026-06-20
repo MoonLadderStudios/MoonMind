@@ -256,6 +256,64 @@ async def _create_uploaded_artifact(
         await session.commit()
     return artifact_id
 
+async def _create_local_artifact(
+    session: AsyncSession,
+    *,
+    principal: str,
+    root_path: str,
+    payload: bytes,
+    content_type: str = "application/json",
+) -> str:
+    artifact_service = _build_local_artifact_service(session, root_path=root_path)
+    artifact, _upload = await artifact_service.create(
+        principal=principal,
+        content_type=content_type,
+        size_bytes=len(payload),
+        metadata_json={"label": "Step Execution compatibility manifest"},
+    )
+    await artifact_service.write_complete(
+        artifact_id=artifact.artifact_id,
+        principal=principal,
+        payload=payload,
+        content_type=content_type,
+    )
+    return artifact.artifact_id
+
+def _step_ledger_with_manifest_ref(
+    workflow_id: str,
+    *,
+    manifest_ref: str,
+    execution_ordinal: object = 1,
+) -> dict[str, object]:
+    return {
+        "workflowId": workflow_id,
+        "runId": "run-query-latest",
+        "runScope": "latest",
+        "steps": [
+            {
+                "logicalStepId": "implement-story",
+                "order": 1,
+                "title": "Implement story",
+                "tool": {"type": "skill", "name": "moonspec-implement"},
+                "dependsOn": [],
+                "status": "failed",
+                "waitingReason": None,
+                "attentionRequired": True,
+                "executionOrdinal": execution_ordinal,
+                "startedAt": "2026-04-08T12:00:00Z",
+                "updatedAt": "2026-04-08T12:00:00Z",
+                "summary": "Manifest compatibility check",
+                "checks": [],
+                "refs": {
+                    "latestStepExecutionManifestRef": manifest_ref,
+                    "stepExecutionManifestRefs": [manifest_ref],
+                },
+                "artifacts": {},
+                "lastError": "Manifest compatibility check",
+            }
+        ],
+    }
+
 @pytest.mark.asyncio
 async def test_execution_lifecycle_endpoints_report_projection_contract(
     tmp_path, query_state, monkeypatch
@@ -705,6 +763,122 @@ async def test_execution_lifecycle_endpoints_report_projection_contract(
         db_base.async_session_maker = original_session_maker
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expected_code"),
+    [
+        (b"{not-json", "malformed_step_execution_manifest"),
+        (
+            json.dumps(
+                {
+                    "stepExecutionId": "",
+                    "workflowId": "",
+                    "runId": "run-query-latest",
+                    "logicalStepId": "implement-story",
+                    "executionOrdinal": 1,
+                    "reason": "future_reason",
+                    "status": "future_status",
+                }
+            ).encode("utf-8"),
+            "invalid_step_execution_manifest",
+        ),
+    ],
+)
+async def test_step_execution_api_degraded_manifest_values_fail_closed(
+    tmp_path,
+    query_state,
+    monkeypatch,
+    payload: bytes,
+    expected_code: str,
+):
+    original_db_url = db_base.DATABASE_URL
+    original_engine = db_base.engine
+    original_session_maker = db_base.async_session_maker
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/temporal_contract_step_execution.db"
+    db_base.DATABASE_URL = db_url
+    db_base.engine = create_async_engine(db_url, future=True)
+    db_base.async_session_maker = sessionmaker(
+        db_base.engine, class_=AsyncSession, expire_on_commit=False
+    )
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "artifacts"),
+    )
+
+    async with db_base.engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    shared_user_id = uuid4()
+    app.dependency_overrides[CURRENT_USER_DEP] = lambda: SimpleNamespace(
+        id=shared_user_id, is_superuser=False
+    )
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            create_response = await client.post(
+                "/api/executions",
+                json={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "title": "Step Execution compatibility",
+                    "idempotencyKey": f"step-execution-{expected_code}",
+                },
+            )
+            assert create_response.status_code == 201
+            workflow_id = create_response.json()["workflowId"]
+
+            async with db_base.async_session_maker() as session:
+                artifact_id = await _create_local_artifact(
+                    session,
+                    principal=str(shared_user_id),
+                    root_path=str(tmp_path / "artifacts"),
+                    payload=payload,
+                )
+
+            manifest_ref = f"artifact://{artifact_id}"
+            query_state[workflow_id] = {
+                "get_step_ledger": _step_ledger_with_manifest_ref(
+                    workflow_id,
+                    manifest_ref=manifest_ref,
+                )
+            }
+
+            response = await client.get(
+                f"/api/executions/{workflow_id}/steps/implement-story/step-executions"
+            )
+
+            assert response.status_code == 200
+            body = response.json()
+            projection = body["stepExecutions"][0]
+            assert projection["manifestArtifactRef"] == manifest_ref
+            assert projection["compatibilityDecision"] == {
+                "valid": False,
+                "decision": "invalid",
+                "failureCode": expected_code,
+                "message": projection["compatibilityDecision"]["message"],
+            }
+            assert len(projection["compatibilityDecision"]["message"]) <= 500
+            assert projection["status"] is None
+            assert projection["reason"] is None
+
+            detail = await client.get(
+                f"/api/executions/{workflow_id}/steps/implement-story/step-executions/1"
+            )
+            assert detail.status_code == 200
+            detail_body = detail.json()
+            assert detail_body["compatibilityDecision"]["decision"] == "invalid"
+            assert detail_body["compatibilityDecision"]["failureCode"] == expected_code
+    finally:
+        db_base.DATABASE_URL = original_db_url
+        db_base.engine = original_engine
+        db_base.async_session_maker = original_session_maker
+
+@pytest.mark.asyncio
 async def test_request_rerun_keeps_workflow_id_and_rotates_run_id(tmp_path, query_state):
     original_db_url = db_base.DATABASE_URL
     original_engine = db_base.engine
@@ -1082,11 +1256,10 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                                 }
                             ],
                             "steps": [
-                                    {
-                                        "id": "step-review-screenshot",
-                                        "instructions": "Review the step screenshot.",
-                                        "dependsOn": ["MM-638"],
-                                        "inputAttachments": [
+                                {
+                                    "id": "step-review-screenshot",
+                                    "instructions": "Review the step screenshot.",
+                                    "inputAttachments": [
                                         {
                                             "artifactId": step_artifact,
                                             "filename": "same-name.png",
@@ -1228,7 +1401,7 @@ async def test_task_shaped_create_returns_temporal_identity_and_redirect(
                 assert authored["publish"] == {"mode": "branch"}
                 assert authored["repository"] == "MoonLadderStudios/MoonMind"
                 assert authored["branch"] == "feature/mm-639"
-                assert authored["steps"][0]["dependencies"] == ["MM-638"]
+                assert "dependencies" not in authored["steps"][0]
                 assert authored["finalSubmittedOrder"] == [
                     {"stepId": "step-review-screenshot", "ordinal": 0}
                 ]

@@ -43,16 +43,16 @@ def test_canonical_docs_and_runtime_evidence_agree_on_manifest_and_checkpoint_st
     assert "implementation gap backlog" not in docs_text.lower()
 
 
-def test_temp_plan_state_matches_incomplete_final_definition_of_done() -> None:
-    runtime_text = _read(RUN_WORKFLOW)
-    temp_text = _read(TEMP_PLAN)
+def test_temp_plan_cleanup_matches_closed_final_definition_of_done() -> None:
+    docs_text = "\n".join(
+        _read(path) for path in (STEP_DOC, LEDGER_DOC, ACTIVITY_DOC, RUN_HISTORY_DOC)
+    )
     roadmap_text = _read(ROADMAP_DOC)
 
-    assert TEMP_PLAN.exists()
-    assert "Status: Execution plan (disposable; not canonical)" in temp_text
-    assert "Consolidate manifest writers (completed)" in temp_text
+    assert not TEMP_PLAN.exists()
+    assert "Status: Execution plan (disposable; not canonical)" not in docs_text
+    assert "Final definition of done" not in docs_text
     assert "- [ ] **13.1** Resume-from-checkpoint as the default recovery path" in roadmap_text
-    assert "build_step_execution_manifest_payload" not in temp_text
 
 
 def test_roadmap_and_implementation_evidence_remain_consistent() -> None:

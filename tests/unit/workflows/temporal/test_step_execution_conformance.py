@@ -5,12 +5,15 @@ import json
 import pytest
 
 from moonmind.workflows.temporal.step_execution_conformance import (
+    CLEANUP_GATE_REQUIRED_CONDITIONS,
     FORBIDDEN_INLINE_EVIDENCE_FIXTURES,
     REQUIRED_CONFORMANCE_FAMILIES,
     REQUIRED_TRACEABILITY_IDS,
     STEP_EXECUTION_CONFORMANCE_SUITE_ID,
     api_contract_fixture,
+    api_degraded_projection_decisions,
     build_conformance_summary,
+    cleanup_gate_decision,
     classify_gate_verdict,
     golden_fixture_catalog,
     run_step_execution_conformance,
@@ -250,6 +253,68 @@ def test_api_contract_fixture_exposes_refs_and_canonical_terms_only() -> None:
     assert fixture["projection"]["artifactRefs"]["manifestRef"].startswith(
         "artifact://"
     )
+
+
+def test_api_projection_degraded_values_have_typed_invalid_decisions() -> None:
+    decisions = {
+        decision["fixtureId"]: decision
+        for decision in api_degraded_projection_decisions()
+    }
+
+    assert set(decisions) == {
+        "api-blank-step-execution-value",
+        "api-unknown-step-execution-value",
+        "api-future-step-execution-value",
+        "api-malformed-step-execution-value",
+        "api-unsupported-step-execution-ref",
+    }
+    assert all(decision["decision"] == "invalid" for decision in decisions.values())
+    assert all(decision["expected"] == "invalid" for decision in decisions.values())
+    assert all(decision["failureCode"] for decision in decisions.values())
+    assert all(len(decision["message"]) <= 500 for decision in decisions.values())
+    assert all(
+        {"FR-004", "SC-003", "SCN-003", "DESIGN-REQ-021"}.issubset(
+            set(decision["traceability"])
+        )
+        for decision in decisions.values()
+    )
+
+
+def test_cleanup_gate_retains_temp_plan_while_closure_blockers_remain() -> None:
+    conditions = {condition: True for condition in CLEANUP_GATE_REQUIRED_CONDITIONS}
+    conditions["docs_match_implemented_behavior"] = False
+
+    decision = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=True,
+        expected="invalid",
+    )
+
+    assert decision["decision"] == "invalid"
+    assert decision["expected"] == "invalid"
+    assert decision["failureCode"] == "cleanup_blockers_remaining"
+    assert "docs_match_implemented_behavior" in decision["message"]
+    assert {"FR-007", "FR-008", "SC-004", "DESIGN-REQ-024"}.issubset(
+        set(decision["traceability"])
+    )
+
+
+def test_cleanup_gate_requires_temp_plan_deletion_after_closure() -> None:
+    conditions = {condition: True for condition in CLEANUP_GATE_REQUIRED_CONDITIONS}
+
+    lingering_plan = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=True,
+    )
+    closed = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=False,
+    )
+
+    assert lingering_plan["decision"] == "invalid"
+    assert lingering_plan["failureCode"] == "obsolete_gap_plan_present"
+    assert closed["decision"] == "valid"
+    assert closed["failureCode"] is None
 
 
 def test_api_contract_fixture_covers_phase_11_recovery_evidence_panels() -> None:

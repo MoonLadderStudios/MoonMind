@@ -3,10 +3,13 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import { missionControlViteBase } from './src/vite-base';
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, mode }) => ({
   base: missionControlViteBase(command),
   plugins: [react()],
-  root: resolve(__dirname, 'src'),
+  root: mode === 'test' ? undefined : resolve(__dirname, 'src'),
+  resolve: {
+    preserveSymlinks: mode === 'test',
+  },
   build: {
     outDir: resolve(__dirname, '../api_service/static/workflow_console/dist'),
     emptyOutDir: true,
@@ -20,6 +23,7 @@ export default defineConfig(({ command }) => ({
   test: {
     environment: 'jsdom',
     globals: true,
+    include: ['frontend/src/**/*.test.{ts,tsx}'],
     css: {
       include: /mission-control\.css$/,
     },

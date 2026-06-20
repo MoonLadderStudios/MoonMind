@@ -1626,7 +1626,11 @@ class UpdateExecutionRequest(BaseModel):
 class RecoverFromFailedStepRequest(BaseModel):
     """Request payload for creating a failed-step recovery follow-up execution."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="allow",
+        json_schema_extra={"additionalProperties": False},
+    )
 
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1, max_length=128)
     source_workflow_id: Optional[str] = Field(None, alias="sourceWorkflowId", min_length=1)
@@ -1693,6 +1697,12 @@ class RecoverFromFailedStepRequest(BaseModel):
 
 class RecoverFromSelectedStepRequest(RecoverFromFailedStepRequest):
     """Request payload for creating a selected-step recovery follow-up execution."""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="allow",
+        json_schema_extra={"additionalProperties": False},
+    )
 
     source_workflow_id: str = Field(..., alias="sourceWorkflowId", min_length=1)
     source_run_id: str = Field(..., alias="sourceRunId", min_length=1)
@@ -2477,6 +2487,17 @@ class StepLedgerSnapshotModel(BaseModel):
     steps: list[StepLedgerRowModel] = Field(default_factory=list, alias="steps")
 
 
+class CompatibilityBoundaryDecisionModel(BaseModel):
+    """Typed fail-closed decision for degraded persisted boundary values."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    valid: bool = Field(..., alias="valid")
+    decision: Literal["valid", "invalid", "degraded"] = Field(..., alias="decision")
+    failure_code: str | None = Field(None, alias="failureCode", max_length=120)
+    message: str = Field(..., alias="message", max_length=500)
+
+
 class StepExecutionProjectionModel(BaseModel):
     """Bounded Step Execution projection derived from manifest refs."""
 
@@ -2490,8 +2511,8 @@ class StepExecutionProjectionModel(BaseModel):
     execution_ordinal: int = Field(..., alias="executionOrdinal", ge=1)
     source_execution_ordinal: int | None = Field(None, alias="sourceExecutionOrdinal", ge=1)
     lineage: StepExecutionLineageModel | None = Field(None, alias="lineage")
-    reason: StepExecutionReason = Field(..., alias="reason")
-    status: StepExecutionStatus = Field(..., alias="status")
+    reason: StepExecutionReason | None = Field(None, alias="reason")
+    status: StepExecutionStatus | None = Field(None, alias="status")
     terminal_disposition: StepExecutionTerminalDisposition | None = Field(
         None, alias="terminalDisposition"
     )
@@ -2511,6 +2532,9 @@ class StepExecutionProjectionModel(BaseModel):
     )
     recovery_eligibility: RecoveryEligibilityDiagnosticModel | None = Field(
         None, alias="recoveryEligibility"
+    )
+    compatibility_decision: CompatibilityBoundaryDecisionModel | None = Field(
+        None, alias="compatibilityDecision"
     )
 
 

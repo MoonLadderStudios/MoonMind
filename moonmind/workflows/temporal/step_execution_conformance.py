@@ -78,6 +78,15 @@ _VALID_GATE_VERDICTS = {
 }
 _DEGRADED_GATE_VERDICTS = {"PARTIAL", "PASS", "FAIL"}
 
+CLEANUP_GATE_REQUIRED_CONDITIONS = (
+    "conformance_passed",
+    "terminology_passed",
+    "workflow_degraded_values_typed",
+    "api_projection_degraded_values_typed",
+    "docs_match_implemented_behavior",
+    "traceability_preserved",
+)
+
 
 def _identity() -> StepExecutionIdentityModel:
     return StepExecutionIdentityModel(
@@ -952,6 +961,120 @@ def _api_decision() -> dict[str, Any]:
     )
 
 
+def api_degraded_projection_decisions() -> list[dict[str, Any]]:
+    cases = (
+        (
+            "api-blank-step-execution-value",
+            "invalid_step_execution_manifest",
+            "blank Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-unknown-step-execution-value",
+            "invalid_step_execution_manifest",
+            "unknown Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-future-step-execution-value",
+            "invalid_step_execution_manifest",
+            "future Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-malformed-step-execution-value",
+            "malformed_step_execution_manifest",
+            "malformed Step Execution manifest values produce typed invalid API decisions",
+        ),
+        (
+            "api-unsupported-step-execution-ref",
+            "invalid_step_execution_manifest_ref",
+            "unsupported Step Execution manifest refs produce typed invalid API decisions",
+        ),
+    )
+    return [
+        _decision(
+            fixture_id=fixture_id,
+            category="api_contract",
+            contract_surface="api",
+            decision="invalid",
+            expected="invalid",
+            failure_code=failure_code,
+            message=message,
+            traceability=("FR-004", "SC-003", "SCN-003", "DESIGN-REQ-021"),
+        )
+        for fixture_id, failure_code, message in cases
+    ]
+
+
+def cleanup_gate_decision(
+    *,
+    conditions: Mapping[str, bool],
+    temp_gap_plan_exists: bool,
+    fixture_id: str = "mm-832-cleanup-gate",
+    expected: str = "valid",
+) -> dict[str, Any]:
+    missing = [
+        condition
+        for condition in CLEANUP_GATE_REQUIRED_CONDITIONS
+        if not bool(conditions.get(condition))
+    ]
+    if missing:
+        expected_state = "invalid" if temp_gap_plan_exists else expected
+        return _decision(
+            fixture_id=fixture_id,
+            category="cleanup_gate",
+            contract_surface="cleanup_gate",
+            decision="invalid",
+            expected=expected_state,
+            failure_code="cleanup_blockers_remaining",
+            message="cleanup blocked by " + ", ".join(missing),
+            traceability=("FR-007", "FR-008", "SC-004", "DESIGN-REQ-024"),
+        )
+    if temp_gap_plan_exists:
+        return _decision(
+            fixture_id=fixture_id,
+            category="cleanup_gate",
+            contract_surface="cleanup_gate",
+            decision="invalid",
+            expected=expected,
+            failure_code="obsolete_gap_plan_present",
+            message="cleanup evidence is complete but the disposable gap plan remains",
+            traceability=("FR-007", "FR-008", "SC-004", "DESIGN-REQ-024"),
+        )
+    return _decision(
+        fixture_id=fixture_id,
+        category="cleanup_gate",
+        contract_surface="cleanup_gate",
+        decision="valid",
+        expected=expected,
+        failure_code=None,
+        message="cleanup evidence complete and disposable gap plan absent",
+        traceability=("FR-007", "FR-008", "SC-004", "DESIGN-REQ-024"),
+    )
+
+
+def cleanup_gate_fixture_decisions() -> list[dict[str, Any]]:
+    complete_conditions = {
+        condition: True for condition in CLEANUP_GATE_REQUIRED_CONDITIONS
+    }
+    blocked_conditions = {
+        **complete_conditions,
+        "docs_match_implemented_behavior": False,
+    }
+    return [
+        cleanup_gate_decision(
+            conditions=blocked_conditions,
+            temp_gap_plan_exists=True,
+            fixture_id="cleanup-gate-retains-gap-plan-with-blockers",
+            expected="invalid",
+        ),
+        cleanup_gate_decision(
+            conditions=complete_conditions,
+            temp_gap_plan_exists=False,
+            fixture_id="cleanup-gate-final-closure",
+            expected="valid",
+        ),
+    ]
+
+
 def _family_results(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     families: list[dict[str, Any]] = []
     for family in REQUIRED_CONFORMANCE_FAMILIES:
@@ -978,6 +1101,8 @@ def _decision_family(decision: Mapping[str, Any]) -> str:
         return surface
     if category == "api_contract":
         return "api_contract"
+    if category == "cleanup_gate":
+        return "golden"
     if category == "terminology":
         return "terminology"
     if category == "replay":
@@ -999,6 +1124,8 @@ def build_conformance_summary() -> dict[str, Any]:
         + forbidden_decisions
         + _terminology_decisions()
         + [_api_decision()]
+        + api_degraded_projection_decisions()
+        + cleanup_gate_fixture_decisions()
     )
     families = _family_results(decisions)
     return {

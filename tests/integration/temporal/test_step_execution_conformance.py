@@ -7,9 +7,12 @@ from pathlib import Path
 import pytest
 
 from moonmind.workflows.temporal.step_execution_conformance import (
+    CLEANUP_GATE_REQUIRED_CONDITIONS,
     REQUIRED_CONFORMANCE_FAMILIES,
     api_contract_fixture,
+    api_degraded_projection_decisions,
     build_conformance_summary,
+    cleanup_gate_decision,
     classify_gate_verdict,
     golden_fixture_catalog,
     replay_degraded_fixture_decisions,
@@ -147,6 +150,60 @@ def test_api_fixtures_expose_artifact_refs_not_inline_evidence() -> None:
     )
     for forbidden in ("transcript", "diff --git", "providerPayload", "credentials"):
         assert forbidden not in rendered
+
+
+def test_api_projection_degraded_values_are_conformance_evidence() -> None:
+    decisions = {
+        decision["fixtureId"]: decision
+        for decision in api_degraded_projection_decisions()
+    }
+
+    assert {
+        "api-blank-step-execution-value",
+        "api-unknown-step-execution-value",
+        "api-future-step-execution-value",
+        "api-malformed-step-execution-value",
+        "api-unsupported-step-execution-ref",
+    }.issubset(decisions)
+    assert all(decision["decision"] == "invalid" for decision in decisions.values())
+    assert all(decision["failureCode"] for decision in decisions.values())
+    assert all(
+        {"FR-004", "SC-003", "SCN-003", "DESIGN-REQ-021"}.issubset(
+            set(decision["traceability"])
+        )
+        for decision in decisions.values()
+    )
+
+
+def test_cleanup_gate_keeps_plan_until_blockers_close_and_requires_deletion() -> None:
+    conditions = {condition: True for condition in CLEANUP_GATE_REQUIRED_CONDITIONS}
+    blocked_conditions = {
+        **conditions,
+        "docs_match_implemented_behavior": False,
+    }
+
+    blocked = cleanup_gate_decision(
+        conditions=blocked_conditions,
+        temp_gap_plan_exists=True,
+        expected="invalid",
+    )
+    stale = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=True,
+    )
+    closed = cleanup_gate_decision(
+        conditions=conditions,
+        temp_gap_plan_exists=False,
+    )
+
+    assert blocked["decision"] == "invalid"
+    assert blocked["expected"] == "invalid"
+    assert stale["decision"] == "invalid"
+    assert stale["failureCode"] == "obsolete_gap_plan_present"
+    assert closed["decision"] == "valid"
+    assert {"FR-007", "FR-008", "SC-004", "DESIGN-REQ-024"}.issubset(
+        set(closed["traceability"])
+    )
 
 
 def test_writer_fixtures_reject_superseded_content_type_spellings() -> None:
