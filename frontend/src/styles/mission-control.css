@@ -3320,6 +3320,107 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.4rem;
 }
 
+/* MM-831: expanded Step Execution history surface */
+.step-execution-history-count {
+  margin: 0 0 0.4rem;
+  color: rgb(var(--mm-muted));
+}
+
+.step-execution-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.step-execution-history-item {
+  border: 1px solid rgb(var(--mm-border) / 0.4);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: rgb(var(--mm-panel) / 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.step-execution-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.step-execution-reason {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: rgb(var(--mm-muted));
+}
+
+/* MM-831: downstream invalidation marker for dependency-invalidated executions */
+.step-invalidation-marker {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.12rem 0.48rem;
+  border: 1px solid rgb(var(--mm-warn) / 0.5);
+  background: rgb(var(--mm-warn) / 0.14);
+  color: rgb(var(--mm-warn));
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.step-execution-history-facts {
+  margin: 0;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.step-execution-fact {
+  display: grid;
+  grid-template-columns: minmax(8.5rem, max-content) 1fr;
+  gap: 0.25rem 0.6rem;
+  align-items: baseline;
+}
+
+.step-execution-fact dt {
+  margin: 0;
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(var(--mm-muted));
+}
+
+.step-execution-fact dd {
+  margin: 0;
+  font-size: 0.72rem;
+  color: rgb(var(--mm-ink) / 0.82);
+  min-width: 0;
+}
+
+.step-execution-ref-list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.55rem;
+}
+
+.step-execution-ref {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  max-width: 100%;
+}
+
+@media (max-width: 640px) {
+  .step-execution-fact {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
+  }
+}
+
 /* Section header for steps */
 .step-tl-section-header {
   display: flex;

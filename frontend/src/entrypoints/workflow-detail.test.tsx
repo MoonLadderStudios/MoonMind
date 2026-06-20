@@ -734,6 +734,230 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getByText('art-plan-checkpoint')).toBeTruthy();
   });
 
+  it('MM-831 renders expanded Step Execution history from the step-executions list endpoint', async () => {
+    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'History task',
+      summary: 'Execution summary',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+    };
+    const stepsSnapshot = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'apply',
+          order: 1,
+          title: 'Apply patch',
+          tool: { type: 'agent_runtime', name: 'codex_cli', version: '1' },
+          dependsOn: [],
+          status: 'succeeded',
+          waitingReason: null,
+          attentionRequired: false,
+          executionOrdinal: 2,
+          startedAt: '2026-04-09T00:00:03Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          summary: 'Applied repository changes',
+          checks: [],
+          refs: { childWorkflowId: null, childRunId: null, agentRunId: null },
+          artifacts: {
+            outputSummary: null,
+            outputPrimary: 'art-apply-output',
+            runtimeStdout: null,
+            runtimeStderr: null,
+            runtimeMergedLogs: null,
+            runtimeDiagnostics: null,
+            providerSnapshot: null,
+          },
+          lastError: null,
+        },
+      ],
+    };
+    const stepExecutionsResponse = {
+      workflowId: 'test-123',
+      runId: '02-run',
+      runScope: 'latest',
+      logicalStepId: 'apply',
+      stepExecutions: [
+        {
+          manifestArtifactRef: 'art-exec-1-manifest',
+          stepExecutionId: 'test-123:02-run:apply:1',
+          workflowId: 'test-123',
+          runId: '02-run',
+          logicalStepId: 'apply',
+          executionOrdinal: 1,
+          sourceExecutionOrdinal: null,
+          lineage: null,
+          reason: 'initial_execution',
+          status: 'failed',
+          terminalDisposition: 'retryable',
+          startedAt: '2026-04-09T00:00:01Z',
+          updatedAt: '2026-04-09T00:00:02Z',
+          summary: 'First attempt failed the gate',
+          runtimeChildRefs: { childWorkflowId: 'child-wf-apply-1' },
+          workspacePolicy: 'workspace_required',
+          gitDisposition: 'candidate',
+          qualityGateVerdict: 'ADDITIONAL_WORK_NEEDED',
+          manifestRefs: { manifestArtifactRef: 'art-exec-1-manifest' },
+          outputRefs: { summary: 'art-exec-1-output', diff: 'art-exec-1-diff' },
+          stepEvidence: {
+            logicalStepId: 'apply',
+            executionOrdinal: 1,
+            checkpointRefsByBoundary: {},
+            contextBundleRef: {
+              category: 'context',
+              status: 'available',
+              artifactRef: 'art-exec-1-context',
+            },
+            gateSummary: { verdict: 'ADDITIONAL_WORK_NEEDED', artifactRef: 'art-exec-1-gate' },
+            terminalDisposition: 'retryable',
+            sideEffectSummary: { status: 'skipped', artifactRefs: {} },
+            diagnosticRefs: [
+              {
+                kind: 'environment',
+                status: 'available',
+                diagnosticsRef: 'art-exec-1-diag',
+                reasonCode: 'sidecar_unhealthy',
+                summary: 'Sidecar unhealthy',
+              },
+            ],
+          },
+          recoveryEligibility: null,
+        },
+        {
+          manifestArtifactRef: 'art-exec-2-manifest',
+          stepExecutionId: 'test-123:02-run:apply:2',
+          workflowId: 'test-123',
+          runId: '02-run',
+          logicalStepId: 'apply',
+          executionOrdinal: 2,
+          sourceExecutionOrdinal: 1,
+          lineage: {
+            sourceWorkflowId: 'wf-source',
+            sourceRunId: 'run-source',
+            sourceLogicalStepId: 'apply',
+            sourceExecutionOrdinal: 1,
+            relationship: 'recovered_from',
+          },
+          reason: 'dependency_invalidated',
+          status: 'succeeded',
+          terminalDisposition: 'accepted',
+          startedAt: '2026-04-09T00:00:03Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          summary: 'Re-ran after the upstream contract changed',
+          runtimeChildRefs: { childWorkflowId: 'child-wf-apply-2' },
+          workspacePolicy: 'workspace_required',
+          gitDisposition: 'accepted',
+          qualityGateVerdict: 'FULLY_IMPLEMENTED',
+          manifestRefs: { manifestArtifactRef: 'art-exec-2-manifest' },
+          outputRefs: { summary: 'art-exec-2-output', diff: 'art-exec-2-diff' },
+          stepEvidence: {
+            logicalStepId: 'apply',
+            executionOrdinal: 2,
+            checkpointRefsByBoundary: {},
+            contextBundleRef: {
+              category: 'context',
+              status: 'available',
+              artifactRef: 'art-exec-2-context',
+            },
+            gateSummary: { verdict: 'FULLY_IMPLEMENTED', artifactRef: 'art-exec-2-gate' },
+            terminalDisposition: 'accepted',
+            sideEffectSummary: {
+              status: 'available',
+              artifactRefs: { publish: 'art-exec-2-sideeffect' },
+            },
+            diagnosticRefs: [],
+          },
+          recoveryEligibility: null,
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps/apply/step-executions')) {
+        return Promise.resolve({ ok: true, json: async () => stepExecutionsResponse } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => stepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    // History is not requested or rendered until the row is expanded.
+    await waitFor(() => {
+      expect(screen.getAllByText('Apply patch').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByLabelText('Step Execution history')).toBeNull();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show details for Apply patch' }));
+
+    // The expanded surface consumes the step-executions LIST endpoint.
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([input]) =>
+          String(input).includes(
+            '/api/executions/test-123/steps/apply/step-executions?source=temporal',
+          ),
+        ),
+      ).toBe(true);
+    });
+
+    const history = await screen.findByLabelText('Step Execution history');
+    expect(screen.getByRole('heading', { name: 'Step Execution history' })).toBeTruthy();
+    expect(screen.getByText('2 step executions')).toBeTruthy();
+
+    // Newest execution renders first.
+    const ordinals = Array.from(
+      (history as HTMLElement).querySelectorAll('.step-execution-pill'),
+    ).map((node) => node.textContent);
+    expect(ordinals).toEqual(['Execution 2', 'Execution 1']);
+
+    // Downstream invalidation status is surfaced in the compact history rows.
+    expect(within(history).getByText('Downstream invalidation')).toBeTruthy();
+
+    // Full enumerated evidence field set is surfaced as refs / typed diagnostics.
+    expect(within(history).getByText('Lineage')).toBeTruthy();
+    expect(within(history).getByText('Source attempt')).toBeTruthy();
+    expect(within(history).getAllByText('Terminal disposition').length).toBe(2);
+    expect(within(history).getAllByText('Workspace policy').length).toBe(2);
+    expect(within(history).getAllByText('Git disposition').length).toBe(2);
+    expect(within(history).getAllByText('Gate verdict').length).toBe(2);
+    expect(within(history).getAllByText('Context bundle').length).toBe(2);
+    expect(within(history).getAllByText('Runtime child refs').length).toBe(2);
+    expect(within(history).getByText('Diagnostics refs')).toBeTruthy();
+    expect(within(history).getAllByText('Side effects').length).toBe(2);
+
+    // Ref-only values, never inlined bodies.
+    expect(within(history).getByText('art-exec-2-context')).toBeTruthy();
+    expect(within(history).getByText('art-exec-1-context')).toBeTruthy();
+    expect(within(history).getByText('art-exec-2-diff')).toBeTruthy();
+    expect(within(history).getByText('art-exec-1-diag')).toBeTruthy();
+    expect(within(history).getByText('art-exec-2-sideeffect')).toBeTruthy();
+    expect(within(history).getByText('child-wf-apply-2')).toBeTruthy();
+    expect(within(history).getByText('wf-source')).toBeTruthy();
+  });
+
   it('MM-801 renders Artifacts as the focused report and artifact route', async () => {
     window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     mockWorkflowDetailSubrouteFetch();
