@@ -524,6 +524,98 @@ const RecoveryEligibilitySchema = z
   })
   .passthrough();
 
+// MM-831: bounded Step Execution evidence projection consumed by the expanded
+// Step Execution history surface. These mirror the API camelCase ref-only
+// projection models; raw artifact bodies are never inlined.
+const GateSummaryStatusSchema = z
+  .object({
+    verdict: z.string().nullable().optional(),
+    summary: z.string().nullable().optional(),
+    artifactRef: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const SideEffectSummarySchema = z
+  .object({
+    status: z.string().optional(),
+    artifactRefs: z.record(z.string(), z.string()).default({}),
+    summary: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const EnvironmentDiagnosticReferenceSchema = z
+  .object({
+    kind: z.string(),
+    status: z.string(),
+    diagnosticsRef: z.string().nullable().optional(),
+    reasonCode: z.string(),
+    summary: z.string(),
+  })
+  .passthrough();
+
+const StepEvidenceSummarySchema = z
+  .object({
+    logicalStepId: z.string(),
+    executionOrdinal: z.number().nullable().optional(),
+    checkpointRefsByBoundary: z.record(z.string(), EvidenceRefStatusSchema).default({}),
+    contextBundleRef: EvidenceRefStatusSchema.nullable().optional(),
+    retrievalManifestRef: EvidenceRefStatusSchema.nullable().optional(),
+    memoryManifestRef: EvidenceRefStatusSchema.nullable().optional(),
+    gateSummary: GateSummaryStatusSchema.nullable().optional(),
+    terminalDisposition: z.string().nullable().optional(),
+    sideEffectSummary: SideEffectSummarySchema.nullable().optional(),
+    diagnosticRefs: z.array(EnvironmentDiagnosticReferenceSchema).default([]),
+  })
+  .passthrough();
+
+const StepExecutionLineageSchema = z
+  .object({
+    sourceWorkflowId: z.string(),
+    sourceRunId: z.string(),
+    sourceLogicalStepId: z.string(),
+    sourceExecutionOrdinal: z.number(),
+    relationship: z.string().nullable().optional(),
+    lineageExecutionOrdinal: z.number().nullable().optional(),
+  })
+  .passthrough();
+
+const StepExecutionProjectionSchema = z
+  .object({
+    manifestArtifactRef: z.string(),
+    stepExecutionId: z.string(),
+    workflowId: z.string(),
+    runId: z.string(),
+    logicalStepId: z.string(),
+    executionOrdinal: z.number(),
+    sourceExecutionOrdinal: z.number().nullable().optional(),
+    lineage: StepExecutionLineageSchema.nullable().optional(),
+    reason: z.string(),
+    status: z.string(),
+    terminalDisposition: z.string().nullable().optional(),
+    startedAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+    summary: z.string().nullable().optional(),
+    runtimeChildRefs: z.record(z.string(), z.unknown()).default({}),
+    workspacePolicy: z.string().nullable().optional(),
+    gitDisposition: z.string().nullable().optional(),
+    qualityGateVerdict: z.string().nullable().optional(),
+    manifestRefs: z.record(z.string(), z.unknown()).default({}),
+    outputRefs: z.record(z.string(), z.unknown()).default({}),
+    stepEvidence: StepEvidenceSummarySchema.nullable().optional(),
+    recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
+  })
+  .passthrough();
+
+const StepExecutionListSchema = z
+  .object({
+    workflowId: z.string(),
+    runId: z.string(),
+    runScope: z.string().default('latest'),
+    logicalStepId: z.string().default(''),
+    stepExecutions: z.array(StepExecutionProjectionSchema).default([]),
+  })
+  .passthrough();
+
 const ExecutionDetailSchema = z
   .object({
     taskId: z.string().optional(),
@@ -2741,13 +2833,249 @@ function StepProvenanceMarker({ row }: { row: z.infer<typeof StepLedgerRowSchema
   );
 }
 
+// MM-831: flatten a ref map into renderable [label, ref] entries. Only string
+// values are surfaced (these are artifact refs, never raw bodies).
+function stepRefEntries(
+  refs: Record<string, unknown> | null | undefined,
+): Array<[string, string]> {
+  if (!refs) return [];
+  const entries: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(refs)) {
+    if (typeof value === 'string' && value) {
+      entries.push([key, value]);
+    }
+  }
+  return entries;
+}
+
+function StepExecutionRefList({ entries }: { entries: Array<[string, string]> }) {
+  if (entries.length === 0) return null;
+  return (
+    <span className="step-execution-ref-list">
+      {entries.map(([label, ref]) => (
+        <span className="step-execution-ref" key={`${label}-${ref}`}>
+          <span className="small">{formatStatusLabel(label)}:</span>{' '}
+          <code className="text-xs break-all">{ref}</code>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// MM-831: one compact Step Execution row inside the expanded history. Surfaces
+// the full enumerated evidence field set (lineage, reason, source attempt,
+// runtime child refs, context bundle ref, workspace policy, git disposition,
+// gate verdict, output/diagnostic/diff refs, side effects, terminal
+// disposition, downstream invalidation) as refs and typed diagnostics only.
+function StepExecutionHistoryRow({
+  execution,
+}: {
+  execution: z.infer<typeof StepExecutionProjectionSchema>;
+}) {
+  const contextBundleRef = execution.stepEvidence?.contextBundleRef?.artifactRef ?? null;
+  const gateVerdict =
+    execution.qualityGateVerdict ?? execution.stepEvidence?.gateSummary?.verdict ?? null;
+  const diagnosticRefs = (execution.stepEvidence?.diagnosticRefs ?? []).filter(
+    (item) => item.diagnosticsRef,
+  );
+  const sideEffect = execution.stepEvidence?.sideEffectSummary ?? null;
+  const sideEffectRefs = stepRefEntries(sideEffect?.artifactRefs);
+  const outputRefs = stepRefEntries(execution.outputRefs);
+  const runtimeChildRefs = stepRefEntries(execution.runtimeChildRefs);
+  const downstreamInvalidated = execution.reason === 'dependency_invalidated';
+  const lineage = execution.lineage ?? null;
+
+  return (
+    <li className="step-execution-history-item">
+      <div className="step-execution-history-head">
+        <span className="step-execution-pill">Execution {execution.executionOrdinal}</span>
+        <span {...executionStatusPillProps(execution.status)}>
+          {formatStatusLabel(execution.status)}
+        </span>
+        <span className="step-execution-reason">{formatStatusLabel(execution.reason)}</span>
+        {downstreamInvalidated ? (
+          <span
+            className="step-invalidation-marker"
+            title="This step re-ran because a changed upstream output invalidated it."
+          >
+            Downstream invalidation
+          </span>
+        ) : null}
+      </div>
+      <dl className="step-execution-history-facts">
+        {execution.sourceExecutionOrdinal ? (
+          <div className="step-execution-fact">
+            <dt>Source attempt</dt>
+            <dd>Execution {execution.sourceExecutionOrdinal}</dd>
+          </div>
+        ) : null}
+        {lineage ? (
+          <div className="step-execution-fact">
+            <dt>Lineage</dt>
+            <dd>
+              <code className="text-xs break-all">{lineage.sourceWorkflowId}</code> run{' '}
+              <code className="text-xs break-all">{lineage.sourceRunId}</code>{' '}
+              {lineage.sourceLogicalStepId} execution {lineage.sourceExecutionOrdinal}
+              {lineage.relationship ? ` (${formatStatusLabel(lineage.relationship)})` : ''}
+            </dd>
+          </div>
+        ) : null}
+        {execution.terminalDisposition ? (
+          <div className="step-execution-fact">
+            <dt>Terminal disposition</dt>
+            <dd>{formatStatusLabel(execution.terminalDisposition)}</dd>
+          </div>
+        ) : null}
+        {execution.workspacePolicy ? (
+          <div className="step-execution-fact">
+            <dt>Workspace policy</dt>
+            <dd>{formatStatusLabel(execution.workspacePolicy)}</dd>
+          </div>
+        ) : null}
+        {execution.gitDisposition ? (
+          <div className="step-execution-fact">
+            <dt>Git disposition</dt>
+            <dd>{formatStatusLabel(execution.gitDisposition)}</dd>
+          </div>
+        ) : null}
+        {gateVerdict ? (
+          <div className="step-execution-fact">
+            <dt>Gate verdict</dt>
+            <dd>{formatStatusLabel(gateVerdict)}</dd>
+          </div>
+        ) : null}
+        {contextBundleRef ? (
+          <div className="step-execution-fact">
+            <dt>Context bundle</dt>
+            <dd>
+              <code className="text-xs break-all">{contextBundleRef}</code>
+            </dd>
+          </div>
+        ) : null}
+        {runtimeChildRefs.length > 0 ? (
+          <div className="step-execution-fact">
+            <dt>Runtime child refs</dt>
+            <dd>
+              <StepExecutionRefList entries={runtimeChildRefs} />
+            </dd>
+          </div>
+        ) : null}
+        {outputRefs.length > 0 ? (
+          <div className="step-execution-fact">
+            <dt>Output &amp; diff refs</dt>
+            <dd>
+              <StepExecutionRefList entries={outputRefs} />
+            </dd>
+          </div>
+        ) : null}
+        {diagnosticRefs.length > 0 ? (
+          <div className="step-execution-fact">
+            <dt>Diagnostics refs</dt>
+            <dd>
+              <StepExecutionRefList
+                entries={diagnosticRefs.map((item) => [item.kind, item.diagnosticsRef as string])}
+              />
+            </dd>
+          </div>
+        ) : null}
+        {sideEffect ? (
+          <div className="step-execution-fact">
+            <dt>Side effects</dt>
+            <dd>
+              {formatStatusLabel(sideEffect.status || 'skipped')}
+              {sideEffectRefs.length > 0 ? (
+                <>
+                  {' '}
+                  <StepExecutionRefList entries={sideEffectRefs} />
+                </>
+              ) : null}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+      {execution.summary ? <p className="small">{execution.summary}</p> : null}
+    </li>
+  );
+}
+
+// MM-831: expanded Step Execution history. Consumes the step-executions LIST
+// endpoint (keyed by execution_ordinal) and renders newest-first compact rows.
+function StepExecutionHistory({
+  apiBase,
+  workflowId,
+  logicalStepId,
+  sourceTemporal,
+  enabled,
+  pollInterval,
+}: {
+  apiBase: string;
+  workflowId: string;
+  logicalStepId: string;
+  sourceTemporal: boolean;
+  enabled: boolean;
+  pollInterval: number | false;
+}) {
+  const historyQuery = useQuery({
+    queryKey: ['workflow-detail-step-executions', workflowId, logicalStepId, sourceTemporal],
+    queryFn: async () => {
+      const suffix = sourceTemporal ? '?source=temporal' : '';
+      const response = await fetch(
+        `${apiBase}/executions/${encodeURIComponent(workflowId)}/steps/${encodeURIComponent(
+          logicalStepId,
+        )}/step-executions${suffix}`,
+        { credentials: 'include' },
+      );
+      if (!response.ok) {
+        const statusText = response.statusText.trim();
+        const detail = statusText ? ` ${statusText}` : '';
+        throw new Error(`Step executions: ${response.status}${detail}`);
+      }
+      return StepExecutionListSchema.parse(await response.json());
+    },
+    enabled: enabled && Boolean(workflowId) && Boolean(logicalStepId),
+    refetchInterval: enabled ? pollInterval : false,
+  });
+
+  if (!enabled) return null;
+
+  const executions = historyQuery.data?.stepExecutions ?? [];
+  const ordered = [...executions].sort((a, b) => b.executionOrdinal - a.executionOrdinal);
+
+  return (
+    <section className="step-tl-detail-section">
+      <h4>Step Execution history</h4>
+      {historyQuery.isLoading ? (
+        <p className="small">Loading step executions…</p>
+      ) : historyQuery.isError ? (
+        <p className="small step-tl-error">{(historyQuery.error as Error).message}</p>
+      ) : ordered.length > 0 ? (
+        <>
+          <p className="small step-execution-history-count">
+            {ordered.length} step execution{ordered.length === 1 ? '' : 's'}
+          </p>
+          <ol className="step-execution-history" aria-label="Step Execution history">
+            {ordered.map((execution) => (
+              <StepExecutionHistoryRow key={execution.stepExecutionId} execution={execution} />
+            ))}
+          </ol>
+        </>
+      ) : (
+        <p className="small">No step executions recorded for this step yet.</p>
+      )}
+    </section>
+  );
+}
+
 function StepLedgerRowCard({
   apiBase,
   logStreamingEnabled,
   sessionTimelineEnabled,
   structuredHistoryEnabled,
   row,
+  workflowId,
   runId,
+  sourceTemporal,
+  historyPollInterval,
   expanded,
   onToggle,
   isLast,
@@ -2758,7 +3086,10 @@ function StepLedgerRowCard({
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
   row: z.infer<typeof StepLedgerRowSchema>;
+  workflowId: string;
   runId: string;
+  sourceTemporal: boolean;
+  historyPollInterval: number | false;
   expanded: boolean;
   onToggle: () => void;
   isLast: boolean;
@@ -2849,6 +3180,14 @@ function StepLedgerRowCard({
               <h4>Artifacts</h4>
               <StepArtifactsList artifacts={row.artifacts} />
             </section>
+            <StepExecutionHistory
+              apiBase={apiBase}
+              workflowId={workflowId}
+              logicalStepId={row.logicalStepId}
+              sourceTemporal={sourceTemporal}
+              enabled={expanded}
+              pollInterval={historyPollInterval}
+            />
             <StepWorkloadDetails workload={row.workload} />
             <section className="step-tl-detail-section">
               <h4>Metadata</h4>
@@ -5668,7 +6007,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                         sessionTimelineEnabled={sessionTimelineEnabled}
                         structuredHistoryEnabled={structuredHistoryEnabled}
                         row={row}
+                        workflowId={workflowId}
                         runId={latestRunId}
+                        sourceTemporal={sourceTemporal}
+                        historyPollInterval={liveUpdates && !isTerminalExecution ? detailPoll : false}
                         expanded={Boolean(expandedSteps[row.logicalStepId])}
                         onToggle={() => toggleStep(row.logicalStepId)}
                         isLast={idx === stepsQuery.data.steps.length - 1}
