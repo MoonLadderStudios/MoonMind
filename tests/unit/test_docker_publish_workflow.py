@@ -110,7 +110,7 @@ def test_runner_publish_validates_selftest_report_output() -> None:
     run = step["run"]
     assert "--self-test" in run
     assert '"self_test"' in run
-    for token in ("report.primary", "report.structured", "no_secret_leak", "redaction_ok"):
+    for token in ("report.primary", "report.structured", "no_canary_leak", "redaction_ok"):
         assert token in run, f"self-test validation does not check {token}"
     assert "exit 1" in run or "SystemExit(1)" in run
 

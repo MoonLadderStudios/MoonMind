@@ -289,8 +289,8 @@ jobs:
               problems.append(f"missing report artifacts: {sorted(missing)}")
           if not report.get("redaction_ok"):
               problems.append("redaction not verified in normalized findings")
-          if not report.get("no_secret_leak"):
-              problems.append("secret marker leaked into report output")
+          if not report.get("no_canary_leak"):
+              problems.append("redaction canary leaked into report output")
           if report.get("failure_category") != "success":
               problems.append(f"failure_category is {report.get('failure_category')!r}")
           if int(report.get("findings_count") or 0) < 1:
