@@ -1,23 +1,31 @@
+from __future__ import annotations
+
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
-from llama_index.core import Settings as LlamaSettings
-from llama_index.core import VectorStoreIndex
-from llama_index.core.schema import NodeWithScore
 from pydantic import BaseModel, Field
 
 from api_service.api.dependencies import get_service_context, get_vector_index
 from api_service.auth_providers import get_current_user  # Auth dependency
 from api_service.db.models import User  # User model for type hinting
 from moonmind.config.settings import settings
-from moonmind.factories.google_factory import get_google_model
-from moonmind.rag.retriever import QdrantRAG
+
+if TYPE_CHECKING:
+    from llama_index.core import Settings as LlamaSettings
+    from llama_index.core import VectorStoreIndex
+    from llama_index.core.schema import NodeWithScore
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def get_google_model(*args, **kwargs):
+    from moonmind.factories.google_factory import get_google_model as _get
+
+    return _get(*args, **kwargs)
 
 # Model Context Protocol Schema Definitions
 class ContextMessage(BaseModel):
@@ -83,6 +91,8 @@ async def process_context(
             logger.info(
                 f"RAG enabled. Retrieving context for query: '{user_query[:100]}...'"
             )
+            from moonmind.rag.retriever import QdrantRAG
+
             rag_instance = QdrantRAG(
                 index=vector_index,
                 service_settings=llama_settings,

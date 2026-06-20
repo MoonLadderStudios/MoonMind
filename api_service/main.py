@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from llama_index.core import VectorStoreIndex, load_index_from_storage
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
@@ -84,14 +83,6 @@ from api_service.auth import (
     fastapi_users,
 )
 from moonmind.config.settings import settings
-from moonmind.factories.embed_model_factory import build_embed_model
-
-# Removed unused import: build_indexers
-from moonmind.factories.service_context_factory import build_service_context
-from moonmind.factories.storage_context_factory import build_storage_context
-from moonmind.factories.vector_store_factory import build_vector_store
-from moonmind.rag.service import ContextRetrievalService
-from moonmind.rag.settings import RagRuntimeSettings
 from moonmind.utils.logging import SecretRedactor
 
 logger.info("Starting FastAPI...")
@@ -100,6 +91,42 @@ _PRESET_SEED_DIR = (
     Path(__file__).resolve().parent / "data" / "presets"
 )
 _LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
+
+
+def build_embed_model(*args, **kwargs):
+    from moonmind.factories.embed_model_factory import build_embed_model as _build
+
+    return _build(*args, **kwargs)
+
+
+def build_vector_store(*args, **kwargs):
+    from moonmind.factories.vector_store_factory import build_vector_store as _build
+
+    return _build(*args, **kwargs)
+
+
+def build_storage_context(*args, **kwargs):
+    from moonmind.factories.storage_context_factory import build_storage_context as _build
+
+    return _build(*args, **kwargs)
+
+
+def build_service_context(*args, **kwargs):
+    from moonmind.factories.service_context_factory import build_service_context as _build
+
+    return _build(*args, **kwargs)
+
+
+def build_context_retrieval_service(*args, **kwargs):
+    from moonmind.rag.service import ContextRetrievalService
+
+    return ContextRetrievalService(*args, **kwargs)
+
+
+def build_rag_runtime_settings_from_env():
+    from moonmind.rag.settings import RagRuntimeSettings
+
+    return RagRuntimeSettings.from_env()
 
 def _initialize_embedding_model(app_state, app_settings):
     """Initializes the embedding model and records its dimensionality on app_state."""
@@ -324,6 +351,8 @@ async def _initialize_oidc_provider(app: FastAPI):
 
 def _load_or_create_vector_index(app_state):
     """Loads an existing vector index or creates a new one if loading fails."""
+    from llama_index.core import VectorStoreIndex, load_index_from_storage
+
     logger.info("Attempting to load VectorStoreIndex from storage_context...")
     try:
         app_state.vector_index = load_index_from_storage(
@@ -1092,8 +1121,8 @@ async def startup_event():
     await _initialize_oidc_provider(app)  # OIDC provider init like Keycloak discovery
     _register_settings_change_subscribers()
     try:
-        app.state.retrieval_service = ContextRetrievalService(
-            settings=RagRuntimeSettings.from_env()
+        app.state.retrieval_service = build_context_retrieval_service(
+            settings=build_rag_runtime_settings_from_env()
         )
     except Exception as exc:
         logger.warning(

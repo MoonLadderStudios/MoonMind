@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import logging
 import time
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 from uuid import uuid4
 
 # Multi-provider imports from main branch
@@ -8,9 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 
 # RAG imports from feat/rag branch
-from llama_index.core import Settings as LlamaSettings
-from llama_index.core import VectorStoreIndex
-from llama_index.core.schema import NodeWithScore
 from openai import AsyncOpenAI  # Moved import to top
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,12 +19,7 @@ from api_service.auth_providers import get_auth_manager, get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
 from moonmind.config.settings import settings
-from moonmind.factories.anthropic_factory import AnthropicFactory
-from moonmind.factories.google_factory import get_google_model
-from moonmind.factories.openai_factory import get_openai_model
-from moonmind.models_cache import model_cache
 from moonmind.billing.costs import emit_llm_cost_telemetry, estimate_model_cost
-from moonmind.rag.retriever import QdrantRAG
 from moonmind.security import scan_outbound_text
 from moonmind.schemas.chat_models import (
     ChatCompletionRequest,
@@ -41,9 +35,44 @@ from moonmind.schemas.chat_models import (
     Usage,
 )
 
+if TYPE_CHECKING:
+    from llama_index.core import Settings as LlamaSettings
+    from llama_index.core import VectorStoreIndex
+    from llama_index.core.schema import NodeWithScore
+
 router = APIRouter()
 responses_router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class _ModelCacheProxy:
+    def __getattr__(self, name: str):
+        from moonmind.models_cache import model_cache as _model_cache
+
+        return getattr(_model_cache, name)
+
+
+model_cache = _ModelCacheProxy()
+
+
+def get_openai_model(*args, **kwargs):
+    from moonmind.factories.openai_factory import get_openai_model as _get
+
+    return _get(*args, **kwargs)
+
+
+def get_google_model(*args, **kwargs):
+    from moonmind.factories.google_factory import get_google_model as _get
+
+    return _get(*args, **kwargs)
+
+
+class AnthropicFactory:
+    @staticmethod
+    def create_anthropic_model(*args, **kwargs):
+        from moonmind.factories.anthropic_factory import AnthropicFactory as _Factory
+
+        return _Factory.create_anthropic_model(*args, **kwargs)
 
 def _scan_chat_messages_before_send(messages: List, *, surface: str) -> None:
     for index, msg in enumerate(messages):
@@ -161,6 +190,8 @@ async def get_rag_context(
         return ""
 
     logger.info(f"RAG enabled. Retrieving context for query: '{user_query[:100]}...'")
+    from moonmind.rag.retriever import QdrantRAG
+
     rag_instance = QdrantRAG(
         index=vector_index,
         service_settings=llama_settings,

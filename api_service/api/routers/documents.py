@@ -1,23 +1,46 @@
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException
-from llama_index.core import Settings, StorageContext
 
 from api_service.api.dependencies import get_service_context, get_storage_context
 from api_service.auth_providers import get_current_user  # Auth dependency
 from api_service.db.models import User  # User model for type hinting
 from moonmind.config.settings import settings
-from moonmind.indexers.confluence_indexer import ConfluenceIndexer
-from moonmind.indexers.github_indexer import GitHubIndexer
-from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer  # Added import
 from moonmind.schemas.documents_models import (  # Updated import path with GoogleDriveLoadRequest
     ConfluenceLoadRequest,
     GitHubLoadRequest,
     GoogleDriveLoadRequest,
 )
 
+if TYPE_CHECKING:
+    from llama_index.core import Settings, StorageContext
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class ConfluenceIndexer:
+    def __new__(cls, *args, **kwargs):
+        from moonmind.indexers.confluence_indexer import ConfluenceIndexer as _Indexer
+
+        return _Indexer(*args, **kwargs)
+
+
+class GitHubIndexer:
+    def __new__(cls, *args, **kwargs):
+        from moonmind.indexers.github_indexer import GitHubIndexer as _Indexer
+
+        return _Indexer(*args, **kwargs)
+
+
+class GoogleDriveIndexer:
+    def __new__(cls, *args, **kwargs):
+        from moonmind.indexers.google_drive_indexer import GoogleDriveIndexer as _Indexer
+
+        return _Indexer(*args, **kwargs)
 
 @router.post("/confluence/load")  # Path relative to the /v1/documents prefix
 async def load_confluence_documents(
