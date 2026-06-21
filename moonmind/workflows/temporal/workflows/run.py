@@ -2000,6 +2000,10 @@ class MoonMindRunWorkflow:
             if value:
                 compact_task[key] = value
 
+        compact_steps = self._proposal_compact_steps(task.get("steps"))
+        if compact_steps:
+            compact_task["steps"] = compact_steps
+
         authored_presets = task.get("authoredPresets")
         if isinstance(authored_presets, Sequence) and not isinstance(
             authored_presets, (str, bytes)
@@ -2039,12 +2043,64 @@ class MoonMindRunWorkflow:
         compact: dict[str, Any] = {}
         for key in allowed_keys:
             item = value.get(key)
-            if isinstance(item, bool):
+            if isinstance(item, (bool, int, float)):
                 compact[key] = item
                 continue
             text = self._coerce_text(item, max_chars=max_chars)
             if text:
                 compact[key] = text
+        return compact
+
+    def _proposal_compact_steps(self, value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return []
+        compact_steps: list[dict[str, Any]] = []
+        for step in value[:50]:
+            if not isinstance(step, Mapping):
+                continue
+            compact_step: dict[str, Any] = {}
+            for key in ("id", "title", "type"):
+                text = self._coerce_text(step.get(key), max_chars=160)
+                if text:
+                    compact_step[key] = text
+            for key in ("tool", "skill", "skills"):
+                selector = self._proposal_compact_selector_metadata(step.get(key))
+                if selector:
+                    compact_step[key] = selector
+            source = self._proposal_compact_source_metadata(step.get("source"))
+            if source:
+                compact_step["source"] = source
+            if any(
+                key in compact_step for key in ("tool", "skill", "skills", "source")
+            ):
+                compact_steps.append(compact_step)
+        return compact_steps
+
+    def _proposal_compact_source_metadata(self, value: object) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        compact: dict[str, Any] = {}
+        for key in (
+            "kind",
+            "presetId",
+            "presetSlug",
+            "presetVersion",
+            "originalStepId",
+        ):
+            text = self._coerce_text(value.get(key), max_chars=160)
+            if text:
+                compact[key] = text
+        include_path = value.get("includePath")
+        if isinstance(include_path, Sequence) and not isinstance(
+            include_path, (str, bytes)
+        ):
+            compact_include_path = [
+                text
+                for item in include_path[:20]
+                if (text := self._coerce_text(item, max_chars=160))
+            ]
+            if compact_include_path:
+                compact["includePath"] = compact_include_path
         return compact
 
     def _proposal_compact_selector_metadata(self, value: object) -> dict[str, Any]:
@@ -2095,7 +2151,6 @@ class MoonMindRunWorkflow:
             "logsRef": self._logs_ref,
             "summaryRef": self._summary_ref,
             "finishSummaryRef": self._report_ref,
-            "runSummaryPath": "reports/run_summary.json",
         }
         if self._last_diagnostics_ref:
             refs["diagnosticsRef"] = self._last_diagnostics_ref

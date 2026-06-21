@@ -552,10 +552,19 @@ async def test_run_proposals_stage_passes_artifact_refs_instead_of_raw_inputs(
                 "steps": [
                     {
                         "id": "agent-step",
+                        "title": "Agent step",
+                        "type": "skill",
                         "instructions": "raw step prompt should stay by ref",
+                        "skill": {"id": "jira-implement"},
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetId": "preset-1",
+                            "includePath": ["root", "implement"],
+                            "originalStepId": "implement-story",
+                        },
                     }
                 ],
-                "runtime": {"mode": "codex"},
+                "runtime": {"mode": "codex", "effort": 2},
                 "skills": {"include": [{"name": "pr-resolver"}]},
                 "authoredPresets": [
                     {
@@ -576,8 +585,22 @@ async def test_run_proposals_stage_passes_artifact_refs_instead_of_raw_inputs(
     assert captured_generate_payload["parameters"] == {
         "workflow": {
             "proposalIdea": "Add missing proposal hardening test coverage",
-            "runtime": {"mode": "codex"},
+            "runtime": {"mode": "codex", "effort": 2},
             "skills": {"include": [{"name": "pr-resolver"}]},
+            "steps": [
+                {
+                    "id": "agent-step",
+                    "title": "Agent step",
+                    "type": "skill",
+                    "skill": {"id": "jira-implement"},
+                    "source": {
+                        "kind": "preset-derived",
+                        "presetId": "preset-1",
+                        "includePath": ["root", "implement"],
+                        "originalStepId": "implement-story",
+                    },
+                }
+            ],
             "authoredPresets": [
                 {
                     "id": "preset-1",
@@ -602,7 +625,6 @@ async def test_run_proposals_stage_passes_artifact_refs_instead_of_raw_inputs(
         "logsRef": "artifact://logs",
         "summaryRef": "artifact://summary",
         "finishSummaryRef": "artifact://reports/run-summary",
-        "runSummaryPath": "reports/run_summary.json",
         "diagnosticsRef": "artifact://diag-last",
         "lastStep": {
             "id": "agent-step",
