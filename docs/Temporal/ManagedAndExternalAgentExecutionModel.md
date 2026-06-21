@@ -596,6 +596,28 @@ The managed path follows the same conceptual lifecycle as the external path:
 7. any held provider-profile slot is released
 8. artifacts are published
 
+### 8.2.1 Generic managed-agent environment
+
+Every managed agent session receives the same generic, project-agnostic
+environment variables, regardless of project type or runtime. The runtime
+launcher injects these authoritatively so a managed agent behaves like a
+developer machine with the repository checked out, and behavior is identical
+across project types (no engine- or project-specific values):
+
+| Variable | Value |
+| --- | --- |
+| `MOONMIND_REPO_DIR` | `/work/agent_jobs/<run_id>/repo` (the checked-out repository) |
+| `MOONMIND_RUN_ROOT` | `/work/agent_jobs/<run_id>` (the per-run workspace root) |
+| `MOONMIND_ARTIFACTS_DIR` | `/work/agent_jobs/<run_id>/artifacts/<step_id>` (per-step durable artifact area) |
+| `CI` | `1` |
+
+Paths follow the workspace convention in
+`docs/ManagedAgents/DockerSidecarRuntime.md` §5.2 and are derived from the
+resolved run workspace so they always point at the real directories. The
+`<step_id>` segment is the Step Execution logical step id when present, and is
+run-scoped otherwise. These MoonMind-owned values take precedence over any
+profile- or passthrough-supplied values for the same keys.
+
 ## 8.3 Managed runtime supervisor
 
 A dedicated supervisor should own the active lifecycle of managed runs.

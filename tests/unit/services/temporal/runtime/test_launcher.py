@@ -3174,3 +3174,192 @@ async def test_launch_fails_fast_when_skill_projection_errors(tmp_path, monkeypa
             profile=profile,
             workspace_path=str(workspace),
         )
+
+
+# ---------------------------------------------------------------------------
+# MM-861: generic managed-agent environment variables
+# ---------------------------------------------------------------------------
+
+
+class _GenericEnvFakeProcess:
+    def __init__(self, pid: int = 9101) -> None:
+        self.pid = pid
+        self.returncode = 0
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+
+    async def wait(self) -> int:
+        return 0
+
+    async def communicate(self) -> tuple[bytes, bytes]:
+        return b"", b""
+
+
+def _patch_generic_env_subprocess(monkeypatch) -> dict[str, str]:
+    """Capture the env passed to the spawned managed-agent subprocess."""
+
+    captured_env: dict[str, str] = {}
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        env = kwargs.get("env")
+        if isinstance(env, dict):
+            captured_env.clear()
+            captured_env.update(env)
+        return _GenericEnvFakeProcess()
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    # Avoid privilege-drop chown logic in unit context.
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    return captured_env
+
+
+@pytest.mark.asyncio
+async def test_launch_injects_generic_managed_agent_env_vars(tmp_path, monkeypatch):
+    """Every managed agent session receives the four generic env vars (MM-861)."""
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    captured_env = _patch_generic_env_subprocess(monkeypatch)
+
+    workspace = tmp_path / "workspaces" / "run-generic-env" / "repo"
+    workspace.mkdir(parents=True)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(command_template=["echo", "hello"])
+    request = _make_request()
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-generic-env",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    run_root = workspace.resolve().parent
+    artifacts_dir = run_root / "artifacts" / "run-generic-env"
+
+    assert captured_env["MOONMIND_REPO_DIR"] == str(workspace.resolve())
+    assert captured_env["MOONMIND_RUN_ROOT"] == str(run_root)
+    assert captured_env["MOONMIND_ARTIFACTS_DIR"] == str(artifacts_dir)
+    assert captured_env["CI"] == "1"
+    # Artifacts area is created so the session can write to it immediately.
+    assert artifacts_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_launch_generic_env_uses_logical_step_id_for_artifacts_dir(
+    tmp_path, monkeypatch
+):
+    """MOONMIND_ARTIFACTS_DIR uses the Step Execution logical step id."""
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    captured_env = _patch_generic_env_subprocess(monkeypatch)
+
+    workspace = tmp_path / "workspaces" / "run-step-env" / "repo"
+    workspace.mkdir(parents=True)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(command_template=["echo", "hello"])
+    request = _make_request(
+        step_execution={
+            "workflowId": "wf-1",
+            "runId": "run-step-env",
+            "logicalStepId": "implement",
+            "executionOrdinal": 1,
+            "stepExecutionId": "wf-1:run-step-env:implement:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+        }
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-step-env",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    run_root = workspace.resolve().parent
+    assert captured_env["MOONMIND_ARTIFACTS_DIR"] == str(
+        run_root / "artifacts" / "implement"
+    )
+    assert (run_root / "artifacts" / "implement").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_launch_generic_env_overrides_profile_and_passthrough(
+    tmp_path, monkeypatch
+):
+    """Generic vars are MoonMind-owned and identical across project types."""
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("CI", "ci-from-worker-env")
+    captured_env = _patch_generic_env_subprocess(monkeypatch)
+
+    workspace = tmp_path / "workspaces" / "run-override" / "repo"
+    workspace.mkdir(parents=True)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    # Both a profile-level env override and a worker-process CI value must be
+    # superseded by the MoonMind-owned generic value.
+    profile = _make_profile(
+        command_template=["echo", "hello"],
+        env_overrides={"CI": "0", "MOONMIND_REPO_DIR": "/should/be/overwritten"},
+    )
+    request = _make_request()
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-override",
+        request=request,
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    assert captured_env["CI"] == "1"
+    assert captured_env["MOONMIND_REPO_DIR"] == str(workspace.resolve())
+
+
+def test_build_generic_managed_agent_env_falls_back_to_run_id_without_workspace(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    request = _make_request()
+
+    env = ManagedRuntimeLauncher._build_generic_managed_agent_env(
+        run_id="run-no-ws",
+        resolved_workspace_path=None,
+        request=request,
+    )
+
+    run_root = (tmp_path / "workspaces" / "run-no-ws").resolve()
+    assert env["MOONMIND_RUN_ROOT"] == str(run_root)
+    assert env["MOONMIND_REPO_DIR"] == str(run_root / "repo")
+    assert env["MOONMIND_ARTIFACTS_DIR"] == str(run_root / "artifacts" / "run-no-ws")
+    assert env["CI"] == "1"
+    assert (run_root / "artifacts" / "run-no-ws").is_dir()
+
+
+def test_sanitize_artifacts_step_segment_blocks_traversal():
+    sanitized = ManagedRuntimeLauncher._sanitize_artifacts_step_segment(
+        "../../etc/passwd"
+    )
+    assert ".." not in sanitized
+    assert "/" not in sanitized
+    assert sanitized
+    # An empty/degenerate segment never collapses to a traversal token.
+    assert ManagedRuntimeLauncher._sanitize_artifacts_step_segment("..") == "step"
+    assert ManagedRuntimeLauncher._sanitize_artifacts_step_segment("") == "step"
