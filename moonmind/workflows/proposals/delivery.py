@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Mapping, Protocol
@@ -176,6 +177,26 @@ class ProviderDecisionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ProposalDecisionStateUpdate:
+    """Bounded review-state transition pushed back to the provider issue.
+
+    Carries only sanitized state-transition metadata. It never carries an
+    executable payload; promotion always runs the stored proposal snapshot.
+    """
+
+    decision: str | None
+    accepted: bool
+    actor: str
+    provider_event_id: str
+    resulting_state: str
+    reason: str | None = None
+    note: str | None = None
+    priority: str | None = None
+    promoted_execution_id: str | None = None
+    promoted_execution_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class GitHubDecisionIngressResult:
     """Verified GitHub reviewer-decision event at the provider boundary."""
 
@@ -203,6 +224,21 @@ class ProposalIssueProvider(Protocol):
         rendered: RenderedProposalIssue,
         issue: Mapping[str, Any],
     ) -> dict[str, Any]:
+        pass
+
+    async def apply_decision_state(
+        self,
+        request: ProposalDeliveryRequest,
+        issue: Mapping[str, Any],
+        labels: Sequence[str],
+        comment: str | None,
+    ) -> dict[str, Any]:
+        """Update review-state labels and append an audit comment.
+
+        Must not rewrite the original issue title or body; the original issue is
+        preserved as the human audit trail.
+        """
+
         pass
 
 
@@ -251,6 +287,35 @@ class GitHubProposalIssueProvider:
         if hasattr(result, "model_dump"):
             return result.model_dump(by_alias=True)
         return dict(result)
+
+    async def apply_decision_state(
+        self,
+        request: ProposalDeliveryRequest,
+        issue: Mapping[str, Any],
+        labels: Sequence[str],
+        comment: str | None,
+    ) -> dict[str, Any]:
+        issue_number = _clean(issue.get("key") or issue.get("number"))
+        label_result = await self._github.set_issue_labels(
+            repo=request.destination,
+            issue_number=issue_number,
+            labels=list(labels),
+        )
+        applied = {
+            "labelsUpdated": bool(getattr(label_result, "updated", False)),
+            "labels": list(labels),
+        }
+        if comment:
+            comment_result = await self._github.comment_on_issue(
+                repo=request.destination,
+                issue_number=issue_number,
+                body=comment,
+            )
+            applied["commented"] = bool(getattr(comment_result, "created", False))
+            comment_url = _clean(getattr(comment_result, "external_url", ""))
+            if comment_url:
+                applied["commentUrl"] = comment_url
+        return applied
 
 
 class JiraProposalIssueProvider:
@@ -336,6 +401,31 @@ class JiraProposalIssueProvider:
             "external_url": _clean(issue.get("url") or issue.get("self")) or None,
         }
 
+    async def apply_decision_state(
+        self,
+        request: ProposalDeliveryRequest,
+        issue: Mapping[str, Any],
+        labels: Sequence[str],
+        comment: str | None,
+    ) -> dict[str, Any]:
+        from moonmind.integrations.jira.models import AddCommentRequest, EditIssueRequest
+
+        issue_key = _clean(issue.get("key") or issue.get("number"))
+        await self._jira.edit_issue(
+            EditIssueRequest(
+                issueKey=issue_key,
+                fields={"labels": list(labels)},
+                update={},
+            )
+        )
+        applied: dict[str, Any] = {"labelsUpdated": True, "labels": list(labels)}
+        if comment:
+            await self._jira.add_comment(
+                AddCommentRequest(issueKey=issue_key, body=comment)
+            )
+            applied["commented"] = True
+        return applied
+
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
@@ -417,6 +507,88 @@ def _canonical_github_labels(request: ProposalDeliveryRequest) -> tuple[str, ...
         f"moonmind:dedup:{short_hash}",
     )
     return labels
+
+
+def _decision_state_labels(
+    request: ProposalDeliveryRequest,
+    *,
+    resulting_state: str,
+    priority: str | None = None,
+) -> tuple[str, ...]:
+    """Render review-state labels for a decision, preserving canonical labels.
+
+    Only the bounded ``state`` token (and the ``priority`` token when a
+    reviewer reprioritization is applied) is transitioned; the proposal,
+    target, category, and dedup labels are kept stable.
+    """
+
+    state_token = _label_token(resulting_state, "updated", max_length=_MAX_GITHUB_LABEL_LENGTH)
+    priority_token = (
+        _label_token(priority, "normal") if _clean(priority) else None
+    )
+    if request.provider == "jira":
+        provider_cfg = _provider_config(request.provider_metadata, "jira")
+        configured = _iter_strings(provider_cfg.get("labels"))
+        labels = [
+            "moonmind-proposal",
+            "proposal-review",
+            f"moonmind-state-{state_token}",
+            *configured,
+        ]
+        if priority_token:
+            labels.append(f"moonmind-priority-{priority_token}")
+        return tuple(dict.fromkeys(labels))
+
+    provider_cfg = _provider_config(request.provider_metadata, "github")
+    base = [*_canonical_github_labels(request), *_iter_strings(provider_cfg.get("labels"))]
+    transitioned: list[str] = []
+    for label in base:
+        if label.startswith("moonmind:state:"):
+            transitioned.append(f"moonmind:state:{state_token}")
+        elif priority_token and label.startswith("moonmind:priority:"):
+            transitioned.append(f"moonmind:priority:{priority_token}")
+        else:
+            transitioned.append(label)
+    return tuple(dict.fromkeys(transitioned))
+
+
+def _decision_comment(
+    update: ProposalDecisionStateUpdate,
+    *,
+    redactor: SecretRedactor | None = None,
+) -> str | None:
+    """Render a sanitized review-trail comment for an accepted decision."""
+
+    redactor = redactor or SecretRedactor.from_environ(placeholder="[REDACTED]")
+    decision = _clean(update.decision) or "decision"
+    promoted_id = _clean(update.promoted_execution_id)
+    if decision == "promote" and promoted_id:
+        link = _clean(update.promoted_execution_url) or promoted_id
+        body = "\n".join(
+            [
+                "MoonMind promoted this proposal to a new MoonMind.UserWorkflow.",
+                "",
+                f"- Execution ID: `{promoted_id}`",
+                f"- Execution link: {link}",
+                "",
+                (
+                    "MoonMind executed the stored proposal snapshot. This issue is "
+                    "preserved as the human audit trail; edited issue text, comments, "
+                    "labels, or fields were not used as executable input."
+                ),
+            ]
+        )
+        return redactor.scrub(body)
+    actor = _clean(update.actor) or "a reviewer"
+    resulting_state = _clean(update.resulting_state) or decision
+    summary = (
+        f"MoonMind recorded a `{decision}` decision from `{actor}`. "
+        f"Resulting state: `{resulting_state}`."
+    )
+    note = _clean(update.note)
+    if note:
+        summary = f"{summary}\n\n{note}"
+    return redactor.scrub(summary)
 
 
 def _marker(request: ProposalDeliveryRequest) -> str:
@@ -962,12 +1134,70 @@ class ProposalDeliveryService:
             provider_metadata=provider_metadata,
         )
 
+    async def record_decision(
+        self,
+        request: ProposalDeliveryRequest,
+        update: ProposalDecisionStateUpdate,
+    ) -> dict[str, Any]:
+        """Push a bounded review-state transition to the provider issue.
+
+        Updates the issue state labels and appends an audit comment (including
+        the promoted execution link for promotions) through the trusted provider
+        adapter. The original issue title and body are preserved as the human
+        audit trail.
+        """
+
+        self._validate_policy(request)
+        provider = self._provider(request.provider)
+        applier = getattr(provider, "apply_decision_state", None)
+        if not callable(applier):
+            return {
+                "provider": request.provider,
+                "applied": False,
+                "reason": "provider_state_update_unsupported",
+            }
+        external_key = _clean(request.external_key)
+        if not external_key:
+            return {
+                "provider": request.provider,
+                "applied": False,
+                "reason": "missing_external_issue",
+            }
+        issue = {
+            "key": external_key,
+            "number": external_key,
+            "url": _clean(request.external_url),
+        }
+        labels = _decision_state_labels(
+            request,
+            resulting_state=update.resulting_state,
+            priority=update.priority,
+        )
+        comment = _decision_comment(update, redactor=self._redactor)
+        applied = await applier(request, issue, labels, comment)
+        result: dict[str, Any] = {
+            "provider": request.provider,
+            "applied": True,
+            "externalKey": external_key,
+            "resultingExternalState": update.resulting_state,
+            "labels": list(labels),
+            "commented": bool(comment),
+        }
+        if _clean(update.promoted_execution_id):
+            result["promotedExecutionId"] = _clean(update.promoted_execution_id)
+        if _clean(update.promoted_execution_url):
+            result["promotedExecutionUrl"] = _clean(update.promoted_execution_url)
+        if isinstance(applied, Mapping):
+            result["providerResponse"] = _safe_metadata(applied)
+        return _safe_metadata(result)
+
 
 __all__ = [
     "ProposalDeliveryError",
     "ProposalDeliveryRequest",
     "ProposalDeliveryResult",
     "ProposalDeliveryService",
+    "ProposalDecisionStateUpdate",
     "ProposalIssueProvider",
     "GitHubProposalIssueProvider",
     "GitHubDecisionIngressResult",
