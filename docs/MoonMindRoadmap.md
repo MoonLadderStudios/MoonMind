@@ -164,7 +164,7 @@ All six items shipped: run digests, fix patterns/error signatures, Mem0 long-ter
 - [ ] **7.2** Artifact browsing UI — API exists (`temporal_artifacts.py`); dashboard browsing of files/logs/patches is still partial.
 - [ ] **7.5** Side-by-side comparison view — comparison runs preserve lineage, but no side-by-side UI.
 - [x] **7.6** Multi-step / step DAG visualization.
-- [ ] **7.7** Remediation panels — tracked with 13.3.
+- [ ] **7.7** Remediation panels - Tracked with 13.3.
 - [x] **7.8** Expanded Step Execution history surface.
 
 ---
@@ -274,7 +274,7 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - Step Execution history is now visible in expanded Mission Control step rows (MM-831 / PR #2541).
 
 ### Remaining work
-- [ ] **13.1** Resume-from-checkpoint as the default recovery path — checkpoint restore logic exists, but is not yet the primary operator flow for failed runs.
+- [ ] **13.1** Resume-from-checkpoint as the default recovery path — checkpoint restore logic exists but is not yet the primary operator flow for failed runs.
   *Done means:* a failed run's default operator flow offers evidence-gated checkpoint resume with replay-safe cutover.
 - [ ] **13.2** Queryable remediation audit events — publish remediation lifecycle audit through the control-event mechanism.
   *Done means:* remediation lifecycle events queryable per target run.

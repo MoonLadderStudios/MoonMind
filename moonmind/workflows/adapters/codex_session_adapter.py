@@ -256,7 +256,10 @@ def _is_empty_assistant_turn_failure(metadata: Mapping[str, Any] | None) -> bool
         return False
     if metadata.get("failureCause") == EMPTY_ASSISTANT_FAILURE_CAUSE:
         return True
+    retry_action = str(metadata.get("retryRecommendedAction") or "").strip()
     reason = str(metadata.get("reason") or "").strip()
+    if retry_action == "clear_session" and "produced no assistant output" in reason:
+        return True
     return reason in {
         "codex app-server task_complete produced no assistant output",
         "codex app-server turn/completed produced no assistant output",
