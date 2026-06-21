@@ -31,7 +31,6 @@ const JIRA_BREAKDOWN_PRESET_SLUG = "jira-breakdown";
 const JIRA_BREAKDOWN_ORCHESTRATE_PRESET_SLUG = "jira-breakdown-orchestrate";
 const JIRA_BREAKDOWN_IMPLEMENT_PRESET_SLUG = "jira-breakdown-implement";
 const JIRA_ORCHESTRATE_PRESET_SLUG = "jira-orchestrate";
-const JIRA_IMPLEMENT_PRESET_SLUG = "jira-implement";
 const SELF_MANAGED_PUBLISH_SKILLS = new Set([
   ...PR_RESOLVER_SKILLS,
   "fix-comments",
@@ -50,7 +49,6 @@ const HIDDEN_PRESET_INPUT_KEYS: Record<string, Set<string>> = {
     "sourcedesignpath",
     "constraints",
   ]),
-  [JIRA_IMPLEMENT_PRESET_SLUG]: new Set(["constraints", "jira_issue_key"]),
   [MOONSPEC_ORCHESTRATE_PRESET_SLUG]: new Set(["orchestrationmode"]),
 };
 const PROPOSE_TASKS_PREFERENCE_KEY = "moonmind.workflow-start.propose-tasks";
@@ -229,6 +227,7 @@ interface DashboardConfig {
     };
     github?: {
       branches?: string;
+      issues?: string;
     };
     jira?: {
       connections?: string;
@@ -2677,6 +2676,7 @@ function unsupportedCapabilityWidget(
     "date",
     "email",
     "integer",
+    "github.issue-picker",
     "jira.issue-picker",
     "number",
     "object",
@@ -2734,9 +2734,61 @@ function capabilityInputTextValue(
 ): string {
   const value = capabilityInputValue(values, defaults, name);
   if (value && typeof value === "object" && !Array.isArray(value)) {
-    return String((value as Record<string, unknown>).key || "");
+    const record = value as Record<string, unknown>;
+    if (record.repository && record.number) {
+      return `${String(record.repository)}#${String(record.number)}`;
+    }
+    return String(record.key || "");
   }
   return value === undefined || value === null ? "" : String(value);
+}
+
+function normalizeGitHubIssueInput(
+  rawValue: string,
+  defaultRepository: string | undefined,
+): Record<string, unknown> {
+  const value = rawValue.trim();
+  if (!value) {
+    return {};
+  }
+  const urlMatch = value.match(
+    /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/issues\/(\d+)(?:[/?#].*)?$/i,
+  );
+  if (urlMatch) {
+    return {
+      repository: urlMatch[1],
+      number: Number(urlMatch[2]),
+      url: `https://github.com/${urlMatch[1]}/issues/${urlMatch[2]}`,
+    };
+  }
+  const qualifiedMatch = value.match(
+    /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)$/i,
+  );
+  if (qualifiedMatch) {
+    return { repository: qualifiedMatch[1], number: Number(qualifiedMatch[2]) };
+  }
+  const shorthandMatch = value.match(/^#(\d+)$/);
+  const normalizedRepository = String(defaultRepository || "").trim();
+  if (shorthandMatch && OWNER_REPO_PATTERN.test(normalizedRepository)) {
+    return { repository: normalizedRepository, number: Number(shorthandMatch[1]) };
+  }
+  return { repository: normalizedRepository, number: Number.NaN, raw: value };
+}
+
+function issuePickerTextValue(
+  value: unknown,
+  provider: "jira" | "github",
+): string {
+  const issueValue = recordValue(value);
+  if (provider === "github") {
+    const repository = String(issueValue.repository || "").trim();
+    const number = String(issueValue.number || "").trim();
+    if (repository && number) {
+      return `${repository}#${number}`;
+    }
+    return String(issueValue.raw || "");
+  }
+  return String(issueValue.key || "");
 }
 
 function schemaContractHasFields(detail: Pick<PresetDetail, "inputSchema"> | null | undefined): boolean {
@@ -2803,6 +2855,15 @@ function validateSchemaCapabilityValues(
       const issueValue = recordValue(value);
       if (required.has(name) && !String(issueValue.key || "").trim()) {
         errors[name] = "A Jira issue is required.";
+      }
+      continue;
+    }
+    if (widget === "github.issue-picker") {
+      const issueValue = recordValue(value);
+      const repository = String(issueValue.repository || "").trim();
+      const number = Number(issueValue.number);
+      if (required.has(name) && (!OWNER_REPO_PATTERN.test(repository) || !Number.isInteger(number) || number <= 0)) {
+        errors[name] = "A GitHub issue is required.";
       }
       continue;
     }
@@ -3280,24 +3341,39 @@ function SchemaCapabilityFields({
             </label>
           );
         }
-        if (widget === "jira.issue-picker") {
+        if (widget === "jira.issue-picker" || widget === "github.issue-picker") {
           const issueValue = recordValue(value);
+          const provider = widget === "github.issue-picker" ? "github" : "jira";
+          const placeholder = String(
+            uiSchema.searchPlaceholder ||
+              (provider === "github" ? "Search GitHub issues" : "Search Jira issues"),
+          );
           return (
             <label key={name} htmlFor={inputId}>
               {label}
               <input
                 id={inputId}
                 type="text"
-                value={String(issueValue.key || "")}
-                placeholder={String(uiSchema.searchPlaceholder || "Search Jira issues")}
+                value={issuePickerTextValue(value, provider)}
+                placeholder={placeholder}
                 disabled={disabled}
                 aria-invalid={Boolean(error)}
-                onChange={(event) =>
+                onChange={(event) => {
+                  if (provider === "github") {
+                    onChange(
+                      name,
+                      normalizeGitHubIssueInput(
+                        event.target.value,
+                        String(issueValue.repository || readLocalPreference(LAST_REPOSITORY_OPTION_PREFERENCE_KEY) || ""),
+                      ),
+                    );
+                    return;
+                  }
                   onChange(name, {
                     ...issueValue,
                     key: event.target.value,
-                  })
-                }
+                  });
+                }}
               />
               {description ? <span className="small">{description}</span> : null}
               {error ? <span className="notice small">{error}</span> : null}

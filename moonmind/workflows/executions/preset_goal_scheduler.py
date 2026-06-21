@@ -7,6 +7,8 @@ import re
 from typing import Any, Mapping
 
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b", re.IGNORECASE)
+_GITHUB_ISSUE_URL_PATTERN = re.compile(r"https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/issues/(\d+)", re.IGNORECASE)
+_GITHUB_ISSUE_REF_PATTERN = re.compile(r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(\d+)\b")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +50,16 @@ def _jira_project_key(goal: str) -> str:
 def _issue_key(goal: str) -> str | None:
     match = _JIRA_ISSUE_KEY_PATTERN.search(goal)
     return match.group(1).upper() if match else None
+
+
+def _github_issue_ref(goal: str) -> tuple[str, int] | None:
+    url_match = _GITHUB_ISSUE_URL_PATTERN.search(goal)
+    if url_match:
+        return url_match.group(1), int(url_match.group(2))
+    ref_match = _GITHUB_ISSUE_REF_PATTERN.search(goal)
+    if ref_match:
+        return ref_match.group(1), int(ref_match.group(2))
+    return None
 
 
 def goal_from_payloads(
@@ -100,6 +112,7 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
 
     lowered = normalized_goal.lower()
     issue_key = _issue_key(normalized_goal)
+    github_issue = _github_issue_ref(normalized_goal)
     wants_breakdown = _contains_any(
         lowered,
         ("break down", "breakdown", "split", "stories", "story candidates"),
@@ -122,7 +135,7 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
         return GoalPresetSchedule(
             goal=normalized_goal,
             slug=slug,
-            version="1.0.0",
+            version="1.1.0" if slug == "jira-implement" else "1.0.0",
             issue_key=issue_key,
             inputs={
                 "jira_issue_key": issue_key,
@@ -130,6 +143,20 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
                 "constraints": "",
             },
             reason="jira_issue_goal",
+        )
+
+    if github_issue:
+        repository, number = github_issue
+        return GoalPresetSchedule(
+            goal=normalized_goal,
+            slug="github-issue-implement",
+            version="1.0.0",
+            issue_key=f"{repository}#{number}",
+            inputs={
+                "github_issue": {"repository": repository, "number": number},
+                "constraints": "",
+            },
+            reason="github_issue_goal",
         )
 
     if wants_breakdown:

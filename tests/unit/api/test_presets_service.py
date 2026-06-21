@@ -2508,7 +2508,7 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
                 slug="jira-implement",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
+                version="1.1.0",
                 inputs={"jira_issue": {"key": "MM-742"}},
                 context={},
             )
@@ -2529,6 +2529,62 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
                 },
             }
             assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
+            assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
+                "jira-implement",
+                "issue-implement-assessment",
+                "issue-implement-work-pr",
+            ]
+
+
+async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_path):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="github-issue-implement",
+                scope="global",
+                scope_ref=None,
+                version="1.0.0",
+                inputs={
+                    "github_issue": {
+                        "repository": "MoonLadderStudios/MoonMind",
+                        "number": 123,
+                    },
+                    "constraints": "",
+                },
+                context={},
+            )
+
+    assert [step["title"] for step in expanded["steps"]] == [
+        "Load GitHub issue brief",
+        "Assess existing implementation state",
+        "Check GitHub issue blockers before implementation",
+        "Mark GitHub issue In Progress",
+        "Implement the issue",
+        "Verify implementation",
+        "Create pull request",
+        "Finalize GitHub issue status",
+    ]
+    assert expanded["steps"][0]["tool"]["id"] == "github.load_issue_preset_brief"
+    assert expanded["steps"][2]["tool"]["id"] == "github.check_issue_blockers"
+    assert expanded["steps"][3]["tool"]["id"] == "github.update_issue_status"
+    assert [item["presetSlug"] for item in expanded["authoredPresets"]] == [
+        "github-issue-implement",
+        "issue-implement-assessment",
+        "issue-implement-work-pr",
+    ]
+    assert expanded["appliedTemplate"]["inputs"]["github_issue_ref"] == (
+        "MoonLadderStudios/MoonMind#123"
+    )
 
 async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path):
     seed_dir = (

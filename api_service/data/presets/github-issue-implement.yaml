@@ -1,0 +1,201 @@
+slug: github-issue-implement
+title: GitHub Issue Implement
+description: Implement a GitHub issue by assessing repository state, completing missing
+  work, creating a pull request, and updating the issue.
+scope: global
+version: 1.0.0
+tags:
+- github
+- implementation
+- pull-request
+requiredCapabilities:
+- git
+- gh
+annotations:
+  sourceSkill: github-issue-implement
+  issueProvider: github
+  output: pull-request
+  issueInput:
+    provider: github
+    objectInput: github_issue
+    refInput: github_issue_ref
+    refTemplate: '{{ repository }}#{{ number }}'
+  githubIssueUpdate:
+    inProgress:
+      comment: true
+      labelsToAdd:
+      - 'status: in-progress'
+      labelsToRemove:
+      - 'status: todo'
+    codeReview:
+      commentPullRequestUrl: true
+      labelsToAdd:
+      - 'status: code-review'
+      labelsToRemove:
+      - 'status: in-progress'
+    done:
+      closeIssue: true
+      labelsToAdd:
+      - 'status: done'
+      labelsToRemove:
+      - 'status: code-review'
+  inputSchema:
+    type: object
+    required:
+    - github_issue
+    properties:
+      github_issue:
+        type: object
+        title: GitHub issue
+        description: Issue that will seed the task instructions and implementation
+          context.
+        required:
+        - repository
+        - number
+        properties:
+          repository:
+            type: string
+            title: Repository
+          number:
+            type: integer
+            title: Issue number
+          title:
+            type: string
+          body:
+            type: string
+          url:
+            type: string
+            format: uri
+          state:
+            type: string
+          labels:
+            type: array
+            items:
+              type: string
+  uiSchema:
+    github_issue:
+      widget: github.issue-picker
+      dataSource: github.issues
+      searchPlaceholder: Search GitHub issues
+      allowManualIssueEntry: true
+  defaults: {}
+inputs:
+- name: github_issue_ref
+  label: GitHub Issue Reference
+  type: text
+  required: false
+  default: ''
+- name: constraints
+  label: Constraints
+  type: textarea
+  required: false
+  default: ''
+steps:
+- title: Load GitHub issue brief
+  type: tool
+  instructions: 'Fetch GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
+    }} through the deterministic trusted GitHub tool surface.
+
+
+    Build the canonical implementation input from the issue title, body, labels, state,
+    URL, and any acceptance criteria in the issue body. Preserve the repository and
+    issue number in the brief so downstream implementation artifacts and the pull
+    request can reference {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
+    }}.'
+  tool:
+    id: github.load_issue_preset_brief
+    requiredCapabilities:
+    - gh
+    inputs:
+      repository: '{{ inputs.github_issue.repository }}'
+      issueNumber: '{{ inputs.github_issue.number }}'
+- kind: include
+  slug: issue-implement-assessment
+  version: 1.0.0
+  alias: assess
+  scope: global
+  inputMapping:
+    issue_provider: github
+    issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
+      }}'
+    issue_url: "{{ inputs.github_issue.url | default('') }}"
+    brief_artifact_path: artifacts/github-issue-implement-brief.json
+    assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+- title: Check GitHub issue blockers before implementation
+  type: tool
+  instructions: 'Read artifacts/github-issue-implement-assessment.json (or the recorded
+    verdict from the assess step) before deciding how to apply blocker results.
+
+
+    Check GitHub issue {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
+    }} through the deterministic trusted GitHub blocker preflight before any new implementation
+    work starts. For this first version, treat explicit blocking labels or a known
+    blocker section in the issue body as blocker evidence.
+
+
+    If the recorded verdict is FULLY_IMPLEMENTED, report blocker findings for the
+    record but do not stop finalization. Otherwise, if unresolved blockers are detected
+    or blocker evidence cannot be evaluated from trusted GitHub data, stop implementation
+    and report the blocker details.'
+  tool:
+    id: github.check_issue_blockers
+    requiredCapabilities:
+    - gh
+    inputs:
+      repository: '{{ inputs.github_issue.repository }}'
+      issueNumber: '{{ inputs.github_issue.number }}'
+- title: Mark GitHub issue In Progress
+  type: tool
+  instructions: 'Read artifacts/github-issue-implement-assessment.json (or the previous
+    step''s recorded verdict) before doing anything.
+
+
+    If the recorded verdict is FULLY_IMPLEMENTED, skip the In Progress update because
+    the issue is already implemented. If the recorded verdict is BLOCKED, stop without
+    changing GitHub. Otherwise mark GitHub issue {{ inputs.github_issue.repository
+    }}#{{ inputs.github_issue.number }} as In Progress using the configured GitHub
+    issue update strategy.'
+  tool:
+    id: github.update_issue_status
+    requiredCapabilities:
+    - gh
+    inputs:
+      repository: '{{ inputs.github_issue.repository }}'
+      issueNumber: '{{ inputs.github_issue.number }}'
+      targetStatus: In Progress
+      mode: start
+- kind: include
+  slug: issue-implement-work-pr
+  version: 1.0.0
+  alias: work-pr
+  scope: global
+  inputMapping:
+    issue_provider: github
+    issue_ref: '{{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
+      }}'
+    brief_artifact_path: artifacts/github-issue-implement-brief.json
+    assessment_artifact_path: artifacts/github-issue-implement-assessment.json
+    pr_artifact_path: artifacts/github-issue-implement-pr.json
+    constraints: '{{ inputs.constraints }}'
+- title: Finalize GitHub issue status
+  type: tool
+  instructions: 'Read artifacts/github-issue-implement-assessment.json (or the recorded
+    verdict from the assess step) before changing GitHub.
+
+
+    If the recorded verdict is BLOCKED, stop without changing GitHub and report the
+    blocking evidence. If the recorded verdict is FULLY_IMPLEMENTED, apply the configured
+    Done strategy. Otherwise read artifacts/github-issue-implement-pr.json, verify
+    it contains a pull_request_url for {{ inputs.github_issue.repository }}#{{ inputs.github_issue.number
+    }}, and apply the configured Code Review strategy with the pull request URL. Do
+    not assume a single organization''s workflow; use the configured label/comment/close
+    strategy exposed by the trusted GitHub update tool.'
+  tool:
+    id: github.update_issue_status
+    requiredCapabilities:
+    - gh
+    inputs:
+      repository: '{{ inputs.github_issue.repository }}'
+      issueNumber: '{{ inputs.github_issue.number }}'
+      mode: finalize_after_pr_or_done
+      pullRequestArtifactPath: artifacts/github-issue-implement-pr.json

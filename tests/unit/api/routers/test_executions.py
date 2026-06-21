@@ -634,7 +634,7 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
 
     assert task_payload["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "scope": "global",
     }
     assert task_payload["inputs"]["jira_issue_key"] == "MM-747"

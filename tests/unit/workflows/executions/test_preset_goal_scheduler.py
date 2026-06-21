@@ -10,7 +10,7 @@ def test_schedule_preset_from_goal_selects_jira_implement_for_issue_goal() -> No
 
     assert schedule is not None
     assert schedule.slug == "jira-implement"
-    assert schedule.version == "1.0.0"
+    assert schedule.version == "1.1.0"
     assert schedule.issue_key == "MM-747"
     assert schedule.inputs["jira_issue_key"] == "MM-747"
 
@@ -22,6 +22,21 @@ def test_schedule_preset_from_goal_accepts_lowercase_jira_issue_key() -> None:
     assert schedule.slug == "jira-implement"
     assert schedule.issue_key == "MM-747"
     assert schedule.inputs["jira_issue_key"] == "MM-747"
+
+
+def test_schedule_preset_from_goal_selects_github_issue_implement_for_issue_url() -> None:
+    schedule = schedule_preset_from_goal(
+        "Implement https://github.com/MoonLadderStudios/MoonMind/issues/123"
+    )
+
+    assert schedule is not None
+    assert schedule.slug == "github-issue-implement"
+    assert schedule.version == "1.0.0"
+    assert schedule.issue_key == "MoonLadderStudios/MoonMind#123"
+    assert schedule.inputs["github_issue"] == {
+        "repository": "MoonLadderStudios/MoonMind",
+        "number": 123,
+    }
 
 
 def test_schedule_preset_from_goal_selects_breakdown_orchestrate_for_story_goal() -> None:

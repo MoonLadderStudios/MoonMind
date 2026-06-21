@@ -54,6 +54,12 @@ annotations:
       searchPlaceholder: Search Jira issues
       allowManualKeyEntry: true
   defaults: {}
+  issueInput:
+    provider: jira
+    objectInput: jira_issue
+    refInput: jira_issue_key
+    refPath:
+      - key
 inputs:
   - name: jira_issue_key
     label: Jira Issue Key

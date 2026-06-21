@@ -377,14 +377,14 @@ async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_p
     task = expanded_parameters["task"]
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "scope": "global",
     }
     assert task["presetSchedule"] == {
         "source": "goal",
         "reason": "jira_issue_goal",
         "presetSlug": "jira-implement",
-        "presetVersion": "1.0.0",
+        "presetVersion": "1.1.0",
         "jiraIssueKey": "MM-747",
     }
     assert task["inputs"]["jira_issue_key"] == "MM-747"

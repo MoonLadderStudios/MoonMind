@@ -31,6 +31,9 @@ JIRA_ORCHESTRATE_TASKS_TOOL_NAME = "story.create_jira_orchestrate_tasks"
 JIRA_IMPLEMENT_TASKS_TOOL_NAME = "story.create_jira_implement_tasks"
 JIRA_CHECK_BLOCKERS_TOOL_NAME = "jira.check_blockers"
 JIRA_LOAD_PRESET_BRIEF_TOOL_NAME = "jira.load_preset_brief"
+GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
+GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
+GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
 JIRA_STORY_TOOL_NAMES = frozenset(
     {
         JIRA_CREATE_ISSUES_TOOL_NAME,
@@ -2442,6 +2445,337 @@ async def load_jira_preset_brief(
         },
     )
 
+
+def _github_issue_inputs(inputs: Mapping[str, Any]) -> tuple[str, int]:
+    nested = _mapping(inputs.get("github") or inputs.get("issue"))
+    repository = _string(
+        inputs.get("repository")
+        or inputs.get("repo")
+        or nested.get("repository")
+        or nested.get("repo")
+    )
+    issue_number_raw = (
+        inputs.get("issueNumber")
+        or inputs.get("issue_number")
+        or inputs.get("number")
+        or nested.get("issueNumber")
+        or nested.get("issue_number")
+        or nested.get("number")
+    )
+    try:
+        issue_number = int(str(issue_number_raw).strip())
+    except (TypeError, ValueError):
+        issue_number = 0
+    if not repository or issue_number <= 0:
+        raise ValueError("repository and issueNumber are required for GitHub issue tools.")
+    return repository, issue_number
+
+
+def _github_issue_payload(data: Mapping[str, Any], repository: str) -> dict[str, Any]:
+    labels = data.get("labels")
+    normalized_labels: list[str] = []
+    if isinstance(labels, Sequence) and not isinstance(labels, (str, bytes, bytearray)):
+        for item in labels:
+            if isinstance(item, Mapping):
+                label = _string(item.get("name"))
+            else:
+                label = _string(item)
+            if label:
+                normalized_labels.append(label)
+    number_raw = data.get("number")
+    try:
+        number = int(str(number_raw).strip())
+    except (TypeError, ValueError):
+        number = 0
+    return {
+        "repository": repository,
+        "number": number,
+        "title": _string(data.get("title")),
+        "body": _string(data.get("body")),
+        "url": _string(data.get("html_url") or data.get("url")),
+        "state": _string(data.get("state")),
+        "labels": normalized_labels,
+    }
+
+
+async def _fetch_github_issue(
+    *,
+    repository: str,
+    issue_number: int,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> tuple[dict[str, Any] | None, str | None]:
+    service = github_service_factory()
+    token, resolution_error = await service.resolve_github_token(repo=repository)
+    if not token:
+        return None, resolution_error or "GitHub issue lookup is unavailable."
+    headers = service._github_headers(token)
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            return response.json(), None
+        except httpx.HTTPStatusError as exc:
+            summary = service._github_permission_summary(exc.response)
+            return None, (
+                f"GitHub issue fetch failed with HTTP {exc.response.status_code}"
+                + (f" for {repository}#{issue_number}. {summary}" if summary else f" for {repository}#{issue_number}.")
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return None, f"GitHub issue fetch failed: {exc.__class__.__name__}"
+
+
+async def load_github_issue_preset_brief(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    """Load a compact GitHub issue preset brief through trusted GitHub data."""
+
+    repository, issue_number = _github_issue_inputs(inputs)
+    issue_data, error = await _fetch_github_issue(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if issue_data is None:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "error": error or "Could not load GitHub issue preset brief.",
+                "repository": repository,
+                "issueNumber": issue_number,
+            },
+        )
+    issue = _github_issue_payload(issue_data, repository)
+    issue_ref = f"{repository}#{issue['number'] or issue_number}"
+    body = _string(issue.get("body"))
+    title = _string(issue.get("title"))
+    labels = issue.get("labels") if isinstance(issue.get("labels"), list) else []
+    brief_parts = [f"{issue_ref}: {title}".strip()]
+    if body:
+        brief_parts.append(body)
+    if labels:
+        brief_parts.append("Labels: " + ", ".join(str(label) for label in labels))
+    preset_brief = "\n\n".join(part for part in brief_parts if part)
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "trustedSource": "moonmind.github.get_issue",
+            "issue": issue,
+            "presetBrief": preset_brief,
+            "artifactPath": "artifacts/github-issue-implement-brief.json",
+            "summary": f"Loaded GitHub issue preset brief for {issue_ref} from trusted GitHub data.",
+        },
+    )
+
+
+def _github_blockers_from_issue(issue: Mapping[str, Any]) -> list[dict[str, Any]]:
+    labels = [str(label).strip().lower() for label in issue.get("labels") or []]
+    blockers: list[dict[str, Any]] = []
+    for label in labels:
+        if label in {"blocked", "status: blocked", "status/blocked"} or label.startswith("blocked:"):
+            blockers.append({"source": "label", "label": label, "statusKnown": False, "done": False})
+    body = _string(issue.get("body"))
+    match = re.search(r"(?im)^#+\s*block(?:ed|ers|ing)\b(?P<section>.*?)(?:^#+\s|\Z)", body, flags=re.DOTALL)
+    if match:
+        section = match.group("section").strip()
+        if section and not re.search(r"(?i)\b(none|n/a|no blockers?)\b", section):
+            blockers.append({"source": "body", "section": section[:1000], "statusKnown": False, "done": False})
+    return blockers
+
+
+async def check_github_issue_blockers(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    repository, issue_number = _github_issue_inputs(inputs)
+    issue_data, error = await _fetch_github_issue(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    issue_ref = f"{repository}#{issue_number}"
+    if issue_data is None:
+        return ToolResult(
+            status="FAILED",
+            outputs={"issueRef": issue_ref, "decision": "blocked", "summary": error or "GitHub blocker check failed."},
+        )
+    issue = _github_issue_payload(issue_data, repository)
+    blockers = _github_blockers_from_issue(issue)
+    if blockers:
+        return ToolResult(
+            status="COMPLETED",
+            outputs={
+                "issueRef": issue_ref,
+                "decision": "blocked",
+                "blockingIssues": blockers,
+                "summary": f"GitHub issue {issue_ref} has unresolved blocker evidence.",
+            },
+        )
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "issueRef": issue_ref,
+            "decision": "continue",
+            "blockingIssues": [],
+            "summary": f"GitHub issue {issue_ref} has no configured blocker evidence.",
+        },
+    )
+
+
+_GITHUB_STATUS_ACTIONS = {
+    "start": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": ["status: todo"], "comment": True},
+    "in_progress": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": ["status: todo"], "comment": True},
+    "code_review": {"labelsToAdd": ["status: code-review"], "labelsToRemove": ["status: in-progress"], "commentPullRequestUrl": True},
+    "done": {"labelsToAdd": ["status: done"], "labelsToRemove": ["status: code-review"], "closeIssue": True},
+}
+
+
+def _github_status_mode(inputs: Mapping[str, Any]) -> str:
+    mode = _string(inputs.get("mode")).lower().replace(" ", "_")
+    if mode:
+        return mode
+    target = _string(inputs.get("targetStatus")).lower().replace(" ", "_")
+    return target or "start"
+
+
+def _pull_request_url_from_artifact_path(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    artifact_path = _string(
+        inputs.get("pullRequestArtifactPath")
+        or inputs.get("pull_request_artifact_path")
+    )
+    if not artifact_path:
+        return ""
+    raw_path = Path(artifact_path).expanduser()
+    candidate_paths: list[Path] = []
+    if raw_path.is_absolute():
+        candidate_paths.append(raw_path.resolve())
+    else:
+        for root in _repo_root_candidates(inputs, context):
+            candidate = (root / raw_path).resolve()
+            if candidate.is_relative_to(root):
+                candidate_paths.append(candidate)
+    for candidate in candidate_paths:
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        nested_pull_request = _mapping(payload.get("pullRequest") or payload.get("pull_request"))
+        return _first_string(
+            payload.get("pullRequestUrl"),
+            payload.get("pull_request_url"),
+            payload.get("prUrl"),
+            payload.get("url"),
+            nested_pull_request.get("url"),
+        )
+    return ""
+
+
+def _github_status_pull_request_url(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    return _first_string(
+        inputs.get("pullRequestUrl"),
+        inputs.get("pull_request_url"),
+        _pull_request_url_from_artifact_path(inputs, context),
+    )
+
+
+async def update_github_issue_status(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    repository, issue_number = _github_issue_inputs(inputs)
+    mode = _github_status_mode(inputs)
+    pull_request_url = _github_status_pull_request_url(inputs, _context)
+    if mode == "finalize_after_pr_or_done":
+        mode = "code_review" if pull_request_url else "done"
+    actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
+    service = github_service_factory()
+    token, resolution_error = await service.resolve_github_token(repo=repository)
+    issue_ref = f"{repository}#{issue_number}"
+    if not token:
+        return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": resolution_error or "GitHub issue update is unavailable."})
+    headers = service._github_headers(token)
+    issue_data, error = await _fetch_github_issue(
+        repository=repository,
+        issue_number=issue_number,
+        github_service_factory=github_service_factory,
+    )
+    if issue_data is None:
+        return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": error or "GitHub issue update fetch failed."})
+    issue = _github_issue_payload(issue_data, repository)
+    current_labels = [str(label) for label in issue.get("labels") or []]
+    remove = {str(label).lower() for label in actions.get("labelsToRemove") or []}
+    labels = [label for label in current_labels if label.lower() not in remove]
+    for label in actions.get("labelsToAdd") or []:
+        if str(label).lower() not in {existing.lower() for existing in labels}:
+            labels.append(str(label))
+    patch_payload: dict[str, Any] = {"labels": labels}
+    if actions.get("closeIssue"):
+        patch_payload["state"] = "closed"
+    applied: list[str] = []
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            response = await client.patch(
+                f"https://api.github.com/repos/{repository}/issues/{issue_number}",
+                headers=headers,
+                json=patch_payload,
+            )
+            response.raise_for_status()
+            updated = response.json()
+            applied.append("patch_issue")
+            comment_body = ""
+            pr_url = pull_request_url
+            if actions.get("commentPullRequestUrl") and pr_url:
+                comment_body = f"Implementation pull request: {pr_url}"
+            elif actions.get("comment"):
+                comment_body = f"MoonMind started implementation for {issue_ref}."
+            if comment_body:
+                comment_response = await client.post(
+                    f"https://api.github.com/repos/{repository}/issues/{issue_number}/comments",
+                    headers=headers,
+                    json={"body": comment_body},
+                )
+                comment_response.raise_for_status()
+                applied.append("comment")
+        except httpx.HTTPStatusError as exc:
+            summary = service._github_permission_summary(exc.response)
+            return ToolResult(
+                status="FAILED",
+                outputs={"issueRef": issue_ref, "summary": f"GitHub issue update failed with HTTP {exc.response.status_code}. {summary}".strip()},
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return ToolResult(status="FAILED", outputs={"issueRef": issue_ref, "summary": f"GitHub issue update failed: {exc.__class__.__name__}"})
+    updated_issue = _github_issue_payload(updated, repository)
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "issueUrl": updated_issue.get("url") or issue.get("url"),
+            "appliedActions": applied,
+            "confirmedState": updated_issue.get("state"),
+            "confirmedLabels": updated_issue.get("labels"),
+            "summary": f"Updated GitHub issue {issue_ref} with mode {mode}.",
+        },
+    )
+
+
 async def discover_documents(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -2867,6 +3201,42 @@ def register_story_output_tool_handlers(
         handler=_load_jira_preset_brief,
     )
 
+    async def _load_github_issue_preset_brief(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await load_github_issue_preset_brief(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME,
+        version="1.0",
+        handler=_load_github_issue_preset_brief,
+    )
+
+    async def _check_github_issue_blockers(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await check_github_issue_blockers(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME,
+        version="1.0",
+        handler=_check_github_issue_blockers,
+    )
+
+    async def _update_github_issue_status(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await update_github_issue_status(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME,
+        version="1.0",
+        handler=_update_github_issue_status,
+    )
+
     async def _discover_documents(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -2900,6 +3270,9 @@ __all__ = [
     "JIRA_CREATE_ISSUES_TOOL_NAME",
     "JIRA_IMPLEMENT_TASKS_TOOL_NAME",
     "JIRA_LOAD_PRESET_BRIEF_TOOL_NAME",
+    "GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME",
+    "GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME",
+    "GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME",
     "JIRA_ORCHESTRATE_TASKS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",
     "check_jira_blockers",
