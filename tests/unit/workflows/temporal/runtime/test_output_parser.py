@@ -246,6 +246,15 @@ class TestClaudeCodeOutputParser:
             "You've hit your session limit · resets 9:50pm (UTC)"
         ]
 
+    def test_parse_ignores_session_limit_prose_without_hit_phrase(self) -> None:
+        parser = ClaudeCodeOutputParser()
+        result = parser.parse(
+            "Updated docs explaining how session limit messages are classified.\n",
+            "",
+        )
+        assert not result.rate_limited
+        assert result.error_messages == []
+
     def test_parse_ignores_clean_output(self) -> None:
         parser = ClaudeCodeOutputParser()
         result = parser.parse(

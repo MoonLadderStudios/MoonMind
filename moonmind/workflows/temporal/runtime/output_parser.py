@@ -26,7 +26,7 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
 # non-zero code and otherwise look like a generic execution error.
 _CLAUDE_CODE_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "hit your limit",
-    "session limit",
+    "hit your session limit",
     "usage limit",
     "status 429",
     "status: 429",
