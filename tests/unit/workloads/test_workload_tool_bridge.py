@@ -220,6 +220,25 @@ def test_container_run_workload_tool_definition_routes_to_docker_workload() -> N
     output_properties = definition["outputs"]["schema"]["properties"]
     assert output_properties["outputRefs"] == {"type": "object"}
 
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "container.run_workload",
+        "container.run_container",
+        "container.run_docker",
+        "container.start_helper",
+        "unreal.run_tests",
+        "moonmind.integration_ci",
+    ],
+)
+def test_dood_tool_definitions_expose_generic_collect_globs(tool_name: str) -> None:
+    definition = build_dood_tool_definition_payload(name=tool_name, version="1.0")
+    collect_globs_schema = definition["inputs"]["schema"]["properties"]["collectGlobs"]
+    assert collect_globs_schema == {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+    }
+
 def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
     definition = build_dood_tool_definition_payload(
         name="unreal.run_tests",
@@ -339,6 +358,37 @@ async def test_container_run_workload_handler_validates_and_calls_launcher() -> 
         "status": "complete"
     }
     assert "session.summary" not in result.outputs["outputRefs"]
+
+@pytest.mark.asyncio
+async def test_container_run_workload_handler_passes_collect_globs_to_launcher() -> None:
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _FakeLauncher()
+    handler = build_workload_tool_handler(
+        tool_name="container.run_workload",
+        registry=registry,
+        launcher=launcher,
+    )
+
+    result = await handler(
+        {
+            "profileId": "local-python",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "command": ["python", "-V"],
+            "collectGlobs": [".artifacts/**/*.json", "logs/*.log"],
+        },
+        {"workflow_id": "task-1", "node_id": "step-test", "attempt": 1},
+    )
+
+    assert isinstance(result, SkillResult)
+    assert launcher.validated is not None
+    assert launcher.validated.request.collect_globs == (
+        ".artifacts/**/*.json",
+        "logs/*.log",
+    )
 
 @pytest.mark.asyncio
 async def test_workload_tool_handler_preserves_report_publication_metadata() -> None:

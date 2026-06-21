@@ -614,6 +614,7 @@ Minimum request shape:
 * `envOverrides`
 * `timeoutSeconds`
 * `declaredOutputs`
+* `collectGlobs`
 * optional report publication fields
 
 ### 11.3 `container.start_helper` and `container.stop_helper`
@@ -668,6 +669,7 @@ Minimum request shape:
 * `resources`
 * `timeoutSeconds`
 * `declaredOutputs`
+* `collectGlobs`
 * `report` / report publication fields
 
 Desired-state boundaries for `container.run_container`:
@@ -707,6 +709,7 @@ Minimum request shape:
 * `timeoutSeconds`
 * `envOverrides`
 * `declaredOutputs`
+* `collectGlobs`
 * `report` / report publication fields
 
 Validation rules:
@@ -840,6 +843,7 @@ The worker plane:
 * captures stdout, stderr, and diagnostics
 * writes runtime evidence under the workflow artifacts directory
 * collects declared outputs
+* generically collects repo-written workspace files matching `collectGlobs` (see **14.6**)
 * applies timeout and cancellation policies
 * emits audit metadata
 
@@ -1013,6 +1017,7 @@ Artifact classes align with the artifact contract:
 * `runtime.stdout`
 * `runtime.stderr`
 * `runtime.diagnostics`
+* `collected:<relative-path>` — one entry per generically collected workspace file (see **14.6 Generic workspace artifact collection**)
 
 The controlling rule is durable, retrievable outputs first.
 
@@ -1025,6 +1030,40 @@ However:
 * workload artifacts are not session continuity artifacts by default
 * the workload container is not presented as the managed session
 * session-plane artifacts remain the responsibility of the session plane
+
+### 14.6 Generic workspace artifact collection
+
+Beyond explicitly enumerated `declaredOutputs`, a managed Docker run may collect
+whatever the repo's scripts write into the workspace — logs, gate files, reports —
+**generically**, without MoonMind knowing the project type.
+
+Collection is path/glob based and project-agnostic:
+
+* The request carries optional `collectGlobs`: relative glob patterns (for
+  example `.artifacts/**/*.json`, `logs/*.log`).
+* Patterns are resolved against the run **repo directory** — the repo checkout
+  mounted in the workspace, which is the profile-backed container workdir where
+  repo scripts execute and write relative paths.
+* Each matched regular file is published as a run artifact under the
+  `collected:<relative-posix-path>` artifact class, alongside (never replacing)
+  runtime and declared outputs.
+* The collected refs and a per-pattern collection summary (matched files,
+  skipped candidates, truncation) are recorded in `runtime.diagnostics`.
+
+Rules:
+
+* MoonMind MUST NOT hardcode any project- or engine-specific collection path.
+  The glob patterns are caller/profile/task supplied; the engine never appears
+  in MoonMind code. For example, an Unreal Tactics run may write
+  `.artifacts/<engine>/<timestamp>/` and `.artifacts/<engine>/latest/gate.json`,
+  but those paths are expressed only as caller-supplied globs, not as MoonMind
+  constants.
+* `collectGlobs` patterns MUST stay inside the workspace: absolute patterns and
+  parent traversal (`..`) are rejected before launch, and any matched file that
+  resolves outside the repo workspace (for example through a symlink) is skipped
+  rather than published.
+* Collection is bounded; when the per-run match limit is reached the remaining
+  matches are reported as truncated in diagnostics rather than dropped silently.
 
 ---
 

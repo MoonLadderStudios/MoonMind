@@ -26,6 +26,12 @@ _MAX_CAPTURED_STREAM_CHARS = 64_000
 _MAX_CAPTURED_STREAM_BYTES = 64_000
 _DEFAULT_TIMEOUT_SECONDS = 300
 _DEFAULT_KILL_GRACE_SECONDS = 30
+# Upper bound on generically collected workspace files per run. Collection is
+# glob-driven and project-agnostic; this guard keeps a pathological glob (for
+# example ``**/*``) from publishing an unbounded number of refs. When the bound
+# is hit the remaining matches are reported as truncated rather than dropped
+# silently.
+_MAX_COLLECTED_ARTIFACTS = 512
 _UNRESTRICTED_RUNNER_PROFILE = RunnerProfile.model_validate(
     {
         "id": "unrestricted",
@@ -391,6 +397,81 @@ def _declared_output_refs(
             missing[artifact_class] = relative_path
     return refs, missing
 
+def _collect_workspace_artifacts(
+    request: ValidatedWorkloadRequest,
+) -> tuple[dict[str, str], list[dict[str, object]]]:
+    """Collect repo-written workspace files matching caller-supplied globs.
+
+    This is the generic, path/glob-based collection of whatever a repo's
+    scripts write into the workspace after a managed Docker run (logs, gate
+    files, reports). It is intentionally project- and engine-agnostic: the only
+    inputs are the caller-supplied ``collectGlobs`` patterns, resolved relative
+    to the run repo directory (the container workdir where repo scripts run).
+    MoonMind hardcodes no project- or engine-specific paths.
+
+    Returns ``(refs, diagnostics)`` where ``refs`` maps a deterministic
+    ``collected:<relative-posix-path>`` artifact class to the absolute file
+    path, and ``diagnostics`` records, per requested pattern, what matched or
+    why a candidate was skipped.
+    """
+
+    collect_globs = tuple(getattr(request.request, "collect_globs", ()) or ())
+    if not collect_globs:
+        return {}, []
+
+    base = Path(request.request.repo_dir).resolve()
+    refs: dict[str, str] = {}
+    diagnostics: list[dict[str, object]] = []
+    seen: set[str] = set()
+
+    for pattern in collect_globs:
+        matched: list[str] = []
+        skipped: list[str] = []
+        truncated = False
+        try:
+            candidates = sorted(base.glob(pattern))
+        except (NotImplementedError, OSError, ValueError) as exc:
+            diagnostics.append(
+                {"pattern": pattern, "status": "error", "error": str(exc)}
+            )
+            continue
+        for candidate in candidates:
+            if len(refs) >= _MAX_COLLECTED_ARTIFACTS:
+                truncated = True
+                break
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if not resolved.is_file():
+                continue
+            try:
+                relative = resolved.relative_to(base)
+            except ValueError:
+                # A symlink (or matched entry) resolving outside the repo
+                # workspace must never be published as a collected artifact.
+                skipped.append(str(candidate))
+                continue
+            key = relative.as_posix()
+            if key in seen:
+                continue
+            seen.add(key)
+            refs[f"collected:{key}"] = str(resolved)
+            matched.append(key)
+        entry: dict[str, object] = {
+            "pattern": pattern,
+            "status": "matched" if matched else "empty",
+            "matched": matched,
+        }
+        if skipped:
+            entry["skippedOutsideWorkspace"] = skipped
+        if truncated:
+            entry["status"] = "truncated"
+            entry["truncated"] = True
+        diagnostics.append(entry)
+
+    return refs, diagnostics
+
 def _publish_workload_artifacts(
     request: ValidatedWorkloadRequest,
     *,
@@ -398,6 +479,7 @@ def _publish_workload_artifacts(
     stderr: str,
     diagnostics: Mapping[str, object],
     declared_output_refs: Mapping[str, str],
+    collected_output_refs: Mapping[str, str] | None = None,
 ) -> tuple[str | None, str | None, str | None, dict[str, str], dict[str, object]]:
     artifact_root = Path(request.request.artifacts_dir)
     workload_root = artifact_root / "workload" / request.container_name
@@ -446,6 +528,8 @@ def _publish_workload_artifacts(
     if diagnostics_ref is not None:
         output_refs["runtime.diagnostics"] = diagnostics_ref
     output_refs.update(declared_output_refs)
+    if collected_output_refs:
+        output_refs.update(collected_output_refs)
     publication: dict[str, object]
     if errors:
         publication = {
@@ -867,6 +951,7 @@ class DockerWorkloadLauncher:
             "command": list(request.request.command),
             "envOverrideKeys": sorted(request.request.env_overrides),
             "declaredOutputs": dict(request.request.declared_outputs),
+            "collectGlobs": list(getattr(request.request, "collect_globs", ()) or ()),
             "resourceOverrides": request.request.resources.model_dump(
                 mode="json",
                 by_alias=True,
@@ -875,6 +960,7 @@ class DockerWorkloadLauncher:
             "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": _DEFAULT_KILL_GRACE_SECONDS}),
         }
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
+        collected_refs, collected_outputs = _collect_workspace_artifacts(request)
         report_publication = _report_publication_metadata(
             request,
             declared_output_refs=declared_refs,
@@ -882,6 +968,8 @@ class DockerWorkloadLauncher:
         )
         diagnostics["declaredOutputRefs"] = dict(declared_refs)
         diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
+        diagnostics["collectedOutputRefs"] = dict(collected_refs)
+        diagnostics["collectedOutputs"] = collected_outputs
         diagnostics["reportPublication"] = report_publication
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
@@ -890,6 +978,7 @@ class DockerWorkloadLauncher:
                 stderr=stderr,
                 diagnostics=diagnostics,
                 declared_output_refs=declared_refs,
+                collected_output_refs=collected_refs,
             )
         )
         workload_metadata["artifactPublication"] = artifact_publication
@@ -1091,6 +1180,7 @@ class DockerWorkloadLauncher:
             **helper_metadata,
             "command": list(request.request.command),
             "envOverrideKeys": sorted(request.request.env_overrides),
+            "collectGlobs": list(getattr(request.request, "collect_globs", ()) or ()),
             "resourceOverrides": request.request.resources.model_dump(
                 mode="json",
                 by_alias=True,
@@ -1099,6 +1189,7 @@ class DockerWorkloadLauncher:
             "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": 30}),
         }
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
+        collected_refs, collected_outputs = _collect_workspace_artifacts(request)
         report_publication = _report_publication_metadata(
             request,
             declared_output_refs=declared_refs,
@@ -1106,6 +1197,8 @@ class DockerWorkloadLauncher:
         )
         diagnostics["declaredOutputRefs"] = dict(declared_refs)
         diagnostics["missingDeclaredOutputs"] = dict(missing_declared_outputs)
+        diagnostics["collectedOutputRefs"] = dict(collected_refs)
+        diagnostics["collectedOutputs"] = collected_outputs
         diagnostics["reportPublication"] = report_publication
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
@@ -1114,6 +1207,7 @@ class DockerWorkloadLauncher:
                 stderr=stderr,
                 diagnostics=diagnostics,
                 declared_output_refs=declared_refs,
+                collected_output_refs=collected_refs,
             )
         )
         helper_metadata["artifactPublication"] = artifact_publication
