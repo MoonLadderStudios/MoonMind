@@ -21,10 +21,12 @@ _GEMINI_RATE_LIMIT_MARKERS: tuple[str, ...] = (
 )
 # Markers for Anthropic Claude Code CLI usage-limit messages.  The shipped CLI
 # prints variations of "You've hit your limit · resets <time>" (account
-# quota) and "You've hit your usage limit ..." (workspace/admin quota); both
-# exit with a non-zero code and otherwise look like a generic execution error.
+# quota), "You've hit your session limit ..." (subscription/session quota), and
+# "You've hit your usage limit ..." (workspace/admin quota); all exit with a
+# non-zero code and otherwise look like a generic execution error.
 _CLAUDE_CODE_RATE_LIMIT_MARKERS: tuple[str, ...] = (
     "hit your limit",
+    "hit your session limit",
     "usage limit",
     "status 429",
     "status: 429",
