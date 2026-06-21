@@ -28,7 +28,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     LLM_TASK_QUEUE,
     SANDBOX_TASK_QUEUE,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
 
 PLAN_GENERATE_CALLS: list[Dict[str, Any]] = []
 ARTIFACT_READ_CALLS: list[Dict[str, Any]] = []
@@ -264,7 +264,7 @@ async def mock_proposal_submit(args: Dict[str, Any]) -> Dict[str, Any]:
         "errors": [],
     }
 
-class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
+class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         PLAN_GENERATE_CALLS.clear()
         ARTIFACT_READ_CALLS.clear()
@@ -306,7 +306,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue="test-task-queue",
-                    workflows=[MoonMindRunWorkflow],
+                    workflows=[MoonMindUserWorkflow],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
             ):
@@ -321,7 +321,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
                 # Start workflow
                 handle = await env.client.start_workflow(
-                    MoonMindRunWorkflow.run,
+                    MoonMindUserWorkflow.run,
                     request,
                     id="test-workflow-id",
                     task_queue="test-task-queue",
@@ -362,12 +362,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue="test-task-queue",
-                    workflows=[MoonMindRunWorkflow],
+                    workflows=[MoonMindUserWorkflow],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
             ):
                 handle = await env.client.start_workflow(
-                    MoonMindRunWorkflow.run,
+                    MoonMindUserWorkflow.run,
                     {
                         "workflowType": "MoonMind.UserWorkflow",
                         "title": "Queryable run",
@@ -414,12 +414,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue="test-task-queue",
-                    workflows=[MoonMindRunWorkflow],
+                    workflows=[MoonMindUserWorkflow],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
             ):
                 result = await env.client.execute_workflow(
-                    MoonMindRunWorkflow.run,
+                    MoonMindUserWorkflow.run,
                     {
                         "workflowType": "MoonMind.UserWorkflow",
                         "ownerId": "malicious-owner",
@@ -440,7 +440,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
             async with Worker(
                 env.client,
                 task_queue="test-task-queue",
-                workflows=[MoonMindRunWorkflow],
+                workflows=[MoonMindUserWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
                 request = {
@@ -450,7 +450,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
-                        MoonMindRunWorkflow.run,
+                        MoonMindUserWorkflow.run,
                         request,
                         id="test-workflow-id-error",
                         task_queue="test-task-queue",
@@ -468,12 +468,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
             async with Worker(
                 env.client,
                 task_queue="test-task-queue",
-                workflows=[MoonMindRunWorkflow],
+                workflows=[MoonMindUserWorkflow],
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
-                        MoonMindRunWorkflow.run,
+                        MoonMindUserWorkflow.run,
                         {"workflowType": "MoonMind.UserWorkflow"},
                         id="test-workflow-id-missing-owner",
                         task_queue="test-task-queue",
@@ -510,13 +510,13 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue="test-task-queue",
-                    workflows=[MoonMindRunWorkflow],
+                    workflows=[MoonMindUserWorkflow],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
             ):
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
-                        MoonMindRunWorkflow.run,
+                        MoonMindUserWorkflow.run,
                         {"workflowType": "MoonMind.UserWorkflow"},
                         id="test-workflow-id-failed-skill-status",
                         task_queue="test-task-queue",
@@ -561,13 +561,13 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue="test-task-queue",
-                    workflows=[MoonMindRunWorkflow],
+                    workflows=[MoonMindUserWorkflow],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
             ):
                 with self.assertRaises(client.WorkflowFailureError) as exc_info:
                     await env.client.execute_workflow(
-                        MoonMindRunWorkflow.run,
+                        MoonMindUserWorkflow.run,
                         {
                             "workflowType": "MoonMind.UserWorkflow",
                             "initialParameters": {
@@ -631,12 +631,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     Worker(
                         env.client,
                         task_queue="test-task-queue",
-                        workflows=[MoonMindRunWorkflow],
+                        workflows=[MoonMindUserWorkflow],
                         workflow_runner=UnsandboxedWorkflowRunner(),
                     ),
                 ):
                     result = await env.client.execute_workflow(
-                        MoonMindRunWorkflow.run,
+                        MoonMindUserWorkflow.run,
                         {
                             "workflowType": "MoonMind.UserWorkflow",
                             "initialParameters": {
@@ -718,12 +718,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                     Worker(
                         env.client,
                         task_queue="test-task-queue",
-                        workflows=[MoonMindRunWorkflow],
+                        workflows=[MoonMindUserWorkflow],
                         workflow_runner=UnsandboxedWorkflowRunner(),
                     ),
                 ):
                     result = await env.client.execute_workflow(
-                        MoonMindRunWorkflow.run,
+                        MoonMindUserWorkflow.run,
                         {
                             "workflowType": "MoonMind.UserWorkflow",
                             "initialParameters": {
@@ -772,12 +772,12 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(
                     env.client,
                     task_queue="test-task-queue",
-                    workflows=[MoonMindRunWorkflow],
+                    workflows=[MoonMindUserWorkflow],
                     workflow_runner=UnsandboxedWorkflowRunner(),
                 ),
             ):
                 result = await env.client.execute_workflow(
-                    MoonMindRunWorkflow.run,
+                    MoonMindUserWorkflow.run,
                     {
                         "workflowType": "MoonMind.UserWorkflow",
                         "initialParameters": {
@@ -812,7 +812,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 Worker(env.client, task_queue=ARTIFACTS_TASK_QUEUE, activities=[mock_artifact_read]),
                 Worker(env.client, task_queue=SANDBOX_TASK_QUEUE, activities=[mock_sandbox_command, mock_skill_execute]),
                 Worker(env.client, task_queue=INTEGRATIONS_TASK_QUEUE, activities=[mock_integration_start, mock_integration_status_wait]),
-                Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindRunWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
+                Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindUserWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
             ):
                 request = {
                     "workflowType": "MoonMind.UserWorkflow",
@@ -825,7 +825,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
                 # Start workflow
                 handle = await env.client.start_workflow(
-                    MoonMindRunWorkflow.run,
+                    MoonMindUserWorkflow.run,
                     request,
                     id="test-workflow-signal",
                     task_queue="test-task-queue",
@@ -838,7 +838,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                 
                 # Signal the workflow to complete the external stage
                 await handle.signal(
-                    MoonMindRunWorkflow.external_event, 
+                    MoonMindUserWorkflow.external_event, 
                     {
                         "correlation_id": "corr-123",
                         "normalized_status": "completed"
@@ -868,7 +868,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
                         mock_integration_merge_pr,
                     ],
                 ),
-                Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindRunWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
+                Worker(env.client, task_queue="test-task-queue", workflows=[MoonMindUserWorkflow], workflow_runner=UnsandboxedWorkflowRunner()),
             ):
                 request = {
                     "workflowType": "MoonMind.UserWorkflow",
@@ -885,7 +885,7 @@ class TestMoonMindRunWorkflow(unittest.IsolatedAsyncioTestCase):
 
                 # Start workflow
                 handle = await env.client.start_workflow(
-                    MoonMindRunWorkflow.run,
+                    MoonMindUserWorkflow.run,
                     request,
                     id="test-workflow-merge",
                     task_queue="test-task-queue",
