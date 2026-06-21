@@ -145,6 +145,89 @@ class WorkflowProposalService:
         scrubbed = self._redactor.scrub(serialized)
         return json.loads(scrubbed)
 
+    def _proposal_observability_event(
+        self,
+        event_type: str,
+        *,
+        proposal: WorkflowProposal | None = None,
+        **fields: Any,
+    ) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "eventType": event_type,
+            "observedAt": datetime.now(UTC).isoformat(),
+        }
+        if proposal is not None:
+            event.update(
+                {
+                    "proposalId": str(getattr(proposal, "id", "")),
+                    "provider": self._clean_str(getattr(proposal, "provider", ""))
+                    or None,
+                    "repository": self._clean_str(
+                        getattr(proposal, "repository", "")
+                    )
+                    or None,
+                    "externalKey": (
+                        self._clean_str(getattr(proposal, "external_key", "")) or None
+                    ),
+                    "dedupHash": (
+                        self._clean_str(getattr(proposal, "dedup_hash", "")) or None
+                    ),
+                }
+            )
+        event.update(fields)
+        return self._scrub_json(
+            {key: value for key, value in event.items() if value is not None}
+        )
+
+    def _append_proposal_event(
+        self,
+        proposal: WorkflowProposal,
+        event_type: str,
+        **fields: Any,
+    ) -> None:
+        provider_metadata = (
+            dict(getattr(proposal, "provider_metadata", {}))
+            if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
+            else {}
+        )
+        existing_events = provider_metadata.get("observabilityEvents")
+        events: list[dict[str, Any]] = (
+            list(existing_events) if isinstance(existing_events, list) else []
+        )
+        events.append(
+            self._proposal_observability_event(
+                event_type,
+                proposal=proposal,
+                **fields,
+            )
+        )
+        provider_metadata["observabilityEvents"] = events[-100:]
+        proposal.provider_metadata = provider_metadata
+
+    def _require_recovery_stored_snapshot(self, proposal: WorkflowProposal) -> None:
+        request = getattr(proposal, "workflow_create_request", None)
+        if not isinstance(request, Mapping) or not request:
+            self._append_proposal_event(
+                proposal,
+                "proposal.recovery_rejected",
+                action="redeliver",
+                reason="missing_stored_snapshot",
+            )
+            raise WorkflowProposalValidationError(
+                "recovery requires the stored proposal snapshot"
+            )
+        payload = request.get("payload")
+        if not isinstance(payload, Mapping) or not payload:
+            self._append_proposal_event(
+                proposal,
+                "proposal.recovery_rejected",
+                action="redeliver",
+                reason="missing_stored_payload",
+            )
+            raise WorkflowProposalValidationError(
+                "recovery requires the stored proposal payload"
+            )
+
     def _merge_json_objects(
         self, existing: Mapping[str, Any], incoming: Mapping[str, Any]
     ) -> dict[str, Any]:
@@ -695,6 +778,13 @@ class WorkflowProposalService:
                 "error": self._scrub_json(exc.to_output(record_id=str(proposal.id))),
             }
             proposal.provider_metadata = existing_metadata
+            self._append_proposal_event(
+                proposal,
+                "proposal.delivery_failed",
+                retryable=exc.retryable,
+                reason=str(exc),
+                nextAction=exc.next_action,
+            )
             await self._repository.commit()
             return
         except Exception as exc:
@@ -723,6 +813,13 @@ class WorkflowProposalService:
                 }
             )
             proposal.provider_metadata = existing_metadata
+            self._append_proposal_event(
+                proposal,
+                "proposal.delivery_failed",
+                retryable=True,
+                reason="provider delivery failed",
+                errorType=type(exc).__name__,
+            )
             await self._repository.commit()
             return
         proposal.external_key = result.external_key
@@ -738,6 +835,15 @@ class WorkflowProposalService:
         }
         existing_metadata["delivery"] = self._scrub_json(delivery_metadata)
         proposal.provider_metadata = existing_metadata
+        self._append_proposal_event(
+            proposal,
+            (
+                "proposal.github_issue_created"
+                if result.created
+                else "proposal.github_issue_updated"
+            ),
+            duplicateSource=result.duplicate_source,
+        )
         await self._repository.commit()
 
     async def redeliver_proposal(self, *, proposal_id: UUID) -> WorkflowProposal:
@@ -750,6 +856,12 @@ class WorkflowProposalService:
         proposal = await self._repository.get_proposal(proposal_id)
         if proposal is None:
             raise WorkflowProposalNotFoundError(str(proposal_id))
+        self._require_recovery_stored_snapshot(proposal)
+        self._append_proposal_event(
+            proposal,
+            "proposal.recovery_replay_requested",
+            action="redeliver",
+        )
         await self._deliver_proposal_if_configured(proposal)
         await self._repository.refresh(proposal)
         return proposal
@@ -788,6 +900,21 @@ class WorkflowProposalService:
                         **dict(metadata),
                     }
                 )
+                sync_node = provider_metadata["sync"]
+                if (
+                    isinstance(sync_node, Mapping)
+                    and sync_node.get("orphanLinked")
+                ):
+                    external_key = self._scrub_text(
+                        self._clean_str(sync_node.get("externalKey"))
+                    )
+                    external_url = self._scrub_text(
+                        self._clean_str(sync_node.get("externalUrl"))
+                    )
+                    if external_key:
+                        proposal.external_key = external_key
+                    if external_url:
+                        proposal.external_url = external_url
         else:
             provider_metadata["sync"] = self._scrub_json(
                 {
@@ -801,6 +928,21 @@ class WorkflowProposalService:
             )
         proposal.last_synced_at = now
         proposal.provider_metadata = provider_metadata
+        self._append_proposal_event(
+            proposal,
+            "proposal.recovery_resynced",
+            action="sync",
+            status=provider_metadata.get("sync", {}).get("status")
+            if isinstance(provider_metadata.get("sync"), Mapping)
+            else None,
+        )
+        sync_node = provider_metadata.get("sync")
+        if isinstance(sync_node, Mapping) and sync_node.get("orphanLinked"):
+            self._append_proposal_event(
+                proposal,
+                "proposal.recovery_orphan_linked",
+                externalKey=sync_node.get("externalKey"),
+            )
         await self._repository.commit()
         await self._repository.refresh(proposal)
         return proposal
@@ -1228,6 +1370,27 @@ class WorkflowProposalService:
         )
         provider_metadata["providerDecisions"] = decisions
         proposal.provider_metadata = provider_metadata
+        self._append_proposal_event(
+            proposal,
+            "proposal.decision_observed",
+            providerEventId=event.provider_event_id,
+            actor=event.actor,
+            decision=result.decision,
+            accepted=result.accepted,
+            reason=result.reason,
+        )
+        self._append_proposal_event(
+            proposal,
+            (
+                "proposal.decision_accepted"
+                if result.accepted
+                else "proposal.decision_rejected"
+            ),
+            providerEventId=event.provider_event_id,
+            actor=event.actor,
+            decision=result.decision,
+            reason=result.reason,
+        )
         await self._sync_provider_decision_state_if_configured(
             proposal=proposal,
             result=result,
@@ -1331,6 +1494,12 @@ class WorkflowProposalService:
                 break
         provider_metadata["providerDecisions"] = decisions
         proposal.provider_metadata = self._scrub_json(provider_metadata)
+        self._append_proposal_event(
+            proposal,
+            "proposal.promotion_completed",
+            providerEventId=provider_event_id,
+            promotedExecutionId=promoted_execution_id,
+        )
         if result is not None:
             await self._sync_provider_decision_state_if_configured(
                 proposal=proposal,
@@ -1365,9 +1534,22 @@ class WorkflowProposalService:
             WorkflowProposalStatus.OPEN,
             WorkflowProposalStatus.ACCEPTED,
         }:
+            self._append_proposal_event(
+                proposal,
+                "proposal.promotion_failed",
+                reason="invalid_status",
+                status=getattr(proposal.status, "value", str(proposal.status)),
+            )
             raise WorkflowProposalStatusError(
                 f"proposal status {proposal.status.value} cannot be promoted"
             )
+        self._append_proposal_event(
+            proposal,
+            "proposal.promotion_started",
+            priorityOverride=priority_override,
+            maxAttemptsOverride=max_attempts_override,
+            runtimeModeOverride=runtime_mode_override,
+        )
 
         request = dict(proposal.workflow_create_request or {})
         payload = dict(request.get("payload") or {})
@@ -1375,6 +1557,11 @@ class WorkflowProposalService:
             parsed = CanonicalWorkflowExecutionPayload.model_validate(payload)
             payload = parsed.model_dump(by_alias=True, exclude_none=True)
         except ValidationError as exc:
+            self._append_proposal_event(
+                proposal,
+                "proposal.promotion_failed",
+                reason="invalid_stored_payload",
+            )
             raise WorkflowProposalValidationError(
                 f"stored workflow payload is invalid: {exc}"
             ) from exc
@@ -1388,6 +1575,12 @@ class WorkflowProposalService:
                 or normalized_runtime_mode not in SUPPORTED_EXECUTION_RUNTIMES
             ):
                 supported = ", ".join(sorted(SUPPORTED_EXECUTION_RUNTIMES))
+                self._append_proposal_event(
+                    proposal,
+                    "proposal.promotion_failed",
+                    reason="invalid_runtime_override",
+                    runtimeModeOverride=runtime_mode_override,
+                )
                 raise WorkflowProposalValidationError(
                     f"runtimeMode must be one of: {supported}"
                 )
@@ -1406,6 +1599,12 @@ class WorkflowProposalService:
                 parsed = CanonicalWorkflowExecutionPayload.model_validate(payload)
                 payload = parsed.model_dump(by_alias=True, exclude_none=True)
             except ValidationError as exc:
+                self._append_proposal_event(
+                    proposal,
+                    "proposal.promotion_failed",
+                    reason="invalid_runtime_override",
+                    runtimeModeOverride=runtime_mode_override,
+                )
                 raise WorkflowProposalValidationError(
                     f"runtimeMode override is invalid: {exc}"
                 ) from exc
@@ -1419,6 +1618,11 @@ class WorkflowProposalService:
         try:
             priority = int(priority)
         except Exception as exc:  # pragma: no cover
+            self._append_proposal_event(
+                proposal,
+                "proposal.promotion_failed",
+                reason="invalid_priority_override",
+            )
             raise WorkflowProposalValidationError("priority override is invalid") from exc
 
         max_attempts = request.get("maxAttempts", 3)
@@ -1427,10 +1631,20 @@ class WorkflowProposalService:
         try:
             max_attempts = int(max_attempts)
         except Exception as exc:  # pragma: no cover
+            self._append_proposal_event(
+                proposal,
+                "proposal.promotion_failed",
+                reason="invalid_max_attempts_override",
+            )
             raise WorkflowProposalValidationError(
                 "maxAttempts override is invalid"
             ) from exc
         if max_attempts < 1:
+            self._append_proposal_event(
+                proposal,
+                "proposal.promotion_failed",
+                reason="invalid_max_attempts_override",
+            )
             raise WorkflowProposalValidationError("maxAttempts must be >= 1")
 
         proposal.status = WorkflowProposalStatus.PROMOTED
@@ -1447,6 +1661,13 @@ class WorkflowProposalService:
             }
         )
         proposal.decision_note = self._scrub_text(self._clean_str(note)) or None
+        self._append_proposal_event(
+            proposal,
+            "proposal.promotion_completed",
+            priority=priority,
+            maxAttempts=max_attempts,
+            runtimeMode=runtime_mode_override,
+        )
         await self._repository.commit()
         await self._repository.refresh(proposal)
         logger.info(

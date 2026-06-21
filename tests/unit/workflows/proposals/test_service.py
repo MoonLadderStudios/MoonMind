@@ -1250,6 +1250,10 @@ async def test_create_proposal_invokes_delivery_and_persists_external_issue() ->
     assert proposal.delivered_at == datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     assert proposal.last_synced_at == datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     assert proposal.provider_metadata["delivery"]["marker"] == "moonmind-proposal"
+    assert {
+        event["eventType"]
+        for event in proposal.provider_metadata["observabilityEvents"]
+    } == {"proposal.github_issue_created"}
     assert delivery.requests[0].workflow_snapshot_ref == "artifact://snapshot"
     assert repo.commit.await_count >= 2
 
@@ -1291,8 +1295,56 @@ async def test_redeliver_proposal_reuses_trusted_delivery_adapter() -> None:
     assert updated is record
     assert delivery.requests[0].record_id == str(record.id)
     assert record.provider_metadata["delivery"]["status"] == "delivered"
+    event_types = [
+        event["eventType"]
+        for event in record.provider_metadata["observabilityEvents"]
+    ]
+    assert "proposal.recovery_replay_requested" in event_types
+    assert "proposal.github_issue_created" in event_types
     repo.get_proposal_for_update.assert_not_called()
     repo.refresh.assert_awaited_with(record)
+
+
+@pytest.mark.asyncio
+async def test_redeliver_proposal_rejects_missing_stored_snapshot_before_adapter() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        provider="github",
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        repository="Moon/Repo",
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        origin_metadata={},
+        provider_metadata={"delivery": {"status": "failed"}},
+        resolved_policy={},
+        workflow_snapshot_ref=None,
+        workflow_create_request={},
+    )
+    repo.get_proposal.return_value = record
+    delivery = _FakeDeliveryService()
+    service = WorkflowProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=delivery,
+    )
+
+    with pytest.raises(WorkflowProposalValidationError):
+        await service.redeliver_proposal(proposal_id=record.id)
+
+    assert delivery.requests == []
+    assert record.provider_metadata["observabilityEvents"][0]["eventType"] == (
+        "proposal.recovery_rejected"
+    )
+    assert record.provider_metadata["observabilityEvents"][0]["reason"] == (
+        "missing_stored_snapshot"
+    )
 
 
 @pytest.mark.asyncio
@@ -1330,8 +1382,69 @@ async def test_sync_proposal_delivery_records_recovery_audit_without_adapter_syn
 
     assert updated is record
     assert record.provider_metadata["sync"]["status"] == "inspected"
+    assert record.provider_metadata["observabilityEvents"][0]["eventType"] == (
+        "proposal.recovery_resynced"
+    )
     assert record.last_synced_at is not None
     repo.get_proposal_for_update.assert_not_called()
+    repo.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_proposal_delivery_records_orphan_link_from_trusted_adapter() -> None:
+    class SyncingDelivery:
+        async def sync(self, request):
+            return {
+                "orphanLinked": True,
+                "externalKey": "42",
+                "externalUrl": "https://github.example/Moon/Repo/issues/42",
+                "dedupHash": "hash",
+            }
+
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        provider="github",
+        external_key=None,
+        external_url=None,
+        repository="Moon/Repo",
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        origin_metadata={},
+        provider_metadata={"delivery": {"status": "delivered"}},
+        resolved_policy={},
+        workflow_snapshot_ref="artifact://snapshot",
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
+        delivered_at=None,
+        last_synced_at=None,
+    )
+    repo.get_proposal.return_value = record
+    service = WorkflowProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=SyncingDelivery(),
+    )
+
+    updated = await service.sync_proposal_delivery(proposal_id=record.id)
+
+    assert updated is record
+    assert record.external_key == "42"
+    assert record.external_url == "https://github.example/Moon/Repo/issues/42"
+    assert record.provider_metadata["sync"]["status"] == "synced"
+    assert record.provider_metadata["sync"]["orphanLinked"] is True
+    assert [
+        event["eventType"]
+        for event in record.provider_metadata["observabilityEvents"]
+    ] == [
+        "proposal.recovery_resynced",
+        "proposal.recovery_orphan_linked",
+    ]
+    assert record.provider_metadata["observabilityEvents"][1]["externalKey"] == "42"
     repo.commit.assert_awaited()
 
 
@@ -1562,6 +1675,14 @@ async def test_record_provider_decision_event_persists_idempotent_metadata() -> 
     assert decision_row["deferUntil"] is None
     assert decision_row["resultingExternalState"] == "reprioritized"
     assert decision_row["observedAt"]
+    event_types = [
+        event["eventType"]
+        for event in proposal.provider_metadata["observabilityEvents"]
+    ]
+    assert event_types == [
+        "proposal.decision_observed",
+        "proposal.decision_accepted",
+    ]
     repo.commit.assert_awaited_once()
     repo.refresh.assert_awaited_once_with(proposal)
 
@@ -1616,6 +1737,10 @@ async def test_record_provider_decision_event_rejects_unverified_actor_before_st
     assert persisted["accepted"] is False
     assert persisted["reason"] == "provider_auth_failed"
     assert "ghp_secret" not in str(persisted)
+    assert [
+        event["eventType"]
+        for event in proposal.provider_metadata["observabilityEvents"]
+    ] == ["proposal.decision_observed", "proposal.decision_rejected"]
 
 
 @pytest.mark.asyncio
@@ -1705,6 +1830,7 @@ async def test_promote_proposal_allows_provider_accepted_snapshot_with_runtime_c
                 },
             }
         },
+        provider_metadata={},
     )
     repo.get_proposal_for_update.return_value = proposal
     service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
@@ -1721,6 +1847,10 @@ async def test_promote_proposal_allows_provider_accepted_snapshot_with_runtime_c
     assert task["runtime"]["mode"] == "codex"
     assert task["authoredPresets"] == [{"presetId": "runtime-quality-followup"}]
     assert task["steps"][0]["source"]["kind"] == "preset-derived"
+    assert [
+        event["eventType"]
+        for event in updated.provider_metadata["observabilityEvents"]
+    ] == ["proposal.promotion_started", "proposal.promotion_completed"]
 
 
 @pytest.mark.asyncio
@@ -1750,6 +1880,9 @@ async def test_attach_provider_decision_execution_persists_promoted_run_id() -> 
     row = updated.provider_metadata["providerDecisions"][0]
     assert row["promotedExecutionId"] == "wf-promoted-1"
     assert row["resultingExternalState"] == "promoted"
+    assert updated.provider_metadata["observabilityEvents"][0]["eventType"] == (
+        "proposal.promotion_completed"
+    )
 
 
 @pytest.mark.asyncio
