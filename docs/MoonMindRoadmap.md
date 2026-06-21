@@ -203,10 +203,11 @@ All six items shipped: run digests, fix patterns/error signatures, Mem0 long-ter
 - JSON helper routes.
 - Webhook/callback API for external agents.
 - OpenAI-compatible Chat Completions API.
+- OpenAI-compatible Responses API (`/v1/responses`, limited subset) — OpenAI models route through `client.responses.create`; Google and Anthropic models are served through a normalized Chat Completions bridge, with RAG context injection and outbound secret scanning. Covered by unit tests.
 - Executable-tool discovery includes schema-driven curated tools such as `security.pentest.run` when deployment policy allows them.
 
 ### Remaining work
-- [ ] **8.4** OpenAI Responses API compatibility — only Chat Completions format is currently supported.
+- [ ] **8.4** Responses API feature parity — the `/v1/responses` route ships a single-turn subset; streaming, tool calls, conversation state (`conversation` / `previous_response_id`), and background mode are explicitly rejected and remain unimplemented.
 
 ---
 
