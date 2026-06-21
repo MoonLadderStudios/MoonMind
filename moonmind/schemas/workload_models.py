@@ -149,6 +149,27 @@ def _validate_relative_artifact_path(value: str, *, field_name: str) -> str:
         raise ValueError(f"{field_name} must stay under artifactsDir")
     return normalized
 
+def _validate_collect_glob(value: str) -> str:
+    """Validate a generic, project-agnostic workspace collection glob.
+
+    Patterns are caller-supplied relative globs (e.g. ``.artifacts/**/*.json``)
+    resolved against the run repo workspace after a managed Docker run. The
+    pattern must stay inside the workspace: absolute patterns and parent
+    traversal are rejected so collection cannot escape MoonMind-owned paths.
+    No project- or engine-specific path is implied by this contract.
+    """
+
+    normalized = require_non_blank(value, field_name="collectGlobs[]").replace("\\", "/")
+    if normalized == "." or normalized.startswith("/"):
+        raise ValueError(
+            "collectGlobs patterns must be relative workspace globs, not absolute paths"
+        )
+    if any(segment == ".." for segment in normalized.split("/")):
+        raise ValueError(
+            "collectGlobs patterns must not traverse outside the workspace"
+        )
+    return normalized
+
 def _validate_declared_output_key(value: str) -> str:
     normalized = require_non_blank(value, field_name="declaredOutputs key")
     if normalized.startswith("session."):
@@ -491,6 +512,10 @@ class WorkloadRequest(BaseModel):
         default_factory=dict,
         alias="declaredOutputs",
     )
+    collect_globs: tuple[str, ...] = Field(
+        default_factory=tuple,
+        alias="collectGlobs",
+    )
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     workload_access: WorkloadAccessKind = Field("profile", alias="workloadAccess")
@@ -515,6 +540,11 @@ class WorkloadRequest(BaseModel):
             )
             for key, value in self.declared_outputs.items()
         }
+        self.collect_globs = tuple(
+            dict.fromkeys(
+                _validate_collect_glob(str(pattern)) for pattern in self.collect_globs
+            )
+        )
         if self.session_id is None:
             if self.session_epoch is not None or self.source_turn_id is not None:
                 raise ValueError(
@@ -568,6 +598,7 @@ class UnrestrictedContainerRequest(BaseModel):
     timeout_seconds: int | None = Field(None, alias="timeoutSeconds", ge=1)
     resources: WorkloadResourceOverrides = Field(default_factory=WorkloadResourceOverrides, alias="resources")
     declared_outputs: dict[str, str] = Field(default_factory=dict, alias="declaredOutputs")
+    collect_globs: tuple[str, ...] = Field(default_factory=tuple, alias="collectGlobs")
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     source_turn_id: NonBlankStr | None = Field(None, alias="sourceTurnId")
@@ -589,6 +620,9 @@ class UnrestrictedContainerRequest(BaseModel):
             _validate_declared_output_key(key): _validate_relative_artifact_path(str(value), field_name="declaredOutputs value")
             for key, value in self.declared_outputs.items()
         }
+        self.collect_globs = tuple(
+            dict.fromkeys(_validate_collect_glob(str(pattern)) for pattern in self.collect_globs)
+        )
         if self.workdir is not None:
             self.workdir = require_non_blank(self.workdir, field_name="workdir")
         if self.session_id is None and (self.session_epoch is not None or self.source_turn_id is not None):
@@ -630,6 +664,7 @@ class UnrestrictedDockerRequest(BaseModel):
     timeout_seconds: int | None = Field(None, alias="timeoutSeconds", ge=1)
     resources: WorkloadResourceOverrides = Field(default_factory=WorkloadResourceOverrides, alias="resources")
     declared_outputs: dict[str, str] = Field(default_factory=dict, alias="declaredOutputs")
+    collect_globs: tuple[str, ...] = Field(default_factory=tuple, alias="collectGlobs")
     session_id: NonBlankStr | None = Field(None, alias="sessionId")
     session_epoch: int | None = Field(None, alias="sessionEpoch", ge=1)
     source_turn_id: NonBlankStr | None = Field(None, alias="sourceTurnId")
@@ -648,6 +683,9 @@ class UnrestrictedDockerRequest(BaseModel):
             _validate_declared_output_key(key): _validate_relative_artifact_path(str(value), field_name="declaredOutputs value")
             for key, value in self.declared_outputs.items()
         }
+        self.collect_globs = tuple(
+            dict.fromkeys(_validate_collect_glob(str(pattern)) for pattern in self.collect_globs)
+        )
         if self.session_id is None and (self.session_epoch is not None or self.source_turn_id is not None):
             raise ValueError("sessionEpoch/sourceTurnId require sessionId association metadata")
         return self

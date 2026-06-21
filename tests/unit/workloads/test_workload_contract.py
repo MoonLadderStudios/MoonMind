@@ -626,6 +626,59 @@ def test_workload_request_rejects_runtime_reserved_declared_outputs(
     with pytest.raises(ValueError, match="runtime artifact classes"):
         _request(declaredOutputs={artifact_class: "logs.txt"})
 
+def test_workload_request_normalizes_collect_globs() -> None:
+    request = _request(
+        collectGlobs=[
+            ".artifacts/**/*.json",
+            ".artifacts\\latest\\gate.json",
+            ".artifacts/**/*.json",
+        ]
+    )
+    # Backslashes are normalized to POSIX and duplicates collapse, preserving order.
+    assert request.collect_globs == (
+        ".artifacts/**/*.json",
+        ".artifacts/latest/gate.json",
+    )
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["/abs/out/*.json", "../escape/*.json", "a/../../b/*.json", "."],
+)
+def test_workload_request_rejects_collect_globs_escaping_workspace(pattern: str) -> None:
+    with pytest.raises(ValueError, match="collectGlobs"):
+        _request(collectGlobs=[pattern])
+
+def test_unrestricted_requests_accept_collect_globs() -> None:
+    container = UnrestrictedContainerRequest.model_validate(
+        {
+            "agentRunId": "task-1",
+            "stepId": "step-test",
+            "attempt": 1,
+            "toolName": "container.run_container",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "scratchDir": "/work/agent_jobs/task-1/scratch/step-test",
+            "image": "python:3.12-slim",
+            "command": ["python", "build.py"],
+            "collectGlobs": ["dist/**/*"],
+        }
+    )
+    assert container.collect_globs == ("dist/**/*",)
+
+    docker = UnrestrictedDockerRequest.model_validate(
+        {
+            "agentRunId": "task-1",
+            "stepId": "step-test",
+            "attempt": 1,
+            "toolName": "container.run_docker",
+            "repoDir": "/work/agent_jobs/task-1/repo",
+            "artifactsDir": "/work/agent_jobs/task-1/artifacts/step-test",
+            "command": ["docker", "compose", "up"],
+            "collectGlobs": ["reports/*.xml"],
+        }
+    )
+    assert docker.collect_globs == ("reports/*.xml",)
+
 def test_registry_validates_bounded_helper_contract(tmp_path: Path) -> None:
     registry = _registry(
         tmp_path,

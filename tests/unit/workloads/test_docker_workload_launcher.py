@@ -920,6 +920,213 @@ async def test_launcher_links_declared_output_artifacts_under_artifacts_dir(
     }
 
 @pytest.mark.asyncio
+async def test_launcher_collects_workspace_artifacts_via_generic_globs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    repo_dir = workspace_root / "task-collect" / "repo"
+    artifact_dir = workspace_root / "task-collect" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    # The repo writes to unpredictable, timestamped paths a declared-output map
+    # could not enumerate up front. MoonMind must collect them generically.
+    timestamped = repo_dir / ".artifacts" / "dood-unreal-tactics" / "20260621T120000Z"
+    timestamped.mkdir(parents=True, exist_ok=True)
+    (timestamped / "report.json").write_text('{"ok":true}\n', encoding="utf-8")
+    latest_gate = repo_dir / ".artifacts" / "dood-unreal-tactics" / "latest"
+    latest_gate.mkdir(parents=True, exist_ok=True)
+    (latest_gate / "gate.json").write_text('{"gate":"pass"}\n', encoding="utf-8")
+    build_log = repo_dir / "logs"
+    build_log.mkdir(parents=True, exist_ok=True)
+    (build_log / "build.log").write_text("built\n", encoding="utf-8")
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"done\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-collect",
+            repoDir=str(repo_dir),
+            artifactsDir=str(artifact_dir),
+            collectGlobs=[".artifacts/**/*.json", "logs/*.log"],
+        )
+    )
+
+    report_key = "collected:.artifacts/dood-unreal-tactics/20260621T120000Z/report.json"
+    gate_key = "collected:.artifacts/dood-unreal-tactics/latest/gate.json"
+    log_key = "collected:logs/build.log"
+    assert result.output_refs[report_key] == str((timestamped / "report.json").resolve())
+    assert result.output_refs[gate_key] == str((latest_gate / "gate.json").resolve())
+    assert result.output_refs[log_key] == str((build_log / "build.log").resolve())
+    # Runtime + collected refs coexist; collection does not displace them.
+    assert result.output_refs["runtime.stdout"] == result.stdout_ref
+
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["collectGlobs"] == [".artifacts/**/*.json", "logs/*.log"]
+    assert diagnostics["collectedOutputRefs"][report_key] == str(
+        (timestamped / "report.json").resolve()
+    )
+    statuses = {entry["pattern"]: entry["status"] for entry in diagnostics["collectedOutputs"]}
+    assert statuses == {".artifacts/**/*.json": "matched", "logs/*.log": "matched"}
+
+@pytest.mark.asyncio
+async def test_launcher_collection_is_noop_without_collect_globs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    repo_dir = workspace_root / "task-no-collect" / "repo"
+    artifact_dir = workspace_root / "task-no-collect" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    (repo_dir / "stray.json").write_text("{}\n", encoding="utf-8")
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"done\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-no-collect",
+            repoDir=str(repo_dir),
+            artifactsDir=str(artifact_dir),
+        )
+    )
+
+    assert not any(key.startswith("collected:") for key in result.output_refs)
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    assert diagnostics["collectGlobs"] == []
+    assert diagnostics["collectedOutputRefs"] == {}
+    assert diagnostics["collectedOutputs"] == []
+
+@pytest.mark.asyncio
+async def test_launcher_collection_enforces_cap_and_skips_remaining_globs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    repo_dir = workspace_root / "task-cap" / "repo"
+    artifact_dir = workspace_root / "task-cap" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    logs = repo_dir / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    # More matches than the (monkeypatched) cap: the first pattern must stop
+    # collecting once the cap is reached rather than materializing every match.
+    for index in range(4):
+        (logs / f"build-{index}.log").write_text("x\n", encoding="utf-8")
+    reports = repo_dir / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "late.json").write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher._MAX_COLLECTED_ARTIFACTS", 2
+    )
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"done\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-cap",
+            repoDir=str(repo_dir),
+            artifactsDir=str(artifact_dir),
+            collectGlobs=["logs/*.log", "reports/*.json"],
+        )
+    )
+
+    collected = [k for k in result.output_refs if k.startswith("collected:")]
+    # Collection never exceeds the cap, even though more files matched.
+    assert len(collected) == 2
+
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    entries = {entry["pattern"]: entry for entry in diagnostics["collectedOutputs"]}
+    # The first pattern hits the cap mid-iteration and reports truncation.
+    assert entries["logs/*.log"]["status"] == "truncated"
+    assert entries["logs/*.log"]["truncated"] is True
+    assert len(entries["logs/*.log"]["matched"]) == 2
+    # The second pattern is skipped entirely once the cap is already reached:
+    # no matches are collected and the existing reports file is left untouched.
+    assert entries["reports/*.json"]["status"] == "truncated"
+    assert entries["reports/*.json"]["truncated"] is True
+    assert entries["reports/*.json"]["matched"] == []
+    assert not any(key.endswith("late.json") for key in collected)
+
+@pytest.mark.asyncio
+async def test_launcher_skips_collected_files_resolving_outside_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    repo_dir = workspace_root / "task-escape" / "repo"
+    artifact_dir = workspace_root / "task-escape" / "artifacts" / "step-test"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside-secret.json"
+    outside.write_text('{"secret":true}\n', encoding="utf-8")
+    # A symlink inside the repo that points outside the workspace must not be
+    # published as a collected artifact.
+    link = repo_dir / "leak.json"
+    link.symlink_to(outside)
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        if args[1] == "run":
+            return _Process(returncode=0, stdout=b"done\n")
+        return _Process(returncode=0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+
+    result = await DockerWorkloadLauncher().run(
+        _validated_request(
+            tmp_path,
+            workspace_root=workspace_root,
+            agentRunId="task-escape",
+            repoDir=str(repo_dir),
+            artifactsDir=str(artifact_dir),
+            collectGlobs=["*.json"],
+        )
+    )
+
+    assert not any(key.startswith("collected:") for key in result.output_refs)
+    diagnostics = json.loads(Path(result.diagnostics_ref or "").read_text("utf-8"))
+    escape_entry = next(
+        entry for entry in diagnostics["collectedOutputs"] if entry["pattern"] == "*.json"
+    )
+    assert escape_entry["status"] == "empty"
+    assert len(escape_entry["skippedOutsideWorkspace"]) == 1
+    assert escape_entry["skippedOutsideWorkspace"][0].endswith("leak.json")
+    # The out-of-workspace target path is never leaked into collected refs.
+    assert str(outside) not in json.dumps(result.output_refs)
+
+@pytest.mark.asyncio
 async def test_launcher_timeout_stops_kills_and_removes_container(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
