@@ -15,6 +15,7 @@ from moonmind.workflows.proposals.models import (
 )
 from moonmind.workflows.proposals.service import (
     WorkflowProposalService,
+    WorkflowProposalStatusError,
     WorkflowProposalValidationError,
 )
 from moonmind.workflows.proposals.delivery import ProviderDecisionEvent
@@ -626,7 +627,7 @@ async def test_promote_proposal_applies_runtime_override() -> None:
 
 
 @pytest.mark.asyncio
-async def test_promote_proposal_rejects_unsupported_runtime_before_commit() -> None:
+async def test_promote_rejects_unsupported_runtime_after_failure_event_commit() -> None:
     repo = AsyncMock()
     proposal = SimpleNamespace(
         id=uuid4(),
@@ -656,7 +657,40 @@ async def test_promote_proposal_rejects_unsupported_runtime_before_commit() -> N
             runtime_mode_override="codex_cloud",
         )
 
-    repo.commit.assert_not_awaited()
+    repo.commit.assert_awaited_once()
+    assert proposal.provider_metadata["observabilityEvents"][-1]["eventType"] == (
+        "proposal.promotion_failed"
+    )
+    assert proposal.provider_metadata["observabilityEvents"][-1]["reason"] == (
+        "invalid_runtime_override"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promote_proposal_rejects_invalid_status_after_failure_event_commit() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=WorkflowProposalStatus.PROMOTED,
+        repository="Moon/Repo",
+        provider_metadata={},
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(WorkflowProposalStatusError, match="cannot be promoted"):
+        await service.promote_proposal(
+            proposal_id=proposal.id,
+            promoted_by_user_id=uuid4(),
+        )
+
+    repo.commit.assert_awaited_once()
+    assert proposal.provider_metadata["observabilityEvents"][0]["eventType"] == (
+        "proposal.promotion_failed"
+    )
+    assert proposal.provider_metadata["observabilityEvents"][0]["reason"] == (
+        "invalid_status"
+    )
 
 
 @pytest.mark.asyncio
@@ -919,7 +953,13 @@ async def test_promote_proposal_rejects_unresolved_preset_steps() -> None:
             promoted_by_user_id=uuid4(),
         )
 
-    repo.commit.assert_not_awaited()
+    repo.commit.assert_awaited_once()
+    assert proposal.provider_metadata["observabilityEvents"][-1]["eventType"] == (
+        "proposal.promotion_failed"
+    )
+    assert proposal.provider_metadata["observabilityEvents"][-1]["reason"] == (
+        "invalid_stored_payload"
+    )
 
 @pytest.mark.asyncio
 async def test_create_proposal_returns_existing_open_duplicate_before_create() -> None:
@@ -1345,6 +1385,7 @@ async def test_redeliver_proposal_rejects_missing_stored_snapshot_before_adapter
     assert record.provider_metadata["observabilityEvents"][0]["reason"] == (
         "missing_stored_snapshot"
     )
+    repo.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

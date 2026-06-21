@@ -204,7 +204,9 @@ class WorkflowProposalService:
         provider_metadata["observabilityEvents"] = events[-100:]
         proposal.provider_metadata = provider_metadata
 
-    def _require_recovery_stored_snapshot(self, proposal: WorkflowProposal) -> None:
+    async def _require_recovery_stored_snapshot(
+        self, proposal: WorkflowProposal
+    ) -> None:
         request = getattr(proposal, "workflow_create_request", None)
         if not isinstance(request, Mapping) or not request:
             self._append_proposal_event(
@@ -213,6 +215,7 @@ class WorkflowProposalService:
                 action="redeliver",
                 reason="missing_stored_snapshot",
             )
+            await self._repository.commit()
             raise WorkflowProposalValidationError(
                 "recovery requires the stored proposal snapshot"
             )
@@ -224,6 +227,7 @@ class WorkflowProposalService:
                 action="redeliver",
                 reason="missing_stored_payload",
             )
+            await self._repository.commit()
             raise WorkflowProposalValidationError(
                 "recovery requires the stored proposal payload"
             )
@@ -856,7 +860,7 @@ class WorkflowProposalService:
         proposal = await self._repository.get_proposal(proposal_id)
         if proposal is None:
             raise WorkflowProposalNotFoundError(str(proposal_id))
-        self._require_recovery_stored_snapshot(proposal)
+        await self._require_recovery_stored_snapshot(proposal)
         self._append_proposal_event(
             proposal,
             "proposal.recovery_replay_requested",
@@ -1540,6 +1544,7 @@ class WorkflowProposalService:
                 reason="invalid_status",
                 status=getattr(proposal.status, "value", str(proposal.status)),
             )
+            await self._repository.commit()
             raise WorkflowProposalStatusError(
                 f"proposal status {proposal.status.value} cannot be promoted"
             )
@@ -1562,6 +1567,7 @@ class WorkflowProposalService:
                 "proposal.promotion_failed",
                 reason="invalid_stored_payload",
             )
+            await self._repository.commit()
             raise WorkflowProposalValidationError(
                 f"stored workflow payload is invalid: {exc}"
             ) from exc
@@ -1581,6 +1587,7 @@ class WorkflowProposalService:
                     reason="invalid_runtime_override",
                     runtimeModeOverride=runtime_mode_override,
                 )
+                await self._repository.commit()
                 raise WorkflowProposalValidationError(
                     f"runtimeMode must be one of: {supported}"
                 )
@@ -1605,6 +1612,7 @@ class WorkflowProposalService:
                     reason="invalid_runtime_override",
                     runtimeModeOverride=runtime_mode_override,
                 )
+                await self._repository.commit()
                 raise WorkflowProposalValidationError(
                     f"runtimeMode override is invalid: {exc}"
                 ) from exc
@@ -1623,6 +1631,7 @@ class WorkflowProposalService:
                 "proposal.promotion_failed",
                 reason="invalid_priority_override",
             )
+            await self._repository.commit()
             raise WorkflowProposalValidationError("priority override is invalid") from exc
 
         max_attempts = request.get("maxAttempts", 3)
@@ -1636,6 +1645,7 @@ class WorkflowProposalService:
                 "proposal.promotion_failed",
                 reason="invalid_max_attempts_override",
             )
+            await self._repository.commit()
             raise WorkflowProposalValidationError(
                 "maxAttempts override is invalid"
             ) from exc
@@ -1645,6 +1655,7 @@ class WorkflowProposalService:
                 "proposal.promotion_failed",
                 reason="invalid_max_attempts_override",
             )
+            await self._repository.commit()
             raise WorkflowProposalValidationError("maxAttempts must be >= 1")
 
         proposal.status = WorkflowProposalStatus.PROMOTED
