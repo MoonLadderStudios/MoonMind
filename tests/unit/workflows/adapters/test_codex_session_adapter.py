@@ -1714,6 +1714,125 @@ async def test_start_resets_session_once_after_empty_assistant_activity_failure(
         }
     ]
 
+
+@pytest.mark.asyncio
+async def test_start_resets_session_after_prefixed_empty_assistant_activity_failure(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
+    send_turn_calls: list[Any] = []
+    clear_calls: list[Any] = []
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    reset_thread_id = "thread-1:empty-output-reset"
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(
+            binding=binding,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _session_status(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(request: Any) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
+        if len(send_turn_calls) == 1:
+            metadata = {
+                "reason": (
+                    "turn failed: codex app-server turn/completed produced "
+                    "no assistant output"
+                ),
+                "failureClass": "transient",
+                "retryRecommendedAction": "clear_session",
+                "turnFailureEvidence": {"schemaVersion": "v1"},
+            }
+            _raise_activity_error_from_application_error(
+                ApplicationError(
+                    metadata["reason"],
+                    metadata,
+                    type="CodexTransientTurnError",
+                    non_retryable=True,
+                )
+            )
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=2,
+            container_id="container-1",
+            thread_id=reset_thread_id,
+            turn_id="turn-after-reset",
+            status="completed",
+            assistant_text="Recovered after session reset.",
+        )
+
+    async def _clear_remote_session(request: Any) -> CodexManagedSessionHandle:
+        clear_calls.append(request)
+        assert request.new_thread_id == reset_thread_id
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=2,
+            container_id="container-1",
+            thread_id=reset_thread_id,
+        )
+
+    async def _fetch_summary(_request: Any) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=binding.session_id,
+            session_epoch=2,
+            container_id="container-1",
+            thread_id=reset_thread_id,
+            last_assistant_text="Recovered after session reset.",
+        )
+
+    async def _publish_artifacts(
+        _request: Any,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=binding.session_id,
+            session_epoch=2,
+            container_id="container-1",
+            thread_id=reset_thread_id,
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_async_noop,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_clear_remote_session,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    handle = await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+
+    assert handle.status == "completed"
+    assert len(send_turn_calls) == 2
+    assert len(clear_calls) == 1
+    assert send_turn_calls[1].thread_id == reset_thread_id
+
 async def test_start_classifies_codex_provider_capacity_failure_and_publishes_artifacts(
     tmp_path: Path,
 ) -> None:
