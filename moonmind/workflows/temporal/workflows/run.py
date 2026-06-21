@@ -1915,6 +1915,258 @@ class MoonMindRunWorkflow:
                 outputs[target_key] = value.strip()
         return outputs
 
+    def _proposal_step_output_refs(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, Any]:
+        row = self._step_ledger_row_for(logical_step_id)
+        if not isinstance(row, Mapping):
+            return {}
+        artifacts = row.get("artifacts")
+        if not isinstance(artifacts, Mapping):
+            return {}
+        outputs = self._step_execution_compact_output_refs(logical_step_id)
+        for source_key, target_key in (
+            ("runtimeDiagnostics", "diagnosticsRef"),
+            ("providerSnapshot", "providerSnapshotRef"),
+            ("stepExecutionManifestRef", "stepExecutionManifestRef"),
+        ):
+            value = artifacts.get(source_key)
+            if isinstance(value, str) and value.strip():
+                outputs[target_key] = value.strip()
+        refs = row.get("refs")
+        if isinstance(refs, Mapping):
+            manifest_refs = refs.get("stepExecutionManifestRefs")
+            if isinstance(manifest_refs, Sequence) and not isinstance(
+                manifest_refs, (str, bytes)
+            ):
+                compact_manifest_refs = [
+                    item.strip()
+                    for item in manifest_refs
+                    if isinstance(item, str) and item.strip()
+                ]
+                if compact_manifest_refs:
+                    outputs["stepExecutionManifestRefs"] = compact_manifest_refs
+        return outputs
+
+    def _proposal_generation_parameters(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Return redacted compact metadata for proposal generation activities."""
+
+        task_node = parameters.get("workflow")
+        if not isinstance(task_node, Mapping):
+            task_node = parameters.get("task")
+        task = task_node if isinstance(task_node, Mapping) else {}
+
+        compact_task: dict[str, Any] = {}
+        for key in (
+            "proposalTitle",
+            "proposalIdea",
+            "suggestedTitle",
+            "titleSuggestion",
+            "recommendedNextAction",
+            "nextAction",
+            "nextStep",
+            "next_step",
+        ):
+            value = self._coerce_text(task.get(key), max_chars=500)
+            if value:
+                compact_task[key] = self._sanitize_operator_summary(value) or value
+
+        compact_sections = {
+            "runtime": (
+                "mode",
+                "model",
+                "effort",
+                "profileId",
+                "providerProfile",
+                "executionProfileRef",
+            ),
+            "git": ("branch", "startingBranch", "targetBranch", "baseBranch"),
+            "publish": ("mode", "enabled", "strategy"),
+        }
+        for key, allowed_keys in compact_sections.items():
+            value = self._proposal_compact_mapping(
+                task.get(key),
+                allowed_keys=allowed_keys,
+                max_chars=200,
+            )
+            if value:
+                compact_task[key] = value
+        for key in ("skill", "tool", "skills"):
+            value = self._proposal_compact_selector_metadata(task.get(key))
+            if value:
+                compact_task[key] = value
+
+        compact_steps = self._proposal_compact_steps(task.get("steps"))
+        if compact_steps:
+            compact_task["steps"] = compact_steps
+
+        authored_presets = task.get("authoredPresets")
+        if isinstance(authored_presets, Sequence) and not isinstance(
+            authored_presets, (str, bytes)
+        ):
+            compact_presets: list[dict[str, Any]] = []
+            for index, preset in enumerate(authored_presets[:5]):
+                if not isinstance(preset, Mapping):
+                    continue
+                compact_preset: dict[str, Any] = {}
+                for key in ("id", "name", "version", "source", "presetId"):
+                    value = self._coerce_text(preset.get(key), max_chars=160)
+                    if value:
+                        compact_preset[key] = value
+                source_ref = self._coerce_text(
+                    preset.get("sourceRef") or preset.get("artifactRef"),
+                    max_chars=400,
+                )
+                if source_ref:
+                    compact_preset["sourceRef"] = source_ref
+                if compact_preset:
+                    compact_preset["index"] = index
+                    compact_presets.append(compact_preset)
+            if compact_presets:
+                compact_task["authoredPresets"] = compact_presets
+
+        return {"workflow": compact_task} if compact_task else {}
+
+    def _proposal_compact_mapping(
+        self,
+        value: object,
+        *,
+        allowed_keys: Sequence[str],
+        max_chars: int,
+    ) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        compact: dict[str, Any] = {}
+        for key in allowed_keys:
+            item = value.get(key)
+            if isinstance(item, (bool, int, float)):
+                compact[key] = item
+                continue
+            text = self._coerce_text(item, max_chars=max_chars)
+            if text:
+                compact[key] = text
+        return compact
+
+    def _proposal_compact_steps(self, value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return []
+        compact_steps: list[dict[str, Any]] = []
+        for step in value[:50]:
+            if not isinstance(step, Mapping):
+                continue
+            compact_step: dict[str, Any] = {}
+            for key in ("id", "title", "type"):
+                text = self._coerce_text(step.get(key), max_chars=160)
+                if text:
+                    compact_step[key] = text
+            for key in ("tool", "skill", "skills"):
+                selector = self._proposal_compact_selector_metadata(step.get(key))
+                if selector:
+                    compact_step[key] = selector
+            source = self._proposal_compact_source_metadata(step.get("source"))
+            if source:
+                compact_step["source"] = source
+            if any(
+                key in compact_step for key in ("tool", "skill", "skills", "source")
+            ):
+                compact_steps.append(compact_step)
+        return compact_steps
+
+    def _proposal_compact_source_metadata(self, value: object) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        compact: dict[str, Any] = {}
+        for key in (
+            "kind",
+            "presetId",
+            "presetSlug",
+            "presetVersion",
+            "originalStepId",
+        ):
+            text = self._coerce_text(value.get(key), max_chars=160)
+            if text:
+                compact[key] = text
+        include_path = value.get("includePath")
+        if isinstance(include_path, Sequence) and not isinstance(
+            include_path, (str, bytes)
+        ):
+            compact_include_path = [
+                text
+                for item in include_path[:20]
+                if (text := self._coerce_text(item, max_chars=160))
+            ]
+            if compact_include_path:
+                compact["includePath"] = compact_include_path
+        return compact
+
+    def _proposal_compact_selector_metadata(self, value: object) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        compact: dict[str, Any] = {}
+        for key in ("id", "name", "version", "source", "mode"):
+            text = self._coerce_text(value.get(key), max_chars=160)
+            if text:
+                compact[key] = text
+        for key in ("include", "exclude", "sets"):
+            items = value.get(key)
+            if not isinstance(items, Sequence) or isinstance(items, (str, bytes)):
+                continue
+            compact_items: list[Any] = []
+            for item in items[:20]:
+                if isinstance(item, str):
+                    text = self._coerce_text(item, max_chars=160)
+                    if text:
+                        compact_items.append(text)
+                    continue
+                if not isinstance(item, Mapping):
+                    continue
+                compact_item: dict[str, Any] = {}
+                for item_key in ("id", "name", "version", "source"):
+                    text = self._coerce_text(item.get(item_key), max_chars=160)
+                    if text:
+                        compact_item[item_key] = text
+                if compact_item:
+                    compact_items.append(compact_item)
+            if compact_items:
+                compact[key] = compact_items
+        resolved_ref = self._coerce_text(
+            value.get("resolvedSkillsetRef")
+            or value.get("resolved_skillset_ref")
+            or value.get("manifestRef")
+            or value.get("manifest_ref"),
+            max_chars=400,
+        )
+        if resolved_ref:
+            compact["resolvedSkillsetRef"] = resolved_ref
+        return compact
+
+    def _proposal_generation_evidence_refs(self) -> dict[str, Any]:
+        refs: dict[str, Any] = {
+            "inputRef": self._input_ref,
+            "planRef": self._plan_ref,
+            "logsRef": self._logs_ref,
+            "summaryRef": self._summary_ref,
+            "finishSummaryRef": self._report_ref,
+        }
+        if self._last_diagnostics_ref:
+            refs["diagnosticsRef"] = self._last_diagnostics_ref
+        if self._last_step_id:
+            step_refs = self._proposal_step_output_refs(self._last_step_id)
+            if step_refs:
+                refs["lastStep"] = {
+                    "id": self._last_step_id,
+                    "outputRefs": step_refs,
+                }
+        return {
+            key: value
+            for key, value in refs.items()
+            if value is not None and value != {}
+        }
+
     def _step_execution_side_effects(
         self,
         logical_step_id: str,
@@ -11276,7 +11528,8 @@ class MoonMindRunWorkflow:
                 "workflow_id": workflow.info().workflow_id,
                 "run_id": workflow.info().run_id,
                 "repo": self._repo,
-                "parameters": parameters,
+                "parameters": self._proposal_generation_parameters(parameters),
+                "evidenceRefs": self._proposal_generation_evidence_refs(),
                 "observability": {
                     "operatorSummary": self._operator_summary,
                     "lastStep": {

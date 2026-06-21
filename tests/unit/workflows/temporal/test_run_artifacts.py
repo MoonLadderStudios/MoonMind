@@ -5308,8 +5308,8 @@ async def test_run_proposals_stage_uses_workflow_proposal_policy(
             "workflow": {
                 "proposeTasks": True,
                 "proposalPolicy": {
-                    "maxItems": {"project": 12},
-                    "targets": ["project"],
+                    "maxItems": {"workflow_repo": 12},
+                    "targets": ["workflow_repo"],
                     "defaultRuntime": "gemini_cli",
                 }
             }
@@ -5317,8 +5317,8 @@ async def test_run_proposals_stage_uses_workflow_proposal_policy(
     )
     
     assert captured_policy is not None
-    assert captured_policy["maxItems"] == {"project": 12}
-    assert captured_policy["targets"] == ["project"]
+    assert captured_policy["maxItems"] == {"workflow_repo": 12}
+    assert captured_policy["targets"] == ["workflow_repo"]
     assert captured_policy["defaultRuntime"] == "gemini_cli"
     
     # Also verify origin format DOC-REQ-005

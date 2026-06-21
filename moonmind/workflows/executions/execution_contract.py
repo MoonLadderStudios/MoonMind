@@ -54,7 +54,7 @@ _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SECRET_REF_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
-_PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
+_PROPOSAL_POLICY_TARGETS = ("workflow_repo", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _SELF_MANAGED_PUBLISH_SKILLS = frozenset(
     {
@@ -1241,7 +1241,7 @@ class WorkflowProposalPolicy(BaseModel):
             lowered = target.lower()
             if lowered not in _PROPOSAL_POLICY_TARGETS:
                 raise WorkflowContractError(
-                    "workflow.proposalPolicy.targets entries must be 'project' or 'moonmind'"
+                    "workflow.proposalPolicy.targets entries must be 'workflow_repo' or 'moonmind'"
                 )
             if lowered in seen:
                 continue
@@ -1257,8 +1257,16 @@ class WorkflowProposalPolicy(BaseModel):
         if not isinstance(value, Mapping):
             raise WorkflowContractError("workflow.proposalPolicy.maxItems must be an object")
         normalized: dict[str, int] = {}
+        key_aliases = {
+            "workflow_repo": ("workflowRepo", "workflow_repo"),
+            "moonmind": ("moonmind",),
+        }
         for key in _PROPOSAL_POLICY_TARGETS:
-            raw = value.get(key)
+            raw = None
+            for source_key in key_aliases[key]:
+                if source_key in value:
+                    raw = value.get(source_key)
+                    break
             if raw is None:
                 continue
             try:
@@ -1899,29 +1907,29 @@ class WorkflowExecutionSpec(BaseModel):
 class EffectiveProposalPolicy:
     """Resolved proposal policy derived from config and optional overrides."""
 
-    allow_project: bool
+    allow_workflow_repo: bool
     allow_moonmind: bool
-    max_items_project: int
+    max_items_workflow_repo: int
     max_items_moonmind: int
     min_severity_for_moonmind: str
     severity_rank: dict[str, int]
     delivery_provider: str
     provider_metadata: dict[str, Any] = field(default_factory=dict)
-    remaining_project_slots: int = field(init=False)
+    remaining_workflow_repo_slots: int = field(init=False)
     remaining_moonmind_slots: int = field(init=False)
 
     def __post_init__(self) -> None:
-        self.remaining_project_slots = (
-            self.max_items_project if self.allow_project else 0
+        self.remaining_workflow_repo_slots = (
+            self.max_items_workflow_repo if self.allow_workflow_repo else 0
         )
         self.remaining_moonmind_slots = (
             self.max_items_moonmind if self.allow_moonmind else 0
         )
 
-    def consume_project_slot(self) -> bool:
-        if not self.allow_project or self.remaining_project_slots <= 0:
+    def consume_workflow_repo_slot(self) -> bool:
+        if not self.allow_workflow_repo or self.remaining_workflow_repo_slots <= 0:
             return False
-        self.remaining_project_slots -= 1
+        self.remaining_workflow_repo_slots -= 1
         return True
 
     def consume_moonmind_slot(self) -> bool:
@@ -1930,8 +1938,8 @@ class EffectiveProposalPolicy:
         self.remaining_moonmind_slots -= 1
         return True
 
-    def has_project_capacity(self) -> bool:
-        return self.allow_project and self.remaining_project_slots > 0
+    def has_workflow_repo_capacity(self) -> bool:
+        return self.allow_workflow_repo and self.remaining_workflow_repo_slots > 0
 
     def has_moonmind_capacity(self) -> bool:
         return self.allow_moonmind and self.remaining_moonmind_slots > 0
@@ -2370,7 +2378,7 @@ def build_effective_proposal_policy(
     *,
     policy: WorkflowProposalPolicy | None,
     default_targets: str,
-    default_max_items_project: int,
+    default_max_items_workflow_repo: int,
     default_max_items_moonmind: int,
     default_moonmind_severity_floor: str,
     severity_vocabulary: Sequence[str] | None = None,
@@ -2396,19 +2404,19 @@ def build_effective_proposal_policy(
     elif default_targets_normalized in _PROPOSAL_POLICY_TARGETS:
         default_target_list = [default_targets_normalized]
     else:
-        default_target_list = ["project"]
+        default_target_list = ["workflow_repo"]
     configured_targets = (
         list(policy.targets) if policy and policy.targets else default_target_list
     )
-    allow_project = "project" in configured_targets
+    allow_workflow_repo = "workflow_repo" in configured_targets
     allow_moonmind = "moonmind" in configured_targets
-    if not allow_project and not allow_moonmind:
-        allow_project = True
+    if not allow_workflow_repo and not allow_moonmind:
+        allow_workflow_repo = True
 
     max_items = dict(policy.max_items or {}) if policy and policy.max_items else {}
-    max_items_project = int(max_items.get("project") or 0)
-    if max_items_project <= 0:
-        max_items_project = max(1, int(default_max_items_project or 1))
+    max_items_workflow_repo = int(max_items.get("workflow_repo") or 0)
+    if max_items_workflow_repo <= 0:
+        max_items_workflow_repo = max(1, int(default_max_items_workflow_repo or 1))
     max_items_moonmind = int(max_items.get("moonmind") or 0)
     if max_items_moonmind <= 0:
         max_items_moonmind = max(1, int(default_max_items_moonmind or 1))
@@ -2427,9 +2435,9 @@ def build_effective_proposal_policy(
             severity_floor = filtered_vocab[-1]
 
     return EffectiveProposalPolicy(
-        allow_project=allow_project,
+        allow_workflow_repo=allow_workflow_repo,
         allow_moonmind=allow_moonmind,
-        max_items_project=max_items_project,
+        max_items_workflow_repo=max_items_workflow_repo,
         max_items_moonmind=max_items_moonmind,
         min_severity_for_moonmind=severity_floor,
         severity_rank=severity_rank,

@@ -3646,6 +3646,30 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     await resources.aclose()
 
 @pytest.mark.asyncio
+async def test_proposal_service_factory_uses_delivery_enabled_service() -> None:
+    service = object()
+
+    @asynccontextmanager
+    async def _fake_session_context():
+        yield "session"
+
+    with (
+        patch(
+            "api_service.db.base.get_async_session_context",
+            side_effect=_fake_session_context,
+        ),
+        patch(
+            "moonmind.workflows.get_workflow_proposal_service",
+            return_value=service,
+        ) as factory,
+    ):
+        proposal_service_factory = worker_runtime._build_proposal_service_factory()
+        async with proposal_service_factory() as resolved:
+            assert resolved is service
+
+    factory.assert_called_once_with("session")
+
+@pytest.mark.asyncio
 @patch("moonmind.workflows.temporal.worker_runtime._build_agent_runtime_deps")
 @patch("moonmind.workflows.temporal.worker_runtime.build_worker_activity_bindings")
 @patch("moonmind.workflows.temporal.worker_runtime.TemporalAgentRuntimeActivities")

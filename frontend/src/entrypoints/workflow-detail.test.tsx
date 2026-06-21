@@ -2381,10 +2381,10 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     const menu = await openWorkflowActionsMenu();
-    expect(within(menu).getByRole('menuitem', { name: 'Edit task' }).getAttribute('href')).toBe(
+    expect(within(menu).getByRole('menuitem', { name: 'Edit' }).getAttribute('href')).toBe(
       '/workflows/new?editExecutionId=test-123',
     );
-    const editLink = within(menu).getByRole('menuitem', { name: 'Edit task' });
+    const editLink = within(menu).getByRole('menuitem', { name: 'Edit' });
     editLink.addEventListener('click', (event) => event.preventDefault());
     fireEvent.focus(editLink);
     fireEvent.keyDown(editLink, { key: 'Enter' });
@@ -2516,7 +2516,7 @@ describe('Workflow Detail Entrypoint', () => {
     const menu = screen.getByRole('menu', { name: 'Workflow actions' });
     for (const label of [
       'Rename',
-      'Edit task',
+      'Edit',
       'Compare run',
       'Rerun',
       'Resume from failed step',
@@ -2527,8 +2527,8 @@ describe('Workflow Detail Entrypoint', () => {
       'Reject',
       'Cancel',
       'Send Message',
-      'Bypass Dependency Wait',
-      'Create remediation task',
+      'Bypass Dependencies',
+      'Remediate',
     ]) {
       expect(within(menu).getByRole('menuitem', { name: label })).toBeTruthy();
     }
@@ -2945,7 +2945,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     const menu = await openWorkflowActionsMenu();
-    expect(within(menu).getByRole('menuitem', { name: 'Edit task' }).getAttribute('href')).toBe(
+    expect(within(menu).getByRole('menuitem', { name: 'Edit' }).getAttribute('href')).toBe(
       '/workflows/new?rerunExecutionId=test-123&mode=edit',
     );
     expect(within(menu).getByRole('menuitem', { name: 'Rerun' })).toBeTruthy();
@@ -3001,7 +3001,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     const menu = await openWorkflowActionsMenu();
-    expect(within(menu).getByRole('menuitem', { name: 'Edit task' }).getAttribute('href')).toBe(
+    expect(within(menu).getByRole('menuitem', { name: 'Edit' }).getAttribute('href')).toBe(
       '/workflows/new?editExecutionId=test-123',
     );
     expect(screen.queryByText(/Edit workflow unavailable:/)).toBeNull();
@@ -3057,10 +3057,10 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     const menu = await openWorkflowActionsMenu();
-    expect(screen.queryByRole('link', { name: 'Edit task' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
     expect(
-      within(menu).getByText('Edit task unavailable: original task input snapshot missing'),
+      within(menu).getByText('Edit unavailable: original task input snapshot missing'),
     ).toBeTruthy();
     expect(
       within(menu).getByText('Rerun unavailable: original task input snapshot missing'),
@@ -3345,7 +3345,7 @@ describe('Workflow Detail Entrypoint', () => {
     await waitFor(() => {
       expect(screen.getByText('Flagged off task')).toBeTruthy();
     });
-    expect(screen.queryByRole('link', { name: 'Edit task' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Workflow Actions' })).toBeNull();
   });
@@ -3948,7 +3948,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     const menu = await openWorkflowActionsMenu();
-    expect(within(menu).getByRole('menuitem', { name: 'Create remediation task' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Remediate' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Remediation Tasks' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
@@ -3960,7 +3960,7 @@ describe('Workflow Detail Entrypoint', () => {
       '/api/artifacts/art_context/download',
     );
 
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Create remediation task' }));
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
 
     await waitFor(() => {
       const remediationCreateCall = fetchSpy.mock.calls.find(
@@ -4064,7 +4064,7 @@ describe('Workflow Detail Entrypoint', () => {
       target: { value: 'troubleshooting_only' },
     });
     const menu = await openWorkflowActionsMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Create remediation task' }));
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Remediate' }));
 
     await waitFor(() => {
       const remediationCreateCall = fetchSpy.mock.calls.find(
@@ -4127,7 +4127,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('Completed target task')).toBeTruthy();
     });
 
-    expect(screen.queryByRole('button', { name: 'Create remediation task' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remediate' })).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=inbound'))).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('/remediations?direction=outbound'))).toBe(true);
   });
@@ -4998,7 +4998,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     const menu = await openWorkflowActionsMenu();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Bypass Dependency Wait' }));
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Bypass Dependencies' }));
 
     await waitFor(() => {
       expect(confirmSpy).toHaveBeenCalledWith('Bypass dependency waiting for this task?');
@@ -6034,7 +6034,7 @@ describe('Workflow Detail Entrypoint', () => {
     const menu = await openWorkflowActionsMenu();
     expect(within(menu).getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Skip Dependency Wait' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Bypass Dependency Wait' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Bypass Dependencies' })).toBeNull();
   });
 
   it('renders a Session Continuity panel for Codex managed-session agent runs', async () => {

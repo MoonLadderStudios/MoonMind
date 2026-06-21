@@ -182,30 +182,50 @@ export function buildWorkflowActionMenuItems(
     }
   };
 
+  // Commonly used actions are surfaced at the top of the menu so operators can
+  // reach them without scanning the full list.
   addButton({
-    id: 'rename',
-    label: 'Rename',
-    available: Boolean(actions.canSetTitle),
-    disabledReason: disabledReason('canSetTitle'),
-    onSelect: handlers.onRename,
+    id: 'bypass-dependency-wait',
+    label: 'Bypass Dependencies',
+    available: Boolean(actions.canBypassDependencies),
+    disabledReason: disabledReason('canBypassDependencies'),
+    danger: true,
+    onSelect: handlers.onBypassDependencies,
+  });
+  addButton({
+    id: 'cancel',
+    label: 'Cancel',
+    available: Boolean(actions.canCancel),
+    disabledReason: disabledReason('canCancel'),
+    danger: true,
+    onSelect: handlers.onCancel,
+  });
+  addButton({
+    id: 'force-cancel',
+    label: 'Force cancel',
+    available: Boolean(actions.canCancel),
+    disabledReason: disabledReason('canCancel'),
+    danger: true,
+    onSelect: handlers.onForceCancel,
   });
   if (taskEditingOn) {
     addLink({
       id: 'edit-task',
-      label: 'Edit task',
+      label: 'Edit',
       href: editHref,
       available: Boolean(canShowEditWorkflow && editHref),
       disabledReason: editTaskDisabledReason,
       onSelect: handlers.onEditTask,
     });
-    addLink({
-      id: 'compare-run',
-      label: 'Compare run',
-      href: compareHref,
-      available: Boolean(compareHref),
-      disabledReason: disabledReason('canEditForRerun'),
-      onSelect: handlers.onCompareRun,
-    });
+  }
+  addButton({
+    id: 'create-remediation-task',
+    label: 'Remediate',
+    available: canCreateRemediation,
+    disabledReason: null,
+    onSelect: handlers.onCreateRemediation,
+  });
+  if (taskEditingOn) {
     addButton({
       id: 'rerun',
       label: 'Rerun',
@@ -229,6 +249,24 @@ export function buildWorkflowActionMenuItems(
         onSelect: handlers.onRecoverFromSelectedStep,
       });
     }
+  }
+  // Remaining, less commonly used actions follow.
+  addButton({
+    id: 'rename',
+    label: 'Rename',
+    available: Boolean(actions.canSetTitle),
+    disabledReason: disabledReason('canSetTitle'),
+    onSelect: handlers.onRename,
+  });
+  if (taskEditingOn) {
+    addLink({
+      id: 'compare-run',
+      label: 'Compare run',
+      href: compareHref,
+      available: Boolean(compareHref),
+      disabledReason: disabledReason('canEditForRerun'),
+      onSelect: handlers.onCompareRun,
+    });
   }
   addButton({
     id: 'pause',
@@ -260,42 +298,11 @@ export function buildWorkflowActionMenuItems(
     onSelect: handlers.onReject,
   });
   addButton({
-    id: 'cancel',
-    label: 'Cancel',
-    available: Boolean(actions.canCancel),
-    disabledReason: disabledReason('canCancel'),
-    danger: true,
-    onSelect: handlers.onCancel,
-  });
-  addButton({
-    id: 'force-cancel',
-    label: 'Force cancel',
-    available: Boolean(actions.canCancel),
-    disabledReason: disabledReason('canCancel'),
-    danger: true,
-    onSelect: handlers.onForceCancel,
-  });
-  addButton({
     id: 'send-message',
     label: 'Send Message',
     available: Boolean(actions.canSendMessage),
     disabledReason: disabledReason('canSendMessage'),
     onSelect: handlers.onSendMessage,
-  });
-  addButton({
-    id: 'bypass-dependency-wait',
-    label: 'Bypass Dependency Wait',
-    available: Boolean(actions.canBypassDependencies),
-    disabledReason: disabledReason('canBypassDependencies'),
-    danger: true,
-    onSelect: handlers.onBypassDependencies,
-  });
-  addButton({
-    id: 'create-remediation-task',
-    label: 'Create remediation task',
-    available: canCreateRemediation,
-    disabledReason: null,
-    onSelect: handlers.onCreateRemediation,
   });
   return items;
 }

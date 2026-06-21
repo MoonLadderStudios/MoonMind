@@ -4227,6 +4227,12 @@ export const LIQUID_GL_OPTIONS = {
   magnify: 1,
 } as const;
 
+// Defaults applied when the advanced execution controls (Priority / Max
+// Attempts) are hidden. Submission uses these so toggling Advanced mode off
+// never silently submits stale values nor blocks on a hidden invalid one.
+const DEFAULT_PRIORITY = 0;
+const DEFAULT_MAX_ATTEMPTS = 3;
+
 export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
@@ -4397,8 +4403,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     normalizePublishModeForSubmit(defaultPublishMode),
   );
   const [produceReport, setProduceReport] = useState(false);
-  const [priority, setPriority] = useState(0);
-  const [maxAttempts, setMaxAttempts] = useState(3);
+  const [priority, setPriority] = useState(DEFAULT_PRIORITY);
+  const [maxAttempts, setMaxAttempts] = useState(DEFAULT_MAX_ATTEMPTS);
   const [proposeTasks, setProposeTasks] = useState(() =>
     readProposeTasksPreference(defaultProposeTasks),
   );
@@ -7789,12 +7795,20 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    if (!Number.isInteger(priority)) {
+    // Priority and Max Attempts live behind the Advanced mode toggle. When that
+    // toggle is off the inputs are unmounted, so fall back to defaults instead
+    // of validating or submitting whatever value the hidden state still holds.
+    const effectivePriority = showAdvancedStepOptions ? priority : DEFAULT_PRIORITY;
+    const effectiveMaxAttempts = showAdvancedStepOptions
+      ? maxAttempts
+      : DEFAULT_MAX_ATTEMPTS;
+
+    if (!Number.isInteger(effectivePriority)) {
       setSubmitMessage("Priority must be an integer.");
       clearSubmitBusy();
       return;
     }
-    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    if (!Number.isInteger(effectiveMaxAttempts) || effectiveMaxAttempts < 1) {
       setSubmitMessage("Max Attempts must be an integer >= 1.");
       clearSubmitBusy();
       return;
@@ -8700,8 +8714,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
     const requestBody: Record<string, unknown> = {
       type: "task",
-      priority,
-      maxAttempts,
+      priority: effectivePriority,
+      maxAttempts: effectiveMaxAttempts,
       payload: {
         repository: normalizedRepository,
         ...(mergedCapabilities.length > 0
@@ -10763,32 +10777,34 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Execution controls"
           aria-label="Execution controls"
         >
-        <div className="grid-2" data-runtime-visibility="worker">
-          <label>
-            Priority
-            <div className="priority-slider-container">
+        {showAdvancedStepOptions ? (
+          <div className="grid-2" data-runtime-visibility="worker">
+            <label>
+              Priority
+              <div className="priority-slider-container">
+                <input
+                  type="range"
+                  name="priority"
+                  min="-10"
+                  max="10"
+                  value={priority}
+                  onChange={(event) => setPriority(Number(event.target.value))}
+                />
+                <output>{priority}</output>
+              </div>
+            </label>
+            <label>
+              Max Attempts
               <input
-                type="range"
-                name="priority"
-                min="-10"
-                max="10"
-                value={priority}
-                onChange={(event) => setPriority(Number(event.target.value))}
+                type="number"
+                min="1"
+                name="maxAttempts"
+                value={maxAttempts}
+                onChange={(event) => setMaxAttempts(Number(event.target.value))}
               />
-              <output>{priority}</output>
-            </div>
-          </label>
-          <label>
-            Max Attempts
-            <input
-              type="number"
-              min="1"
-              name="maxAttempts"
-              value={maxAttempts}
-              onChange={(event) => setMaxAttempts(Number(event.target.value))}
-            />
-          </label>
-        </div>
+            </label>
+          </div>
+        ) : null}
 
         <label className="checkbox">
           <input
