@@ -6,6 +6,7 @@ issues are review artifacts with bounded controls and links back to evidence.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -17,6 +18,11 @@ _GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SECRET_KEY_RE = re.compile(
     r"(token|password|secret|authorization|cookie|private[_-]?key)",
     re.IGNORECASE,
+)
+_MAX_GITHUB_LABEL_LENGTH = 50
+_CATEGORY_LABEL_PREFIX = "moonmind:category:"
+_MAX_CATEGORY_LABEL_TOKEN_LENGTH = (
+    _MAX_GITHUB_LABEL_LENGTH - len(_CATEGORY_LABEL_PREFIX)
 )
 _COMMAND_RE = re.compile(
     (
@@ -366,9 +372,14 @@ def _safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return safe
 
 
-def _label_token(value: object, fallback: str) -> str:
+def _label_token(value: object, fallback: str, *, max_length: int | None = None) -> str:
     token = re.sub(r"[^a-z0-9]+", "-", _clean(value).lower()).strip("-")
-    return token or fallback
+    token = token or fallback
+    if max_length is None or len(token) <= max_length:
+        return token
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:8]
+    prefix_length = max(1, max_length - len(digest) - 1)
+    return f"{token[:prefix_length].rstrip('-')}-{digest}"
 
 
 def _target_class(request: ProposalDeliveryRequest) -> str:
@@ -382,11 +393,16 @@ def _target_class(request: ProposalDeliveryRequest) -> str:
 
 def _canonical_github_labels(request: ProposalDeliveryRequest) -> tuple[str, ...]:
     short_hash = (request.dedup_hash or "unknown")[:12] or "unknown"
+    category_token = _label_token(
+        request.category,
+        "uncategorized",
+        max_length=_MAX_CATEGORY_LABEL_TOKEN_LENGTH,
+    )
     labels = (
         "moonmind:proposal",
         "moonmind:state:open",
         f"moonmind:target:{_target_class(request)}",
-        f"moonmind:category:{_label_token(request.category, 'uncategorized')}",
+        f"moonmind:category:{category_token}",
         f"moonmind:priority:{_label_token(request.priority, 'normal')}",
         f"moonmind:dedup:{short_hash}",
     )
@@ -397,9 +413,9 @@ def _marker(request: ProposalDeliveryRequest) -> str:
     snapshot = request.workflow_snapshot_ref or "stored-proposal-snapshot"
     return (
         "<!-- moonmind-proposal "
-        f"record={request.record_id} target={_target_class(request)} "
+        f"record={request.record_id} "
         f"dedup={request.dedup_hash} "
-        f"snapshot={snapshot} -->"
+        f"snapshot={snapshot} target={_target_class(request)} -->"
     )
 
 

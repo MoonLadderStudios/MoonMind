@@ -188,9 +188,9 @@ class WorkflowProposalService:
             category or "", "uncategorized"
         )
         slug = self._slugify_title(title or "")
-        dedup_key = f"{target}:{repo}:{normalized_category}:{slug}"
+        dedup_key = f"{target}:{repo}:{normalized_category}:{slug}"[:512]
         dedup_hash = hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
-        return dedup_key[:512], dedup_hash
+        return dedup_key, dedup_hash
 
     def _normalize_category(self, value: object) -> str | None:
         text = self._clean_str(value).lower()

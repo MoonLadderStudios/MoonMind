@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,6 +104,21 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
     assert kwargs["workflow_create_request"]["payload"].get("targetRuntime") is None
     service._emit_notification.assert_awaited_once()
     assert proposal is record
+
+
+def test_compute_dedup_fields_hashes_stored_truncated_key() -> None:
+    service = WorkflowProposalService(AsyncMock(), redactor=SecretRedactor([], "***"))
+
+    dedup_key, dedup_hash = service._compute_dedup_fields(
+        target_class="workflow-repo",
+        repository="Moon/Repo",
+        category="tests",
+        title="A" * 800,
+    )
+
+    assert len(dedup_key) == 512
+    assert dedup_hash == hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
+
 
 @pytest.mark.asyncio
 async def test_emit_notification_blocks_secret_payload_before_webhook(

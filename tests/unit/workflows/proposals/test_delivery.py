@@ -113,6 +113,9 @@ def test_github_renderer_includes_review_context_and_excludes_raw_payload() -> N
     assert "custom" in rendered.labels
     assert "<!-- moonmind-proposal" in rendered.body
     assert "target=workflow-repo" in rendered.body
+    assert rendered.marker.index("record=") < rendered.marker.index("dedup=")
+    assert rendered.marker.index("dedup=") < rendered.marker.index("snapshot=")
+    assert rendered.marker.index("snapshot=") < rendered.marker.index("target=")
     assert "wf-123" in rendered.body
     assert "artifact://task-snapshot.json" in rendered.body
     assert "/moonmind promote" in rendered.body
@@ -131,6 +134,19 @@ def test_github_renderer_labels_moonmind_target_from_policy() -> None:
     assert "moonmind:target:moonmind" in rendered.labels
     assert "moonmind:category:run-quality" in rendered.labels
     assert "target=moonmind" in rendered.body
+
+
+def test_github_renderer_caps_long_category_labels() -> None:
+    rendered = render_github_issue(
+        _request(category="A category value that is much longer than github allows")
+    )
+
+    category_labels = [
+        label for label in rendered.labels if label.startswith("moonmind:category:")
+    ]
+    assert len(category_labels) == 1
+    assert len(category_labels[0]) <= 50
+    assert category_labels[0].startswith("moonmind:category:a-category-value")
 
 
 def test_jira_renderer_emits_adf_description_and_configured_fields() -> None:
