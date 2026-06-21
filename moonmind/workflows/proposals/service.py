@@ -570,7 +570,6 @@ class WorkflowProposalService:
             "attachments": [
                 {
                     "title": proposal.title,
-                    "title_link": f"/proposals/{proposal.id}",
                     "text": proposal.summary[:4000],
                     "fields": [
                         {

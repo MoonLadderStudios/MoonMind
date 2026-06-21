@@ -31,6 +31,7 @@ def test_normalize_status_maps_temporal_planning_to_running() -> None:
 def test_normalize_status_maps_temporal_proposals_to_running() -> None:
     assert dashboard_view_model.normalize_status("temporal", "proposals") == "running"
     assert dashboard_view_model.status_maps()["temporal"]["proposals"] == "running"
+    assert "proposals" not in dashboard_view_model.status_maps()
 
 def test_normalize_status_maps_temporal_canceled_spellings_to_canceled() -> None:
     assert dashboard_view_model.normalize_status("temporal", "canceled") == "canceled"
@@ -110,6 +111,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
     assert config["sources"]["agentRuns"]["diagnostics"] == "/api/agent-runs/{agentRunId}/diagnostics"
     assert config["sources"]["agentRuns"]["artifactSession"] == "/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}"
     assert config["sources"]["agentRuns"]["artifactSessionControl"] == "/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control"
+    assert "proposals" not in config["sources"]
     assert "speckit" not in config["sources"]
     assert "orchestrator" not in config["sources"]
     assert "externalRuns" not in config["sources"]
