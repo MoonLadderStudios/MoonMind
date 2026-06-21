@@ -1009,8 +1009,8 @@ def test_workflow_proposal_policy_settings_defaults(app_settings_defaults):
     """Workflow proposal defaults should expose policy knobs on both settings."""
 
     settings = AppSettings(_env_file=None, **app_settings_defaults)
-    assert settings.workflow_proposals.proposal_targets_default == "project"
-    assert settings.workflow.proposal_targets_default == "project"
+    assert settings.workflow_proposals.proposal_targets_default == "workflow_repo"
+    assert settings.workflow.proposal_targets_default == "workflow_repo"
     assert settings.workflow_proposals.max_items_project_default == 3
     assert settings.workflow.proposal_max_items_project == 3
     assert settings.workflow_proposals.moonmind_severity_floor_default == "high"

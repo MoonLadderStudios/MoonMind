@@ -54,7 +54,7 @@ _SECRET_REF_PATH_PATTERN = re.compile(r"^[A-Za-z0-9._/-]+$")
 _SECRET_REF_FIELD_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _CONTAINER_VOLUME_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _CONTAINER_RESERVED_ENV_KEYS = frozenset({"ARTIFACT_DIR", "JOB_ID", "REPOSITORY"})
-_PROPOSAL_POLICY_TARGETS = ("project", "moonmind")
+_PROPOSAL_POLICY_TARGETS = ("workflow_repo", "moonmind")
 _PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _SELF_MANAGED_PUBLISH_SKILLS = frozenset(
     {
@@ -1241,7 +1241,7 @@ class WorkflowProposalPolicy(BaseModel):
             lowered = target.lower()
             if lowered not in _PROPOSAL_POLICY_TARGETS:
                 raise WorkflowContractError(
-                    "workflow.proposalPolicy.targets entries must be 'project' or 'moonmind'"
+                    "workflow.proposalPolicy.targets entries must be 'workflow_repo' or 'moonmind'"
                 )
             if lowered in seen:
                 continue
@@ -2396,17 +2396,17 @@ def build_effective_proposal_policy(
     elif default_targets_normalized in _PROPOSAL_POLICY_TARGETS:
         default_target_list = [default_targets_normalized]
     else:
-        default_target_list = ["project"]
+        default_target_list = ["workflow_repo"]
     configured_targets = (
         list(policy.targets) if policy and policy.targets else default_target_list
     )
-    allow_project = "project" in configured_targets
+    allow_project = "workflow_repo" in configured_targets
     allow_moonmind = "moonmind" in configured_targets
     if not allow_project and not allow_moonmind:
         allow_project = True
 
     max_items = dict(policy.max_items or {}) if policy and policy.max_items else {}
-    max_items_project = int(max_items.get("project") or 0)
+    max_items_project = int(max_items.get("workflow_repo") or 0)
     if max_items_project <= 0:
         max_items_project = max(1, int(default_max_items_project or 1))
     max_items_moonmind = int(max_items.get("moonmind") or 0)

@@ -71,8 +71,8 @@ async def test_run_proposals_stage_propagates_policy(
         "task": {
             "proposeTasks": True,
             "proposalPolicy": {
-                "max_items": {"project": 5},
-                "targets": ["project"],
+                "max_items": {"workflow_repo": 5},
+                "targets": ["workflow_repo"],
                 "default_runtime": "claude",
             }
         }
@@ -86,8 +86,8 @@ async def test_run_proposals_stage_propagates_policy(
     
     submit_payload = captured[1][1]
     policy_payload = submit_payload["policy"]
-    assert policy_payload["maxItems"] == {"project": 5}
-    assert policy_payload["targets"] == ["project"]
+    assert policy_payload["maxItems"] == {"workflow_repo": 5}
+    assert policy_payload["targets"] == ["workflow_repo"]
     assert policy_payload["defaultRuntime"] == "claude"
 
     assert mock_run_workflow._proposals_generated == 1

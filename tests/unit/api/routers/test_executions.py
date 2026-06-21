@@ -3585,8 +3585,8 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
                     "runtime": {"mode": "codex"},
                     "proposeTasks": True,
                     "proposalPolicy": {
-                        "targets": ["project", "moonmind"],
-                        "maxItems": {"project": 2, "moonmind": 1},
+                        "targets": ["workflow_repo", "moonmind"],
+                        "maxItems": {"workflow_repo": 2, "moonmind": 1},
                         "minSeverityForMoonMind": "medium",
                         "defaultRuntime": "gemini_cli",
                     },
@@ -3622,8 +3622,8 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     assert "proposalPolicy" not in initial_parameters
     assert initial_parameters["workflow"]["proposeTasks"] is True
     assert initial_parameters["workflow"]["proposalPolicy"] == {
-        "targets": ["project", "moonmind"],
-        "maxItems": {"project": 2, "moonmind": 1},
+        "targets": ["workflow_repo", "moonmind"],
+        "maxItems": {"workflow_repo": 2, "moonmind": 1},
         "minSeverityForMoonMind": "medium",
         "defaultRuntime": "gemini_cli",
     }
@@ -5869,7 +5869,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
                         "instructions": "Run this on a schedule",
                         "proposeTasks": True,
                         "proposalPolicy": {
-                            "targets": ["project"],
+                            "targets": ["workflow_repo"],
                             "defaultRuntime": "gemini_cli",
                         },
                     },
@@ -5886,7 +5886,7 @@ def test_create_task_shaped_recurring_schedule_normalizes_proposal_intent(
     assert "proposalPolicy" not in stored_payload
     assert stored_payload["workflow"]["proposeTasks"] is True
     assert stored_payload["workflow"]["proposalPolicy"] == {
-        "targets": ["project"],
+        "targets": ["workflow_repo"],
         "defaultRuntime": "gemini_cli",
     }
 

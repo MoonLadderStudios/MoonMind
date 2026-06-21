@@ -18,7 +18,7 @@ from moonmind.jules.runtime import (
 )
 from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
-_ALLOWED_TARGET_DEFAULTS = ("project", "moonmind", "both")
+_ALLOWED_TARGET_DEFAULTS = ("workflow_repo", "moonmind", "both")
 _ALLOWED_PROPOSAL_SEVERITIES = ("low", "medium", "high", "critical")
 _PENTEST_ALLOWED_OPERATION_MODES = (
     "recon_only",
@@ -1025,16 +1025,16 @@ class WorkflowSettings(BaseSettings):
         description="Enable worker-side workflow proposal submission after successful runs.",
     )
     proposal_targets_default: str = Field(
-        "project",
+        "workflow_repo",
         validation_alias=AliasChoices(
             "MOONMIND_PROPOSAL_TARGETS"
         ),
-        description="Default proposal targets when workflows omit proposalPolicy (project|moonmind|both).",
+        description="Default proposal targets when workflows omit proposalPolicy (workflow_repo|moonmind|both).",
     )
     proposal_max_items_project: int = Field(
         3,
         validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT"),
-        description="Default per-run project proposal cap applied when workflow policy omits maxItems.project.",
+        description="Default per-run workflow-repo proposal cap applied when workflow policy omits maxItems.workflowRepo.",
         ge=1,
     )
     proposal_max_items_moonmind: int = Field(
@@ -1125,7 +1125,7 @@ class WorkflowSettings(BaseSettings):
     def _normalize_proposal_targets_default(cls, value: object) -> str:
         text = str(value or "").strip().lower()
         if not text:
-            return "project"
+            return "workflow_repo"
         if text not in _ALLOWED_TARGET_DEFAULTS:
             allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
             raise ValueError(
@@ -2287,11 +2287,11 @@ class WorkflowProposalSettings(BaseSettings):
     """Workflow proposal queue runtime knobs."""
 
     proposal_targets_default: str = Field(
-        "project",
+        "workflow_repo",
         validation_alias=AliasChoices(
             "MOONMIND_PROPOSAL_TARGETS"
         ),
-        description="Default proposal targets when policy overrides are absent (project|moonmind|both).",
+        description="Default proposal targets when policy overrides are absent (workflow_repo|moonmind|both).",
     )
     moonmind_ci_repository: str = Field(
         "MoonLadderStudios/MoonMind",
@@ -2303,7 +2303,7 @@ class WorkflowProposalSettings(BaseSettings):
     max_items_project_default: int = Field(
         3,
         validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT"),
-        description="Default per-run cap for project-targeted proposals when unspecified.",
+        description="Default per-run cap for workflow-repo proposals when unspecified.",
         ge=1,
     )
     max_items_moonmind_default: int = Field(
@@ -2369,7 +2369,7 @@ class WorkflowProposalSettings(BaseSettings):
     def _normalize_setting_targets_default(cls, value: object) -> str:
         text = str(value or "").strip().lower()
         if not text:
-            return "project"
+            return "workflow_repo"
         if text not in _ALLOWED_TARGET_DEFAULTS:
             allowed = ", ".join(_ALLOWED_TARGET_DEFAULTS)
             raise ValueError(

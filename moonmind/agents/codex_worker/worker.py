@@ -12164,7 +12164,7 @@ class CodexWorker:
                             level="warn",
                             message="task.proposalSubmission.rejected",
                             payload={
-                                "target": "project",
+                                "target": "workflow_repo",
                                 "error": str(exc),
                             },
                         )

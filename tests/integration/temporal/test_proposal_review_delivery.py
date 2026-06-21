@@ -217,9 +217,9 @@ async def test_proposal_submit_persists_external_delivery_result() -> None:
     assert delivery.requests[0].origin_metadata["workflow_id"] == "wf-1"
     assert delivery.requests[0].origin_metadata["source"] == "workflow"
     assert delivery.requests[0].origin_metadata["id"] == "wf-1"
-    assert record.resolved_policy["target"] == "project"
+    assert record.resolved_policy["target"] == "workflow_repo"
     assert record.resolved_policy["provider"] == "github"
-    assert record.resolved_policy["capacity"]["project"]["accepted"] == 1
+    assert record.resolved_policy["capacity"]["workflow_repo"]["accepted"] == 1
     assert record.resolved_policy["delivery"]["provider"] == "github"
 
 

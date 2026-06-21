@@ -816,7 +816,7 @@ async def test_promote_proposal_preserves_canonical_proposal_intent() -> None:
                 "workflow": {
                     "instructions": "Add regression coverage",
                     "proposalPolicy": {
-                        "targets": ["project"],
+                        "targets": ["workflow_repo"],
                     },
                 },
             }
@@ -835,7 +835,7 @@ async def test_promote_proposal_preserves_canonical_proposal_intent() -> None:
     assert "proposeTasks" not in final_request["payload"]
     task = final_request["payload"]["workflow"]
     assert task["proposeTasks"] is False
-    assert task["proposalPolicy"] == {"targets": ["project"]}
+    assert task["proposalPolicy"] == {"targets": ["workflow_repo"]}
 
 
 @pytest.mark.asyncio
@@ -1053,7 +1053,7 @@ async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
         last_synced_at=last_synced_at,
         workflow_snapshot_ref="artifact://task-snapshot",
         provider_metadata={"jira": {"issueType": "Task"}},
-        resolved_policy={"target": "project"},
+        resolved_policy={"target": "workflow_repo"},
     )
 
     assert proposal is existing
@@ -1064,7 +1064,7 @@ async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
     assert existing.resolved_policy == {
         "provider": "jira",
         "decision": "kept",
-        "target": "project",
+        "target": "workflow_repo",
         "duplicate": True,
         "duplicate_record_id": str(existing_id),
     }
