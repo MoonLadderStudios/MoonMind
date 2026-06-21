@@ -1,8 +1,8 @@
 import json
 import sys
 
-from scripts import create_jira_implement_preset_workflows as module
-from scripts.create_jira_implement_preset_workflows import (
+from scripts import create_issue_implement_preset_workflows as module
+from scripts.create_issue_implement_preset_workflows import (
     build_expand_payload,
     build_payload,
     post_json,
@@ -11,7 +11,8 @@ from scripts.create_jira_implement_preset_workflows import (
 
 def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
     payload = build_payload(
-        issue_key="mm-770",
+        provider="jira",
+        issue_ref="MM-770",
         repository="MoonLadderStudios/MoonMind",
         runtime="codex_cli",
         expanded_steps=[
@@ -19,6 +20,7 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
             {"title": "Finalize Jira status"},
         ],
         applied_template={"slug": "jira-implement", "version": "1.1.0"},
+        preset_version="1.1.0",
     )
 
     assert payload["type"] == "task"
@@ -54,6 +56,8 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
         "reason": "jira_issue_batch",
         "presetSlug": "jira-implement",
         "presetVersion": "1.1.0",
+        "issueProvider": "jira",
+        "issueRef": "MM-770",
         "jiraIssueKey": "MM-770",
     }
     assert task["appliedStepTemplates"] == [
@@ -63,28 +67,32 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
 
 def test_build_payload_idempotency_key_includes_run_shaping_inputs() -> None:
     base = build_payload(
-        issue_key="MM-770",
+        provider="jira",
+        issue_ref="MM-770",
         repository="MoonLadderStudios/MoonMind",
         runtime="codex_cli",
         preset_version="1.1.0",
         expanded_steps=[],
     )["payload"]["idempotencyKey"]
     changed_repository = build_payload(
-        issue_key="MM-770",
+        provider="jira",
+        issue_ref="MM-770",
         repository="MoonLadderStudios/Other",
         runtime="codex_cli",
         preset_version="1.1.0",
         expanded_steps=[],
     )["payload"]["idempotencyKey"]
     changed_runtime = build_payload(
-        issue_key="MM-770",
+        provider="jira",
+        issue_ref="MM-770",
         repository="MoonLadderStudios/MoonMind",
         runtime="claude_code",
         preset_version="1.1.0",
         expanded_steps=[],
     )["payload"]["idempotencyKey"]
     changed_version = build_payload(
-        issue_key="MM-770",
+        provider="jira",
+        issue_ref="MM-770",
         repository="MoonLadderStudios/MoonMind",
         runtime="codex_cli",
         preset_version="2.0.0",
@@ -98,9 +106,11 @@ def test_build_payload_idempotency_key_includes_run_shaping_inputs() -> None:
 
 def test_build_expand_payload_targets_jira_issue_picker_input() -> None:
     payload = build_expand_payload(
-        issue_key="mm-779",
+        provider="jira",
+        issue="mm-779",
         repository="MoonLadderStudios/MoonMind",
         runtime="codex_cli",
+        preset_version="1.1.0",
     )
 
     assert payload == {
@@ -133,8 +143,8 @@ def test_main_continues_after_expand_failure(monkeypatch, capsys) -> None:
         "appliedTemplate": {"slug": "jira-implement", "version": "1.1.0"},
     }
 
-    def fake_expand_jira_implement(**kwargs):
-        if kwargs["issue_key"].upper() == "MM-770":
+    def fake_expand_issue_implement(**kwargs):
+        if kwargs["issue"].upper() == "MM-770":
             raise TimeoutError("expand unavailable")
         return expanded
 
@@ -149,15 +159,17 @@ def test_main_continues_after_expand_failure(monkeypatch, capsys) -> None:
             },
         }
 
-    monkeypatch.setattr(module, "expand_jira_implement", fake_expand_jira_implement)
+    monkeypatch.setattr(module, "expand_issue_implement", fake_expand_issue_implement)
     monkeypatch.setattr(module, "post_json", fake_post_json)
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "create_jira_implement_preset_workflows.py",
+            "create_issue_implement_preset_workflows.py",
             "MM-770",
             "MM-771",
+            "--provider",
+            "jira",
             "--base-url",
             "http://moonmind.test",
         ],

@@ -2645,6 +2645,56 @@ def _github_status_mode(inputs: Mapping[str, Any]) -> str:
     return target or "start"
 
 
+def _pull_request_url_from_artifact_path(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    artifact_path = _string(
+        inputs.get("pullRequestArtifactPath")
+        or inputs.get("pull_request_artifact_path")
+    )
+    if not artifact_path:
+        return ""
+    raw_path = Path(artifact_path).expanduser()
+    candidate_paths: list[Path] = []
+    if raw_path.is_absolute():
+        candidate_paths.append(raw_path.resolve())
+    else:
+        for root in _repo_root_candidates(inputs, context):
+            candidate = (root / raw_path).resolve()
+            if candidate.is_relative_to(root):
+                candidate_paths.append(candidate)
+    for candidate in candidate_paths:
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, Mapping):
+            continue
+        nested_pull_request = _mapping(payload.get("pullRequest") or payload.get("pull_request"))
+        return _first_string(
+            payload.get("pullRequestUrl"),
+            payload.get("pull_request_url"),
+            payload.get("prUrl"),
+            payload.get("url"),
+            nested_pull_request.get("url"),
+        )
+    return ""
+
+
+def _github_status_pull_request_url(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> str:
+    return _first_string(
+        inputs.get("pullRequestUrl"),
+        inputs.get("pull_request_url"),
+        _pull_request_url_from_artifact_path(inputs, context),
+    )
+
+
 async def update_github_issue_status(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -2653,8 +2703,9 @@ async def update_github_issue_status(
 ) -> ToolResult:
     repository, issue_number = _github_issue_inputs(inputs)
     mode = _github_status_mode(inputs)
+    pull_request_url = _github_status_pull_request_url(inputs, _context)
     if mode == "finalize_after_pr_or_done":
-        mode = "code_review" if _string(inputs.get("pullRequestUrl") or inputs.get("pull_request_url")) else "done"
+        mode = "code_review" if pull_request_url else "done"
     actions = _GITHUB_STATUS_ACTIONS.get(mode, {})
     service = github_service_factory()
     token, resolution_error = await service.resolve_github_token(repo=repository)
@@ -2691,7 +2742,7 @@ async def update_github_issue_status(
             updated = response.json()
             applied.append("patch_issue")
             comment_body = ""
-            pr_url = _string(inputs.get("pullRequestUrl") or inputs.get("pull_request_url"))
+            pr_url = pull_request_url
             if actions.get("commentPullRequestUrl") and pr_url:
                 comment_body = f"Implementation pull request: {pr_url}"
             elif actions.get("comment"):

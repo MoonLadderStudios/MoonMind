@@ -2470,6 +2470,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/github/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Dashboard Github Issues
+         * @description List GitHub issues through MoonMind so browsers never call GitHub directly.
+         */
+        get: operations["list_dashboard_github_issues_api_github_issues_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/skills/imports": {
         parameters: {
             query?: never;
@@ -3884,6 +3904,48 @@ export interface components {
              * @description Branch option source
              */
             source: string;
+        };
+        /**
+         * DashboardIssueListResponse
+         * @description Dashboard response containing GitHub issue options for one repository.
+         */
+        DashboardIssueListResponse: {
+            /** Items */
+            items?: components["schemas"]["DashboardIssueOption"][];
+            /** Error */
+            error?: string | null;
+        };
+        /**
+         * DashboardIssueOption
+         * @description Serializable GitHub issue option exposed to dashboard clients.
+         */
+        DashboardIssueOption: {
+            /** Repository */
+            repository: string;
+            /** Number */
+            number: number;
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+            /**
+             * State
+             * @default
+             */
+            state: string;
+            /** Labels */
+            labels?: string[];
         };
         /**
          * DashboardSkillListResponse
@@ -13870,6 +13932,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardBranchListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_dashboard_github_issues_api_github_issues_get: {
+        parameters: {
+            query: {
+                repository: string;
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardIssueListResponse"];
                 };
             };
             /** @description Validation Error */

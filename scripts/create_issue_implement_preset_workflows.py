@@ -10,6 +10,7 @@ import sys
 import time
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlparse
 
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 DEFAULT_RUNTIME = "codex_cli"
@@ -27,15 +28,16 @@ def normalize_issue_ref(*, provider: str, issue: str, repository: str) -> tuple[
     if raw.startswith("#"):
         number_text = raw[1:]
     elif "#" in raw:
-        number_text = raw.rsplit("#", 1)[-1]
+        repo, number_text = raw.rsplit("#", 1)
+        repo = repo.strip("/")
     else:
         number_text = raw
-    if "github.com/" in raw and "/issues/" in raw:
-        parts = raw.split("github.com/", 1)[1].split("/issues/", 1)
-        repo = parts[0].strip("/")
-        number_text = parts[1].split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
-    elif "#" in raw and not raw.startswith("#"):
-        repo, number_text = raw.rsplit("#", 1)
+    parsed = urlparse(raw)
+    if parsed.scheme in {"http", "https"} and parsed.netloc.lower() == "github.com":
+        parts = [part for part in parsed.path.split("/") if part]
+        if len(parts) >= 4 and parts[2] == "issues":
+            repo = f"{parts[0]}/{parts[1]}"
+            number_text = parts[3]
     number = int(number_text)
     ref = f"{repo}#{number}"
     return ref, {"github_issue": {"repository": repo, "number": number}, "constraints": ""}

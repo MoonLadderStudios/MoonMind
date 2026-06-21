@@ -875,7 +875,7 @@ async def list_dashboard_github_branches(
 
 
 @router.get("/api/github/issues", response_model=DashboardIssueListResponse)
-async def list_dashboard_github_issues(
+def list_dashboard_github_issues(
     repository: str = Query(..., min_length=1),
     q: str = Query(""),
     _user: User = Depends(get_current_user()),

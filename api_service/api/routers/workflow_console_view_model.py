@@ -348,8 +348,17 @@ def _build_repository_options(
         _append_repository_option(options, seen, raw_repo, source="configured")
 
     discovery_error: str | None = None
-    github_enabled = bool(getattr(settings.github, "github_enabled", True))
-    github_token = str(getattr(settings.github, "github_token", "") or "").strip()
+    github_config = getattr(settings, "github", None)
+    github_enabled = (
+        bool(getattr(github_config, "github_enabled", True))
+        if github_config
+        else False
+    )
+    github_token = (
+        str(getattr(github_config, "github_token", "") or "").strip()
+        if github_config
+        else ""
+    )
     if include_credential_discovery and github_enabled and github_token:
         discovered, discovery_error = _get_cached_github_repository_options(
             github_token
@@ -379,8 +388,17 @@ def build_repository_branch_options(repository: str) -> dict[str, Any]:
             "error": "Repository must be owner/repo before branches can be loaded.",
         }
 
-    github_enabled = bool(getattr(settings.github, "github_enabled", True))
-    github_token = str(getattr(settings.github, "github_token", "") or "").strip()
+    github_config = getattr(settings, "github", None)
+    github_enabled = (
+        bool(getattr(github_config, "github_enabled", True))
+        if github_config
+        else False
+    )
+    github_token = (
+        str(getattr(github_config, "github_token", "") or "").strip()
+        if github_config
+        else ""
+    )
     if not github_enabled or not github_token:
         return {
             "items": [],
@@ -449,6 +467,14 @@ def build_repository_issue_options(repository: str, query: str = "") -> dict[str
                         if normalized_query.lower() not in haystack:
                             continue
                     labels = raw.get("labels") if isinstance(raw.get("labels"), list) else []
+                    label_names: list[str] = []
+                    for label in labels:
+                        value = label.get("name") if isinstance(label, Mapping) else label
+                        if value is None:
+                            continue
+                        value_text = str(value).strip()
+                        if value_text:
+                            label_names.append(value_text)
                     items.append({
                         "repository": normalized_repository,
                         "number": number,
@@ -456,11 +482,7 @@ def build_repository_issue_options(repository: str, query: str = "") -> dict[str
                         "body": body,
                         "url": str(raw.get("html_url") or ""),
                         "state": str(raw.get("state") or ""),
-                        "labels": [
-                            str(label.get("name") if isinstance(label, Mapping) else label)
-                            for label in labels
-                            if str(label.get("name") if isinstance(label, Mapping) else label).strip()
-                        ],
+                        "labels": label_names,
                     })
     except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException):
         return {"items": [], "error": "GitHub issue lookup is unavailable."}

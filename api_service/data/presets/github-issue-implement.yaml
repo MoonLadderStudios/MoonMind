@@ -198,3 +198,4 @@ steps:
       repository: '{{ inputs.github_issue.repository }}'
       issueNumber: '{{ inputs.github_issue.number }}'
       mode: finalize_after_pr_or_done
+      pullRequestArtifactPath: artifacts/github-issue-implement-pr.json

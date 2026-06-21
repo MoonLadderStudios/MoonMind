@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import yaml
@@ -743,6 +744,16 @@ def _jira_project_default_for_context(repository: str | None) -> str | None:
     ) or _single_allowed_jira_project_key()
 
 
+def _is_valid_github_repository(repository: str) -> bool:
+    parts = repository.split("/")
+    allowed = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+    return (
+        len(parts) == 2
+        and all(parts)
+        and all(all(char in allowed for char in part) for part in parts)
+    )
+
+
 def _render_issue_ref_template(
     template: str,
     issue_value: Mapping[str, Any],
@@ -766,12 +777,27 @@ def _issue_object_from_ref(
     if not ref:
         return None
     if provider == "github":
-        match = re.fullmatch(
-            r"(?:https://github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/issues/|#)(\d+)",
-            ref,
-        )
-        if match:
-            return {"repository": match.group(1), "number": int(match.group(2))}
+        if "#" in ref and not ref.startswith(("http://", "https://")):
+            repository, number_text = ref.rsplit("#", 1)
+            repository = repository.strip("/")
+            if _is_valid_github_repository(repository) and number_text.isdigit():
+                return {"repository": repository, "number": int(number_text)}
+        parsed = urlparse(ref)
+        if (
+            parsed.scheme in {"http", "https"}
+            and parsed.netloc.lower() == "github.com"
+        ):
+            parts = [part for part in parsed.path.split("/") if part]
+            if (
+                len(parts) >= 4
+                and parts[2] == "issues"
+                and _is_valid_github_repository(f"{parts[0]}/{parts[1]}")
+                and parts[3].isdigit()
+            ):
+                return {
+                    "repository": f"{parts[0]}/{parts[1]}",
+                    "number": int(parts[3]),
+                }
     keys = [str(item or "").strip() for item in (ref_path or []) if str(item or "").strip()]
     if keys:
         target: dict[str, Any] = {}
