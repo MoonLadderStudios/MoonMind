@@ -258,6 +258,93 @@ class ManagedRuntimeLauncher:
         return Path(root).resolve() / "workspaces"
 
     @staticmethod
+    def _sanitize_artifacts_step_segment(value: str) -> str:
+        """Return a filesystem-safe, traversal-free path segment for a step id."""
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip("-.")
+        safe = safe.replace("..", "-")
+        return safe[:120] or "step"
+
+    @classmethod
+    def _resolve_generic_env_step_id(
+        cls,
+        *,
+        run_id: str,
+        request: AgentExecutionRequest,
+    ) -> str:
+        """Resolve the ``<step_id>`` segment for ``MOONMIND_ARTIFACTS_DIR``.
+
+        Managed agent runs that execute a Step Execution carry the logical
+        step identity; standalone launches fall back to the run id so the
+        artifacts directory stays populated and run-scoped.
+        """
+        step_execution = getattr(request, "step_execution", None)
+        if step_execution is not None:
+            logical_step_id = str(
+                getattr(step_execution, "logical_step_id", "") or ""
+            ).strip()
+            if logical_step_id:
+                return cls._sanitize_artifacts_step_segment(logical_step_id)
+        return cls._sanitize_artifacts_step_segment(run_id)
+
+    @classmethod
+    def _build_generic_managed_agent_env(
+        cls,
+        *,
+        run_id: str,
+        resolved_workspace_path: str | None,
+        request: AgentExecutionRequest,
+    ) -> dict[str, str]:
+        """Build the generic, project-agnostic managed-agent env vars (MM-861).
+
+        Every managed agent session receives the same generic workspace
+        coordinates regardless of project type, mirroring a developer machine
+        with the repository checked out:
+
+        - ``MOONMIND_REPO_DIR``      -> the checked-out repository directory
+        - ``MOONMIND_RUN_ROOT``      -> the per-run workspace root
+        - ``MOONMIND_ARTIFACTS_DIR`` -> the per-step durable artifact area
+        - ``CI``                     -> ``"1"``
+
+        Paths follow the ``/work/agent_jobs/<run_id>/...`` workspace convention
+        (``docs/ManagedAgents/DockerSidecarRuntime.md`` §5.2). Values are
+        derived from the resolved workspace so they always point at the real
+        directories, and carry no engine- or project-specific values so
+        behavior is identical across project types.
+        """
+        if resolved_workspace_path:
+            repo_dir = Path(resolved_workspace_path).resolve()
+            run_root = repo_dir.parent
+        else:
+            # Workspace-less launches fall back to the documented
+            # ``/work/agent_jobs/<run_id>/...`` convention derived directly from
+            # ``MOONMIND_AGENT_RUNTIME_STORE``. ``_workspace_root()`` appends a
+            # ``workspaces`` segment used by the internal clone layout, which
+            # would diverge from the published run-root contract.
+            store_root = Path(
+                os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+            ).resolve()
+            run_root = (store_root / run_id).resolve()
+            repo_dir = run_root / "repo"
+
+        step_id = cls._resolve_generic_env_step_id(run_id=run_id, request=request)
+        artifacts_dir = run_root / "artifacts" / step_id
+        try:
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            logger.warning(
+                "Failed to pre-create managed-agent artifacts dir %s",
+                artifacts_dir,
+                exc_info=True,
+            )
+
+        return {
+            "MOONMIND_REPO_DIR": str(repo_dir),
+            "MOONMIND_RUN_ROOT": str(run_root),
+            "MOONMIND_ARTIFACTS_DIR": str(artifacts_dir),
+            "CI": "1",
+        }
+
+    @staticmethod
     def _build_github_socket_path(*, run_id: str, support_root: str | None) -> str:
         """Keep broker sockets on a short path to avoid AF_UNIX length limits."""
         socket_root = Path("/tmp")
@@ -283,6 +370,20 @@ class ManagedRuntimeLauncher:
             "app:app",
             str(path.parent),
             str(path),
+        )
+
+    @staticmethod
+    def _path_within(candidate: str | Path, root: str | Path | None) -> bool:
+        """Return True when ``candidate`` is ``root`` or nested beneath it."""
+        if not root:
+            return False
+        try:
+            resolved_candidate = Path(candidate).resolve()
+            resolved_root = Path(root).resolve()
+        except OSError:
+            return False
+        return resolved_candidate == resolved_root or resolved_candidate.is_relative_to(
+            resolved_root
         )
 
     def _resolve_workspace_ownership_root(
@@ -1144,6 +1245,20 @@ class ManagedRuntimeLauncher:
                 env_overrides.setdefault("GIT_AUTHOR_EMAIL", _git_email)
                 env_overrides.setdefault("GIT_COMMITTER_EMAIL", _git_email)
 
+            # MM-861: expose the generic, project-agnostic workspace env vars to
+            # every managed agent session. These are MoonMind-owned and set
+            # authoritatively (last-wins over profile/passthrough env) so the
+            # values are identical across project types. Injected before the
+            # recursive workspace chown so the artifacts dir is owned by the
+            # runtime user when privileges are dropped.
+            env_overrides.update(
+                self._build_generic_managed_agent_env(
+                    run_id=run_id,
+                    resolved_workspace_path=resolved_workspace_path,
+                    request=request,
+                )
+            )
+
             github_token = await resolve_github_token_for_launch(env_overrides)
             if not github_token:
                 github_token = launch_github_token
@@ -1197,6 +1312,20 @@ class ManagedRuntimeLauncher:
                 await self._run_checked_command(
                     "chown", "-R", "app:app", ownership_root,
                 )
+                # MM-861: the pre-created artifacts dir lives under the run root
+                # and is owned by root until the recursive chown above runs. For
+                # external workspaces the ownership root is only the repo subtree,
+                # so the sibling artifacts dir stays root-owned and the
+                # privilege-dropped app user hits PermissionError writing
+                # MOONMIND_ARTIFACTS_DIR. Chown it explicitly when it is outside
+                # the ownership root.
+                artifacts_dir = env_overrides.get("MOONMIND_ARTIFACTS_DIR")
+                if artifacts_dir and not self._path_within(
+                    artifacts_dir, ownership_root
+                ):
+                    await self._run_checked_command(
+                        "chown", "-R", "app:app", artifacts_dir,
+                    )
 
             if _needs_priv_drop:
                 # runuser -u does not rewrite HOME/USER/LOGNAME for us when we pass
