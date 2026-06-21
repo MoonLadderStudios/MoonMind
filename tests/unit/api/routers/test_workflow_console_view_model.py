@@ -30,6 +30,7 @@ def test_normalize_status_maps_temporal_planning_to_running() -> None:
 
 def test_normalize_status_maps_temporal_proposals_to_running() -> None:
     assert dashboard_view_model.normalize_status("temporal", "proposals") == "running"
+    assert dashboard_view_model.normalize_status("proposals", "proposals") == "running"
     assert dashboard_view_model.status_maps()["temporal"]["proposals"] == "running"
     assert "proposals" not in dashboard_view_model.status_maps()
 

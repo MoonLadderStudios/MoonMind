@@ -4,15 +4,12 @@ import uuid
 
 def _build_proposal_service_factory():
     from api_service.db.base import get_async_session_context
-    from moonmind.workflows.proposals.repositories import WorkflowProposalRepository
-    from moonmind.workflows.proposals.service import WorkflowProposalService
+    from moonmind.workflows import get_workflow_proposal_service
 
     @contextlib.asynccontextmanager
     async def factory():
         async with get_async_session_context() as db_session:
-            yield WorkflowProposalService(
-                WorkflowProposalRepository(db_session),
-            )
+            yield get_workflow_proposal_service(db_session)
     return factory
 
 """Temporal worker runtime entrypoint."""

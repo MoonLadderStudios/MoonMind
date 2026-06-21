@@ -570,6 +570,11 @@ class WorkflowProposalService:
             "attachments": [
                 {
                     "title": proposal.title,
+                    **(
+                        {"title_link": proposal.external_url}
+                        if proposal.external_url
+                        else {}
+                    ),
                     "text": proposal.summary[:4000],
                     "fields": [
                         {

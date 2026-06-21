@@ -1251,6 +1251,11 @@ async def test_create_proposal_invokes_delivery_and_persists_external_issue() ->
     assert proposal.last_synced_at == datetime(2026, 5, 7, 12, 30, tzinfo=UTC)
     assert proposal.provider_metadata["delivery"]["marker"] == "moonmind-proposal"
     assert delivery.requests[0].workflow_snapshot_ref == "artifact://snapshot"
+    notification_payload = service._build_notification_payload(proposal)
+    assert (
+        notification_payload["attachments"][0]["title_link"]
+        == "https://github.example/Moon/Repo/issues/42"
+    )
     assert repo.commit.await_count >= 2
 
 
