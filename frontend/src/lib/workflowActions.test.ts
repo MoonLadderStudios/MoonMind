@@ -76,15 +76,15 @@ describe('buildWorkflowActionMenuItems', () => {
       }),
     );
     expect(items.map((item) => item.id)).toEqual([
+      'bypass-dependency-wait',
+      'cancel',
+      'create-remediation-task',
       'rename',
       'pause',
       'resume',
       'approve',
       'reject',
-      'cancel',
       'send-message',
-      'bypass-dependency-wait',
-      'create-remediation-task',
     ]);
     expect(items.find((item) => item.id === 'reject')?.danger).toBe(true);
     expect(items.find((item) => item.id === 'cancel')?.danger).toBe(true);
@@ -108,9 +108,9 @@ describe('buildWorkflowActionMenuItems', () => {
     );
     expect(withEditing.map((item) => item.id)).toEqual([
       'edit-task',
-      'compare-run',
       'rerun',
       'resume-from-failed-step',
+      'compare-run',
     ]);
     expect(withEditing.find((item) => item.id === 'edit-task')?.href).toBe('/tasks/abc/edit');
   });
