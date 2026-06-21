@@ -4066,6 +4066,44 @@ async def test_cancel_marks_terminal_state_and_close_status(
         assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
 
 @pytest.mark.asyncio
+async def test_cancel_execution_terminal_record_skips_temporal_call(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+        completed = await service.mark_execution_succeeded(
+            workflow_id=created.workflow_id,
+            summary="already done",
+        )
+        assert completed.state is MoonMindWorkflowState.COMPLETED
+        mock_client_adapter.reset_mock()
+
+        result = await service.cancel_execution(
+            workflow_id=created.workflow_id,
+            reason="too late",
+            graceful=True,
+        )
+
+        assert result.state is MoonMindWorkflowState.COMPLETED
+        assert result.close_status is TemporalExecutionCloseStatus.COMPLETED
+        mock_client_adapter.update_workflow.assert_not_called()
+        mock_client_adapter.cancel_workflow.assert_not_called()
+        mock_client_adapter.terminate_workflow.assert_not_called()
+
+@pytest.mark.asyncio
 async def test_cancel_execution_records_reject_audit_action(
     tmp_path, mock_client_adapter
 ):

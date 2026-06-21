@@ -3823,6 +3823,140 @@ async def test_run_marks_blocked_outcome_as_failed_terminal_state(
     assert states[-1] == ("failed", blocker_summary)
     assert workflow._close_status == "failed"
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_stage", ["proposals", "finalizing"])
+async def test_run_observes_cancel_after_late_stages_before_completion(
+    monkeypatch: pytest.MonkeyPatch,
+    cancel_stage: str,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    finalizing_calls: list[dict[str, str | None]] = []
+    terminal_calls: list[dict[str, str | None]] = []
+    states: list[tuple[str, str | None]] = []
+
+    def fake_initialize(
+        _self: MoonMindRunWorkflow,
+        _payload: dict[str, Any],
+    ) -> tuple[str, dict[str, Any], str, str, None]:
+        _self._owner_type = "user"
+        _self._owner_id = "owner-1"
+        _self._entry = "run"
+        return (
+            "MoonMind.UserWorkflow",
+            {"repo": "MoonLadderStudios/MoonMind"},
+            "artifact://input/1",
+            "artifact://plan/1",
+            None,
+        )
+
+    async def fake_run_planning_stage(*_args: Any, **_kwargs: Any) -> str:
+        return "artifact://plan/1"
+
+    async def fake_run_execution_stage(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def fake_run_proposals_stage(
+        self: MoonMindRunWorkflow,
+        *,
+        parameters: dict[str, Any],
+    ) -> None:
+        if cancel_stage == "proposals":
+            self._cancel_requested = True
+
+    async def fake_run_finalizing_stage(
+        self: MoonMindRunWorkflow,
+        *,
+        parameters: dict[str, Any],
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        finalizing_calls.append({"status": status, "error": error})
+        if cancel_stage == "finalizing":
+            self._cancel_requested = True
+
+    async def fake_record_terminal_state(
+        self: MoonMindRunWorkflow,
+        *,
+        state: str,
+        close_status: str,
+        summary: str | None,
+        error_category: str | None = None,
+    ) -> None:
+        terminal_calls.append(
+            {
+                "state": state,
+                "close_status": close_status,
+                "summary": summary,
+                "error_category": error_category,
+            }
+        )
+
+    async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    original_set_state = MoonMindRunWorkflow._set_state
+
+    def capture_set_state(
+        self: MoonMindRunWorkflow,
+        state: str,
+        summary: str | None = None,
+    ) -> None:
+        states.append((state, summary))
+        original_set_state(self, state, summary)
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-cancel-after-proposals",
+            "run_id": "run-cancel-after-proposals",
+            "task_queue": "mm.workflow",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_initialize_from_payload", fake_initialize)
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_wait_if_paused_at_safe_boundary",
+        fake_noop_async,
+    )
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_planning_stage", fake_run_planning_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_execution_stage", fake_run_execution_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_proposals_stage", fake_run_proposals_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_run_finalizing_stage", fake_run_finalizing_stage)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_record_terminal_state", fake_record_terminal_state)
+    monkeypatch.setattr(MoonMindRunWorkflow, "_set_state", capture_set_state)
+
+    result = await workflow.run({"workflowType": "MoonMind.UserWorkflow"})
+
+    assert result == {"status": "canceled"}
+    expected_finalizing_status = "canceled" if cancel_stage == "proposals" else "success"
+    assert finalizing_calls == [{"status": expected_finalizing_status, "error": None}]
+    assert terminal_calls == [
+        {
+            "state": "canceled",
+            "close_status": "canceled",
+            "summary": "Execution canceled.",
+            "error_category": None,
+        }
+    ]
+    assert states[-1] == ("canceled", "Execution canceled.")
+    assert ("completed", "Workflow completed successfully") not in states
+
 def test_publish_completion_requires_pr_url_for_pr_publish_mode() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._publish_status = "published"

@@ -2096,10 +2096,12 @@ class TemporalExecutionService:
         )
         reason_text = (reason or default_reason).strip() or default_reason
 
-        if (
-            record.workflow_type is TemporalWorkflowType.USER_WORKFLOW
-            and record.state not in TERMINAL_STATES
-        ):
+        if record.state in TERMINAL_STATES:
+            if isinstance(record, TemporalExecutionCanonicalRecord):
+                return await self._sync_projection_best_effort(record)
+            return record
+
+        if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
             await self._best_effort_terminate_workflow_scoped_managed_sessions(
                 workflow_id=record.workflow_id,
                 reason=reason_text,
@@ -2124,11 +2126,6 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Temporal cancel failed: {exc}"
             ) from exc
-
-        if record.state in TERMINAL_STATES:
-            if isinstance(record, TemporalExecutionCanonicalRecord):
-                return await self._sync_projection_best_effort(record)
-            return record
 
         record.paused = False
         self._clear_waiting_metadata(record)
