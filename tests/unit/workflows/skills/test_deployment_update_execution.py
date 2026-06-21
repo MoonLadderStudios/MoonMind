@@ -20,10 +20,12 @@ from moonmind.workflows.skills.deployment_execution import (
     InMemoryDesiredStateStore,
     TemporalDeploymentEvidenceWriter,
     _command_plan_targeting_services,
+    _compose_up_args_for_services,
     _ensure_command_succeeded,
     _ensure_runner_survives_update,
     _is_host_absolute_path,
     _remap_host_compose_path,
+    _remove_services_from_command_args,
     _service_is_excluded,
     _service_name_matches,
     _tail_text,
@@ -850,7 +852,7 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
     monkeypatch.setenv("HOSTNAME", "deploy123")
     events: list[str] = []
     runner = DeploymentControlRunner(events)
-    executor, store, _evidence, _runner, _events = _executor(
+    executor, store, evidence, _runner, _events = _executor(
         runner=runner,
         events=events,
         excluded_services=("temporal-worker-deployment-control",),
@@ -861,23 +863,30 @@ async def test_deployment_control_runner_targets_services_except_itself(monkeypa
     assert result.status == "COMPLETED"
     assert len(store.records) == 1
     pull_command = runner.commands[0][1]
-    up_command = runner.commands[1][1]
+    one_shot_command = runner.commands[1][1]
+    up_command = runner.commands[2][1]
     assert pull_command[-4:] == (
         "temporal-worker-agent-runtime",
         "init-db",
         "api",
         "new-worker",
     )
-    assert up_command[-4:] == (
-        "temporal-worker-agent-runtime",
-        "init-db",
-        "api",
-        "new-worker",
-    )
+    assert one_shot_command[-1:] == ("init-db",)
+    assert up_command[-3:] == ("temporal-worker-agent-runtime", "api", "new-worker")
     assert "temporal-worker-deployment-control" not in up_command
+    assert "init-db" not in up_command
     assert "postgres" not in up_command
     assert "docker-proxy" not in up_command
     assert "temporal" not in up_command
+    assert "-d" not in one_shot_command
+    assert "--wait" not in one_shot_command
+    assert "--exit-code-from" in one_shot_command
+    assert one_shot_command[-2:] == ("init-db", "init-db")
+    command_payload = next(
+        payload for kind, payload in evidence.records if kind == "command-log"
+    )
+    assert command_payload["oneShot"][0]["service"] == "init-db"
+    assert command_payload["oneShot"][0]["result"]["exitCode"] == 0
 
 
 @pytest.mark.asyncio
@@ -983,6 +992,90 @@ def test_runner_guard_blocks_when_no_specific_services_targeted(monkeypatch) -> 
         _ensure_runner_survives_update(command_plan=plan, before_state=before_state)
 
     assert exc_info.value.error_code == "DEPLOYMENT_RUNNER_UNSAFE"
+
+
+def test_compose_up_args_for_services_only_removes_trailing_service_args() -> None:
+    args = (
+        "docker",
+        "compose",
+        "up",
+        "-d",
+        "--wait",
+        "--no-deps",
+        "up",
+        "init-db",
+    )
+
+    rewritten = _compose_up_args_for_services(args, ("api",))
+
+    assert rewritten == (
+        "docker",
+        "compose",
+        "up",
+        "-d",
+        "--wait",
+        "--no-deps",
+        "api",
+    )
+
+
+def test_one_shot_up_args_wait_on_exit_code_without_detached_wait() -> None:
+    args = (
+        "docker",
+        "compose",
+        "up",
+        "-d",
+        "--remove-orphans",
+        "--wait",
+        "--no-deps",
+        "api",
+        "init-db",
+    )
+
+    rewritten = _compose_up_args_for_services(
+        args,
+        ("init-db",),
+        one_shot_service="init-db",
+    )
+
+    assert rewritten == (
+        "docker",
+        "compose",
+        "up",
+        "--remove-orphans",
+        "--no-deps",
+        "--exit-code-from",
+        "init-db",
+        "init-db",
+    )
+
+
+def test_remove_services_from_command_args_preserves_option_values() -> None:
+    args = (
+        "docker",
+        "compose",
+        "pull",
+        "--policy",
+        "always",
+        "--ignore-buildable",
+        "api",
+        "init-db",
+    )
+
+    rewritten = _remove_services_from_command_args(
+        args,
+        excluded_services={"always", "init-db"},
+    )
+
+    assert rewritten == (
+        "docker",
+        "compose",
+        "pull",
+        "--policy",
+        "always",
+        "--ignore-buildable",
+        "api",
+    )
 
 
 def test_targeted_update_plan_skips_compose_dependencies() -> None:
@@ -1124,6 +1217,14 @@ def test_compose_config_validation_failure_has_normalized_class() -> None:
 
     assert exc_info.value.error_code == "DEPLOYMENT_COMMAND_FAILED"
     assert exc_info.value.details["failureClass"] == "compose_config_validation_failure"
+
+
+def test_one_shot_service_failure_has_normalized_class() -> None:
+    with pytest.raises(ToolFailure) as exc_info:
+        _ensure_command_succeeded("one-shot service init-db", {"exitCode": 2})
+
+    assert exc_info.value.error_code == "DEPLOYMENT_COMMAND_FAILED"
+    assert exc_info.value.details["failureClass"] == "one_shot_service_failure"
 
 
 def test_tail_text_returns_empty_for_non_positive_limit() -> None:
