@@ -1254,24 +1254,46 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     raise
                 refreshed_snapshot = await self._load_snapshot(binding.workflow_id)
                 if not refreshed_snapshot.container_id or not refreshed_snapshot.thread_id:
-                    raise
-                refreshed_locator = self._locator_from_snapshot(refreshed_snapshot)
-                logger.warning(
-                    "Retrying managed-session resume status after locator mismatch "
-                    "using refreshed workflow snapshot for session %s",
-                    refreshed_locator.session_id,
+                    snapshot = refreshed_snapshot
+                else:
+                    refreshed_locator = self._locator_from_snapshot(refreshed_snapshot)
+                    logger.warning(
+                        "Retrying managed-session resume status after locator mismatch "
+                        "using refreshed workflow snapshot for session %s",
+                        refreshed_locator.session_id,
+                    )
+                    try:
+                        handle = await self._coerce_handle(
+                            self._session_status(refreshed_locator)
+                        )
+                    except Exception as retry_exc:
+                        if not _is_session_locator_mismatch_error(retry_exc):
+                            raise
+                        logger.warning(
+                            "Managed-session resume status still mismatched after "
+                            "snapshot refresh for session %s; launching a fresh "
+                            "workflow-scoped session.",
+                            refreshed_locator.session_id,
+                        )
+                        snapshot = refreshed_snapshot
+                    else:
+                        await self._signal_control_action(
+                            action="resume_session",
+                            reason=None,
+                            container_id=handle.session_state.container_id,
+                            thread_id=handle.session_state.thread_id,
+                            active_turn_id=handle.session_state.active_turn_id,
+                        )
+                        return handle
+            else:
+                await self._signal_control_action(
+                    action="resume_session",
+                    reason=None,
+                    container_id=handle.session_state.container_id,
+                    thread_id=handle.session_state.thread_id,
+                    active_turn_id=handle.session_state.active_turn_id,
                 )
-                handle = await self._coerce_handle(
-                    self._session_status(refreshed_locator)
-                )
-            await self._signal_control_action(
-                action="resume_session",
-                reason=None,
-                container_id=handle.session_state.container_id,
-                thread_id=handle.session_state.thread_id,
-                active_turn_id=handle.session_state.active_turn_id,
-            )
-            return handle
+                return handle
 
         active_binding = snapshot.binding
         turn_completion_timeout_seconds = self._turn_completion_timeout_seconds(

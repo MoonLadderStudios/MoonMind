@@ -3168,6 +3168,130 @@ async def test_start_retries_existing_session_status_after_locator_mismatch(
         "threadId": "thread-cleared",
     }
 
+async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
+    tmp_path: Path,
+) -> None:
+    binding = _binding().model_copy(update={"session_epoch": 7})
+    load_snapshot_calls: list[str] = []
+    session_status_calls: list[CodexManagedSessionLocator] = []
+    launch_calls: list[Any] = []
+    attach_calls: list[dict[str, Any]] = []
+    send_turn_calls: list[SendCodexManagedSessionTurnRequest] = []
+    control_calls: list[dict[str, Any]] = []
+
+    async def _load_snapshot(workflow_id: str) -> CodexManagedSessionSnapshot:
+        load_snapshot_calls.append(workflow_id)
+        return _snapshot(
+            binding=binding,
+            container_id="container-stale",
+            thread_id="thread-stale",
+        )
+
+    async def _session_status(
+        request: CodexManagedSessionLocator,
+    ) -> CodexManagedSessionHandle:
+        session_status_calls.append(request)
+        _raise_activity_error_from_application_error(
+            ApplicationError(
+                "sessionEpoch does not match the active managed session",
+                type="RuntimeError",
+            )
+        )
+
+    async def _launch_session(request: Any) -> CodexManagedSessionHandle:
+        launch_calls.append(request)
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-fresh",
+            thread_id="thread-fresh",
+        )
+
+    async def _send_turn(
+        request: SendCodexManagedSessionTurnRequest,
+    ) -> CodexManagedSessionTurnResponse:
+        send_turn_calls.append(request)
+        return _turn_response(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _fetch_summary(
+        request: FetchCodexManagedSessionSummaryRequest,
+    ) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _publish_artifacts(
+        request: PublishCodexManagedSessionArtifactsRequest,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return _publication(
+            session_id=request.session_id,
+            session_epoch=request.session_epoch,
+            container_id=request.container_id,
+            thread_id=request.thread_id,
+        )
+
+    async def _attach_runtime_handles(payload: dict[str, Any]) -> None:
+        attach_calls.append(payload)
+
+    async def _apply_control_action(payload: dict[str, Any]) -> None:
+        control_calls.append(payload)
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "secret_ref"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_attach_runtime_handles,
+        apply_session_control_action=_apply_control_action,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    handle = await adapter.start(_request(binding))
+
+    assert handle.status == "completed"
+    assert len(load_snapshot_calls) == 2
+    assert len(session_status_calls) == 2
+    assert len(launch_calls) == 1
+    assert session_status_calls[0].container_id == "container-stale"
+    assert session_status_calls[1].thread_id == "thread-stale"
+    launch_request = launch_calls[0]["request"]
+    assert launch_request["sessionEpoch"] == 7
+    assert launch_request["threadId"] == f"thread:{binding.session_id}:7"
+    assert send_turn_calls[0].container_id == "container-fresh"
+    assert send_turn_calls[0].thread_id == "thread-fresh"
+    assert attach_calls == [
+        {"containerId": "container-fresh", "threadId": "thread-fresh"}
+    ]
+    assert control_calls[0] == {
+        "action": "start_session",
+        "containerId": "container-fresh",
+        "threadId": "thread-fresh",
+    }
+
 async def test_clear_session_rotates_epoch_and_signals_session_workflow(
     tmp_path: Path,
 ) -> None:
