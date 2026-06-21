@@ -1135,7 +1135,10 @@ class WorkflowProposalService:
         )
 
         dedup_key, dedup_hash = self._compute_dedup_fields(
-            repository=destination, title=cleaned_title
+            target_class=normalized_target,
+            repository=destination,
+            category=normalized_category,
+            title=cleaned_title,
         )
         proposal = await self._repository.create_proposal(
             title=cleaned_title,

@@ -7,6 +7,7 @@ issues are review artifacts with bounded controls and links back to evidence.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -172,6 +173,15 @@ class ProviderDecisionResult:
     runtime_mode: str | None = None
     external_state: str | None = None
     promoted_execution_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubDecisionIngressResult:
+    """Verified GitHub reviewer-decision event at the provider boundary."""
+
+    event: ProviderDecisionEvent
+    verified: bool
+    reason: str | None = None
 
 
 class ProposalIssueProvider(Protocol):
@@ -417,6 +427,130 @@ def _marker(request: ProposalDeliveryRequest) -> str:
         f"dedup={request.dedup_hash} "
         f"snapshot={snapshot} target={_target_class(request)} -->"
     )
+
+
+def github_marker_for_proposal(proposal: Any) -> str:
+    """Return the ownership marker expected in a delivered proposal issue."""
+
+    return _marker(request_from_proposal(proposal))
+
+
+def verify_github_webhook_signature(
+    *,
+    body: bytes,
+    signature_header: str | None,
+    secret: str | None,
+) -> bool:
+    """Verify GitHub's sha256 webhook signature without exposing the secret."""
+
+    clean_secret = _clean(secret)
+    clean_signature = _clean(signature_header)
+    if not clean_secret or not clean_signature.startswith("sha256="):
+        return False
+    digest = hmac.new(clean_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    expected = f"sha256={digest}"
+    return hmac.compare_digest(expected, clean_signature)
+
+
+def github_decision_event_from_payload(
+    *,
+    payload: Mapping[str, Any],
+    proposal: Any,
+    body: bytes,
+    signature_header: str | None,
+    webhook_secret: str | None,
+    trusted_sync: bool = False,
+    observed_at: datetime | None = None,
+) -> GitHubDecisionIngressResult:
+    """Build a service decision event only after GitHub boundary checks.
+
+    GitHub issue/comment text remains untrusted. This helper extracts only the
+    bounded fields needed by the proposal service and derives authenticity and
+    actor authorization from provider metadata plus MoonMind policy.
+    """
+
+    issue_node = payload.get("issue")
+    issue = dict(issue_node) if isinstance(issue_node, Mapping) else {}
+    comment_node = payload.get("comment")
+    comment = dict(comment_node) if isinstance(comment_node, Mapping) else {}
+    repo_node = payload.get("repository")
+    repository = dict(repo_node) if isinstance(repo_node, Mapping) else {}
+    sender_node = payload.get("sender")
+    sender = dict(sender_node) if isinstance(sender_node, Mapping) else {}
+
+    delivery_id = _clean(payload.get("deliveryId") or payload.get("delivery_id"))
+    provider_event_id = (
+        delivery_id
+        or _clean(comment.get("node_id") or comment.get("id"))
+        or _clean(payload.get("id"))
+    )
+    comment_user_node = comment.get("user")
+    comment_user = (
+        dict(comment_user_node) if isinstance(comment_user_node, Mapping) else {}
+    )
+    actor = _clean(sender.get("login") or comment_user.get("login"))
+    issue_number = _clean(issue.get("number") or payload.get("externalKey"))
+    command_body = _clean(
+        comment.get("body")
+        if comment_node is not None
+        else (issue.get("body") or payload.get("body"))
+    )
+    repo_full_name = _clean(repository.get("full_name") or payload.get("repository"))
+    issue_body = _clean(issue.get("body"))
+
+    signature_verified = verify_github_webhook_signature(
+        body=body,
+        signature_header=signature_header,
+        secret=webhook_secret,
+    )
+    authenticity_verified = signature_verified or trusted_sync
+    proposal_repository = _clean(getattr(proposal, "repository", ""))
+    proposal_provider = _clean(getattr(proposal, "provider", "")).lower()
+    proposal_external_key = _clean(getattr(proposal, "external_key", ""))
+    expected_marker = github_marker_for_proposal(proposal)
+
+    reason: str | None = None
+    if not authenticity_verified:
+        reason = "provider_auth_failed"
+    elif proposal_provider and proposal_provider != "github":
+        reason = "provider_identity_mismatch"
+    elif not repo_full_name or repo_full_name.lower() != proposal_repository.lower():
+        reason = "provider_identity_mismatch"
+    elif not issue_number or issue_number != proposal_external_key:
+        reason = "provider_identity_mismatch"
+    elif expected_marker not in issue_body:
+        reason = "provider_auth_failed"
+
+    actor_authorized = _github_actor_authorized(proposal, actor)
+    if reason is None and not actor_authorized:
+        reason = "actor_not_authorized"
+
+    event = ProviderDecisionEvent(
+        provider="github",
+        external_key=issue_number,
+        provider_event_id=provider_event_id,
+        actor=actor,
+        body=command_body,
+        authenticity_verified=authenticity_verified and reason is None,
+        actor_authorized=actor_authorized,
+        observed_at=observed_at or datetime.now(UTC),
+    )
+    return GitHubDecisionIngressResult(
+        event=event,
+        verified=reason is None,
+        reason=reason,
+    )
+
+
+def _github_actor_authorized(proposal: Any, actor: str) -> bool:
+    policy = getattr(proposal, "resolved_policy", {})
+    if not isinstance(policy, Mapping):
+        return False
+    allowed = policy.get("allowedActors")
+    if not isinstance(allowed, (list, tuple, set)):
+        return False
+    normalized = {_clean(item).lower() for item in allowed if _clean(item)}
+    return bool(actor and _clean(actor).lower() in normalized)
 
 
 def _evidence_lines(request: ProposalDeliveryRequest) -> list[str]:
@@ -836,10 +970,13 @@ __all__ = [
     "ProposalDeliveryService",
     "ProposalIssueProvider",
     "GitHubProposalIssueProvider",
+    "GitHubDecisionIngressResult",
     "JiraProposalIssueProvider",
     "ProviderDecisionEvent",
     "ProviderDecisionResult",
     "RenderedProposalIssue",
+    "github_decision_event_from_payload",
+    "github_marker_for_proposal",
     "parse_provider_decision",
     "render_github_issue",
     "render_jira_issue",

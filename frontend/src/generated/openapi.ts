@@ -1833,6 +1833,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/proposals/{proposal_id}/github-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Github Provider Decision
+         * @description Ingest a GitHub reviewer decision after provider-boundary verification.
+         *
+         *     MM-857 / source MM-853: callers cannot supply trusted booleans for GitHub
+         *     decisions. Authenticity, marker ownership, provider identity, and actor
+         *     authorization are derived from the GitHub payload before service invocation.
+         */
+        post: operations["github_provider_decision_api_proposals__proposal_id__github_decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/proposals/{proposal_id}/delivery": {
         parameters: {
             query?: never;
@@ -12741,6 +12765,37 @@ export interface operations {
                 "application/json": components["schemas"]["WorkflowProposalProviderDecisionRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowProposalProviderDecisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    github_provider_decision_api_proposals__proposal_id__github_decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

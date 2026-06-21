@@ -4499,6 +4499,30 @@ class TemporalProposalActivities:
         return text
 
     @classmethod
+    def _proposal_allowed_actors_from_provider_metadata(
+        cls,
+        *,
+        provider_payload: Mapping[str, Any],
+        delivery_provider: str,
+    ) -> list[str]:
+        provider_cfg = provider_payload.get(delivery_provider)
+        if not isinstance(provider_cfg, Mapping):
+            return []
+        actors: list[str] = []
+        seen: set[str] = set()
+        for key in ("allowedActors", "allowed_actors", "reviewers"):
+            raw = provider_cfg.get(key)
+            if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+                continue
+            for item in raw:
+                actor = cls._normalize_proposal_text(item)
+                actor_key = actor.lower()
+                if actor and actor_key not in seen:
+                    actors.append(actor)
+                    seen.add(actor_key)
+        return actors
+
+    @classmethod
     def _comparison_key(cls, value: object) -> str:
         normalized = cls._normalize_proposal_text(value).lower()
         return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
@@ -5166,6 +5190,12 @@ class TemporalProposalActivities:
             ):
                 if source_key in github_policy:
                     delivery_policy_constraints[target_key] = github_policy[source_key]
+            policy_allowed_actors = self._proposal_allowed_actors_from_provider_metadata(
+                provider_payload=provider_payload,
+                delivery_provider=delivery_provider,
+            )
+            if policy_allowed_actors:
+                delivery_policy_constraints["allowedActors"] = policy_allowed_actors
         if delivery_provider == "jira":
             jira_policy = provider_payload.get("jira")
         else:
