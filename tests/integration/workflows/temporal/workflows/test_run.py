@@ -838,7 +838,7 @@ class TestMoonMindUserWorkflow(unittest.IsolatedAsyncioTestCase):
                 
                 # Signal the workflow to complete the external stage
                 await handle.signal(
-                    MoonMindUserWorkflow.external_event, 
+                    MoonMindUserWorkflow.external_event,
                     {
                         "correlation_id": "corr-123",
                         "normalized_status": "completed"
