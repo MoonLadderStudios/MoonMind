@@ -357,6 +357,13 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["generated_count"], 0)
         self.assertEqual(result["submitted_count"], 0)
         self.assertEqual(result["errors"], [])
+        self.assertEqual(
+            [event["eventType"] for event in result["observabilityEvents"]],
+            [
+                "proposal.generation_requested",
+                "proposal.candidates_generated",
+            ],
+        )
 
     async def test_valid_candidates_counted(self) -> None:
         activities = TemporalProposalActivities()
@@ -378,6 +385,10 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["generated_count"], 2)
         self.assertEqual(result["submitted_count"], 2)
         self.assertEqual(result["errors"], [])
+        self.assertIn(
+            "proposal.generation_requested",
+            {event["eventType"] for event in result["observabilityEvents"]},
+        )
 
     async def test_origin_requires_workflow_id_without_service(self) -> None:
         activities = TemporalProposalActivities()
@@ -414,6 +425,119 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                     ),
                 }
             ],
+        )
+        self.assertIn(
+            "proposal.candidate_rejected",
+            {event["eventType"] for event in result["observabilityEvents"]},
+        )
+
+    async def test_observability_events_cover_submit_delivery_and_recovery_outcomes(
+        self,
+    ) -> None:
+        mock_service = AsyncMock()
+        mock_service.create_proposal.side_effect = [
+            SimpleNamespace(
+                id="proposal-created",
+                external_key="101",
+                external_url="https://github.example/org/repo/issues/101",
+                provider_metadata={
+                    "delivery": {
+                        "status": "delivered",
+                        "created": True,
+                    }
+                },
+            ),
+            SimpleNamespace(
+                id="proposal-updated",
+                external_key="102",
+                external_url="https://github.example/org/repo/issues/102",
+                provider_metadata={
+                    "delivery": {
+                        "status": "delivered",
+                        "created": False,
+                        "duplicateSource": "provider_marker",
+                    }
+                },
+            ),
+            SimpleNamespace(
+                id="proposal-failed",
+                external_key="103",
+                external_url="https://github.example/org/repo/issues/103",
+                provider_metadata={
+                    "delivery": {
+                        "status": "failed",
+                        "error": {
+                            "code": "provider_rejected",
+                            "sanitizedReason": "provider rejected delivery",
+                        },
+                    }
+                },
+            ),
+        ]
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Create issue",
+                        "summary": "Exercise created issue event",
+                        "workflowCreateRequest": {
+                            "payload": {"repository": "org/repo"}
+                        },
+                    },
+                    {
+                        "title": "Update issue",
+                        "summary": "Exercise dedup update event",
+                        "workflowCreateRequest": {
+                            "payload": {"repository": "org/repo"}
+                        },
+                    },
+                    {
+                        "title": "Delivery fails",
+                        "summary": "Exercise delivery failure event",
+                        "workflowCreateRequest": {
+                            "payload": {"repository": "org/repo"}
+                        },
+                    },
+                    {
+                        "title": "Missing repository",
+                        "summary": "Exercise unroutable reporting",
+                        "workflowCreateRequest": {
+                            "payload": {"workflow": {"instructions": "Fix it"}}
+                        },
+                    },
+                ],
+                "policy": {},
+                "origin": {},
+            }
+        )
+
+        event_types = {event["eventType"] for event in result["observabilityEvents"]}
+        self.assertTrue(
+            {
+                "proposal.generation_requested",
+                "proposal.candidates_generated",
+                "proposal.submitted",
+                "proposal.github_issue_created",
+                "proposal.github_issue_updated",
+                "proposal.delivery_failed",
+            }.issubset(event_types)
+        )
+        self.assertEqual(result["submitted_count"], 3)
+        self.assertEqual(result["deliveredCount"], 2)
+        self.assertIn(
+            {
+                "title": "Missing repository",
+                "target": "workflow_repo",
+                "accepted": False,
+                "reason": "capacity",
+            },
+            result["delivery_decisions"],
         )
 
     async def test_valid_skill_tool_candidate_counted_after_contract_validation(self) -> None:

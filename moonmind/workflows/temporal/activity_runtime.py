@@ -5087,6 +5087,39 @@ class TemporalProposalActivities:
         generated_count = len(candidates)
         delivery_decisions: list[dict[str, Any]] = []
         errors: list[str] = []
+        observability_events: list[dict[str, Any]] = [
+            {
+                "eventType": "proposal.generation_requested",
+                "workflowId": workflow_id or None,
+                "temporalRunId": run_id or None,
+                "candidateCount": generated_count,
+            },
+            {
+                "eventType": "proposal.candidates_generated",
+                "workflowId": workflow_id or None,
+                "temporalRunId": run_id or None,
+                "candidateCount": generated_count,
+            },
+        ]
+
+        def append_event(event_type: str, **fields: Any) -> None:
+            event = {
+                "eventType": event_type,
+                "workflowId": workflow_id or None,
+                "temporalRunId": run_id or None,
+                **fields,
+            }
+            observability_events.append(
+                {
+                    key: (
+                        self._redactor.scrub(str(value))
+                        if isinstance(value, str)
+                        else value
+                    )
+                    for key, value in event.items()
+                    if value is not None
+                }
+            )
 
         parsed_policy: WorkflowProposalPolicy | None = None
         if isinstance(policy, Mapping) and policy:
@@ -5100,6 +5133,15 @@ class TemporalProposalActivities:
                     "submitted_count": 0,
                     "errors": [f"invalid proposal policy: {redacted}"],
                     "delivery_decisions": [],
+                    "observabilityEvents": [
+                        *observability_events,
+                        {
+                            "eventType": "proposal.candidate_rejected",
+                            "workflowId": workflow_id or None,
+                            "temporalRunId": run_id or None,
+                            "reason": "invalid_policy",
+                        },
+                    ],
                 }
 
         effective_policy = build_effective_proposal_policy(
@@ -5151,6 +5193,7 @@ class TemporalProposalActivities:
                 "submitted_count": 0,
                 "errors": [],
                 "delivery_decisions": [],
+                "observabilityEvents": observability_events,
             }
 
         provider_metadata = dict(effective_policy.provider_metadata or {})
@@ -5225,6 +5268,15 @@ class TemporalProposalActivities:
                     "submitted_count": 0,
                     "errors": ["proposal service unavailable"],
                     "delivery_decisions": [],
+                    "observabilityEvents": [
+                        *observability_events,
+                        {
+                            "eventType": "proposal.delivery_failed",
+                            "workflowId": workflow_id or None,
+                            "temporalRunId": run_id or None,
+                            "reason": "proposal_service_unavailable",
+                        },
+                    ],
                 }
 
         import contextlib
@@ -5251,11 +5303,24 @@ class TemporalProposalActivities:
                     "dedupUpdates": [],
                     "errors": [error],
                     "delivery_decisions": [],
+                    "observabilityEvents": [
+                        *observability_events,
+                        {
+                            "eventType": "proposal.candidate_rejected",
+                            "workflowId": workflow_id or None,
+                            "temporalRunId": run_id or None,
+                            "reason": "missing_origin_workflow_id",
+                        },
+                    ],
                 }
 
             for candidate in candidates:
                 if not isinstance(candidate, Mapping):
                     errors.append("skipped non-object candidate")
+                    append_event(
+                        "proposal.candidate_rejected",
+                        reason="candidate_not_object",
+                    )
                     continue
                 title = str(candidate.get("title") or "").strip()
                 summary = str(candidate.get("summary") or "").strip()
@@ -5266,6 +5331,11 @@ class TemporalProposalActivities:
                     or not isinstance(workflow_create_request, Mapping)
                 ):
                     errors.append(f"skipped malformed candidate: {title!r}")
+                    append_event(
+                        "proposal.candidate_rejected",
+                        title=title or None,
+                        reason="malformed_candidate",
+                    )
                     continue
 
                 original_payload_node = workflow_create_request.get("payload")
@@ -5304,6 +5374,18 @@ class TemporalProposalActivities:
                     errors.append(
                         f"invalid workflowCreateRequest for {title!r}: {redacted_error}"
                     )
+                    append_event(
+                        "proposal.candidate_rejected",
+                        title=title,
+                        reason="invalid_workflow_create_request",
+                        sanitizedReason=redacted_error,
+                    )
+                    if "repository" in redacted_error.lower():
+                        append_event(
+                            "proposal.recovery_unroutable_reported",
+                            title=title,
+                            reason="invalid_or_missing_repository",
+                        )
                     continue
 
                 if missing_workflow_repo_destination:
@@ -5478,6 +5560,12 @@ class TemporalProposalActivities:
                                 "reason": "capacity",
                             }
                         )
+                        append_event(
+                            "proposal.candidate_rejected",
+                            title=title,
+                            target="moonmind",
+                            reason="capacity",
+                        )
                         continue
                     target = "moonmind"
                     if isinstance(payload_node, dict):
@@ -5493,6 +5581,12 @@ class TemporalProposalActivities:
                                 "accepted": False,
                                 "reason": "capacity",
                             }
+                        )
+                        append_event(
+                            "proposal.candidate_rejected",
+                            title=title,
+                            target="project",
+                            reason="capacity",
                         )
                         continue
 
@@ -5620,6 +5714,15 @@ class TemporalProposalActivities:
                                     ]
                                 if "error" in delivery_node:
                                     decision["error"] = delivery_node["error"]
+                        append_event(
+                            "proposal.submitted",
+                            proposalId=str(getattr(proposal, "id", "")),
+                            title=title,
+                            target=target,
+                            repository=target_repo,
+                            provider=delivery_provider,
+                            externalKey=external_key,
+                        )
                         submitted_count += 1
                     else:
                         logger.info(
@@ -5627,6 +5730,13 @@ class TemporalProposalActivities:
                             title,
                         )
                         submitted_count += 1
+                        append_event(
+                            "proposal.submitted",
+                            title=title,
+                            target=target,
+                            repository=target_repo,
+                            provider=delivery_provider,
+                        )
                     delivery_decisions.append(decision)
                 except Exception as exc:
                     redacted_error = self._redactor.scrub(str(exc))[:200]
@@ -5634,6 +5744,15 @@ class TemporalProposalActivities:
                     decision["accepted"] = False
                     decision["reason"] = "submission_failed"
                     delivery_decisions.append(decision)
+                    append_event(
+                        "proposal.delivery_failed",
+                        title=title,
+                        target=target,
+                        repository=target_repo,
+                        provider=delivery_provider,
+                        reason="submission_failed",
+                        sanitizedReason=redacted_error,
+                    )
                     logger.warning(
                         "proposal.submit: failed to submit proposal %r: %s",
                         title,
@@ -5660,6 +5779,17 @@ class TemporalProposalActivities:
                 external_links.append(link)
             if external_url and status in {"delivered", "updated", "deduped"}:
                 delivered_count += 1
+                append_event(
+                    (
+                        "proposal.github_issue_updated"
+                        if decision.get("created") is False
+                        or decision.get("duplicateSource")
+                        else "proposal.github_issue_created"
+                    ),
+                    provider=provider,
+                    externalKey=external_key or None,
+                    externalUrl=external_url,
+                )
             if decision.get("created") is False or decision.get("duplicateSource"):
                 dedup: dict[str, Any] = {"created": bool(decision.get("created"))}
                 if provider:
@@ -5686,6 +5816,23 @@ class TemporalProposalActivities:
                     ),
                 )
                 delivery_failures.append(failure)
+                append_event(
+                    "proposal.delivery_failed",
+                    provider=provider,
+                    externalKey=external_key or None,
+                    reason=str(failure.get("code") or "delivery_failed"),
+                    sanitizedReason=str(failure.get("message") or "delivery failed"),
+                )
+
+        for decision in delivery_decisions:
+            if not isinstance(decision, Mapping):
+                continue
+            if decision.get("accepted") is False and decision.get("repository") == "":
+                append_event(
+                    "proposal.recovery_unroutable_reported",
+                    title=str(decision.get("title") or ""),
+                    reason=str(decision.get("reason") or "unroutable"),
+                )
 
         return {
             "generated_count": generated_count,
@@ -5706,6 +5853,7 @@ class TemporalProposalActivities:
             "dedupUpdates": dedup_updates,
             "errors": errors,
             "delivery_decisions": delivery_decisions,
+            "observabilityEvents": observability_events,
         }
 
 class TemporalAgentRuntimeActivities:
