@@ -145,6 +145,8 @@ def test_workflow_console_api_routes_are_workflow_native() -> None:
     assert "/workflows" in route_paths
     assert "/workflows/new" in route_paths
     assert "/workflows/{workflow_path:path}" in route_paths
+    assert "/proposals" not in route_paths
+    assert "/proposals/{proposal_id}" not in route_paths
     assert "/api/workflows/skills" in route_paths
     assert "/api/workflows/skills/upload" in route_paths
 
@@ -214,7 +216,6 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         "/index-health",
         "/schedules",
         "/settings",
-        "/proposals",
     ):
         response = client.get(path)
         assert response.status_code == 200
@@ -360,7 +361,7 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert "/static/workflow_console/dist/assets/" in response.text
 
 def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
-    for path in ("/workflows", "/proposals"):
+    for path in ("/workflows",):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":true' in response.text
@@ -369,9 +370,9 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
         assert response.status_code == 200
         assert '"dataWidePanel":false' in response.text
 
+
 def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> None:
     for path, entrypoint in (
-        ("/proposals/123e4567-e89b-12d3-a456-426614174000", "proposals"),
         ("/manifests/nightly-docs", "manifests"),
         ("/schedules/123e4567-e89b-12d3-a456-426614174000", "schedules"),
     ):
@@ -380,6 +381,16 @@ def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> N
         assert "moonmind-ui-boot" in response.text
         payload = _extract_boot_payload(response.text)
         assert payload["page"] == entrypoint
+
+
+def test_proposal_review_routes_are_not_mission_control_surfaces(client: TestClient) -> None:
+    for path in (
+        "/proposals",
+        "/proposals/123e4567-e89b-12d3-a456-426614174000",
+    ):
+        response = client.get(path)
+        assert response.status_code == 404
+
 
 def test_legacy_settings_subroutes_redirect_to_unified_settings(client: TestClient) -> None:
     workers = client.get("/workers", follow_redirects=False)

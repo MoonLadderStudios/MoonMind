@@ -404,13 +404,6 @@ def _jira_create_page_enabled() -> bool:
     return bool(settings.feature_flags.jira_create_page_enabled)
 
 _STATUS_MAPS: dict[str, dict[str, str]] = {
-    "proposals": {
-        "open": "queued",
-        "promoted": "completed",
-        "dismissed": "canceled",
-        "accepted": "completed",
-        "rejected": "failed",
-    },
     "temporal": {
         "scheduled": "queued",
         "initializing": "queued",
@@ -437,13 +430,10 @@ _STATUS_MAPS: dict[str, dict[str, str]] = {
 def normalize_status(source: str, raw_status: str | None) -> str:
     """Normalize source-specific status values into dashboard display states."""
 
-    source_key = source.strip().lower()
     status_key = (raw_status or "").strip().lower()
 
-    # Prioritize Temporal states, allowing proposals to use their local mapping.
-    map_key = "proposals" if source_key == "proposals" else "temporal"
-    mapping = _STATUS_MAPS.get(map_key)
-    
+    mapping = _STATUS_MAPS.get("temporal")
+
     if mapping and status_key in mapping:
         return mapping[status_key]
 
@@ -611,13 +601,6 @@ def build_runtime_config(
         },
         "statusMaps": status_maps(),
         "sources": {
-            "proposals": {
-                "list": "/api/proposals",
-                "detail": "/api/proposals/{id}",
-                "promote": "/api/proposals/{id}/promote",
-                "dismiss": "/api/proposals/{id}/dismiss",
-                "priority": "/api/proposals/{id}/priority",
-            },
             "schedules": {
                 "list": "/api/recurring-workflows?scope=personal",
                 "create": "/api/recurring-workflows",
