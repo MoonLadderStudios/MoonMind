@@ -43,6 +43,20 @@ _SENSITIVE_VALUE_PATTERN = re.compile(
     r"(?:token|password|passwd|secret)=[^ \t\n\r,;&\"']+)",
     re.IGNORECASE,
 )
+_COMPOSE_OPTION_FLAGS_WITH_VALUES = frozenset(
+    {
+        "--env-file",
+        "--exit-code-from",
+        "--file",
+        "--format",
+        "--policy",
+        "--project-directory",
+        "--project-name",
+        "--wait-timeout",
+        "-f",
+        "-p",
+    }
+)
 
 
 class DesiredStateStore(Protocol):
@@ -1236,6 +1250,7 @@ class DeploymentUpdateExecutor:
                             _compose_up_args_for_services(
                                 command_plan.up_args,
                                 (service,),
+                                one_shot_service=service,
                             )
                         ),
                     }
@@ -1644,16 +1659,42 @@ def _command_plan_without_services(
 def _compose_up_args_for_services(
     up_args: Sequence[str],
     services: Sequence[str],
+    *,
+    one_shot_service: str | None = None,
 ) -> tuple[str, ...]:
-    target_services = {
-        service.lower() for service in _compose_up_target_services(up_args)
-    }
-    without_targets = tuple(
-        part
-        for part in up_args
-        if str(part).strip().lower() not in target_services
+    prefix, _target_services = _split_trailing_service_args(up_args)
+    requested_services = tuple(str(service) for service in services)
+    if one_shot_service is None:
+        return (*prefix, *requested_services)
+    return _compose_one_shot_up_args(
+        prefix,
+        one_shot_service=str(one_shot_service),
     )
-    return (*without_targets, *tuple(str(service) for service in services))
+
+
+def _compose_one_shot_up_args(
+    up_prefix_args: Sequence[str],
+    *,
+    one_shot_service: str,
+) -> tuple[str, ...]:
+    parts: list[str] = []
+    skip_next = False
+    for raw_part in up_prefix_args:
+        part = str(raw_part)
+        if skip_next:
+            skip_next = False
+            continue
+        if part in {"-d", "--detach", "--wait"}:
+            continue
+        if part == "--wait-timeout":
+            skip_next = True
+            continue
+        if part.startswith("--wait-timeout="):
+            continue
+        parts.append(part)
+    if parts and parts[-1] == "--":
+        parts.pop()
+    return (*parts, "--exit-code-from", one_shot_service, one_shot_service)
 
 
 def _remove_services_from_command_args(
@@ -1663,11 +1704,36 @@ def _remove_services_from_command_args(
 ) -> tuple[str, ...]:
     if not excluded_services:
         return tuple(args)
-    return tuple(
-        str(part)
-        for part in args
-        if str(part).strip().lower() not in excluded_services
+    prefix, trailing_services = _split_trailing_service_args(args)
+    return (
+        *prefix,
+        *(
+            service
+            for service in trailing_services
+            if service.strip().lower() not in excluded_services
+        ),
     )
+
+
+def _split_trailing_service_args(
+    args: Sequence[str],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    parts = tuple(str(part) for part in args)
+    if len(parts) <= 3:
+        return parts, ()
+    index = 3
+    while index < len(parts):
+        part = parts[index]
+        if part == "--":
+            return parts[: index + 1], parts[index + 1 :]
+        if part.startswith("-"):
+            option_name = part.split("=", 1)[0]
+            index += 1
+            if option_name in _COMPOSE_OPTION_FLAGS_WITH_VALUES and "=" not in part:
+                index += 1
+            continue
+        return parts[:index], parts[index:]
+    return parts, ()
 
 
 def _target_service_names_from_state(
