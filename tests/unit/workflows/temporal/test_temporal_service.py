@@ -1002,6 +1002,97 @@ async def test_create_execution_persists_supplied_matching_remediation_run_id(
         assert link.authority_mode == "observe_only"
 
 @pytest.mark.asyncio
+async def test_create_execution_allows_observe_only_remediation_of_system_target(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        user_owner_id = uuid4()
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=None,
+            owner_type="system",
+            title="System target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        remediation = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=user_owner_id,
+            title="Remediate system target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "workflow": {
+                    "instructions": "Investigate the target",
+                    "remediation": {
+                        "target": {"workflowId": target.workflow_id},
+                        "authorityMode": "observe_only",
+                    },
+                }
+            },
+            idempotency_key=None,
+        )
+
+        link = await session.get(
+            TemporalExecutionRemediationLink, remediation.workflow_id
+        )
+        assert link is not None
+        assert link.target_workflow_id == target.workflow_id
+        assert link.target_run_id == target.run_id
+        assert link.authority_mode == "observe_only"
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_elevated_user_remediation_of_system_target(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        target = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=None,
+            owner_type="system",
+            title="System target",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={},
+            idempotency_key=None,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="Remediation target unauthorized",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=uuid4(),
+                title="Remediate system target",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={
+                    "workflow": {
+                        "instructions": "Investigate the target",
+                        "remediation": {
+                            "target": {"workflowId": target.workflow_id},
+                            "authorityMode": "admin_auto",
+                        },
+                    }
+                },
+                idempotency_key=None,
+            )
+
+@pytest.mark.asyncio
 async def test_create_execution_rejects_missing_remediation_target_workflow_id(
     tmp_path, mock_client_adapter
 ):

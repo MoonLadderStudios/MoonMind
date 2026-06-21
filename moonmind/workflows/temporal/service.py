@@ -482,6 +482,25 @@ class TemporalExecutionService:
             return True
         return (record.owner_id or None) == owner_id
 
+    def _can_reference_remediation_target(
+        self,
+        record: TemporalExecutionCanonicalRecord,
+        *,
+        owner_id: str | None,
+        owner_type: TemporalExecutionOwnerType,
+        authority_mode: str,
+    ) -> bool:
+        if self._can_reference_dependency_target(
+            record,
+            owner_id=owner_id,
+            owner_type=owner_type,
+        ):
+            return True
+        return (
+            record.owner_type is TemporalExecutionOwnerType.SYSTEM
+            and authority_mode == "observe_only"
+        )
+
     async def _validate_remediation_link(
         self,
         *,
@@ -517,6 +536,18 @@ class TemporalExecutionService:
                 f"Workflow cannot remediate itself: {new_workflow_id}"
             )
 
+        authority_mode = str(
+            remediation.get("authorityMode")
+            or remediation.get("authority_mode")
+            or "observe_only"
+        ).strip() or "observe_only"
+        if authority_mode not in ALLOWED_REMEDIATION_AUTHORITY_MODES:
+            supported = ", ".join(sorted(ALLOWED_REMEDIATION_AUTHORITY_MODES))
+            raise TemporalExecutionValidationError(
+                "Unsupported workflow.remediation.authorityMode "
+                f"'{authority_mode}'. Supported values: {supported}."
+            )
+
         target_record = await self._session.get(
             TemporalExecutionCanonicalRecord, target_workflow_id
         )
@@ -524,10 +555,11 @@ class TemporalExecutionService:
             raise TemporalExecutionValidationError(
                 f"Remediation target not found: {target_workflow_id}"
             )
-        if not self._can_reference_dependency_target(
+        if not self._can_reference_remediation_target(
             target_record,
             owner_id=owner_id,
             owner_type=owner_type,
+            authority_mode=authority_mode,
         ):
             raise TemporalExecutionValidationError(
                 f"Remediation target unauthorized: {target_workflow_id}"
@@ -585,17 +617,6 @@ class TemporalExecutionService:
         trigger_type = None
         if isinstance(trigger, Mapping):
             trigger_type = str(trigger.get("type") or "").strip() or None
-        authority_mode = str(
-            remediation.get("authorityMode")
-            or remediation.get("authority_mode")
-            or "observe_only"
-        ).strip() or "observe_only"
-        if authority_mode not in ALLOWED_REMEDIATION_AUTHORITY_MODES:
-            supported = ", ".join(sorted(ALLOWED_REMEDIATION_AUTHORITY_MODES))
-            raise TemporalExecutionValidationError(
-                "Unsupported workflow.remediation.authorityMode "
-                f"'{authority_mode}'. Supported values: {supported}."
-            )
         action_policy_ref = str(remediation.get("actionPolicyRef") or "").strip()
         if (
             action_policy_ref
