@@ -363,10 +363,11 @@ async def test_provider_approval_creates_one_run_from_stored_snapshot() -> None:
     assert len(executions) == 1
     payload = executions[0]["initialParameters"]
     assert payload["targetRuntime"] == "codex"
-    assert payload["task"]["authoredPresets"] == [
+    workflow = payload["workflow"]
+    assert workflow["authoredPresets"] == [
         {"presetId": "runtime-quality-followup"}
     ]
-    assert payload["task"]["steps"][0]["source"] == {"kind": "preset-derived"}
+    assert workflow["steps"][0]["source"] == {"kind": "preset-derived"}
     assert "unsafe edited text" not in str(payload)
 
     duplicate = await _promote_provider_event(
