@@ -425,39 +425,60 @@ def _collect_workspace_artifacts(
     seen: set[str] = set()
 
     for pattern in collect_globs:
+        if len(refs) >= _MAX_COLLECTED_ARTIFACTS:
+            # The cap is already reached, so any remaining pattern would only
+            # produce results we discard. Skip globbing entirely; a broad
+            # pattern over a large workspace must not trigger unbounded post-run
+            # I/O just to throw the matches away.
+            diagnostics.append(
+                {
+                    "pattern": pattern,
+                    "status": "truncated",
+                    "truncated": True,
+                    "matched": [],
+                }
+            )
+            continue
         matched: list[str] = []
         skipped: list[str] = []
         truncated = False
         try:
-            candidates = sorted(base.glob(pattern))
+            # Iterate lazily and stop once the cap is reached instead of
+            # materializing and sorting every candidate up front. A broad
+            # pattern (for example ``**/*``) over a large workspace would
+            # otherwise spend unbounded I/O and memory before the cap applies.
+            for candidate in base.glob(pattern):
+                if len(refs) >= _MAX_COLLECTED_ARTIFACTS:
+                    truncated = True
+                    break
+                try:
+                    resolved = candidate.resolve()
+                except OSError:
+                    continue
+                if not resolved.is_file():
+                    continue
+                try:
+                    relative = resolved.relative_to(base)
+                except ValueError:
+                    # A symlink (or matched entry) resolving outside the repo
+                    # workspace must never be published as a collected artifact.
+                    skipped.append(str(candidate))
+                    continue
+                key = relative.as_posix()
+                if key in seen:
+                    continue
+                seen.add(key)
+                refs[f"collected:{key}"] = str(resolved)
+                matched.append(key)
         except (NotImplementedError, OSError, ValueError) as exc:
             diagnostics.append(
                 {"pattern": pattern, "status": "error", "error": str(exc)}
             )
             continue
-        for candidate in candidates:
-            if len(refs) >= _MAX_COLLECTED_ARTIFACTS:
-                truncated = True
-                break
-            try:
-                resolved = candidate.resolve()
-            except OSError:
-                continue
-            if not resolved.is_file():
-                continue
-            try:
-                relative = resolved.relative_to(base)
-            except ValueError:
-                # A symlink (or matched entry) resolving outside the repo
-                # workspace must never be published as a collected artifact.
-                skipped.append(str(candidate))
-                continue
-            key = relative.as_posix()
-            if key in seen:
-                continue
-            seen.add(key)
-            refs[f"collected:{key}"] = str(resolved)
-            matched.append(key)
+        # Sort only the bounded collected/skipped subsets for deterministic
+        # diagnostics, never the full (possibly unbounded) candidate set.
+        matched.sort()
+        skipped.sort()
         entry: dict[str, object] = {
             "pattern": pattern,
             "status": "matched" if matched else "empty",
