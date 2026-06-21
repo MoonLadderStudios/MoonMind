@@ -366,11 +366,39 @@ def _safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     return safe
 
 
+def _label_token(value: object, fallback: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "-", _clean(value).lower()).strip("-")
+    return token or fallback
+
+
+def _target_class(request: ProposalDeliveryRequest) -> str:
+    target = _clean(request.resolved_policy.get("target")).lower()
+    if target == "moonmind":
+        return "moonmind"
+    if request.dedup_key.startswith("moonmind:"):
+        return "moonmind"
+    return "workflow-repo"
+
+
+def _canonical_github_labels(request: ProposalDeliveryRequest) -> tuple[str, ...]:
+    short_hash = (request.dedup_hash or "unknown")[:12] or "unknown"
+    labels = (
+        "moonmind:proposal",
+        "moonmind:state:open",
+        f"moonmind:target:{_target_class(request)}",
+        f"moonmind:category:{_label_token(request.category, 'uncategorized')}",
+        f"moonmind:priority:{_label_token(request.priority, 'normal')}",
+        f"moonmind:dedup:{short_hash}",
+    )
+    return labels
+
+
 def _marker(request: ProposalDeliveryRequest) -> str:
     snapshot = request.workflow_snapshot_ref or "stored-proposal-snapshot"
     return (
         "<!-- moonmind-proposal "
-        f"record={request.record_id} dedup={request.dedup_hash} "
+        f"record={request.record_id} target={_target_class(request)} "
+        f"dedup={request.dedup_hash} "
         f"snapshot={snapshot} -->"
     )
 
@@ -439,7 +467,9 @@ def render_github_issue(
     redactor = redactor or SecretRedactor.from_environ(placeholder="[REDACTED]")
     provider_cfg = _provider_config(request.provider_metadata, "github")
     configured_labels = _iter_strings(provider_cfg.get("labels"))
-    labels = tuple(dict.fromkeys(("moonmind-proposal", "proposal-review", *configured_labels)))
+    labels = tuple(
+        dict.fromkeys((*_canonical_github_labels(request), *configured_labels))
+    )
     title = f"[MoonMind proposal] {request.title}".strip()
     body = "\n\n".join(
         [

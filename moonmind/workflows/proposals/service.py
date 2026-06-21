@@ -162,10 +162,33 @@ class WorkflowProposalService:
         normalized = _DEDUP_SLUG_PATTERN.sub("-", title.lower()).strip("-")
         return normalized or "untitled"
 
-    def _compute_dedup_fields(self, *, repository: str, title: str) -> tuple[str, str]:
+    @staticmethod
+    def _slugify_dedup_component(value: str, fallback: str) -> str:
+        normalized = _DEDUP_SLUG_PATTERN.sub("-", value.lower()).strip("-")
+        return normalized or fallback
+
+    def _target_class_for_repository(self, repository: str) -> str:
+        return (
+            "moonmind"
+            if self._is_moonmind_repository(repository)
+            else "workflow-repo"
+        )
+
+    def _compute_dedup_fields(
+        self,
+        *,
+        target_class: str,
+        repository: str,
+        category: str | None,
+        title: str,
+    ) -> tuple[str, str]:
+        target = self._slugify_dedup_component(target_class or "", "workflow-repo")
         repo = (repository or "").strip().lower() or "unknown"
+        normalized_category = self._slugify_dedup_component(
+            category or "", "uncategorized"
+        )
         slug = self._slugify_title(title or "")
-        dedup_key = f"{repo}:{slug}"
+        dedup_key = f"{target}:{repo}:{normalized_category}:{slug}"
         dedup_hash = hashlib.sha256(dedup_key.encode("utf-8")).hexdigest()
         return dedup_key[:512], dedup_hash
 
@@ -902,8 +925,12 @@ class WorkflowProposalService:
                 requested_priority = derived_priority
                 priority_override_reason = derived_reason
 
+        target_class = self._target_class_for_repository(repository)
         dedup_key, dedup_hash = self._compute_dedup_fields(
-            repository=repository, title=cleaned_title
+            target_class=target_class,
+            repository=repository,
+            category=normalized_category,
+            title=cleaned_title,
         )
 
         duplicate_finder = getattr(self._repository, "find_open_duplicate", None)

@@ -93,7 +93,7 @@ async def test_create_proposal_defers_runtime_defaults_until_promotion() -> None
     args, kwargs = repo.create_proposal.await_args
     assert kwargs["repository"] == "Moon/Repo"
     assert kwargs["category"] == "tests"
-    assert kwargs["dedup_key"].startswith("moon/repo")
+    assert kwargs["dedup_key"].startswith("workflow-repo:moon/repo:tests:")
     assert len(kwargs["dedup_hash"]) == 64
     assert kwargs["review_priority"] is WorkflowProposalReviewPriority.NORMAL
     assert kwargs["priority_override_reason"] is None
@@ -1078,23 +1078,48 @@ async def test_create_proposal_merges_duplicate_delivery_metadata() -> None:
     service._emit_notification.assert_not_awaited()
 
 
-def test_compute_dedup_fields_are_repository_aware_and_title_normalized() -> None:
+def test_compute_dedup_fields_include_target_repository_category_and_title() -> None:
     service = WorkflowProposalService(AsyncMock(), redactor=SecretRedactor([], "***"))
 
     first_key, first_hash = service._compute_dedup_fields(
-        repository="Moon/Repo", title="Add   Tests!!"
+        target_class="workflow-repo",
+        repository="Moon/Repo",
+        category="Tests",
+        title="Add   Tests!!",
     )
     second_key, second_hash = service._compute_dedup_fields(
-        repository="moon/repo", title="add-tests"
+        target_class="workflow_repo",
+        repository="moon/repo",
+        category="tests",
+        title="add-tests",
     )
     other_key, other_hash = service._compute_dedup_fields(
-        repository="Other/Repo", title="Add Tests"
+        target_class="workflow-repo",
+        repository="Other/Repo",
+        category="Tests",
+        title="Add Tests",
+    )
+    other_category_key, other_category_hash = service._compute_dedup_fields(
+        target_class="workflow-repo",
+        repository="Moon/Repo",
+        category="Security",
+        title="Add Tests",
+    )
+    moonmind_key, moonmind_hash = service._compute_dedup_fields(
+        target_class="moonmind",
+        repository="Moon/Repo",
+        category="Tests",
+        title="Add Tests",
     )
 
-    assert first_key == second_key == "moon/repo:add-tests"
+    assert first_key == second_key == "workflow-repo:moon/repo:tests:add-tests"
     assert first_hash == second_hash
-    assert other_key == "other/repo:add-tests"
+    assert other_key == "workflow-repo:other/repo:tests:add-tests"
     assert other_hash != first_hash
+    assert other_category_key == "workflow-repo:moon/repo:security:add-tests"
+    assert other_category_hash != first_hash
+    assert moonmind_key == "moonmind:moon/repo:tests:add-tests"
+    assert moonmind_hash != first_hash
 
 @pytest.mark.asyncio
 async def test_create_proposal_persists_provider_metadata_separately() -> None:
