@@ -302,7 +302,7 @@ class GitHubProposalIssueProvider:
             labels=list(labels),
         )
         applied = {
-            "labelsUpdated": bool(getattr(label_result, "updated", False)),
+            "labelsUpdated": label_result.updated,
             "labels": list(labels),
         }
         if comment:
@@ -311,8 +311,8 @@ class GitHubProposalIssueProvider:
                 issue_number=issue_number,
                 body=comment,
             )
-            applied["commented"] = bool(getattr(comment_result, "created", False))
-            comment_url = _clean(getattr(comment_result, "external_url", ""))
+            applied["commented"] = comment_result.created
+            comment_url = _clean(comment_result.external_url)
             if comment_url:
                 applied["commentUrl"] = comment_url
         return applied
@@ -1175,14 +1175,27 @@ class ProposalDeliveryService:
         )
         comment = _decision_comment(update, redactor=self._redactor)
         applied = await applier(request, issue, labels, comment)
+        # Some provider adapters (notably GitHub) report failures by returning a
+        # falsey result flag instead of raising. Derive the applied state from the
+        # adapter response so a missing token or provider error is surfaced as an
+        # unapplied transition rather than a silent success.
+        labels_updated = True
+        comment_posted = bool(comment)
+        if isinstance(applied, Mapping):
+            labels_updated = bool(applied.get("labelsUpdated", True))
+            if comment:
+                comment_posted = bool(applied.get("commented", False))
+        state_applied = labels_updated and (comment_posted if comment else True)
         result: dict[str, Any] = {
             "provider": request.provider,
-            "applied": True,
+            "applied": state_applied,
             "externalKey": external_key,
             "resultingExternalState": update.resulting_state,
             "labels": list(labels),
-            "commented": bool(comment),
+            "commented": bool(comment) and comment_posted,
         }
+        if not state_applied:
+            result["reason"] = "provider_state_update_failed"
         if _clean(update.promoted_execution_id):
             result["promotedExecutionId"] = _clean(update.promoted_execution_id)
         if _clean(update.promoted_execution_url):

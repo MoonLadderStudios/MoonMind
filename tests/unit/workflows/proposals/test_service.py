@@ -2348,6 +2348,49 @@ async def test_attach_provider_decision_execution_pushes_promoted_state_through_
     assert syncs[-1]["promotedExecutionId"] == "wf-promoted-1"
 
 
+class _FailingStateDelivery:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object]] = []
+
+    async def record_decision(self, request, update):
+        self.calls.append((request, update))
+        # Provider adapter returned without raising but did not apply the
+        # promotion state (e.g. missing GitHub token).
+        return {
+            "applied": False,
+            "reason": "provider_state_update_failed",
+            "resultingExternalState": update.resulting_state,
+            "promotedExecutionId": update.promoted_execution_id,
+        }
+
+
+@pytest.mark.asyncio
+async def test_attach_provider_decision_execution_records_warning_when_update_fails() -> None:
+    repo = AsyncMock()
+    proposal = _promotable_proposal_with_decision()
+    repo.get_proposal_for_update.return_value = proposal
+    delivery = _FailingStateDelivery()
+    service = WorkflowProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=delivery,
+    )
+
+    updated = await service.attach_provider_decision_execution(
+        proposal_id=proposal.id,
+        provider_event_id="evt-promote",
+        promoted_execution_id="wf-promoted-1",
+    )
+
+    assert len(delivery.calls) == 1
+    # A non-applied update is surfaced as a warning, not a successful sync.
+    assert "providerDecisionStateSyncs" not in updated.provider_metadata
+    warnings = updated.provider_metadata["providerDecisionUpdateWarnings"]
+    assert warnings[-1]["providerEventId"] == "evt-promote"
+    assert warnings[-1]["reason"] == "provider_state_update_failed"
+    assert warnings[-1]["resultingExternalState"] == "promoted"
+
+
 @pytest.mark.asyncio
 async def test_record_provider_decision_event_does_not_push_rejected_event_to_provider() -> None:
     repo = AsyncMock()

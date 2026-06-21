@@ -1654,6 +1654,32 @@ class WorkflowProposalService:
             proposal.provider_metadata = provider_metadata
             return
 
+        # A provider adapter can return without raising yet still report that the
+        # promotion state was not applied (for example a missing GitHub token).
+        # Surface those as warnings instead of recording a successful sync.
+        if isinstance(sync_result, Mapping) and not sync_result.get("applied", True):
+            warnings = provider_metadata.get("providerDecisionUpdateWarnings")
+            warning_rows: list[dict[str, Any]] = (
+                list(warnings) if isinstance(warnings, list) else []
+            )
+            warning_rows.append(
+                self._scrub_json(
+                    {
+                        "providerEventId": result.provider_event_id,
+                        "decision": result.decision,
+                        "resultingExternalState": resulting_state,
+                        "promotedExecutionId": promoted_execution_id,
+                        "promotedExecutionUrl": update.promoted_execution_url,
+                        "reason": sync_result.get("reason")
+                        or "provider_state_update_failed",
+                        "result": dict(sync_result),
+                    }
+                )
+            )
+            provider_metadata["providerDecisionUpdateWarnings"] = warning_rows[-100:]
+            proposal.provider_metadata = provider_metadata
+            return
+
         sync_rows = provider_metadata.get("providerDecisionStateSyncs")
         rows: list[dict[str, Any]] = (
             list(sync_rows) if isinstance(sync_rows, list) else []

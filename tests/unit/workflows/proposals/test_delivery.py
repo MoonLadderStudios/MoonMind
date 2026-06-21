@@ -622,6 +622,48 @@ async def test_record_decision_skips_when_no_external_issue() -> None:
 
 
 @pytest.mark.asyncio
+async def test_record_decision_reports_unapplied_when_provider_update_fails() -> None:
+    """A non-raising provider failure (e.g. missing token) must not record applied."""
+
+    @dataclass
+    class FailingProvider(FakeProvider):
+        async def apply_decision_state(self, request, issue, labels, comment):
+            self.decision_states.append(
+                {"issue": issue, "labels": list(labels), "comment": comment}
+            )
+            # GitHubService returns updated=False/created=False instead of raising
+            # when the token is missing or GitHub returns an error.
+            return {"labelsUpdated": False, "commented": False}
+
+    provider = FailingProvider()
+    service = ProposalDeliveryService(
+        github=provider, redactor=SecretRedactor([], "[REDACTED]")
+    )
+
+    result = await service.record_decision(
+        _request(
+            external_key="42",
+            external_url="https://github.example/Moon/Repo/issues/42",
+        ),
+        ProposalDecisionStateUpdate(
+            decision="promote",
+            accepted=True,
+            actor="reviewer",
+            provider_event_id="evt-promote",
+            resulting_state="promoted",
+            promoted_execution_id="wf-promoted-1",
+            promoted_execution_url="/workflows/wf-promoted-1?source=temporal",
+        ),
+    )
+
+    assert result["applied"] is False
+    assert result["reason"] == "provider_state_update_failed"
+    assert result["commented"] is False
+    assert result["providerResponse"]["labelsUpdated"] is False
+    assert len(provider.decision_states) == 1
+
+
+@pytest.mark.asyncio
 async def test_github_apply_decision_state_updates_labels_and_comments_without_body() -> None:
     class FakeGitHub:
         def __init__(self) -> None:
