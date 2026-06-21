@@ -114,7 +114,12 @@ async def test_cancel_action_routes_to_temporal(
         workflow_id="mm:123", reason="testing", graceful=True
     )
 
-    mock_client_adapter.cancel_workflow.assert_called_once_with("mm:123")
+    mock_client_adapter.update_workflow.assert_called_once_with(
+        "mm:123",
+        "Cancel",
+        "testing",
+    )
+    mock_client_adapter.cancel_workflow.assert_not_called()
     mock_client_adapter.terminate_workflow.assert_not_called()
 
 @pytest.mark.asyncio

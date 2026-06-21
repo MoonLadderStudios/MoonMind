@@ -2107,7 +2107,14 @@ class TemporalExecutionService:
 
         try:
             if graceful:
-                await self._client_adapter.cancel_workflow(record.workflow_id)
+                if record.workflow_type is TemporalWorkflowType.USER_WORKFLOW:
+                    await self._client_adapter.update_workflow(
+                        record.workflow_id,
+                        "Cancel",
+                        reason_text,
+                    )
+                else:
+                    await self._client_adapter.cancel_workflow(record.workflow_id)
             else:
                 await self._client_adapter.terminate_workflow(
                     record.workflow_id,

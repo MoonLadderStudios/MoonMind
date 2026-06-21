@@ -1765,6 +1765,12 @@ async def test_record_terminal_state_preserves_existing_terminal_summary(
         assert canceled is not None
         assert canceled.state is MoonMindWorkflowState.CANCELED
         assert canceled.close_status is TemporalExecutionCloseStatus.CANCELED
+        mock_client_adapter.update_workflow.assert_called_once_with(
+            created.workflow_id,
+            "Cancel",
+            "operator requested cancellation",
+        )
+        mock_client_adapter.cancel_workflow.assert_not_called()
         assert canceled.memo["summary"] == "operator requested cancellation"
 
 
@@ -2367,6 +2373,7 @@ async def test_request_rerun_creates_fresh_execution_for_terminal_execution(
             reason="done",
             graceful=True,
         )
+        service._client_adapter.update_workflow.reset_mock()
 
         source_workflow_id = created.workflow_id
         source_run_id = created.run_id
@@ -4093,6 +4100,12 @@ async def test_cancel_execution_records_reject_audit_action(
         )
         assert canceled.closed_at is not None
         assert canceled.search_attributes["mm_state"] == "canceled"
+        mock_client_adapter.update_workflow.assert_called_once_with(
+            created.workflow_id,
+            "Cancel",
+            "Rejected by operator.",
+        )
+        mock_client_adapter.cancel_workflow.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_cancel_execution_accepts_projection_only_child_workflow(
@@ -4157,7 +4170,12 @@ async def test_cancel_execution_accepts_projection_only_child_workflow(
         assert canceled.memo["summary"] == "stop child"
         assert canceled.memo["intervention_audit"][-1]["action"] == "cancel"
         assert canceled.search_attributes["mm_state"] == "canceled"
-        mock_client_adapter.cancel_workflow.assert_called_once_with(workflow_id)
+        mock_client_adapter.update_workflow.assert_called_once_with(
+            workflow_id,
+            "Cancel",
+            "stop child",
+        )
+        mock_client_adapter.cancel_workflow.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_cancel_execution_rejects_orphaned_projection_only_workflow(
@@ -4263,7 +4281,7 @@ async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_ses
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.cancel_workflow(created.workflow_id),
+                call.update_workflow(created.workflow_id, "Cancel", "stop"),
             ],
             any_order=False,
         )
@@ -4328,7 +4346,7 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
                     "TerminateSession",
                     {"reason": "stop"},
                 ),
-                call.cancel_workflow(created.workflow_id),
+                call.update_workflow(created.workflow_id, "Cancel", "stop"),
             ],
             any_order=False,
         )
@@ -4341,7 +4359,10 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
         monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path / "agent_jobs"))
         service = TemporalExecutionService(session)
         service._client_adapter = mock_client_adapter
-        mock_client_adapter.update_workflow.side_effect = RuntimeError("session closed")
+        mock_client_adapter.update_workflow.side_effect = [
+            RuntimeError("session closed"),
+            None,
+        ]
 
         created = await service.create_execution(
             workflow_type="MoonMind.UserWorkflow",
@@ -4380,7 +4401,18 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
             graceful=True,
         )
 
-        mock_client_adapter.cancel_workflow.assert_called_once_with(created.workflow_id)
+        mock_client_adapter.assert_has_calls(
+            [
+                call.update_workflow(
+                    f"{created.workflow_id}:session:codex_cli",
+                    "TerminateSession",
+                    {"reason": "stop"},
+                ),
+                call.update_workflow(created.workflow_id, "Cancel", "stop"),
+            ],
+            any_order=False,
+        )
+        mock_client_adapter.cancel_workflow.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_forced_cancel_marks_failed_with_terminated_close_status(
