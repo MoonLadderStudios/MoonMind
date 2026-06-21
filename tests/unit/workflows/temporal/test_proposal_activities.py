@@ -20,6 +20,10 @@ from moonmind.workflows.proposals.models import (
     WorkflowProposalStatus,
 )
 from moonmind.workflows.proposals.service import WorkflowProposalService
+from moonmind.workflows.proposals.delivery import (
+    ProposalDeliveryError,
+    ProposalDeliveryService,
+)
 
 class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_list_stub(self) -> None:
@@ -517,12 +521,34 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         result = await activities.proposal_submit(
             {
                 "candidates": candidates,
-                "policy": {"maxItems": {"project": 2}},
+                "policy": {"maxItems": {"workflow_repo": 2}},
                 "origin": {},
             }
         )
         self.assertEqual(result["generated_count"], 5)
         self.assertEqual(result["submitted_count"], 2)
+
+    async def test_max_items_workflow_repo_camel_case_policy_respected(self) -> None:
+        activities = TemporalProposalActivities()
+        candidates = [
+            {
+                "title": f"Proposal {i}",
+                "summary": f"Summary {i}",
+                "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
+            }
+            for i in range(5)
+        ]
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": candidates,
+                "policy": {"maxItems": {"workflowRepo": 1}},
+                "origin": {},
+            }
+        )
+
+        self.assertEqual(result["generated_count"], 5)
+        self.assertEqual(result["submitted_count"], 1)
 
     async def test_raw_task_policy_uses_per_target_caps(self) -> None:
         mock_service = AsyncMock()
@@ -571,8 +597,8 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
             {
                 "candidates": candidates,
                 "policy": {
-                    "targets": ["project", "moonmind"],
-                    "maxItems": {"project": 1, "moonmind": 2},
+                    "targets": ["workflow_repo", "moonmind"],
+                    "maxItems": {"workflow_repo": 1, "moonmind": 2},
                     "minSeverityForMoonMind": "medium",
                 },
                 "origin": {},
@@ -627,7 +653,7 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         candidates = [
             {
                 "title": "[run_quality] Follow-up: Fix proposal routing",
-                "summary": "Proposal should remain project-targeted for MoonMind repo runs.",
+                "summary": "Proposal should remain workflow-repo-targeted for MoonMind repo runs.",
                 "category": "run_quality",
                 "tags": ["artifact_gap"],
                 "workflowCreateRequest": {
@@ -885,6 +911,279 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["validationErrors"][0]["code"], "proposal_validation_error")
         self.assertIn("workflow_id", result["validationErrors"][0]["message"])
         mock_service.create_proposal.assert_not_called()
+
+    async def test_missing_workflow_repo_records_recoverable_delivery_failure(
+        self,
+    ) -> None:
+        """MM-855/MM-853: unresolved workflow_repo routing is an auditable failure."""
+
+        repo = AsyncMock()
+
+        async def create_record(**kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(id=uuid4(), **kwargs)
+
+        repo.create_proposal.side_effect = create_record
+        service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Record unresolved repository",
+                        "summary": "Missing workflow repository should be audited.",
+                        "workflowCreateRequest": {
+                            "payload": {
+                                "workflow": {"instructions": "Fix missing routing"}
+                            }
+                        },
+                    }
+                ],
+                "policy": {"targets": ["workflow_repo"]},
+                "origin": {"workflow_id": "wf-mm-855", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        repo.create_proposal.assert_awaited_once()
+        kwargs = repo.create_proposal.await_args.kwargs
+        self.assertEqual(kwargs["repository"], "unresolved-workflow-repo")
+        self.assertEqual(kwargs["resolved_policy"]["target"], "workflow_repo")
+        failure = result["deliveryFailures"][0]
+        self.assertEqual(failure["targetClass"], "workflow_repo")
+        self.assertIn("repository is required", failure["sanitizedReason"])
+        self.assertIn("recoverableNextAction", failure)
+
+    async def test_missing_workflow_repo_validation_uses_isolated_payload_copy(
+        self,
+    ) -> None:
+        """Validation stamping must not share nested payload objects with input."""
+
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        original_request = {
+            "payload": {
+                "workflow": {
+                    "instructions": "original",
+                    "metadata": {"marker": "keep"},
+                }
+            }
+        }
+        captured_validation_request = {}
+
+        def mutate_during_validation(request, **kwargs):
+            request["payload"]["workflow"]["instructions"] = "mutated"
+            captured_validation_request.update(request)
+            return request
+
+        activities._validate_candidate_workflow_create_request = mutate_during_validation
+
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Record unresolved repository",
+                        "summary": "Missing workflow repository should be audited.",
+                        "workflowCreateRequest": original_request,
+                    }
+                ],
+                "policy": {"targets": ["workflow_repo"]},
+                "origin": {"workflow_id": "wf-mm-855", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(
+            original_request["payload"]["workflow"]["instructions"], "original"
+        )
+        self.assertEqual(
+            captured_validation_request["payload"]["workflow"]["instructions"],
+            "mutated",
+        )
+
+    async def test_missing_github_credentials_records_recoverable_delivery_failure(
+        self,
+    ) -> None:
+        """MM-855/MM-853: credential authorization failures stay recoverable."""
+
+        class MissingCredentialDelivery:
+            async def deliver(self, request):
+                raise ProposalDeliveryError(
+                    "GitHub credentials do not cover repository",
+                    provider="github",
+                    destination=request.destination,
+                    retryable=True,
+                    next_action="Authorize GitHub delivery credentials for this repository.",
+                )
+
+        repo = AsyncMock()
+
+        async def create_record(**kwargs: Any) -> SimpleNamespace:
+            values = dict(kwargs)
+            values.setdefault("external_key", None)
+            values.setdefault("external_url", None)
+            values.setdefault("delivered_at", None)
+            values.setdefault("last_synced_at", None)
+            values.setdefault("provider_metadata", {})
+            values.setdefault("resolved_policy", {})
+            return SimpleNamespace(id=uuid4(), **values)
+
+        repo.create_proposal.side_effect = create_record
+        service = WorkflowProposalService(
+            repo,
+            redactor=SecretRedactor([], "***"),
+            delivery_service=MissingCredentialDelivery(),
+        )
+        service._emit_notification = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Deliver with missing credentials",
+                        "summary": "Credential failures should be audited.",
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {"targets": ["workflow_repo"]},
+                "origin": {"workflow_id": "wf-mm-855", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        self.assertEqual(result["deliveredCount"], 0)
+        failure = result["deliveryFailures"][0]
+        self.assertEqual(failure["provider"], "github")
+        self.assertEqual(failure["destination"], "org/repo")
+        self.assertIn("credentials", failure["sanitizedReason"])
+        self.assertEqual(
+            failure["recoverableNextAction"],
+            "Authorize GitHub delivery credentials for this repository.",
+        )
+
+    async def test_disallowed_repository_records_delivery_failure(self) -> None:
+        """MM-855/MM-853: unauthorized repositories fail closed before provider I/O."""
+
+        class NoopGitHubProvider:
+            async def search_issue(self, request):
+                raise AssertionError("disallowed repository should fail before provider I/O")
+
+            async def create_issue(self, request, rendered):
+                raise AssertionError("disallowed repository should fail before provider I/O")
+
+            async def update_issue(self, request, rendered, issue):
+                raise AssertionError("disallowed repository should fail before provider I/O")
+
+        repo = AsyncMock()
+
+        async def create_record(**kwargs: Any) -> SimpleNamespace:
+            values = dict(kwargs)
+            values.setdefault("external_key", None)
+            values.setdefault("external_url", None)
+            values.setdefault("delivered_at", None)
+            values.setdefault("last_synced_at", None)
+            values.setdefault("provider_metadata", {})
+            values.setdefault("resolved_policy", {})
+            return SimpleNamespace(id=uuid4(), **values)
+
+        repo.create_proposal.side_effect = create_record
+        service = WorkflowProposalService(
+            repo,
+            redactor=SecretRedactor([], "***"),
+            delivery_service=ProposalDeliveryService(github=NoopGitHubProvider()),
+        )
+        service._emit_notification = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Disallowed repository",
+                        "summary": "Policy should block delivery.",
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {
+                    "targets": ["workflow_repo"],
+                    "delivery": {
+                        "provider": "github",
+                        "github": {"allowedRepositories": ["org/allowed"]},
+                    },
+                },
+                "origin": {"workflow_id": "wf-mm-855", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        failure = result["deliveryFailures"][0]
+        self.assertEqual(
+            failure["sanitizedReason"],
+            "GitHub repository is not allowed by proposal delivery policy",
+        )
+        self.assertEqual(failure["destination"], "org/repo")
+
+    async def test_delivery_policy_constraints_use_active_provider_only(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Create Jira follow-up",
+                        "summary": "Policy should use Jira constraints only.",
+                        "workflowCreateRequest": {"payload": {"repository": "MM"}},
+                    }
+                ],
+                "policy": {
+                    "targets": ["workflow_repo"],
+                    "delivery": {
+                        "provider": "jira",
+                        "github": {
+                            "allowedRepositories": ["org/repo"],
+                            "allowedActions": ["open_pr"],
+                        },
+                        "jira": {
+                            "allowedProjects": ["MM"],
+                            "allowedActions": ["create_issue"],
+                        },
+                    },
+                },
+                "origin": {"workflow_id": "wf-mm-855", "temporal_run_id": "run-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        resolved_policy = mock_service.create_proposal.await_args.kwargs[
+            "resolved_policy"
+        ]
+        self.assertEqual(resolved_policy["provider"], "jira")
+        self.assertEqual(resolved_policy["allowedActions"], ["create_issue"])
+        self.assertEqual(resolved_policy["allowedProjects"], ["MM"])
+        self.assertNotIn("allowedRepositories", resolved_policy)
 
 class TestProposalSubmitRuntimeStamping(unittest.IsolatedAsyncioTestCase):
     async def test_default_runtime_stamped_into_candidate(self) -> None:
@@ -1337,7 +1636,7 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
                     }
                 ],
                 "policy": {
-                    "targets": ["project", "moonmind"],
+                    "targets": ["workflow_repo", "moonmind"],
                     "minSeverityForMoonMind": "medium",
                 },
                 "origin": {"workflow_id": "wf-1", "temporal_run_id": "run-1"},
@@ -1350,8 +1649,8 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
             call_kwargs["workflow_create_request"]["payload"]["repository"],
             "org/repo",
         )
-        self.assertEqual(call_kwargs["resolved_policy"]["target"], "project")
-        self.assertEqual(result["delivery_decisions"][0]["target"], "project")
+        self.assertEqual(call_kwargs["resolved_policy"]["target"], "workflow_repo")
+        self.assertEqual(result["delivery_decisions"][0]["target"], "workflow_repo")
 
     async def test_resolved_policy_records_capacity_gates_and_runtime_decision(
         self,

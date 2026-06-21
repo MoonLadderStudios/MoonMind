@@ -5083,11 +5083,11 @@ class TemporalProposalActivities:
             default_targets=getattr(
                 settings.workflow_proposals,
                 "proposal_targets_default",
-                "project",
+                "workflow_repo",
             ),
-            default_max_items_project=getattr(
+            default_max_items_workflow_repo=getattr(
                 settings.workflow_proposals,
-                "max_items_project_default",
+                "max_items_workflow_repo_default",
                 3,
             ),
             default_max_items_moonmind=getattr(
@@ -5150,6 +5150,35 @@ class TemporalProposalActivities:
             for key, value in provider_metadata.items()
             if key in {"github", "jira"} and isinstance(value, Mapping)
         }
+        delivery_policy_constraints: dict[str, Any] = {}
+        if delivery_provider == "github":
+            github_policy = provider_payload.get("github")
+        else:
+            github_policy = None
+        if isinstance(github_policy, Mapping):
+            for source_key, target_key in (
+                ("allowedRepositories", "allowedRepositories"),
+                ("allowed_repositories", "allowedRepositories"),
+                ("allowedOrganizations", "allowedOrganizations"),
+                ("allowed_organizations", "allowedOrganizations"),
+                ("allowedActions", "allowedActions"),
+                ("allowed_actions", "allowedActions"),
+            ):
+                if source_key in github_policy:
+                    delivery_policy_constraints[target_key] = github_policy[source_key]
+        if delivery_provider == "jira":
+            jira_policy = provider_payload.get("jira")
+        else:
+            jira_policy = None
+        if isinstance(jira_policy, Mapping):
+            for source_key, target_key in (
+                ("allowedProjects", "allowedProjects"),
+                ("allowed_projects", "allowedProjects"),
+                ("allowedActions", "allowedActions"),
+                ("allowed_actions", "allowedActions"),
+            ):
+                if source_key in jira_policy:
+                    delivery_policy_constraints[target_key] = jira_policy[source_key]
 
         service_or_ctx = None
         if self._proposal_service_factory is not None:
@@ -5209,9 +5238,33 @@ class TemporalProposalActivities:
                     errors.append(f"skipped malformed candidate: {title!r}")
                     continue
 
+                original_payload_node = workflow_create_request.get("payload")
+                original_target_repo = ""
+                if isinstance(original_payload_node, Mapping):
+                    original_target_repo = str(
+                        original_payload_node.get("repository") or ""
+                    ).strip()
+                missing_workflow_repo_destination = not original_target_repo
+                request_for_validation: Mapping[str, Any] = workflow_create_request
+                if missing_workflow_repo_destination:
+                    request_copy = deepcopy(dict(workflow_create_request))
+                    payload_node = request_copy.get("payload")
+                    if isinstance(payload_node, Mapping) and not isinstance(
+                        payload_node, dict
+                    ):
+                        payload_node = dict(payload_node)
+                        request_copy["payload"] = payload_node
+                    if isinstance(payload_node, dict):
+                        payload_node["repository"] = "unresolved-workflow-repo"
+                    else:
+                        request_copy["payload"] = {
+                            "repository": "unresolved-workflow-repo"
+                        }
+                    request_for_validation = request_copy
+
                 try:
                     stamped_request = self._validate_candidate_workflow_create_request(
-                        workflow_create_request,
+                        request_for_validation,
                         default_runtime=(
                             default_runtime if isinstance(default_runtime, str) else None
                         ),
@@ -5221,6 +5274,123 @@ class TemporalProposalActivities:
                     errors.append(
                         f"invalid workflowCreateRequest for {title!r}: {redacted_error}"
                     )
+                    continue
+
+                if missing_workflow_repo_destination:
+                    if not effective_policy.allow_workflow_repo:
+                        delivery_decisions.append(
+                            {
+                                "title": title,
+                                "target": "workflow_repo",
+                                "accepted": False,
+                                "reason": "target_disabled",
+                            }
+                        )
+                        continue
+                    if not effective_policy.consume_workflow_repo_slot():
+                        delivery_decisions.append(
+                            {
+                                "title": title,
+                                "target": "workflow_repo",
+                                "accepted": False,
+                                "reason": "capacity",
+                            }
+                        )
+                        continue
+
+                    decision = {
+                        "title": title,
+                        "target": "workflow_repo",
+                        "repository": "",
+                        "provider": delivery_provider,
+                        "accepted": True,
+                        "deliveryStatus": "failed",
+                    }
+                    reason = (
+                        "workflowCreateRequest.payload.repository is required for "
+                        "workflow_repo proposal delivery"
+                    )
+                    next_action = (
+                        "Set workflowCreateRequest.payload.repository to the workflow "
+                        "repository before retrying delivery."
+                    )
+                    try:
+                        if service is not None and hasattr(
+                            service, "record_delivery_failure"
+                        ):
+                            from moonmind.workflows.proposals.models import (
+                                WorkflowProposalOriginSource,
+                            )
+
+                            origin_metadata = {
+                                "source": "workflow",
+                                "id": workflow_id,
+                                "workflow_id": workflow_id,
+                                "temporal_run_id": run_id,
+                                "trigger_repo": trigger_repo,
+                                "trigger_job_id": trigger_job_id,
+                            }
+                            proposal = await service.record_delivery_failure(
+                                title=title,
+                                summary=summary,
+                                category=candidate.get("category"),
+                                tags=candidate.get("tags"),
+                                workflow_create_request=dict(workflow_create_request),
+                                origin_source=WorkflowProposalOriginSource.WORKFLOW,
+                                origin_id=None,
+                                origin_external_id=workflow_id,
+                                origin_metadata=origin_metadata,
+                                proposed_by_worker_id=f"temporal:{workflow_id}",
+                                proposed_by_user_id=None,
+                                provider=delivery_provider,
+                                target_class="workflow_repo",
+                                reason=reason,
+                                recoverable_next_action=next_action,
+                                retryable=True,
+                                repository=None,
+                                provider_metadata=provider_payload,
+                                resolved_policy={
+                                    **delivery_policy_constraints,
+                                    "provider": delivery_provider,
+                                    "target": "workflow_repo",
+                                    "repository": "",
+                                    "workflow_id": workflow_id,
+                                    "delivery": {
+                                        "status": "failed",
+                                        "reason": reason,
+                                        "recoverableNextAction": next_action,
+                                    },
+                                },
+                            )
+                            delivery_metadata = getattr(
+                                proposal, "provider_metadata", {}
+                            )
+                            if isinstance(delivery_metadata, Mapping):
+                                delivery_node = delivery_metadata.get("delivery")
+                                if isinstance(delivery_node, Mapping):
+                                    decision["deliveryStatus"] = delivery_node.get(
+                                        "status", "failed"
+                                    )
+                                    if "error" in delivery_node:
+                                        decision["error"] = delivery_node["error"]
+                            submitted_count += 1
+                        else:
+                            decision["error"] = {
+                                "provider": delivery_provider,
+                                "destination": "",
+                                "targetClass": "workflow_repo",
+                                "sanitizedReason": reason,
+                                "recoverableNextAction": next_action,
+                                "retryable": True,
+                            }
+                    except Exception as exc:
+                        redacted_error = self._redactor.scrub(str(exc))[:200]
+                        errors.append(
+                            f"submission failed for {title!r}: {redacted_error}"
+                        )
+                        decision["accepted"] = False
+                        decision["reason"] = "submission_failed"
+                    delivery_decisions.append(decision)
                     continue
 
                 payload_node = stamped_request.get("payload")
@@ -5258,7 +5428,7 @@ class TemporalProposalActivities:
                     bool(moonmind_repo)
                     and effective_policy.allow_moonmind
                     and (
-                        not effective_policy.allow_project
+                        not effective_policy.allow_workflow_repo
                         or target_repo.lower() == moonmind_repo.lower()
                         or category in {"run_quality", "moonmind_ci"}
                     )
@@ -5267,7 +5437,7 @@ class TemporalProposalActivities:
                     and moonmind_severity_qualified
                 )
 
-                target = "project"
+                target = "workflow_repo"
                 if wants_moonmind:
                     if not effective_policy.consume_moonmind_slot():
                         delivery_decisions.append(
@@ -5285,11 +5455,11 @@ class TemporalProposalActivities:
                         stamped_request["payload"] = payload_node
                     target_repo = moonmind_repo
                 else:
-                    if not effective_policy.consume_project_slot():
+                    if not effective_policy.consume_workflow_repo_slot():
                         delivery_decisions.append(
                             {
                                 "title": title,
-                                "target": "project",
+                                "target": "workflow_repo",
                                 "accepted": False,
                                 "reason": "capacity",
                             }
@@ -5347,6 +5517,7 @@ class TemporalProposalActivities:
                             provider=delivery_provider,
                             provider_metadata=provider_payload,
                             resolved_policy={
+                                **delivery_policy_constraints,
                                 "provider": delivery_provider,
                                 "target": target,
                                 "repository": target_repo,
@@ -5354,15 +5525,15 @@ class TemporalProposalActivities:
                                 "default_runtime": default_runtime_value,
                                 "default_runtime_applied": default_runtime_applied,
                                 "capacity": {
-                                    "project": {
-                                        "allowed": effective_policy.allow_project,
-                                        "limit": effective_policy.max_items_project,
+                                    "workflow_repo": {
+                                        "allowed": effective_policy.allow_workflow_repo,
+                                        "limit": effective_policy.max_items_workflow_repo,
                                         "remaining": (
-                                            effective_policy.remaining_project_slots
+                                            effective_policy.remaining_workflow_repo_slots
                                         ),
                                         "accepted": (
-                                            effective_policy.max_items_project
-                                            - effective_policy.remaining_project_slots
+                                            effective_policy.max_items_workflow_repo
+                                            - effective_policy.remaining_workflow_repo_slots
                                         ),
                                     },
                                     "moonmind": {

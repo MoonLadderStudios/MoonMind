@@ -61,6 +61,7 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
         "artifact_gap",
     }
 )
+_UNRESOLVED_WORKFLOW_REPO_DESTINATION = "unresolved-workflow-repo"
 _PROPOSAL_RUNTIME_MODE_ALIASES = {
     "codex_cli": "codex",
     "claude_code": "claude",
@@ -1026,6 +1027,149 @@ class WorkflowProposalService:
             repository,
             normalized_category or "-",
         )
+        return proposal
+
+    async def record_delivery_failure(
+        self,
+        *,
+        title: str,
+        summary: str,
+        category: str | None,
+        tags: list[str] | None,
+        workflow_create_request: dict[str, Any],
+        origin_source: object,
+        origin_id: UUID | None,
+        origin_metadata: dict[str, Any] | None,
+        origin_external_id: str | None = None,
+        proposed_by_worker_id: str | None,
+        proposed_by_user_id: UUID | None,
+        provider: str,
+        target_class: str,
+        reason: str,
+        recoverable_next_action: str,
+        retryable: bool = True,
+        repository: str | None = None,
+        provider_metadata: dict[str, Any] | None = None,
+        resolved_policy: dict[str, Any] | None = None,
+    ) -> WorkflowProposal:
+        """Persist a sanitized fail-closed delivery record without provider I/O."""
+
+        if not proposed_by_worker_id and not proposed_by_user_id:
+            raise WorkflowProposalValidationError(
+                "one of proposed_by_worker_id or proposed_by_user_id is required"
+            )
+        cleaned_title = self._scrub_text(self._clean_str(title))
+        if not cleaned_title:
+            raise WorkflowProposalValidationError("title is required")
+        if len(cleaned_title) > 256:
+            raise WorkflowProposalValidationError("title exceeds max length")
+
+        cleaned_summary = self._scrub_text(self._clean_str(summary))
+        if not cleaned_summary:
+            raise WorkflowProposalValidationError("summary is required")
+        if len(cleaned_summary) > 10000:
+            raise WorkflowProposalValidationError("summary exceeds max length")
+
+        normalized_provider = self._clean_str(provider).lower() or "github"
+        if normalized_provider not in {"github", "jira"}:
+            raise WorkflowProposalValidationError("provider must be github or jira")
+        normalized_target = self._clean_str(target_class).lower()
+        if normalized_target not in {"workflow_repo", "moonmind"}:
+            raise WorkflowProposalValidationError(
+                "target_class must be workflow_repo or moonmind"
+            )
+
+        normalized_category = self._normalize_category(category)
+        normalized_tags = self._normalize_tags(tags)
+        origin = self._normalize_origin_source(origin_source)
+        metadata = origin_metadata if isinstance(origin_metadata, dict) else {}
+        cleaned_origin_external_id = (
+            self._scrub_text(self._clean_str(origin_external_id)) or None
+        )
+        if (
+            origin is WorkflowProposalOriginSource.WORKFLOW
+            and cleaned_origin_external_id is None
+        ):
+            cleaned_origin_external_id = (
+                self._scrub_text(self._clean_str(metadata.get("workflow_id")))
+                or None
+            )
+
+        destination = self._scrub_text(
+            self._clean_str(repository) or _UNRESOLVED_WORKFLOW_REPO_DESTINATION
+        )
+        request_snapshot = self._scrub_json(dict(workflow_create_request or {}))
+        scrubbed_reason = self._scrub_text(self._clean_str(reason)) or (
+            "proposal delivery failed"
+        )
+        scrubbed_next_action = self._scrub_text(
+            self._clean_str(recoverable_next_action)
+        ) or "Review proposal routing configuration."
+        base_provider_metadata = self._scrub_json(dict(provider_metadata or {}))
+        base_provider_metadata["delivery"] = self._scrub_json(
+            {
+                "status": "failed",
+                "error": {
+                    "provider": normalized_provider,
+                    "destination": destination,
+                    "targetClass": normalized_target,
+                    "sanitizedReason": scrubbed_reason,
+                    "recoverableNextAction": scrubbed_next_action,
+                    "retryable": bool(retryable),
+                },
+            }
+        )
+        base_policy = self._scrub_json(
+            {
+                **dict(resolved_policy or {}),
+                "provider": normalized_provider,
+                "target": normalized_target,
+                "repository": destination,
+                "delivery": {
+                    "status": "failed",
+                    "reason": scrubbed_reason,
+                    "recoverableNextAction": scrubbed_next_action,
+                    "retryable": bool(retryable),
+                },
+            }
+        )
+
+        dedup_key, dedup_hash = self._compute_dedup_fields(
+            repository=destination, title=cleaned_title
+        )
+        proposal = await self._repository.create_proposal(
+            title=cleaned_title,
+            summary=cleaned_summary,
+            category=normalized_category,
+            tags=normalized_tags,
+            repository=destination,
+            workflow_create_request=request_snapshot,
+            proposed_by_worker_id=proposed_by_worker_id,
+            proposed_by_user_id=proposed_by_user_id,
+            origin_source=origin,
+            origin_id=origin_id,
+            origin_external_id=cleaned_origin_external_id,
+            origin_metadata=metadata,
+            dedup_key=dedup_key,
+            dedup_hash=dedup_hash,
+            review_priority=WorkflowProposalReviewPriority.NORMAL,
+            priority_override_reason=None,
+            provider=normalized_provider,
+            external_key=None,
+            external_url=None,
+            delivered_at=None,
+            last_synced_at=datetime.now(UTC),
+            workflow_snapshot_ref=None,
+            provider_metadata=base_provider_metadata,
+            resolved_policy=base_policy,
+        )
+        delivery = base_provider_metadata.get("delivery")
+        if isinstance(delivery, dict):
+            error = delivery.get("error")
+            if isinstance(error, dict):
+                error["deliveryRecordId"] = str(proposal.id)
+        proposal.provider_metadata = deepcopy(base_provider_metadata)
+        await self._repository.commit()
         return proposal
 
     async def list_proposals(
