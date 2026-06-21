@@ -1440,6 +1440,13 @@ async def test_create_proposal_records_sanitized_delivery_failure() -> None:
     assert proposal.provider_metadata["delivery"]["error"]["sanitizedReason"] == (
         "provider rejected request"
     )
+    persisted_metadata = repo.create_proposal.await_args.kwargs["provider_metadata"]
+    assert proposal.provider_metadata is not persisted_metadata
+    assert proposal.provider_metadata["delivery"] is not persisted_metadata["delivery"]
+    assert proposal.provider_metadata["delivery"]["error"]["deliveryRecordId"] == str(
+        record.id
+    )
+    assert persisted_metadata["delivery"]["error"]["deliveryRecordId"] == str(record.id)
 
 
 @pytest.mark.asyncio

@@ -12070,7 +12070,7 @@ class CodexWorker:
         effective_policy = build_effective_proposal_policy(
             policy=task_policy,
             default_targets=defaults.proposal_targets_default,
-            default_max_items_project=defaults.proposal_max_items_project,
+            default_max_items_workflow_repo=defaults.proposal_max_items_workflow_repo,
             default_max_items_moonmind=defaults.proposal_max_items_moonmind,
             default_moonmind_severity_floor=defaults.proposal_moonmind_severity_floor,
             severity_vocabulary=settings.workflow_proposals.severity_vocabulary,
@@ -12131,7 +12131,7 @@ class CodexWorker:
                 errors.append("proposal missing workflowCreateRequest")
                 continue
 
-            if effective_policy.has_project_capacity():
+            if effective_policy.has_workflow_repo_capacity():
                 project_payload = copy.deepcopy(payload)
                 if _ensure_task_request_repository(
                     project_payload,
@@ -12147,7 +12147,7 @@ class CodexWorker:
                         external_links.extend(outcome["external_links"])
                         dedup_updates.extend(outcome["dedup_updates"])
                         delivery_failures.extend(outcome["delivery_failures"])
-                        effective_policy.consume_project_slot()
+                        effective_policy.consume_workflow_repo_slot()
                         submitted += 1
                     except Exception as exc:
                         logger.exception(

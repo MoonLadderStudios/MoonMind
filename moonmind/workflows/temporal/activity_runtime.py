@@ -5085,9 +5085,9 @@ class TemporalProposalActivities:
                 "proposal_targets_default",
                 "workflow_repo",
             ),
-            default_max_items_project=getattr(
+            default_max_items_workflow_repo=getattr(
                 settings.workflow_proposals,
-                "max_items_project_default",
+                "max_items_workflow_repo_default",
                 3,
             ),
             default_max_items_moonmind=getattr(
@@ -5151,7 +5151,10 @@ class TemporalProposalActivities:
             if key in {"github", "jira"} and isinstance(value, Mapping)
         }
         delivery_policy_constraints: dict[str, Any] = {}
-        github_policy = provider_payload.get("github")
+        if delivery_provider == "github":
+            github_policy = provider_payload.get("github")
+        else:
+            github_policy = None
         if isinstance(github_policy, Mapping):
             for source_key, target_key in (
                 ("allowedRepositories", "allowedRepositories"),
@@ -5163,7 +5166,10 @@ class TemporalProposalActivities:
             ):
                 if source_key in github_policy:
                     delivery_policy_constraints[target_key] = github_policy[source_key]
-        jira_policy = provider_payload.get("jira")
+        if delivery_provider == "jira":
+            jira_policy = provider_payload.get("jira")
+        else:
+            jira_policy = None
         if isinstance(jira_policy, Mapping):
             for source_key, target_key in (
                 ("allowedProjects", "allowedProjects"),
@@ -5242,13 +5248,18 @@ class TemporalProposalActivities:
                 request_for_validation: Mapping[str, Any] = workflow_create_request
                 if missing_workflow_repo_destination:
                     request_copy = deepcopy(dict(workflow_create_request))
-                    payload_copy = (
-                        dict(original_payload_node)
-                        if isinstance(original_payload_node, Mapping)
-                        else {}
-                    )
-                    payload_copy["repository"] = "unresolved-workflow-repo"
-                    request_copy["payload"] = payload_copy
+                    payload_node = request_copy.get("payload")
+                    if isinstance(payload_node, Mapping) and not isinstance(
+                        payload_node, dict
+                    ):
+                        payload_node = dict(payload_node)
+                        request_copy["payload"] = payload_node
+                    if isinstance(payload_node, dict):
+                        payload_node["repository"] = "unresolved-workflow-repo"
+                    else:
+                        request_copy["payload"] = {
+                            "repository": "unresolved-workflow-repo"
+                        }
                     request_for_validation = request_copy
 
                 try:
@@ -5266,7 +5277,7 @@ class TemporalProposalActivities:
                     continue
 
                 if missing_workflow_repo_destination:
-                    if not effective_policy.allow_project:
+                    if not effective_policy.allow_workflow_repo:
                         delivery_decisions.append(
                             {
                                 "title": title,
@@ -5276,7 +5287,7 @@ class TemporalProposalActivities:
                             }
                         )
                         continue
-                    if not effective_policy.consume_project_slot():
+                    if not effective_policy.consume_workflow_repo_slot():
                         delivery_decisions.append(
                             {
                                 "title": title,
@@ -5417,7 +5428,7 @@ class TemporalProposalActivities:
                     bool(moonmind_repo)
                     and effective_policy.allow_moonmind
                     and (
-                        not effective_policy.allow_project
+                        not effective_policy.allow_workflow_repo
                         or target_repo.lower() == moonmind_repo.lower()
                         or category in {"run_quality", "moonmind_ci"}
                     )
@@ -5444,7 +5455,7 @@ class TemporalProposalActivities:
                         stamped_request["payload"] = payload_node
                     target_repo = moonmind_repo
                 else:
-                    if not effective_policy.consume_project_slot():
+                    if not effective_policy.consume_workflow_repo_slot():
                         delivery_decisions.append(
                             {
                                 "title": title,
@@ -5515,14 +5526,14 @@ class TemporalProposalActivities:
                                 "default_runtime_applied": default_runtime_applied,
                                 "capacity": {
                                     "workflow_repo": {
-                                        "allowed": effective_policy.allow_project,
-                                        "limit": effective_policy.max_items_project,
+                                        "allowed": effective_policy.allow_workflow_repo,
+                                        "limit": effective_policy.max_items_workflow_repo,
                                         "remaining": (
-                                            effective_policy.remaining_project_slots
+                                            effective_policy.remaining_workflow_repo_slots
                                         ),
                                         "accepted": (
-                                            effective_policy.max_items_project
-                                            - effective_policy.remaining_project_slots
+                                            effective_policy.max_items_workflow_repo
+                                            - effective_policy.remaining_workflow_repo_slots
                                         ),
                                     },
                                     "moonmind": {

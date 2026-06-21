@@ -1031,9 +1031,9 @@ class WorkflowSettings(BaseSettings):
         ),
         description="Default proposal targets when workflows omit proposalPolicy (workflow_repo|moonmind|both).",
     )
-    proposal_max_items_project: int = Field(
+    proposal_max_items_workflow_repo: int = Field(
         3,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT"),
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO"),
         description="Default per-run workflow-repo proposal cap applied when workflow policy omits maxItems.workflowRepo.",
         ge=1,
     )
@@ -2300,9 +2300,9 @@ class WorkflowProposalSettings(BaseSettings):
         ),
         description="MoonMind CI repository used whenever proposals target run-quality improvements.",
     )
-    max_items_project_default: int = Field(
+    max_items_workflow_repo_default: int = Field(
         3,
-        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT"),
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO"),
         description="Default per-run cap for workflow-repo proposals when unspecified.",
         ge=1,
     )

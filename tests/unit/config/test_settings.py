@@ -1011,8 +1011,8 @@ def test_workflow_proposal_policy_settings_defaults(app_settings_defaults):
     settings = AppSettings(_env_file=None, **app_settings_defaults)
     assert settings.workflow_proposals.proposal_targets_default == "workflow_repo"
     assert settings.workflow.proposal_targets_default == "workflow_repo"
-    assert settings.workflow_proposals.max_items_project_default == 3
-    assert settings.workflow.proposal_max_items_project == 3
+    assert settings.workflow_proposals.max_items_workflow_repo_default == 3
+    assert settings.workflow.proposal_max_items_workflow_repo == 3
     assert settings.workflow_proposals.moonmind_severity_floor_default == "high"
     assert settings.workflow.proposal_moonmind_severity_floor == "high"
 
@@ -1020,7 +1020,7 @@ def test_workflow_proposal_policy_env_overrides(app_settings_defaults, monkeypat
     """Environment variables should override policy defaults everywhere."""
 
     monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")
-    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT", "5")
+    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO", "5")
     monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
     monkeypatch.setenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", "medium")
 
@@ -1028,15 +1028,15 @@ def test_workflow_proposal_policy_env_overrides(app_settings_defaults, monkeypat
 
     assert settings.workflow_proposals.proposal_targets_default == "both"
     assert settings.workflow.proposal_targets_default == "both"
-    assert settings.workflow_proposals.max_items_project_default == 5
-    assert settings.workflow.proposal_max_items_project == 5
+    assert settings.workflow_proposals.max_items_workflow_repo_default == 5
+    assert settings.workflow.proposal_max_items_workflow_repo == 5
     assert settings.workflow_proposals.max_items_moonmind_default == 4
     assert settings.workflow.proposal_max_items_moonmind == 4
     assert settings.workflow_proposals.moonmind_severity_floor_default == "medium"
     assert settings.workflow.proposal_moonmind_severity_floor == "medium"
 
     monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
-    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_PROJECT", raising=False)
+    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO", raising=False)
     monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
     monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
 

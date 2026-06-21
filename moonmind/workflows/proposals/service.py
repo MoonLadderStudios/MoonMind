@@ -1141,7 +1141,7 @@ class WorkflowProposalService:
             error = delivery.get("error")
             if isinstance(error, dict):
                 error["deliveryRecordId"] = str(proposal.id)
-        proposal.provider_metadata = base_provider_metadata
+        proposal.provider_metadata = deepcopy(base_provider_metadata)
         await self._repository.commit()
         return proposal
 
