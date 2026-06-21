@@ -565,16 +565,13 @@ class WorkflowProposalService:
 
     def _build_notification_payload(self, proposal: WorkflowProposal) -> dict[str, Any]:
         preview = proposal.workflow_create_request or {}
+        external_url = getattr(proposal, "external_url", None)
         payload = {
             "text": f"[Workflow Proposal] {proposal.category or 'general'} → {proposal.repository}",
             "attachments": [
                 {
                     "title": proposal.title,
-                    **(
-                        {"title_link": proposal.external_url}
-                        if proposal.external_url
-                        else {}
-                    ),
+                    **({"title_link": external_url} if external_url else {}),
                     "text": proposal.summary[:4000],
                     "fields": [
                         {
