@@ -3172,6 +3172,7 @@ async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
     tmp_path: Path,
 ) -> None:
     binding = _binding().model_copy(update={"session_epoch": 7})
+    stale_snapshot_binding = binding.model_copy(update={"session_epoch": 6})
     load_snapshot_calls: list[str] = []
     session_status_calls: list[CodexManagedSessionLocator] = []
     launch_calls: list[Any] = []
@@ -3182,7 +3183,7 @@ async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
     async def _load_snapshot(workflow_id: str) -> CodexManagedSessionSnapshot:
         load_snapshot_calls.append(workflow_id)
         return _snapshot(
-            binding=binding,
+            binding=stale_snapshot_binding,
             container_id="container-stale",
             thread_id="thread-stale",
         )
@@ -3277,7 +3278,9 @@ async def test_start_relaunches_session_when_refreshed_locator_still_mismatches(
     assert len(session_status_calls) == 2
     assert len(launch_calls) == 1
     assert session_status_calls[0].container_id == "container-stale"
+    assert session_status_calls[0].session_epoch == 6
     assert session_status_calls[1].thread_id == "thread-stale"
+    assert session_status_calls[1].session_epoch == 6
     launch_request = launch_calls[0]["request"]
     assert launch_request["sessionEpoch"] == 7
     assert launch_request["threadId"] == f"thread:{binding.session_id}:7"

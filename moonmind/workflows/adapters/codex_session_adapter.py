@@ -1254,6 +1254,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                     raise
                 refreshed_snapshot = await self._load_snapshot(binding.workflow_id)
                 if not refreshed_snapshot.container_id or not refreshed_snapshot.thread_id:
+                    logger.warning(
+                        "Refreshed managed-session snapshot for session %s has no "
+                        "active container or thread ID; launching a fresh "
+                        "workflow-scoped session.",
+                        binding.session_id,
+                    )
                     snapshot = refreshed_snapshot
                 else:
                     refreshed_locator = self._locator_from_snapshot(refreshed_snapshot)
@@ -1296,6 +1302,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                 return handle
 
         active_binding = snapshot.binding
+        if active_binding.session_epoch < binding.session_epoch:
+            logger.warning(
+                "Managed-session snapshot for session %s is stale "
+                "(snapshot epoch %s < request epoch %s); launching from the "
+                "request binding.",
+                binding.session_id,
+                active_binding.session_epoch,
+                binding.session_epoch,
+            )
+            active_binding = binding
         turn_completion_timeout_seconds = self._turn_completion_timeout_seconds(
             request=request,
             profile=profile,
