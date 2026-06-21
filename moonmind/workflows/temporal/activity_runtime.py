@@ -670,7 +670,17 @@ _PROPOSAL_TELEMETRY_TAG_LABELS = {
     "retry": "retry",
 }
 _AUTO_SKILL_SENTINEL = "auto"
-_NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = ("MOONMIND_URL",)
+_NON_SECRET_MANAGED_SESSION_ENV_KEYS: tuple[str, ...] = (
+    "MOONMIND_URL",
+    # Non-secret Unreal toolchain image refs. Threaded into the managed-session
+    # launch environment so the docker-sidecar manifest preflight and the agent's
+    # build/test skill see the operator-configured image instead of falling back
+    # to a gated, late-failing pull. GHCR pull *credentials* are intentionally not
+    # here: they are secrets resolved separately by
+    # resolve_ghcr_pull_credentials_for_launch.
+    "MOONMIND_UNREAL_ENGINE_IMAGE",
+    "MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF",
+)
 _MANAGED_SESSION_TELEMETRY_KEYS: tuple[str, ...] = (
     "activityType",
     "agentRunId",

@@ -1744,6 +1744,45 @@ async def test_launch_session_injects_moonmind_url_from_activity_environment(
     assert launched_request.environment["PATH"] == "/usr/bin"
     assert launched_request.environment["MOONMIND_URL"] == "http://api:8000"
 
+async def test_launch_session_injects_unreal_image_refs_from_activity_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pinned = "ghcr.io/moonladderstudios/tactics-ue-base@sha256:abc123"
+    monkeypatch.setenv("MOONMIND_UNREAL_ENGINE_IMAGE", pinned)
+    monkeypatch.setenv("MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF", pinned)
+    controller = AsyncMock()
+    controller.launch_session = AsyncMock(
+        return_value=CodexManagedSessionHandle(
+            sessionState={
+                "sessionId": "sess-1",
+                "sessionEpoch": 1,
+                "containerId": "ctr-1",
+                "threadId": "thread-1",
+            },
+            status="ready",
+            imageRef="moonmind:latest",
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    await activities.agent_runtime_launch_session(
+        {
+            "agentRunId": "task-1",
+            "sessionId": "sess-1",
+            "threadId": "thread-1",
+            "workspacePath": "/work/task/repo",
+            "sessionWorkspacePath": "/work/task/session",
+            "artifactSpoolPath": "/work/task/artifacts",
+            "codexHomePath": "/work/task/codex-home",
+            "imageRef": "moonmind:latest",
+            "environment": {"PATH": "/usr/bin"},
+        }
+    )
+
+    launched_request = controller.launch_session.await_args.args[0]
+    assert launched_request.environment["MOONMIND_UNREAL_ENGINE_IMAGE"] == pinned
+    assert launched_request.environment["MOONMIND_DOCKER_PREFLIGHT_IMAGE_REF"] == pinned
+
 async def test_launch_session_uses_github_descriptor_for_managed_secret_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
