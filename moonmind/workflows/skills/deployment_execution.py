@@ -26,6 +26,7 @@ DEPLOYMENT_RUNNER_MODES = frozenset(
 DEPLOYMENT_UPDATE_MODES = frozenset({"changed_services", "force_recreate"})
 DEPLOYMENT_UPDATE_STACKS = frozenset({"moonmind"})
 DEPLOYMENT_FINAL_STATUSES = frozenset({"SUCCEEDED", "FAILED", "PARTIALLY_VERIFIED"})
+DEPLOYMENT_ONE_SHOT_SERVICES = frozenset({"init-db"})
 FILE_LOCK_STALE_AFTER_SECONDS = 6 * 60 * 60
 _REDACTED = "[REDACTED]"
 _STACK_PATH_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -1169,6 +1170,7 @@ class DeploymentUpdateExecutor:
         command_log: dict[str, Any] = {
             "runnerMode": command_plan.runner_mode,
             "pull": {"command": list(command_plan.pull_args)},
+            "oneShot": [],
             "up": {"command": list(command_plan.up_args)},
         }
 
@@ -1220,8 +1222,25 @@ class DeploymentUpdateExecutor:
                     requested_repository=str(parsed["image"]["repository"]),
                     excluded_services=self.excluded_services,
                 )
+                one_shot_services = _one_shot_services_from_plan(command_plan)
+                service_command_plan = _command_plan_without_services(
+                    command_plan,
+                    excluded_services=one_shot_services,
+                )
                 command_log["pull"]["command"] = list(command_plan.pull_args)
-                command_log["up"]["command"] = list(command_plan.up_args)
+                command_log["up"]["command"] = list(service_command_plan.up_args)
+                command_log["oneShot"] = [
+                    {
+                        "service": service,
+                        "command": list(
+                            _compose_up_args_for_services(
+                                command_plan.up_args,
+                                (service,),
+                            )
+                        ),
+                    }
+                    for service in one_shot_services
+                ]
                 before_ref = await write_evidence("before-state", before_state)
 
                 _add_progress(
@@ -1243,7 +1262,7 @@ class DeploymentUpdateExecutor:
                         target_image=target_image,
                     )
                 _ensure_runner_survives_update(
-                    command_plan=command_plan,
+                    command_plan=service_command_plan,
                     before_state=before_state,
                     target_image=target_image,
                 )
@@ -1265,6 +1284,25 @@ class DeploymentUpdateExecutor:
                 }
                 await self.desired_state_store.persist(desired_payload)
 
+                if one_shot_services:
+                    _add_progress(
+                        progress_events,
+                        "RUNNING_ONE_SHOT_SERVICES",
+                        "Running one-shot deployment services.",
+                    )
+                for one_shot_entry in command_log["oneShot"]:
+                    service_name = str(one_shot_entry["service"])
+                    one_shot_result = await self.runner.up(
+                        stack=parsed["stack"],
+                        command=tuple(one_shot_entry["command"]),
+                        requested_image=requested_image,
+                    )
+                    one_shot_entry["result"] = one_shot_result
+                    _ensure_command_succeeded(
+                        f"one-shot service {service_name}",
+                        one_shot_result,
+                    )
+
                 _add_progress(
                     progress_events,
                     "RECREATING_SERVICES",
@@ -1272,7 +1310,7 @@ class DeploymentUpdateExecutor:
                 )
                 up_result = await self.runner.up(
                     stack=parsed["stack"],
-                    command=command_plan.up_args,
+                    command=service_command_plan.up_args,
                     requested_image=requested_image,
                 )
                 command_log["up"]["result"] = up_result
@@ -1549,6 +1587,86 @@ def _command_plan_targeting_services(
         runner_mode=command_plan.runner_mode,
         pull_args=(*command_plan.pull_args, *services),
         up_args=(*command_plan.up_args, "--no-deps", *services),
+    )
+
+
+def _one_shot_services_from_plan(command_plan: ComposeCommandPlan) -> tuple[str, ...]:
+    one_shot_services = {
+        service.lower() for service in DEPLOYMENT_ONE_SHOT_SERVICES
+    }
+    return tuple(
+        service
+        for service in _compose_up_target_services(command_plan.up_args)
+        if service.lower() in one_shot_services
+    )
+
+
+def _command_plan_without_services(
+    command_plan: ComposeCommandPlan,
+    *,
+    excluded_services: Sequence[str],
+) -> ComposeCommandPlan:
+    excluded = _normalized_service_names(excluded_services)
+    if not excluded:
+        return command_plan
+    target_services = _compose_up_target_services(command_plan.up_args)
+    remaining_targets = tuple(
+        service
+        for service in target_services
+        if service.lower() not in excluded
+    )
+    if target_services and not remaining_targets:
+        raise ToolFailure(
+            error_code="DEPLOYMENT_RUNNER_UNSAFE",
+            message=(
+                "Deployment update has no long-running target services after "
+                "separating one-shot services."
+            ),
+            retryable=False,
+            details={
+                "excludedServices": sorted(excluded),
+                "failureClass": "runner_self_recreation_unsafe",
+            },
+        )
+    return ComposeCommandPlan(
+        runner_mode=command_plan.runner_mode,
+        pull_args=_remove_services_from_command_args(
+            command_plan.pull_args,
+            excluded_services=excluded,
+        ),
+        up_args=_remove_services_from_command_args(
+            command_plan.up_args,
+            excluded_services=excluded,
+        ),
+    )
+
+
+def _compose_up_args_for_services(
+    up_args: Sequence[str],
+    services: Sequence[str],
+) -> tuple[str, ...]:
+    target_services = {
+        service.lower() for service in _compose_up_target_services(up_args)
+    }
+    without_targets = tuple(
+        part
+        for part in up_args
+        if str(part).strip().lower() not in target_services
+    )
+    return (*without_targets, *tuple(str(service) for service in services))
+
+
+def _remove_services_from_command_args(
+    args: Sequence[str],
+    *,
+    excluded_services: set[str],
+) -> tuple[str, ...]:
+    if not excluded_services:
+        return tuple(args)
+    return tuple(
+        str(part)
+        for part in args
+        if str(part).strip().lower() not in excluded_services
     )
 
 
@@ -2159,6 +2277,8 @@ def _command_failure_class(phase: str) -> str:
         return "image_pull_failure"
     if phase == "up":
         return "service_recreation_failure"
+    if phase.startswith("one-shot service "):
+        return "one_shot_service_failure"
     return "compose_config_validation_failure"
 
 
