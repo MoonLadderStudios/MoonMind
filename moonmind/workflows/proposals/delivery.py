@@ -447,7 +447,11 @@ def github_decision_event_from_payload(
     )
     actor = _clean(sender.get("login") or comment_user.get("login"))
     issue_number = _clean(issue.get("number") or payload.get("externalKey"))
-    command_body = _clean(comment.get("body") or issue.get("body") or payload.get("body"))
+    command_body = _clean(
+        comment.get("body")
+        if comment_node is not None
+        else (issue.get("body") or payload.get("body"))
+    )
     repo_full_name = _clean(repository.get("full_name") or payload.get("repository"))
     issue_body = _clean(issue.get("body"))
 

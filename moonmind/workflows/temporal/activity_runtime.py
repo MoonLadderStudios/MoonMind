@@ -4499,6 +4499,30 @@ class TemporalProposalActivities:
         return text
 
     @classmethod
+    def _proposal_allowed_actors_from_provider_metadata(
+        cls,
+        *,
+        provider_payload: Mapping[str, Any],
+        delivery_provider: str,
+    ) -> list[str]:
+        provider_cfg = provider_payload.get(delivery_provider)
+        if not isinstance(provider_cfg, Mapping):
+            return []
+        actors: list[str] = []
+        seen: set[str] = set()
+        for key in ("allowedActors", "allowed_actors", "reviewers"):
+            raw = provider_cfg.get(key)
+            if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+                continue
+            for item in raw:
+                actor = cls._normalize_proposal_text(item)
+                actor_key = actor.lower()
+                if actor and actor_key not in seen:
+                    actors.append(actor)
+                    seen.add(actor_key)
+        return actors
+
+    @classmethod
     def _comparison_key(cls, value: object) -> str:
         normalized = cls._normalize_proposal_text(value).lower()
         return re.sub(r"[^a-z0-9]+", " ", normalized).strip()
@@ -5150,6 +5174,10 @@ class TemporalProposalActivities:
             for key, value in provider_metadata.items()
             if key in {"github", "jira"} and isinstance(value, Mapping)
         }
+        policy_allowed_actors = self._proposal_allowed_actors_from_provider_metadata(
+            provider_payload=provider_payload,
+            delivery_provider=delivery_provider,
+        )
 
         service_or_ctx = None
         if self._proposal_service_factory is not None:
@@ -5332,6 +5360,58 @@ class TemporalProposalActivities:
                             "trigger_job_id": trigger_job_id,
                             "signal": signal_metadata,
                         }
+                        resolved_policy = {
+                            "provider": delivery_provider,
+                            "target": target,
+                            "repository": target_repo,
+                            "workflow_id": workflow_id,
+                            "default_runtime": default_runtime_value,
+                            "default_runtime_applied": default_runtime_applied,
+                            "capacity": {
+                                "project": {
+                                    "allowed": effective_policy.allow_project,
+                                    "limit": effective_policy.max_items_project,
+                                    "remaining": (
+                                        effective_policy.remaining_project_slots
+                                    ),
+                                    "accepted": (
+                                        effective_policy.max_items_project
+                                        - effective_policy.remaining_project_slots
+                                    ),
+                                },
+                                "moonmind": {
+                                    "allowed": effective_policy.allow_moonmind,
+                                    "limit": effective_policy.max_items_moonmind,
+                                    "remaining": (
+                                        effective_policy.remaining_moonmind_slots
+                                    ),
+                                    "accepted": (
+                                        effective_policy.max_items_moonmind
+                                        - effective_policy.remaining_moonmind_slots
+                                    ),
+                                },
+                            },
+                            "gates": {
+                                "moonmind": {
+                                    "severity": severity,
+                                    "severity_floor": (
+                                        effective_policy.min_severity_for_moonmind
+                                    ),
+                                    "severity_qualified": (
+                                        moonmind_severity_qualified
+                                    ),
+                                    "approved_tags": moonmind_tag_matches,
+                                    "qualified": wants_moonmind,
+                                }
+                            },
+                            "delivery": {
+                                "provider": delivery_provider,
+                                "metadata": provider_payload,
+                            },
+                        }
+                        if policy_allowed_actors:
+                            resolved_policy["allowedActors"] = policy_allowed_actors
+
                         proposal = await service.create_proposal(
                             title=title,
                             summary=summary,
@@ -5346,55 +5426,7 @@ class TemporalProposalActivities:
                             proposed_by_user_id=None,
                             provider=delivery_provider,
                             provider_metadata=provider_payload,
-                            resolved_policy={
-                                "provider": delivery_provider,
-                                "target": target,
-                                "repository": target_repo,
-                                "workflow_id": workflow_id,
-                                "default_runtime": default_runtime_value,
-                                "default_runtime_applied": default_runtime_applied,
-                                "capacity": {
-                                    "project": {
-                                        "allowed": effective_policy.allow_project,
-                                        "limit": effective_policy.max_items_project,
-                                        "remaining": (
-                                            effective_policy.remaining_project_slots
-                                        ),
-                                        "accepted": (
-                                            effective_policy.max_items_project
-                                            - effective_policy.remaining_project_slots
-                                        ),
-                                    },
-                                    "moonmind": {
-                                        "allowed": effective_policy.allow_moonmind,
-                                        "limit": effective_policy.max_items_moonmind,
-                                        "remaining": (
-                                            effective_policy.remaining_moonmind_slots
-                                        ),
-                                        "accepted": (
-                                            effective_policy.max_items_moonmind
-                                            - effective_policy.remaining_moonmind_slots
-                                        ),
-                                    },
-                                },
-                                "gates": {
-                                    "moonmind": {
-                                        "severity": severity,
-                                        "severity_floor": (
-                                            effective_policy.min_severity_for_moonmind
-                                        ),
-                                        "severity_qualified": (
-                                            moonmind_severity_qualified
-                                        ),
-                                        "approved_tags": moonmind_tag_matches,
-                                        "qualified": wants_moonmind,
-                                    }
-                                },
-                                "delivery": {
-                                    "provider": delivery_provider,
-                                    "metadata": provider_payload,
-                                },
-                            },
+                            resolved_policy=resolved_policy,
                         )
                         external_key = getattr(proposal, "external_key", None)
                         external_url = getattr(proposal, "external_url", None)

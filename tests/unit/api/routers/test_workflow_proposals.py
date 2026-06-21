@@ -860,6 +860,100 @@ def test_github_provider_decision_rejects_unsigned_payload_before_execution(
     execution_service.create_execution.assert_not_awaited()
 
 
+def test_github_provider_decision_rejects_invalid_utf8_payload(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
+    test_client, service, _execution_service = client
+    proposal_id = uuid4()
+
+    response = test_client.post(
+        f"/api/proposals/{proposal_id}/github-decision",
+        content=b"\xff",
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_github_payload"
+    service.get_proposal.assert_not_awaited()
+
+
+def test_github_provider_decision_trusted_sync_requires_superuser(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, execution_service = client
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.workflow_proposals,
+        "github_webhook_secret",
+        "proposal-webhook-secret",
+    )
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.workflow_snapshot_ref = "artifact://proposals/42.json"
+    proposal.provider_metadata = {}
+    proposal.resolved_policy = {
+        "allowedActors": ["reviewer"],
+        "allowedActions": ["promote"],
+    }
+    service.get_proposal.return_value = proposal
+
+    async def _user_override():
+        return SimpleNamespace(
+            id=uuid4(),
+            email="user@example.com",
+            is_active=True,
+            is_superuser=False,
+        )
+
+    async def _record_provider_decision_event(*, proposal_id, event):
+        assert event.authenticity_verified is False
+        return SimpleNamespace(
+            accepted=False,
+            decision=None,
+            note=None,
+            actor=event.actor,
+            provider_event_id=event.provider_event_id,
+            reason="provider_auth_failed",
+            priority=None,
+            defer_until=None,
+            runtime_mode=None,
+            external_state="ignored",
+            promoted_execution_id=None,
+        )
+
+    test_client.app.dependency_overrides[get_current_user()] = _user_override
+    service.record_provider_decision_event.side_effect = _record_provider_decision_event
+    payload = {
+        "repository": {"full_name": "Moon/Repo"},
+        "issue": {
+            "number": 42,
+            "body": f"{github_marker_for_proposal(proposal)}\n\nproposal body",
+        },
+        "comment": {"id": 1003, "body": "/moonmind promote"},
+        "sender": {"login": "reviewer"},
+    }
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/github-decision",
+        json=payload,
+        headers={
+            "X-GitHub-Delivery": "evt-github-trusted-sync",
+            "X-MoonMind-Trusted-Sync": "true",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert body["reason"] == "provider_auth_failed"
+    service.promote_proposal.assert_not_awaited()
+    execution_service.create_execution.assert_not_awaited()
+
+
 def test_provider_decision_recovery_inspects_delivery_history(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:

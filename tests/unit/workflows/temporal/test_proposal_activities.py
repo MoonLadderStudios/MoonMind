@@ -1182,6 +1182,52 @@ class TestProposalSubmitPolicyResolution(unittest.IsolatedAsyncioTestCase):
         self.assertIn("delivery_decisions", result)
         self.assertEqual(result["delivery_decisions"][0]["provider"], "jira")
 
+    async def test_github_delivery_policy_seeds_allowed_actors(self) -> None:
+        mock_service = AsyncMock()
+
+        @contextlib.asynccontextmanager
+        async def factory():
+            yield mock_service
+
+        activities = TemporalProposalActivities(proposal_service_factory=factory)
+        result = await activities.proposal_submit(
+            {
+                "candidates": [
+                    {
+                        "title": "Fix bug",
+                        "summary": "Bug in module X",
+                        "workflowCreateRequest": {"payload": {"repository": "org/repo"}},
+                    }
+                ],
+                "policy": {
+                    "delivery": {
+                        "provider": "github",
+                        "github": {
+                            "repository": "org/repo",
+                            "allowedActors": ["reviewer", "Reviewer", "lead"],
+                        },
+                    }
+                },
+                "origin": {"workflow_id": "wf-1"},
+            }
+        )
+
+        self.assertEqual(result["submitted_count"], 1)
+        call_kwargs = mock_service.create_proposal.await_args.kwargs
+        self.assertEqual(
+            call_kwargs["provider_metadata"],
+            {
+                "github": {
+                    "repository": "org/repo",
+                    "allowedActors": ["reviewer", "Reviewer", "lead"],
+                }
+            },
+        )
+        self.assertEqual(
+            call_kwargs["resolved_policy"]["allowedActors"],
+            ["reviewer", "lead"],
+        )
+
     async def test_auto_delivery_provider_uses_configured_default(self) -> None:
         mock_service = AsyncMock()
 

@@ -711,7 +711,7 @@ async def github_provider_decision(
     raw_body = await request.body()
     try:
         payload = json.loads(raw_body.decode("utf-8") or "{}")
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -744,6 +744,7 @@ async def github_provider_decision(
             webhook_secret=settings.workflow_proposals.github_webhook_secret,
             trusted_sync=(
                 request.headers.get("X-MoonMind-Trusted-Sync", "").lower() == "true"
+                and bool(getattr(user, "is_superuser", False))
             ),
         )
         result = await service.record_provider_decision_event(

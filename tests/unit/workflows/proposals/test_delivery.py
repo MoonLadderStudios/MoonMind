@@ -237,6 +237,44 @@ def test_github_decision_ingress_rejects_repository_identity_mismatch() -> None:
     assert result.event.authenticity_verified is False
 
 
+def test_github_decision_ingress_empty_comment_does_not_fall_back_to_issue_body() -> None:
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        provider="github",
+        external_key="42",
+        repository="Moon/Repo",
+        dedup_hash="d" * 64,
+        workflow_snapshot_ref="artifact://task-snapshot.json",
+        provider_metadata={},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
+        origin_metadata={},
+        resolved_policy={"allowedActors": ["reviewer"]},
+    )
+
+    result = github_decision_event_from_payload(
+        payload={
+            "repository": {"full_name": "Moon/Repo"},
+            "issue": {
+                "number": 42,
+                "body": (
+                    f"{github_marker_for_proposal(proposal)}\n"
+                    "/moonmind promote"
+                ),
+            },
+            "comment": {"id": 1001, "body": ""},
+            "sender": {"login": "reviewer"},
+        },
+        proposal=proposal,
+        body=b"{}",
+        signature_header=None,
+        webhook_secret=None,
+        trusted_sync=True,
+    )
+
+    assert result.verified is True
+    assert result.event.body == ""
+
+
 def test_provider_decision_parser_accepts_request_revision_command() -> None:
     result = parse_provider_decision(
         ProviderDecisionEvent(
