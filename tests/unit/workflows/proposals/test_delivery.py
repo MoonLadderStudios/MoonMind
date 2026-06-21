@@ -26,6 +26,7 @@ def _request(
     *,
     provider: str = "github",
     repository: str = "Moon/Repo",
+    category: str | None = "tests",
     provider_metadata: dict[str, object] | None = None,
     resolved_policy: dict[str, object] | None = None,
     external_key: str | None = None,
@@ -37,7 +38,7 @@ def _request(
         repository=repository,
         title="Add regression coverage",
         summary="Follow-up proposal from workflow evidence.",
-        category="tests",
+        category=category,
         tags=("artifact_gap", "moonmind"),
         priority="high",
         dedup_key="moon/repo:add-regression-coverage",
@@ -106,14 +107,49 @@ def test_github_renderer_includes_review_context_and_excludes_raw_payload() -> N
     )
 
     assert rendered.title.startswith("[MoonMind proposal] Add regression coverage")
-    assert "moonmind-proposal" in rendered.labels
+    assert "moonmind:proposal" in rendered.labels
+    assert "moonmind:state:open" in rendered.labels
+    assert "moonmind:target:workflow-repo" in rendered.labels
+    assert "moonmind:category:tests" in rendered.labels
+    assert "moonmind:priority:high" in rendered.labels
+    assert "moonmind:dedup:dddddddddddd" in rendered.labels
     assert "custom" in rendered.labels
     assert "<!-- moonmind-proposal" in rendered.body
+    assert "target=workflow-repo" in rendered.body
+    assert rendered.marker.index("record=") < rendered.marker.index("dedup=")
+    assert rendered.marker.index("dedup=") < rendered.marker.index("snapshot=")
+    assert rendered.marker.index("snapshot=") < rendered.marker.index("target=")
     assert "wf-123" in rendered.body
     assert "artifact://task-snapshot.json" in rendered.body
     assert "/moonmind promote" in rendered.body
     assert "stored proposal snapshot" in rendered.body.lower()
     assert "RAW EXECUTABLE PAYLOAD SHOULD NOT APPEAR" not in rendered.body
+
+
+def test_github_renderer_labels_moonmind_target_from_policy() -> None:
+    rendered = render_github_issue(
+        _request(
+            category="run_quality",
+            resolved_policy={"target": "moonmind"},
+        )
+    )
+
+    assert "moonmind:target:moonmind" in rendered.labels
+    assert "moonmind:category:run-quality" in rendered.labels
+    assert "target=moonmind" in rendered.body
+
+
+def test_github_renderer_caps_long_category_labels() -> None:
+    rendered = render_github_issue(
+        _request(category="A category value that is much longer than github allows")
+    )
+
+    category_labels = [
+        label for label in rendered.labels if label.startswith("moonmind:category:")
+    ]
+    assert len(category_labels) == 1
+    assert len(category_labels[0]) <= 50
+    assert category_labels[0].startswith("moonmind:category:a-category-value")
 
 
 def test_jira_renderer_emits_adf_description_and_configured_fields() -> None:

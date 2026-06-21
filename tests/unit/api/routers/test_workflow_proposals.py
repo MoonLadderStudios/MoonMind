@@ -207,7 +207,7 @@ def test_list_proposals_serializes_delivery_record_fields(
     proposal.last_synced_at = datetime(2026, 5, 7, 12, 45, tzinfo=UTC)
     proposal.workflow_snapshot_ref = "artifact://proposals/MM-901.json"
     proposal.provider_metadata = {"jira": {"project_key": "MM", "labels": ["moonmind"]}}
-    proposal.resolved_policy = {"provider": "jira", "target": "project"}
+    proposal.resolved_policy = {"provider": "jira", "target": "workflow_repo"}
     service.list_proposals.return_value = ([proposal], None)
 
     response = test_client.get("/api/proposals")
@@ -221,7 +221,7 @@ def test_list_proposals_serializes_delivery_record_fields(
     assert item["providerMetadata"] == {
         "jira": {"project_key": "MM", "labels": ["moonmind"]}
     }
-    assert item["resolvedPolicy"] == {"provider": "jira", "target": "project"}
+    assert item["resolvedPolicy"] == {"provider": "jira", "target": "workflow_repo"}
     assert item["deliveredAt"] == "2026-05-07T12:30:00Z"
     assert item["lastSyncedAt"] == "2026-05-07T12:45:00Z"
 
@@ -244,7 +244,7 @@ def test_list_proposals_serializes_review_delivery_state(
             "created": True,
         }
     }
-    proposal.resolved_policy = {"provider": "github", "target": "project"}
+    proposal.resolved_policy = {"provider": "github", "target": "workflow_repo"}
     service.list_proposals.return_value = ([proposal], None)
 
     response = test_client.get("/api/proposals")

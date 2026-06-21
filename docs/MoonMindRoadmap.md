@@ -268,7 +268,7 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - Bounded-evidence remediation context — remediation reads a target run's durable evidence under redaction.
 - Canonical remediation submissions via `execution_remediation_links`.
 - Remediation lifecycle repair prevention — locks/ledger prevent duplicate or conflicting repairs.
-- Durable step ledger and checkpoints — step state, attempts, evidence refs, and latest-attempt evidence refs surfaced in the default ledger row.
+- Durable step ledger & checkpoints — step state, attempts, evidence refs, and latest-attempt evidence refs surfaced in the default ledger row.
 - Resume foundations — distinct full-retry vs recovery actions, checkpoint-evidence gating, editable full retry, and resume-from-last-failed-step.
 - Step Execution evidence manifests and checkpoint contracts are documented as the canonical substrate for semantic re-execution, checkpointed side effects, gated iteration, failed-step recovery, and autonomous story loops.
 - Step Execution history is now visible in expanded Mission Control step rows (MM-831 / PR #2541).
