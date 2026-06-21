@@ -14,6 +14,7 @@ from moonmind.workflows.proposals.models import (
     WorkflowProposalStatus,
 )
 
+
 class WorkflowProposalOriginModel(BaseModel):
     """Origin metadata for a proposal."""
 
@@ -22,6 +23,7 @@ class WorkflowProposalOriginModel(BaseModel):
     source: WorkflowProposalOriginSource = Field(..., alias="source")
     id: Optional[str] = Field(None, alias="id")
     metadata: dict[str, Any] | None = Field(None, alias="metadata")
+
 
 class WorkflowProposalPreview(BaseModel):
     """Derived summary of the canonical task payload."""
@@ -46,6 +48,7 @@ class WorkflowProposalPreview(BaseModel):
         default_factory=list, alias="presetSourceMetadata"
     )
 
+
 class WorkflowProposalModel(BaseModel):
     """Serialized proposal model."""
 
@@ -67,9 +70,15 @@ class WorkflowProposalModel(BaseModel):
     last_synced_at: Optional[datetime] = Field(None, alias="lastSyncedAt")
     # legacy_run contract: workflowSnapshotRef wire alias and DB-bound attribute (WP7/v2 cutover)
     workflow_snapshot_ref: Optional[str] = Field(None, alias="workflowSnapshotRef")
-    provider_metadata: dict[str, Any] = Field(default_factory=dict, alias="providerMetadata")
-    resolved_policy: dict[str, Any] = Field(default_factory=dict, alias="resolvedPolicy")
-    review_delivery: dict[str, Any] = Field(default_factory=dict, alias="reviewDelivery")
+    provider_metadata: dict[str, Any] = Field(
+        default_factory=dict, alias="providerMetadata"
+    )
+    resolved_policy: dict[str, Any] = Field(
+        default_factory=dict, alias="resolvedPolicy"
+    )
+    review_delivery: dict[str, Any] = Field(
+        default_factory=dict, alias="reviewDelivery"
+    )
     review_priority: WorkflowProposalReviewPriority = Field(
         WorkflowProposalReviewPriority.NORMAL, alias="reviewPriority"
     )
@@ -95,6 +104,7 @@ class WorkflowProposalModel(BaseModel):
         default_factory=list, alias="similar"
     )
 
+
 class WorkflowProposalSimilarModel(BaseModel):
     """Slim representation of similar proposals."""
 
@@ -105,6 +115,7 @@ class WorkflowProposalSimilarModel(BaseModel):
     category: Optional[str] = Field(None, alias="category")
     repository: str = Field(..., alias="repository")
     created_at: datetime = Field(..., alias="createdAt")
+
 
 class WorkflowProposalCreateRequest(BaseModel):
     """Request payload for creating a workflow proposal."""
@@ -124,6 +135,7 @@ class WorkflowProposalCreateRequest(BaseModel):
     provider_metadata: dict[str, Any] | None = Field(None, alias="providerMetadata")
     resolved_policy: dict[str, Any] | None = Field(None, alias="resolvedPolicy")
 
+
 class WorkflowProposalListResponse(BaseModel):
     """Response payload for listing proposals."""
 
@@ -131,6 +143,7 @@ class WorkflowProposalListResponse(BaseModel):
 
     items: list[WorkflowProposalModel] = Field(default_factory=list, alias="items")
     next_cursor: Optional[str] = Field(None, alias="nextCursor")
+
 
 class WorkflowProposalPromoteRequest(BaseModel):
     """Optional overrides supplied during promotion."""
@@ -149,12 +162,14 @@ class WorkflowProposalPromoteRequest(BaseModel):
         ),
     )
 
+
 class WorkflowProposalDismissRequest(BaseModel):
     """Dismissal note payload."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     note: Optional[str] = Field(None, alias="note")
+
 
 class WorkflowProposalPromoteResponse(BaseModel):
     """Promotion response containing proposal + queue job."""
@@ -165,6 +180,7 @@ class WorkflowProposalPromoteResponse(BaseModel):
     promoted_execution_id: str = Field(
         ..., alias="promotedExecutionId", title="PromotedExecutionId"
     )
+
 
 class WorkflowProposalPriorityRequest(BaseModel):
     """Reviewer priority update request."""
@@ -201,6 +217,8 @@ class WorkflowProposalProviderDecisionRequest(BaseModel):
         alias="authenticity",
     )
     runtime_mode: Optional[str] = Field(None, alias="runtimeMode")
+    priority: Optional[int] = Field(None, alias="priority")
+    max_attempts: Optional[int] = Field(None, alias="maxAttempts")
     external_state: Optional[str] = Field(None, alias="externalState")
 
 
@@ -216,6 +234,8 @@ class WorkflowProposalProviderDecisionResponse(BaseModel):
     provider_event_id: str = Field(..., alias="providerEventId")
     note: Optional[str] = Field(None, alias="note")
     priority: Optional[str] = Field(None, alias="priority")
+    execution_priority: Optional[int] = Field(None, alias="executionPriority")
+    max_attempts: Optional[int] = Field(None, alias="maxAttempts")
     defer_until: Optional[str] = Field(None, alias="deferUntil")
     runtime_mode: Optional[str] = Field(None, alias="runtimeMode")
     resulting_external_state: Optional[str] = Field(

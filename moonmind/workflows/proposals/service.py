@@ -66,14 +66,18 @@ _PROPOSAL_RUNTIME_MODE_ALIASES = {
     "claude_code": "claude",
 }
 
+
 class WorkflowProposalError(RuntimeError):
     """Base error for workflow proposal operations."""
+
 
 class WorkflowProposalValidationError(WorkflowProposalError):
     """Raised when proposal input values are invalid."""
 
+
 class WorkflowProposalStatusError(WorkflowProposalError):
     """Raised when proposal state does not permit the requested action."""
+
 
 class WorkflowProposalService:
     """Application service that validates proposal actions."""
@@ -117,7 +121,9 @@ class WorkflowProposalService:
         )
         self._similar_limit = 10
         self._moonmind_repository = (
-            str(getattr(settings.workflow_proposals, "moonmind_ci_repository", "") or "")
+            str(
+                getattr(settings.workflow_proposals, "moonmind_ci_repository", "") or ""
+            )
             .strip()
             .lower()
         )
@@ -270,7 +276,10 @@ class WorkflowProposalService:
         if "loop_detected" in tag_set:
             return WorkflowProposalReviewPriority.HIGH, "signal:loop_detected"
         if "conflicting_instructions" in tag_set:
-            return WorkflowProposalReviewPriority.HIGH, "signal:conflicting_instructions"
+            return (
+                WorkflowProposalReviewPriority.HIGH,
+                "signal:conflicting_instructions",
+            )
         if "missing_ref" in tag_set:
             missing_refs = signal_dict.get("missing_refs")
             if isinstance(missing_refs, (list, tuple)) and missing_refs:
@@ -290,7 +299,9 @@ class WorkflowProposalService:
             return WorkflowProposalReviewPriority.LOW, "signal:flaky_test"
         return None, None
 
-    def _normalize_origin_source(self, raw_source: object) -> WorkflowProposalOriginSource:
+    def _normalize_origin_source(
+        self, raw_source: object
+    ) -> WorkflowProposalOriginSource:
         if isinstance(raw_source, WorkflowProposalOriginSource):
             return raw_source
         text = self._clean_str(raw_source).lower()
@@ -307,11 +318,16 @@ class WorkflowProposalService:
     def _normalize_review_priority(
         self, value: object | None
     ) -> WorkflowProposalReviewPriority:
-        text = self._clean_str(value).lower() or WorkflowProposalReviewPriority.NORMAL.value
+        text = (
+            self._clean_str(value).lower()
+            or WorkflowProposalReviewPriority.NORMAL.value
+        )
         try:
             return WorkflowProposalReviewPriority(text)
         except ValueError as exc:
-            allowed = ", ".join(member.value for member in WorkflowProposalReviewPriority)
+            allowed = ", ".join(
+                member.value for member in WorkflowProposalReviewPriority
+            )
             raise WorkflowProposalValidationError(
                 f"priority must be one of: {allowed}"
             ) from exc
@@ -336,7 +352,9 @@ class WorkflowProposalService:
         workflow_node = normalized_payload.get("workflow")
         if not isinstance(workflow_node, Mapping):
             workflow_node = normalized_payload.get("task")
-        workflow_payload = dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+        workflow_payload = (
+            dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+        )
         publish_node = workflow_payload.get("publish")
         publish = dict(publish_node) if isinstance(publish_node, Mapping) else {}
         publish["mode"] = "pr"
@@ -391,7 +409,9 @@ class WorkflowProposalService:
         workflow_node = payload_for_validation.get("workflow")
         if not isinstance(workflow_node, Mapping):
             workflow_node = payload_for_validation.get("task")
-        workflow_payload = dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+        workflow_payload = (
+            dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+        )
         if not workflow_payload:
             workflow_payload = {
                 "instructions": (
@@ -420,7 +440,9 @@ class WorkflowProposalService:
         payload_for_validation.pop("task", None)
 
         try:
-            model = CanonicalWorkflowExecutionPayload.model_validate(payload_for_validation)
+            model = CanonicalWorkflowExecutionPayload.model_validate(
+                payload_for_validation
+            )
         except (ValidationError, WorkflowContractError) as exc:
             raise WorkflowProposalValidationError(str(exc)) from exc
         normalized_payload = model.model_dump(by_alias=True, exclude_none=False)
@@ -476,7 +498,9 @@ class WorkflowProposalService:
                 continue
             value = workflow_payload.get(key)
             if key == "runtime" and isinstance(value, Mapping):
-                workflow_payload["runtime"] = cls._normalize_proposal_runtime_mapping(value)
+                workflow_payload["runtime"] = cls._normalize_proposal_runtime_mapping(
+                    value
+                )
                 continue
             workflow_payload[key] = cls._normalize_proposal_runtime_mode(value)
         normalized["workflow"] = workflow_payload
@@ -490,7 +514,9 @@ class WorkflowProposalService:
         apply_runtime_defaults: bool,
     ) -> tuple[dict[str, Any], str]:
         if not isinstance(request, dict):
-            raise WorkflowProposalValidationError("workflowCreateRequest must be an object")
+            raise WorkflowProposalValidationError(
+                "workflowCreateRequest must be an object"
+            )
 
         job_type = self._clean_str(request.get("type") or "workflow").lower()
         if job_type != "workflow":
@@ -529,7 +555,9 @@ class WorkflowProposalService:
                 normalized_payload_input = self._normalize_proposal_runtime_payload(
                     payload
                 )
-                parsed = CanonicalWorkflowExecutionPayload.model_validate(normalized_payload_input)
+                parsed = CanonicalWorkflowExecutionPayload.model_validate(
+                    normalized_payload_input
+                )
                 normalized_payload = parsed.model_dump(by_alias=True, exclude_none=True)
             except ValidationError as exc:
                 raise WorkflowProposalValidationError(
@@ -688,7 +716,9 @@ class WorkflowProposalService:
             else {}
         )
         try:
-            result = await self._delivery_service.deliver(request_from_proposal(proposal))
+            result = await self._delivery_service.deliver(
+                request_from_proposal(proposal)
+            )
         except ProposalDeliveryError as exc:
             existing_metadata["delivery"] = {
                 "status": "failed",
@@ -699,7 +729,9 @@ class WorkflowProposalService:
             return
         except Exception as exc:
             provider = self._clean_str(getattr(proposal, "provider", "")) or "unknown"
-            destination = self._clean_str(getattr(proposal, "repository", "")) or "unknown"
+            destination = (
+                self._clean_str(getattr(proposal, "repository", "")) or "unknown"
+            )
             logger.warning(
                 "Proposal delivery adapter failed for %s via %s: %s",
                 proposal.id,
@@ -857,15 +889,12 @@ class WorkflowProposalService:
             and cleaned_origin_external_id is None
         ):
             cleaned_origin_external_id = (
-                self._scrub_text(self._clean_str(metadata.get("workflow_id")))
-                or None
+                self._scrub_text(self._clean_str(metadata.get("workflow_id"))) or None
             )
-        normalized_provider = (self._clean_str(provider).lower() or "github")
+        normalized_provider = self._clean_str(provider).lower() or "github"
         if normalized_provider not in {"github", "jira"}:
             raise WorkflowProposalValidationError("provider must be github or jira")
-        scrubbed_provider_metadata = self._scrub_json(
-            dict(provider_metadata or {})
-        )
+        scrubbed_provider_metadata = self._scrub_json(dict(provider_metadata or {}))
         scrubbed_resolved_policy = self._scrub_json(dict(resolved_policy or {}))
         cleaned_external_key = self._scrub_text(self._clean_str(external_key)) or None
         cleaned_external_url = self._scrub_text(self._clean_str(external_url)) or None
@@ -1077,6 +1106,16 @@ class WorkflowProposalService:
                     priority=self._clean_str(row.get("priority")) or None,
                     defer_until=self._clean_str(row.get("deferUntil")) or None,
                     runtime_mode=self._clean_str(row.get("runtimeMode")) or None,
+                    execution_priority=(
+                        int(row["executionPriority"])
+                        if self._clean_str(row.get("executionPriority"))
+                        else None
+                    ),
+                    max_attempts=(
+                        int(row["maxAttempts"])
+                        if self._clean_str(row.get("maxAttempts"))
+                        else None
+                    ),
                     external_state=self._clean_str(row.get("resultingExternalState"))
                     or None,
                     promoted_execution_id=self._clean_str(
@@ -1159,6 +1198,8 @@ class WorkflowProposalService:
                 provider_event_id=result.provider_event_id,
                 reason="actor_not_authorized",
                 runtime_mode=result.runtime_mode,
+                execution_priority=result.execution_priority,
+                max_attempts=result.max_attempts,
             )
         if (
             result.accepted
@@ -1173,6 +1214,8 @@ class WorkflowProposalService:
                 provider_event_id=result.provider_event_id,
                 reason="action_not_allowed",
                 runtime_mode=result.runtime_mode,
+                execution_priority=result.execution_priority,
+                max_attempts=result.max_attempts,
             )
 
         resulting_state = (
@@ -1218,6 +1261,8 @@ class WorkflowProposalService:
                     "accepted": result.accepted,
                     "note": result.note,
                     "priority": result.priority,
+                    "executionPriority": result.execution_priority,
+                    "maxAttempts": result.max_attempts,
                     "deferUntil": result.defer_until,
                     "runtimeMode": result.runtime_mode,
                     "observedAt": event.observed_at.isoformat(),
@@ -1255,7 +1300,9 @@ class WorkflowProposalService:
             {
                 "proposalId": str(getattr(proposal, "id", "")),
                 "provider": getattr(proposal, "provider", None),
+                "repository": getattr(proposal, "repository", None),
                 "externalKey": getattr(proposal, "external_key", None),
+                "externalUrl": getattr(proposal, "external_url", None),
                 "decision": result.decision,
                 "accepted": result.accepted,
                 "actor": result.actor,
@@ -1264,6 +1311,8 @@ class WorkflowProposalService:
                 "note": result.note,
                 "resultingExternalState": resulting_state,
                 "promotedExecutionId": promoted_execution_id,
+                "providerMetadata": getattr(proposal, "provider_metadata", {}) or {},
+                "resolvedPolicy": getattr(proposal, "resolved_policy", {}) or {},
             }
         )
         try:
@@ -1326,6 +1375,16 @@ class WorkflowProposalService:
                     provider_event_id=provider_event_id,
                     reason=self._clean_str(row.get("reason")) or None,
                     runtime_mode=self._clean_str(row.get("runtimeMode")) or None,
+                    execution_priority=(
+                        int(row["executionPriority"])
+                        if self._clean_str(row.get("executionPriority"))
+                        else None
+                    ),
+                    max_attempts=(
+                        int(row["maxAttempts"])
+                        if self._clean_str(row.get("maxAttempts"))
+                        else None
+                    ),
                     promoted_execution_id=promoted_execution_id,
                 )
                 break
@@ -1394,7 +1453,9 @@ class WorkflowProposalService:
             workflow_node = payload.get("workflow")
             if not isinstance(workflow_node, Mapping):
                 workflow_node = payload.get("task")
-            workflow_payload = dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+            workflow_payload = (
+                dict(workflow_node) if isinstance(workflow_node, Mapping) else {}
+            )
             runtime_node = workflow_payload.get("runtime")
             runtime = dict(runtime_node) if isinstance(runtime_node, Mapping) else {}
             runtime["mode"] = normalized_runtime_mode
@@ -1419,7 +1480,9 @@ class WorkflowProposalService:
         try:
             priority = int(priority)
         except Exception as exc:  # pragma: no cover
-            raise WorkflowProposalValidationError("priority override is invalid") from exc
+            raise WorkflowProposalValidationError(
+                "priority override is invalid"
+            ) from exc
 
         max_attempts = request.get("maxAttempts", 3)
         if max_attempts_override is not None:

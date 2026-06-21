@@ -23,12 +23,15 @@ from moonmind.workflows.proposals.service import (
     WorkflowProposalValidationError,
 )
 
+
 @pytest.fixture
 def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
     app = FastAPI()
     service = AsyncMock()
     execution_service = AsyncMock()
-    execution_service.create_execution.return_value = SimpleNamespace(workflow_id="wf-abc-123")
+    execution_service.create_execution.return_value = SimpleNamespace(
+        workflow_id="wf-abc-123"
+    )
     app.include_router(router)
 
     async def _service_override():
@@ -38,7 +41,9 @@ def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
         return execution_service
 
     app.dependency_overrides[_get_service] = _service_override
-    app.dependency_overrides[_get_temporal_execution_service] = _execution_service_override
+    app.dependency_overrides[_get_temporal_execution_service] = (
+        _execution_service_override
+    )
 
     mock_user = SimpleNamespace(
         id=uuid4(),
@@ -55,6 +60,7 @@ def client() -> tuple[TestClient, AsyncMock, AsyncMock]:
 
     with TestClient(app) as test_client:
         yield test_client, service, execution_service
+
 
 def _build_proposal() -> SimpleNamespace:
     return SimpleNamespace(
@@ -85,7 +91,10 @@ def _build_proposal() -> SimpleNamespace:
         similar=[],
     )
 
-def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+
+def test_create_proposal_with_user_auth(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     service.create_proposal.return_value = proposal
@@ -114,6 +123,7 @@ def test_create_proposal_with_user_auth(client: tuple[TestClient, AsyncMock, Asy
     assert kwargs["review_priority"] == "high"
     payload = response.json()
     assert payload["repository"] == "Moon/Repo"
+
 
 def test_create_proposal_accepts_workflow_origin(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -146,7 +156,10 @@ def test_create_proposal_accepts_workflow_origin(
     payload = response.json()
     assert payload["origin"]["source"] == "workflow"
 
-def test_list_proposals_supports_filters(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+
+def test_list_proposals_supports_filters(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     service.list_proposals.return_value = ([proposal], None)
@@ -190,6 +203,7 @@ def test_list_proposals_serializes_workflow_origin_id_from_external_id(
     assert origin["source"] == "workflow"
     assert origin["id"] == "wf-123"
     assert origin["metadata"]["workflow_id"] == "wf-123"
+
 
 def test_list_proposals_serializes_delivery_record_fields(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -259,6 +273,7 @@ def test_list_proposals_serializes_review_delivery_state(
         "created": True,
     }
 
+
 def test_promote_proposal_returns_proposal(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
@@ -267,7 +282,7 @@ def test_promote_proposal_returns_proposal(
     final_request = {
         "payload": {
             "repository": "Moon/Repo",
-            "workflow": {"instructions": "do something"}
+            "workflow": {"instructions": "do something"},
         }
     }
     service.promote_proposal.return_value = (proposal, final_request)
@@ -287,6 +302,7 @@ def test_promote_proposal_returns_proposal(
     assert call_kwargs["idempotency_key"] == f"proposal-promote-{proposal.id}"
     assert call_kwargs["initial_parameters"] == final_request["payload"]
     assert call_kwargs["title"] == "do something"
+
 
 def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -311,6 +327,7 @@ def test_promote_proposal_uses_first_non_empty_instruction_line_for_title(
     assert response.status_code == 200
     call_kwargs = execution_service.create_execution.await_args.kwargs
     assert call_kwargs["title"] == "First line with spaces"
+
 
 def test_promote_proposal_rejects_stale_step_graph_metadata(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -347,6 +364,7 @@ def test_promote_proposal_rejects_stale_step_graph_metadata(
     assert "ordered by their steps[] position" in detail["message"]
     execution_service.create_execution.assert_not_awaited()
 
+
 def test_promote_proposal_rejects_workflow_create_request_override(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
@@ -372,6 +390,7 @@ def test_promote_proposal_rejects_workflow_create_request_override(
     service.promote_proposal.assert_not_awaited()
     execution_service.create_execution.assert_not_awaited()
 
+
 def test_promote_proposal_rejects_invalid_state(
     client: tuple[TestClient, AsyncMock, AsyncMock],
 ) -> None:
@@ -388,7 +407,10 @@ def test_promote_proposal_rejects_invalid_state(
     body = response.json()
     assert body["detail"]["code"] == "invalid_state"
 
-def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+
+def test_dismiss_proposal_returns_payload(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     proposal.status = WorkflowProposalStatus.DISMISSED
@@ -403,7 +425,10 @@ def test_dismiss_proposal_returns_payload(client: tuple[TestClient, AsyncMock, A
     body = response.json()
     assert body["status"] == "dismissed"
 
-def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+
+def test_get_proposal_includes_similar(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     similar = _build_proposal()
@@ -416,6 +441,7 @@ def test_get_proposal_includes_similar(client: tuple[TestClient, AsyncMock, Asyn
     service.get_similar_proposals.assert_awaited()
     body = response.json()
     assert body["similar"]
+
 
 def test_get_proposal_preview_includes_preset_provenance(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -536,7 +562,10 @@ def test_get_proposal_preview_includes_operator_outcome_fields(
         "resultingExternalState": "promoted",
     }
 
-def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock]) -> None:
+
+def test_update_priority_endpoint(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+) -> None:
     test_client, service, _execution_service = client
     proposal = _build_proposal()
     service.update_review_priority.return_value = proposal
@@ -548,6 +577,7 @@ def test_update_priority_endpoint(client: tuple[TestClient, AsyncMock, AsyncMock
 
     assert response.status_code == 200
     service.update_review_priority.assert_awaited()
+
 
 def test_promote_proposal_with_runtime_mode_shortcut(
     client: tuple[TestClient, AsyncMock, AsyncMock],
@@ -570,10 +600,7 @@ def test_promote_proposal_with_runtime_mode_shortcut(
     final_request = {
         "payload": {
             "repository": "Moon/Repo",
-            "workflow": {
-                "instructions": "do stuff",
-                "runtime": {"mode": "gemini_cli"}
-            }
+            "workflow": {"instructions": "do stuff", "runtime": {"mode": "gemini_cli"}},
         }
     }
     service.promote_proposal.return_value = (proposal, final_request)
@@ -665,6 +692,8 @@ def test_provider_decision_promotes_through_canonical_execution_path(
         provider_event_id="evt-promote",
         reason=None,
         priority=None,
+        execution_priority=5,
+        max_attempts=2,
         defer_until=None,
         runtime_mode="codex",
         external_state="promoted",
@@ -681,6 +710,8 @@ def test_provider_decision_promotes_through_canonical_execution_path(
             "providerEventId": "evt-promote",
             "actor": "reviewer",
             "body": "Do not run this edited body\n/moonmind promote --runtime codex",
+            "priority": 5,
+            "maxAttempts": 2,
             "authenticity": {"verified": True, "method": "signature"},
         },
     )
@@ -690,10 +721,15 @@ def test_provider_decision_promotes_through_canonical_execution_path(
     assert payload["accepted"] is True
     assert payload["promotedExecutionId"] == "wf-abc-123"
     service.promote_proposal.assert_awaited_once()
-    assert service.promote_proposal.await_args.kwargs["runtime_mode_override"] == "codex"
+    promote_kwargs = service.promote_proposal.await_args.kwargs
+    assert promote_kwargs["runtime_mode_override"] == "codex"
+    assert promote_kwargs["priority_override"] == 5
+    assert promote_kwargs["max_attempts_override"] == 2
     execution_service.create_execution.assert_awaited_once()
     call_kwargs = execution_service.create_execution.await_args.kwargs
-    assert call_kwargs["idempotency_key"] == f"proposal-provider-{proposal.id}-evt-promote"
+    assert (
+        call_kwargs["idempotency_key"] == f"proposal-provider-{proposal.id}-evt-promote"
+    )
     assert call_kwargs["initial_parameters"] == final_request["payload"]
     service.attach_provider_decision_execution.assert_awaited_once_with(
         proposal_id=proposal.id,
@@ -727,9 +763,9 @@ def test_provider_decision_recovery_inspects_delivery_history(
     assert response.status_code == 200
     payload = response.json()
     assert payload["reviewDelivery"]["status"] == "delivered"
-    assert payload["providerMetadata"]["providerDecisions"][0]["promotedExecutionId"] == (
-        "wf-abc-123"
-    )
+    assert payload["providerMetadata"]["providerDecisions"][0][
+        "promotedExecutionId"
+    ] == ("wf-abc-123")
 
 
 def test_redeliver_proposal_endpoint_returns_recovery_record(

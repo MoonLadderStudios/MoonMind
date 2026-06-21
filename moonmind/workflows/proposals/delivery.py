@@ -103,7 +103,10 @@ class ProposalDeliveryRequest:
     def destination(self) -> str:
         if self.provider == "jira":
             jira = _provider_config(self.provider_metadata, "jira")
-            return _clean(jira.get("project_key") or jira.get("projectKey")) or self.repository
+            return (
+                _clean(jira.get("project_key") or jira.get("projectKey"))
+                or self.repository
+            )
         github = _provider_config(self.provider_metadata, "github")
         return _clean(github.get("repository")) or self.repository
 
@@ -147,6 +150,8 @@ class ProviderDecisionEvent:
     authenticity_verified: bool = True
     actor_authorized: bool = True
     runtime_mode: str | None = None
+    execution_priority: int | None = None
+    max_attempts: int | None = None
     external_state: str | None = None
     observed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -164,6 +169,8 @@ class ProviderDecisionResult:
     priority: str | None = None
     defer_until: str | None = None
     runtime_mode: str | None = None
+    execution_priority: int | None = None
+    max_attempts: int | None = None
     external_state: str | None = None
     promoted_execution_id: str | None = None
 
@@ -171,7 +178,9 @@ class ProviderDecisionResult:
 class ProposalIssueProvider(Protocol):
     """Provider port used by proposal delivery orchestration."""
 
-    async def search_issue(self, request: ProposalDeliveryRequest) -> dict[str, Any] | None:
+    async def search_issue(
+        self, request: ProposalDeliveryRequest
+    ) -> dict[str, Any] | None:
         pass
 
     async def create_issue(
@@ -189,6 +198,11 @@ class ProposalIssueProvider(Protocol):
     ) -> dict[str, Any]:
         pass
 
+    async def record_decision(
+        self, request: ProposalDeliveryRequest, decision: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        pass
+
 
 class GitHubProposalIssueProvider:
     """Proposal issue provider backed by the trusted GitHub service."""
@@ -196,7 +210,9 @@ class GitHubProposalIssueProvider:
     def __init__(self, github_service: Any) -> None:
         self._github = github_service
 
-    async def search_issue(self, request: ProposalDeliveryRequest) -> dict[str, Any] | None:
+    async def search_issue(
+        self, request: ProposalDeliveryRequest
+    ) -> dict[str, Any] | None:
         if not hasattr(self._github, "search_issue_by_marker"):
             return None
         return await self._github.search_issue_by_marker(
@@ -236,6 +252,90 @@ class GitHubProposalIssueProvider:
             return result.model_dump(by_alias=True)
         return dict(result)
 
+    async def record_decision(
+        self,
+        request: ProposalDeliveryRequest,
+        decision: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        issue_number = _clean(request.external_key)
+        if not issue_number:
+            raise ProposalDeliveryError(
+                "GitHub proposal decision update requires an external issue key",
+                provider=request.provider,
+                destination=request.destination,
+                retryable=True,
+            )
+        labels = _labels_for_decision(request, decision)
+        comment = _decision_comment(request, decision)
+        label_result = await _call_first_available(
+            self._github,
+            (
+                (
+                    "update_issue_labels",
+                    {
+                        "repo": request.destination,
+                        "issue_number": issue_number,
+                        "labels": labels,
+                    },
+                ),
+                (
+                    "set_issue_labels",
+                    {
+                        "repo": request.destination,
+                        "issue_number": issue_number,
+                        "labels": labels,
+                    },
+                ),
+                (
+                    "update_issue",
+                    {
+                        "repo": request.destination,
+                        "issue_number": issue_number,
+                        "labels": labels,
+                    },
+                ),
+            ),
+        )
+        comment_result = await _call_first_available(
+            self._github,
+            (
+                (
+                    "add_issue_comment",
+                    {
+                        "repo": request.destination,
+                        "issue_number": issue_number,
+                        "body": comment,
+                    },
+                ),
+                (
+                    "create_issue_comment",
+                    {
+                        "repo": request.destination,
+                        "issue_number": issue_number,
+                        "body": comment,
+                    },
+                ),
+                (
+                    "comment_issue",
+                    {
+                        "repo": request.destination,
+                        "issue_number": issue_number,
+                        "body": comment,
+                    },
+                ),
+            ),
+            required=False,
+        )
+        return {
+            "external_key": issue_number,
+            "external_url": request.external_url,
+            "labels": labels,
+            "commented": comment_result is not None,
+            "labelResult": _safe_metadata(
+                label_result if isinstance(label_result, Mapping) else {}
+            ),
+        }
+
 
 class JiraProposalIssueProvider:
     """Proposal issue provider backed by the trusted Jira tool service."""
@@ -243,7 +343,9 @@ class JiraProposalIssueProvider:
     def __init__(self, jira_service: Any) -> None:
         self._jira = jira_service
 
-    async def search_issue(self, request: ProposalDeliveryRequest) -> dict[str, Any] | None:
+    async def search_issue(
+        self, request: ProposalDeliveryRequest
+    ) -> dict[str, Any] | None:
         from moonmind.integrations.jira.models import SearchIssuesRequest
 
         marker = request.dedup_hash
@@ -320,6 +422,40 @@ class JiraProposalIssueProvider:
             "external_url": _clean(issue.get("url") or issue.get("self")) or None,
         }
 
+    async def record_decision(
+        self,
+        request: ProposalDeliveryRequest,
+        decision: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        from moonmind.integrations.jira.models import (
+            AddCommentRequest,
+            EditIssueRequest,
+        )
+
+        issue_key = _clean(request.external_key)
+        if not issue_key:
+            raise ProposalDeliveryError(
+                "Jira proposal decision update requires an external issue key",
+                provider=request.provider,
+                destination=request.destination,
+                retryable=True,
+            )
+        labels = _labels_for_decision(request, decision)
+        await self._jira.edit_issue(
+            EditIssueRequest(issueKey=issue_key, fields={"labels": labels}, update={})
+        )
+        await self._jira.add_comment(
+            AddCommentRequest(
+                issueKey=issue_key, body=_decision_comment(request, decision)
+            )
+        )
+        return {
+            "external_key": issue_key,
+            "external_url": request.external_url,
+            "labels": labels,
+            "commented": True,
+        }
+
 
 def _clean(value: object) -> str:
     return str(value or "").strip()
@@ -364,6 +500,82 @@ def _safe_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
         else:
             safe[str(key)] = _safe_value(value)
     return safe
+
+
+async def _call_first_available(
+    target: Any,
+    calls: tuple[tuple[str, dict[str, Any]], ...],
+    *,
+    required: bool = True,
+) -> Any:
+    for method_name, kwargs in calls:
+        method = getattr(target, method_name, None)
+        if callable(method):
+            result = await method(**kwargs)
+            if hasattr(result, "model_dump"):
+                return result.model_dump(by_alias=True)
+            if isinstance(result, Mapping):
+                return dict(result)
+            return result
+    if required:
+        raise ProposalDeliveryError(
+            "trusted provider adapter does not support proposal decision updates",
+            provider="github",
+            destination="github",
+            retryable=True,
+            next_action="Configure a provider adapter with issue label and comment methods.",
+        )
+    return None
+
+
+def _labels_for_decision(
+    request: ProposalDeliveryRequest,
+    decision: Mapping[str, Any],
+) -> list[str]:
+    metadata_labels = _provider_config(request.provider_metadata, "delivery").get(
+        "labels"
+    )
+    labels = list(_iter_strings(metadata_labels))
+    if not labels:
+        labels = ["moonmind:proposal", "moonmind:state:open"]
+    labels = [label for label in labels if not label.startswith("moonmind:state:")]
+    state = _clean(
+        decision.get("resultingExternalState") or decision.get("decision") or "open"
+    )
+    if state == "accepted" and decision.get("decision") == "promote":
+        state = "promoted"
+    labels.append(f"moonmind:state:{state}")
+    return list(dict.fromkeys(labels))
+
+
+def _decision_comment(
+    request: ProposalDeliveryRequest,
+    decision: Mapping[str, Any],
+) -> str:
+    promoted_execution_id = _clean(decision.get("promotedExecutionId"))
+    execution_link = (
+        f"/workflows/{promoted_execution_id}?source=temporal"
+        if promoted_execution_id
+        else None
+    )
+    lines = [
+        "MoonMind proposal decision recorded.",
+        "",
+        f"- Decision: `{_clean(decision.get('decision')) or 'ignored'}`",
+        f"- Actor: `{_clean(decision.get('actor')) or 'unknown'}`",
+        f"- Provider event: `{_clean(decision.get('providerEventId')) or 'unknown'}`",
+        f"- Resulting state: `{_clean(decision.get('resultingExternalState')) or 'unknown'}`",
+    ]
+    if promoted_execution_id:
+        lines.append(f"- Promoted execution: `{promoted_execution_id}`")
+        lines.append(f"- Execution link: {execution_link}")
+    lines.extend(
+        [
+            "",
+            "The original issue remains the human review audit trail. MoonMind executed the stored proposal snapshot, not edited issue text.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _marker(request: ProposalDeliveryRequest) -> str:
@@ -439,7 +651,9 @@ def render_github_issue(
     redactor = redactor or SecretRedactor.from_environ(placeholder="[REDACTED]")
     provider_cfg = _provider_config(request.provider_metadata, "github")
     configured_labels = _iter_strings(provider_cfg.get("labels"))
-    labels = tuple(dict.fromkeys(("moonmind-proposal", "proposal-review", *configured_labels)))
+    labels = tuple(
+        dict.fromkeys(("moonmind-proposal", "proposal-review", *configured_labels))
+    )
     title = f"[MoonMind proposal] {request.title}".strip()
     body = "\n\n".join(
         [
@@ -475,7 +689,9 @@ def render_jira_issue(
     redactor = redactor or SecretRedactor.from_environ(placeholder="[REDACTED]")
     provider_cfg = _provider_config(request.provider_metadata, "jira")
     configured_labels = _iter_strings(provider_cfg.get("labels"))
-    labels = tuple(dict.fromkeys(("moonmind-proposal", "proposal-review", *configured_labels)))
+    labels = tuple(
+        dict.fromkeys(("moonmind-proposal", "proposal-review", *configured_labels))
+    )
     summary = f"[MoonMind proposal] {request.title}".strip()
     description_text = "\n\n".join(
         [
@@ -497,7 +713,9 @@ def render_jira_issue(
         "description": _text_to_adf_document(redactor.scrub(description_text)),
         "labels": list(labels),
     }
-    project_key = _clean(provider_cfg.get("project_key") or provider_cfg.get("projectKey"))
+    project_key = _clean(
+        provider_cfg.get("project_key") or provider_cfg.get("projectKey")
+    )
     issue_type = _clean(provider_cfg.get("issue_type") or provider_cfg.get("issueType"))
     if project_key:
         fields["projectKey"] = project_key
@@ -542,8 +760,17 @@ def parse_provider_decision(event: ProviderDecisionEvent) -> ProviderDecisionRes
             reason="unsupported_action",
         )
     runtime_mode = _clean(event.runtime_mode) or None
+    execution_priority = event.execution_priority
+    max_attempts = event.max_attempts
     if action == "promote" and args:
-        runtime_mode, args = _extract_runtime_control(args, runtime_mode)
+        runtime_mode, execution_priority, max_attempts, args = (
+            _extract_promotion_controls(
+                args,
+                runtime_mode,
+                execution_priority,
+                max_attempts,
+            )
+        )
     note = _clean(event.note) or args or None
     priority: str | None = None
     defer_until: str | None = None
@@ -570,6 +797,8 @@ def parse_provider_decision(event: ProviderDecisionEvent) -> ProviderDecisionRes
         priority=priority,
         defer_until=defer_until,
         runtime_mode=runtime_mode,
+        execution_priority=execution_priority,
+        max_attempts=max_attempts,
         external_state=_clean(event.external_state) or None,
     )
 
@@ -583,26 +812,68 @@ def _normalize_decision_action(action: object) -> str | None:
     return normalized if normalized in _SUPPORTED_ACTIONS else token
 
 
-def _extract_runtime_control(args: str, existing: str | None) -> tuple[str | None, str]:
+def _extract_promotion_controls(
+    args: str,
+    existing_runtime: str | None,
+    existing_priority: int | None,
+    existing_max_attempts: int | None,
+) -> tuple[str | None, int | None, int | None, str]:
     parts = args.split()
     if not parts:
-        return existing, ""
-    runtime = existing
+        return existing_runtime, existing_priority, existing_max_attempts, ""
+    runtime = existing_runtime
+    priority = existing_priority
+    max_attempts = existing_max_attempts
     remainder: list[str] = []
     skip = False
     for index, part in enumerate(parts):
         if skip:
             skip = False
             continue
+        key = part.lstrip("-")
+        if key in {
+            "runtime",
+            "priority",
+            "maxAttempts",
+            "max-attempts",
+            "max_attempts",
+        } and index + 1 < len(parts):
+            value = _clean(parts[index + 1])
+            if key == "runtime":
+                runtime = value or runtime
+            elif key == "priority":
+                priority = _parse_int_control(value, priority)
+            else:
+                max_attempts = _parse_int_control(value, max_attempts)
+            skip = True
+            continue
+        if "=" in key:
+            key_name, raw_value = key.split("=", 1)
+            value = _clean(raw_value)
+            if key_name == "runtime":
+                runtime = value or runtime
+                continue
+            if key_name == "priority":
+                priority = _parse_int_control(value, priority)
+                continue
+            if key_name in {"maxAttempts", "max-attempts", "max_attempts"}:
+                max_attempts = _parse_int_control(value, max_attempts)
+                continue
         if part == "--runtime" and index + 1 < len(parts):
             runtime = _clean(parts[index + 1]) or runtime
             skip = True
             continue
-        if part.startswith("--runtime="):
-            runtime = _clean(part.split("=", 1)[1]) or runtime
-            continue
         remainder.append(part)
-    return runtime, " ".join(remainder)
+    return runtime, priority, max_attempts, " ".join(remainder)
+
+
+def _parse_int_control(value: str, existing: int | None) -> int | None:
+    if not value:
+        return existing
+    try:
+        return int(value)
+    except ValueError:
+        return existing
 
 
 def request_from_proposal(proposal: Any) -> ProposalDeliveryRequest:
@@ -616,13 +887,16 @@ def request_from_proposal(proposal: Any) -> ProposalDeliveryRequest:
         summary=_clean(getattr(proposal, "summary", "")),
         category=getattr(proposal, "category", None),
         tags=tuple(str(tag) for tag in (getattr(proposal, "tags", None) or ())),
-        priority=_clean(getattr(getattr(proposal, "review_priority", ""), "value", None))
+        priority=_clean(
+            getattr(getattr(proposal, "review_priority", ""), "value", None)
+        )
         or _clean(getattr(proposal, "review_priority", "normal"))
         or "normal",
         dedup_key=_clean(getattr(proposal, "dedup_key", "")),
         dedup_hash=_clean(getattr(proposal, "dedup_hash", "")),
         workflow_snapshot_ref=getattr(proposal, "workflow_snapshot_ref", None),
-        workflow_create_request=getattr(proposal, "workflow_create_request", None) or {},
+        workflow_create_request=getattr(proposal, "workflow_create_request", None)
+        or {},
         origin_metadata=getattr(proposal, "origin_metadata", None) or {},
         provider_metadata=getattr(proposal, "provider_metadata", None) or {},
         resolved_policy=getattr(proposal, "resolved_policy", None) or {},
@@ -781,6 +1055,39 @@ class ProposalDeliveryService:
             duplicate_source=duplicate_source,
             provider_metadata=provider_metadata,
         )
+
+    async def record_decision(self, decision: Mapping[str, Any]) -> dict[str, Any]:
+        provider_name = _clean(decision.get("provider")).lower()
+        request = ProposalDeliveryRequest(
+            record_id=_clean(decision.get("proposalId")),
+            provider=provider_name,
+            repository=_clean(decision.get("repository")),
+            title="",
+            summary="",
+            category=None,
+            tags=(),
+            priority="normal",
+            dedup_key="",
+            dedup_hash="",
+            workflow_snapshot_ref=None,
+            workflow_create_request={},
+            origin_metadata={},
+            provider_metadata=(
+                decision.get("providerMetadata")
+                if isinstance(decision.get("providerMetadata"), Mapping)
+                else {}
+            ),
+            resolved_policy=(
+                decision.get("resolvedPolicy")
+                if isinstance(decision.get("resolvedPolicy"), Mapping)
+                else {}
+            ),
+            external_key=_clean(decision.get("externalKey")),
+            external_url=_clean(decision.get("externalUrl")) or None,
+        )
+        self._validate_policy(request)
+        provider = self._provider(request.provider)
+        return await provider.record_decision(request, decision)
 
 
 __all__ = [

@@ -71,7 +71,9 @@ def _require_proposal_recovery_admin(user: User) -> None:
 def _build_workflow_preview(
     workflow_request: dict[str, object],
 ) -> WorkflowProposalPreview | None:
-    payload = workflow_request.get("payload") if isinstance(workflow_request, dict) else None
+    payload = (
+        workflow_request.get("payload") if isinstance(workflow_request, dict) else None
+    )
     if not isinstance(payload, dict):
         return None
     repository = str(payload.get("repository") or "").strip()
@@ -173,7 +175,10 @@ def _build_workflow_preview(
         presetSourceMetadata=preset_source_metadata,
     )
 
-def _serialize_similar(similar: list[WorkflowProposal] | None) -> list[dict[str, object]]:
+
+def _serialize_similar(
+    similar: list[WorkflowProposal] | None,
+) -> list[dict[str, object]]:
     if not similar:
         return []
     items: list[dict[str, object]] = []
@@ -189,6 +194,7 @@ def _serialize_similar(similar: list[WorkflowProposal] | None) -> list[dict[str,
         )
     return items
 
+
 def _serialize_review_delivery(proposal: WorkflowProposal) -> dict[str, object]:
     provider_metadata = getattr(proposal, "provider_metadata", None)
     delivery_node = (
@@ -199,7 +205,9 @@ def _serialize_review_delivery(proposal: WorkflowProposal) -> dict[str, object]:
     delivery = dict(delivery_node) if isinstance(delivery_node, dict) else {}
     status_value = str(delivery.get("status") or "").strip()
     if not status_value:
-        status_value = "delivered" if getattr(proposal, "external_url", None) else "pending"
+        status_value = (
+            "delivered" if getattr(proposal, "external_url", None) else "pending"
+        )
     result: dict[str, object] = {
         "provider": getattr(proposal, "provider", "github") or "github",
         "status": status_value,
@@ -245,6 +253,7 @@ def _serialize_promotion_result(proposal: WorkflowProposal) -> dict[str, object]
                 result[target_key] = value
         return result
     return None
+
 
 def _serialize_proposal(
     proposal: WorkflowProposal, *, similar: list[WorkflowProposal] | None = None
@@ -295,6 +304,7 @@ def _serialize_proposal(
     }
     return WorkflowProposalModel.model_validate(data)
 
+
 async def _resolve_actor(
     *,
     user: Optional[User],
@@ -308,6 +318,7 @@ async def _resolve_actor(
             "message": "User authentication is required.",
         },
     )
+
 
 def _promotion_title(
     proposal: WorkflowProposal, initial_parameters: dict[str, object]
@@ -350,7 +361,9 @@ def _decision_external_state(
     return decision or "accepted"
 
 
-@router.post("", response_model=WorkflowProposalModel, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "", response_model=WorkflowProposalModel, status_code=status.HTTP_201_CREATED
+)
 async def create_proposal(
     payload: WorkflowProposalCreateRequest = Body(...),
     service: WorkflowProposalService = Depends(_get_service),
@@ -390,6 +403,7 @@ async def create_proposal(
             detail={"code": "invalid_proposal", "message": str(exc)},
         ) from exc
     return _serialize_proposal(proposal)
+
 
 @router.get("", response_model=WorkflowProposalListResponse)
 async def list_proposals(
@@ -441,6 +455,7 @@ async def list_proposals(
     items = [_serialize_proposal(item) for item in proposals]
     return WorkflowProposalListResponse(items=items, next_cursor=next_cursor)
 
+
 @router.get("/{proposal_id}", response_model=WorkflowProposalModel)
 async def get_proposal(
     *,
@@ -461,10 +476,12 @@ async def get_proposal(
         similar_rows = await service.get_similar_proposals(proposal)
     return _serialize_proposal(proposal, similar=similar_rows)
 
+
 def _get_temporal_execution_service(
     session: AsyncSession = Depends(get_async_session),
 ) -> TemporalExecutionService:
     from moonmind.config.settings import settings
+
     return TemporalExecutionService(
         session,
         namespace=settings.temporal.namespace,
@@ -520,6 +537,7 @@ async def _create_promoted_execution(
         scheduled_for=None,
     )
     return execution_record.workflow_id
+
 
 @router.post("/{proposal_id}/promote", response_model=WorkflowProposalPromoteResponse)
 async def promote_proposal(
@@ -579,7 +597,7 @@ async def promote_proposal(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={"code": "proposal_not_found", "message": str(exc)},
         ) from exc
-        
+
     return WorkflowProposalPromoteResponse(
         proposal=_serialize_proposal(proposal),
         promoted_execution_id=promoted_execution_id,
@@ -614,6 +632,8 @@ async def provider_decision(
                 observed_at=payload.observed_at or datetime.now(UTC),
                 authenticity_verified=payload.authenticity.verified,
                 runtime_mode=payload.runtime_mode,
+                execution_priority=payload.priority,
+                max_attempts=payload.max_attempts,
                 external_state=payload.external_state,
             ),
         )
@@ -628,6 +648,8 @@ async def provider_decision(
                 promoted_by_user_id=getattr(user, "id"),
                 note=result.note,
                 runtime_mode_override=result.runtime_mode,
+                priority_override=getattr(result, "execution_priority", None),
+                max_attempts_override=getattr(result, "max_attempts", None),
             )
             promoted_execution_id = await _create_promoted_execution(
                 execution_service=execution_service,
@@ -669,6 +691,8 @@ async def provider_decision(
         providerEventId=result.provider_event_id,
         note=result.note,
         priority=result.priority,
+        executionPriority=getattr(result, "execution_priority", None),
+        maxAttempts=getattr(result, "max_attempts", None),
         deferUntil=result.defer_until,
         runtimeMode=result.runtime_mode,
         resultingExternalState=_decision_external_state(
@@ -745,6 +769,7 @@ async def sync_proposal_delivery(
         ) from exc
     return _serialize_proposal(proposal)
 
+
 @router.post("/{proposal_id}/dismiss", response_model=WorkflowProposalModel)
 async def dismiss_proposal(
     *,
@@ -772,6 +797,7 @@ async def dismiss_proposal(
             detail={"code": "proposal_not_found", "message": str(exc)},
         ) from exc
     return _serialize_proposal(proposal)
+
 
 @router.post("/{proposal_id}/priority", response_model=WorkflowProposalModel)
 async def update_priority(
