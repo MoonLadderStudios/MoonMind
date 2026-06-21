@@ -2327,6 +2327,14 @@ class WorkflowProposalSettings(BaseSettings):
             "delivery.provider (github|jira)."
         ),
     )
+    github_webhook_secret: Optional[str] = Field(
+        None,
+        validation_alias=AliasChoices("WORKFLOW_PROPOSALS_GITHUB_WEBHOOK_SECRET"),
+        description=(
+            "Secret used to verify GitHub proposal reviewer-decision webhooks. "
+            "Trusted sync ingestion may omit this when called through MoonMind auth."
+        ),
+    )
     severity_vocabulary: tuple[str, ...] = Field(
         _ALLOWED_PROPOSAL_SEVERITIES,
         validation_alias=AliasChoices("WORKFLOW_PROPOSALS_SEVERITY_VOCABULARY"),

@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,6 +16,7 @@ from api_service.api.routers.workflow_proposals import (
     router,
 )
 from api_service.auth_providers import get_current_user, get_current_user_optional
+from moonmind.workflows.proposals.delivery import github_marker_for_proposal
 from moonmind.workflows.proposals.models import (
     WorkflowProposalOriginSource,
     WorkflowProposalReviewPriority,
@@ -700,6 +704,160 @@ def test_provider_decision_promotes_through_canonical_execution_path(
         provider_event_id="evt-promote",
         promoted_execution_id="wf-abc-123",
     )
+
+
+def test_github_provider_decision_derives_verified_event_from_signed_payload(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MM-857 / source MM-853: GitHub ingestion verifies trust boundaries before
+    # invoking provider decision state handling.
+    test_client, service, execution_service = client
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.workflow_proposals,
+        "github_webhook_secret",
+        "proposal-webhook-secret",
+    )
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.workflow_snapshot_ref = "artifact://proposals/42.json"
+    proposal.provider_metadata = {}
+    proposal.resolved_policy = {
+        "allowedActors": ["reviewer"],
+        "allowedActions": ["dismiss"],
+    }
+    service.get_proposal.return_value = proposal
+
+    async def _record_provider_decision_event(*, proposal_id, event):
+        assert proposal_id == proposal.id
+        assert event.provider == "github"
+        assert event.external_key == "42"
+        assert event.provider_event_id == "evt-github-1"
+        assert event.actor == "reviewer"
+        assert event.authenticity_verified is True
+        assert event.actor_authorized is True
+        assert event.body == "/moonmind dismiss duplicate"
+        return SimpleNamespace(
+            accepted=True,
+            decision="dismiss",
+            note="duplicate",
+            actor=event.actor,
+            provider_event_id=event.provider_event_id,
+            reason=None,
+            priority=None,
+            defer_until=None,
+            runtime_mode=None,
+            external_state="dismissed",
+            promoted_execution_id=None,
+        )
+
+    service.record_provider_decision_event.side_effect = _record_provider_decision_event
+    payload = {
+        "action": "created",
+        "repository": {"full_name": "Moon/Repo"},
+        "issue": {
+            "number": 42,
+            "body": f"{github_marker_for_proposal(proposal)}\n\nproposal body",
+        },
+        "comment": {
+            "id": 1001,
+            "body": "/moonmind dismiss duplicate",
+            "user": {"login": "reviewer"},
+        },
+        "sender": {"login": "reviewer"},
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(
+        b"proposal-webhook-secret",
+        raw,
+        hashlib.sha256,
+    ).hexdigest()
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/github-decision",
+        content=raw,
+        headers={
+            "content-type": "application/json",
+            "X-GitHub-Delivery": "evt-github-1",
+            "X-Hub-Signature-256": f"sha256={signature}",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["decision"] == "dismiss"
+    service.promote_proposal.assert_not_awaited()
+    execution_service.create_execution.assert_not_awaited()
+
+
+def test_github_provider_decision_rejects_unsigned_payload_before_execution(
+    client: tuple[TestClient, AsyncMock, AsyncMock],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, service, execution_service = client
+    from moonmind.config.settings import settings
+
+    monkeypatch.setattr(
+        settings.workflow_proposals,
+        "github_webhook_secret",
+        "proposal-webhook-secret",
+    )
+    proposal = _build_proposal()
+    proposal.provider = "github"
+    proposal.external_key = "42"
+    proposal.external_url = "https://github.example/Moon/Repo/issues/42"
+    proposal.workflow_snapshot_ref = "artifact://proposals/42.json"
+    proposal.provider_metadata = {}
+    proposal.resolved_policy = {
+        "allowedActors": ["reviewer"],
+        "allowedActions": ["promote"],
+    }
+    service.get_proposal.return_value = proposal
+
+    async def _record_provider_decision_event(*, proposal_id, event):
+        assert event.authenticity_verified is False
+        return SimpleNamespace(
+            accepted=False,
+            decision=None,
+            note=None,
+            actor=event.actor,
+            provider_event_id=event.provider_event_id,
+            reason="provider_auth_failed",
+            priority=None,
+            defer_until=None,
+            runtime_mode=None,
+            external_state="ignored",
+            promoted_execution_id=None,
+        )
+
+    service.record_provider_decision_event.side_effect = _record_provider_decision_event
+    payload = {
+        "repository": {"full_name": "Moon/Repo"},
+        "issue": {
+            "number": 42,
+            "body": f"{github_marker_for_proposal(proposal)}\n\nproposal body",
+        },
+        "comment": {"id": 1002, "body": "/moonmind promote"},
+        "sender": {"login": "reviewer"},
+    }
+
+    response = test_client.post(
+        f"/api/proposals/{proposal.id}/github-decision",
+        json=payload,
+        headers={"X-GitHub-Delivery": "evt-github-unsigned"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is False
+    assert body["reason"] == "provider_auth_failed"
+    service.promote_proposal.assert_not_awaited()
+    execution_service.create_execution.assert_not_awaited()
 
 
 def test_provider_decision_recovery_inspects_delivery_history(

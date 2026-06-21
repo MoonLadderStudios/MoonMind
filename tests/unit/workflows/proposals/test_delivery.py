@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,8 @@ from moonmind.workflows.proposals.delivery import (
     ProposalDeliveryService,
     ProviderDecisionEvent,
     _safe_metadata,
+    github_decision_event_from_payload,
+    github_marker_for_proposal,
     parse_provider_decision,
     render_github_issue,
     render_jira_issue,
@@ -196,6 +199,42 @@ def test_provider_decision_parser_accepts_only_bounded_commands() -> None:
     assert result.decision == "reprioritize"
     assert result.priority == "urgent"
     assert "rm -rf" not in (result.note or "")
+
+
+def test_github_decision_ingress_rejects_repository_identity_mismatch() -> None:
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        provider="github",
+        external_key="42",
+        repository="Moon/Repo",
+        dedup_hash="d" * 64,
+        workflow_snapshot_ref="artifact://task-snapshot.json",
+        provider_metadata={},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
+        origin_metadata={},
+        resolved_policy={"allowedActors": ["reviewer"]},
+    )
+
+    result = github_decision_event_from_payload(
+        payload={
+            "repository": {"full_name": "Other/Repo"},
+            "issue": {
+                "number": 42,
+                "body": github_marker_for_proposal(proposal),
+            },
+            "comment": {"id": 1001, "body": "/moonmind dismiss"},
+            "sender": {"login": "reviewer"},
+        },
+        proposal=proposal,
+        body=b"{}",
+        signature_header=None,
+        webhook_secret=None,
+        trusted_sync=True,
+    )
+
+    assert result.verified is False
+    assert result.reason == "provider_identity_mismatch"
+    assert result.event.authenticity_verified is False
 
 
 def test_provider_decision_parser_accepts_request_revision_command() -> None:

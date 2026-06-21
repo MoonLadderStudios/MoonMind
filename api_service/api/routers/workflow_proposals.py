@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +40,10 @@ from moonmind.workflows.proposals.service import (
     WorkflowProposalStatusError,
     WorkflowProposalValidationError,
 )
-from moonmind.workflows.proposals.delivery import ProviderDecisionEvent
+from moonmind.workflows.proposals.delivery import (
+    ProviderDecisionEvent,
+    github_decision_event_from_payload,
+)
 from moonmind.workflows.executions.execution_contract import (
     CanonicalWorkflowExecutionPayload,
     WorkflowContractError,
@@ -641,6 +645,135 @@ async def provider_decision(
             proposal = await service.attach_provider_decision_execution(
                 proposal_id=proposal_id,
                 provider_event_id=payload.provider_event_id,
+                promoted_execution_id=promoted_execution_id,
+            )
+        else:
+            proposal = await service.get_proposal(proposal_id)
+    except WorkflowProposalStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "invalid_state", "message": str(exc)},
+        ) from exc
+    except WorkflowProposalValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_request", "message": str(exc)},
+        ) from exc
+    except WorkflowProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "proposal_not_found", "message": str(exc)},
+        ) from exc
+
+    return WorkflowProposalProviderDecisionResponse(
+        accepted=result.accepted,
+        decision=result.decision,
+        reason=result.reason,
+        actor=result.actor,
+        providerEventId=result.provider_event_id,
+        note=result.note,
+        priority=result.priority,
+        deferUntil=result.defer_until,
+        runtimeMode=result.runtime_mode,
+        resultingExternalState=_decision_external_state(
+            accepted=result.accepted,
+            decision=result.decision,
+            reason=result.reason,
+            existing=result.external_state,
+            promoted_execution_id=promoted_execution_id,
+        ),
+        promotedExecutionId=promoted_execution_id,
+        proposal=_serialize_proposal(proposal),
+    )
+
+
+@router.post(
+    "/{proposal_id}/github-decision",
+    response_model=WorkflowProposalProviderDecisionResponse,
+)
+async def github_provider_decision(
+    *,
+    proposal_id: UUID,
+    request: Request,
+    service: WorkflowProposalService = Depends(_get_service),
+    execution_service: TemporalExecutionService = Depends(
+        _get_temporal_execution_service
+    ),
+    user: User = Depends(get_current_user()),
+) -> WorkflowProposalProviderDecisionResponse:
+    """Ingest a GitHub reviewer decision after provider-boundary verification.
+
+    MM-857 / source MM-853: callers cannot supply trusted booleans for GitHub
+    decisions. Authenticity, marker ownership, provider identity, and actor
+    authorization are derived from the GitHub payload before service invocation.
+    """
+
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_github_payload",
+                "message": "GitHub decision payload must be valid JSON.",
+            },
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "invalid_github_payload",
+                "message": "GitHub decision payload must be a JSON object.",
+            },
+        )
+
+    try:
+        proposal = await service.get_proposal(proposal_id)
+        from moonmind.config.settings import settings
+
+        github_payload = dict(payload)
+        delivery_id = request.headers.get("X-GitHub-Delivery")
+        if delivery_id:
+            github_payload["deliveryId"] = delivery_id
+        ingress = github_decision_event_from_payload(
+            payload=github_payload,
+            proposal=proposal,
+            body=raw_body,
+            signature_header=request.headers.get("X-Hub-Signature-256"),
+            webhook_secret=settings.workflow_proposals.github_webhook_secret,
+            trusted_sync=(
+                request.headers.get("X-MoonMind-Trusted-Sync", "").lower() == "true"
+            ),
+        )
+        result = await service.record_provider_decision_event(
+            proposal_id=proposal_id,
+            event=ingress.event,
+        )
+        promoted_execution_id = result.promoted_execution_id
+        if (
+            result.accepted
+            and result.decision == "promote"
+            and not promoted_execution_id
+        ):
+            proposal, final_request = await service.promote_proposal(
+                proposal_id=proposal_id,
+                promoted_by_user_id=getattr(user, "id"),
+                note=result.note,
+                runtime_mode_override=result.runtime_mode,
+            )
+            promoted_execution_id = await _create_promoted_execution(
+                execution_service=execution_service,
+                proposal=proposal,
+                final_request=final_request,
+                user=user,
+                idempotency_key=(
+                    f"proposal-provider-{proposal_id}-{ingress.event.provider_event_id}"
+                ),
+            )
+            proposal = await service.attach_provider_decision_execution(
+                proposal_id=proposal_id,
+                provider_event_id=ingress.event.provider_event_id,
                 promoted_execution_id=promoted_execution_id,
             )
         else:
