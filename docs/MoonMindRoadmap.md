@@ -26,7 +26,7 @@ The README is framed around three headline value propositions — **Safety** (Mi
 
 ### Current snapshot
 
-MoonMind is now a usable local control plane with Codex CLI as the first live workflow-scoped managed-session runtime, Mission Control as the operator UI, Temporal-backed durable workflows, artifact-first logs/evidence, provider profiles, external-agent adapters, RAG/memory foundations, and conservative Docker workload boundaries.
+MoonMind is now a usable local control plane with Codex CLI as the first live workflow-scoped managed-session runtime, Mission Control as the operator UI, Temporal-backed durable workflows, artifact-first logs/evidence, provider profiles, RAG/memory foundations, and conservative Docker workload boundaries.
 
 The highest-impact remaining gaps against the README promise are:
 
@@ -75,31 +75,6 @@ Recent main-branch changes since the prior roadmap snapshot:
   - [ ] **1.9e** Checkpoint/resume/fork MVP — map Claude checkpoint metadata to MoonMind checkpoint refs and expose resume-from-last-known-good.
   - [ ] **1.9f** Observability parity minimum — session/turn lifecycle, decisions, checkpoints, context compaction, failures, and correlation IDs.
   - [ ] **1.9g** Cross-runtime managed-session conformance suite covering Codex and Claude adapters.
-
----
-
-## Milestone 2 — External / Black-Box Agent Coordination 🔧
-
-**README claim:** *"Cloud-hosted agents like Jules and Codex Cloud are coordinated through external-agent adapters. MoonMind tracks status, injects context, and closes the feedback loop."*
-
-**Framing:** The core external-agent architecture and the Codex Cloud adapter are in place. This milestone is now hardening: make external providers safe, retry-safe, observable, and boring to add.
-
-### What's shipped
-- Jules end-to-end external event workflow — adapter, event wiring, multi-step `sendMessage` flow, and status polling.
-- Generic external-agent adapter pattern (MM-741) with shared contract, registry-based provider selection, polling, and streaming-gateway execution styles.
-- Generic integration callback receiver with correlation lookup and polling fallback (MM-779).
-- External runs integrated into the main workflow console.
-- Codex Cloud core external-agent adapter — `CodexCloudAgentAdapter`, runtime gate, default-registry registration when enabled, and four Temporal activities (`integration.codex_cloud.{start,status,fetch_result,cancel}`).
-- Canonical external contracts hardened through `ProviderCapabilityDescriptor` and request validators that reject raw credential keys in `parameters` / `workspaceSpec`.
-
-### Remaining work
-- [ ] **2.3** Codex Cloud production-readiness and contract validation — fake-provider/contract-test E2E, runtime-gate diagnostics in Settings/Mission Control, explicit provider→canonical status mapping, bounded unknown-status behavior, and SecretRef/profile-backed credential resolution.
-- [ ] **2.4** External-agent conformance suite for gate enabled/disabled, start/status/fetch/cancel, polling vs callback, timeout, cancellation cleanup, canonical metadata, and error mapping.
-- [ ] **2.5** Durable idempotency and correlation across Temporal activity attempts.
-- [ ] **2.6** Safety at external-agent boundaries — outbound scan, provider-error scrubbing, credential rejection coverage, and governance/review for risky follow-ups.
-- [ ] **2.7** External-agent observability contract — provider name, URL, provider/canonical status, poll hint, callback/cancel semantics, last progress signature, and diagnostics refs.
-- [ ] **2.8** Simplify workflow-side provider handling and retire legacy payload-shape repair paths except as replay shims.
-- [ ] **2.9** Provider capability matrix backed by `ProviderCapabilityDescriptor`.
 
 ---
 
@@ -201,7 +176,7 @@ All six items shipped: run digests, fix patterns/error signatures, Mem0 long-ter
 ### What's shipped
 - `/mcp` Streamable HTTP endpoint (2025 spec) with resource and tool discovery.
 - JSON helper routes.
-- Webhook/callback API for external agents.
+- Webhook/callback API for integration events.
 - OpenAI-compatible Chat Completions API.
 - OpenAI-compatible Responses API (`/v1/responses`, limited subset) — OpenAI models route through `client.responses.create`; Google and Anthropic models are served through a normalized Chat Completions bridge, with RAG context injection and outbound secret scanning. Covered by unit tests.
 - Executable-tool discovery includes schema-driven curated tools such as `security.pentest.run` when deployment policy allows them.
@@ -358,7 +333,6 @@ Milestones are ordered by **impact on delivering the README promise** (highest f
 | 🟠 P1 | **3 — Multi-Step Planning & Context** | 🔧 Partial | 1 item |
 | 🟠 P1 | **7 — Mission Control Dashboard** | 🔧 Partial | 3 items |
 | 🟡 P2 | **5 — RAG & Document Retrieval** | 🔧 Partial | 2 items |
-| 🟡 P2 | **2 — External-agent hardening** | 🔧 Partial | 7 items |
 | 🟡 P2 | **8 — Universal Integration (MCP & APIs)** | 🔧 Partial | 1 item |
 | 🟡 P2 | **H — Housekeeping (H.6 metadata hygiene)** | 🔧 Partial | 1 item |
 | 🟢 Done | **4, 6, 9, 10, 11** | ✅ Shipped | 0 items |
