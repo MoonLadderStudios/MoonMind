@@ -247,6 +247,86 @@ async def test_controller_launches_container_and_returns_typed_handle(
 
 
 @pytest.mark.asyncio
+async def test_launch_session_injects_generic_managed_agent_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Managed Codex sessions receive the generic MM-861 env vars, set
+    authoritatively over caller-supplied passthrough values (every managed
+    agent session honors the same contract as ``ManagedRuntimeLauncher``)."""
+
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
+    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
+    workspace_root = tmp_path / "agent_jobs"
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-1",
+        sessionId="sess-1",
+        threadId="logical-thread-1",
+        workspacePath=str(workspace_root / "task-1" / "repo"),
+        sessionWorkspacePath=str(workspace_root / "task-1" / "session"),
+        artifactSpoolPath=str(workspace_root / "task-1" / "artifacts"),
+        codexHomePath="/home/app/.codex",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        environment={
+            # Spoofed/passthrough values that MUST be overridden authoritatively.
+            "CI": "0",
+            "MOONMIND_REPO_DIR": "/should/be/overwritten",
+        },
+    )
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:3] == ("docker", "rm", "-f"):
+            return 1, "", "No such container"
+        if command[:2] == ("docker", "run"):
+            return 0, "ctr-1\n", ""
+        if "ready" in command:
+            return 0, '{"ready": true}\n', ""
+        if "launch_session" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "logical-thread-1",
+                },
+                "status": "ready",
+                "imageRef": request.image_ref,
+                "controlUrl": "docker-exec://mm-codex-session-sess-1",
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(workspace_root),
+        command_runner=_fake_runner,
+        ready_poll_interval_seconds=0,
+    )
+
+    await controller.launch_session(request)
+
+    run_command = next(
+        command for command in commands if command[:2] == ("docker", "run")
+    )
+    expected_run_root = str(Path(request.artifact_spool_path).parent)
+    assert f"MOONMIND_REPO_DIR={request.workspace_path}" in run_command
+    assert f"MOONMIND_RUN_ROOT={expected_run_root}" in run_command
+    assert f"MOONMIND_ARTIFACTS_DIR={request.artifact_spool_path}" in run_command
+    assert "CI=1" in run_command
+    # Authoritative: the spoofed passthrough values are not propagated.
+    assert "CI=0" not in run_command
+    assert "MOONMIND_REPO_DIR=/should/be/overwritten" not in run_command
+
+
+@pytest.mark.asyncio
 async def test_controller_checks_out_target_branch_for_existing_git_workspace_without_repository(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -2413,7 +2413,7 @@ async def test_launch_privilege_drop_chowns_github_broker_socket_for_claude_code
     )
 
 @pytest.mark.asyncio
-async def test_launch_privilege_drop_chowns_repo_only_for_external_workspace(tmp_path, monkeypatch):
+async def test_launch_privilege_drop_chowns_repo_and_artifacts_for_external_workspace(tmp_path, monkeypatch):
     captured_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     class _FakeProcess:
@@ -2495,8 +2495,17 @@ async def test_launch_privilege_drop_chowns_repo_only_for_external_workspace(tmp
         workspace_path=str(workspace_root),
     )
 
-    assert len(chown_calls) == 1
-    assert chown_calls[0][-1] == str(workspace_root)
+    chowned = {str(call[-1]) for call in chown_calls}
+    # The repo subtree (ownership root) is chowned to the app user...
+    assert str(workspace_root) in chowned
+    # ...and so is the run-specific artifacts dir, which lives outside the repo
+    # for external workspaces, so the privilege-dropped app user can write
+    # MOONMIND_ARTIFACTS_DIR (MM-861).
+    assert str(shared_root / "artifacts" / "root-run") in chowned
+    # The SHARED parent directory must never be chowned (it is shared across
+    # runs); only the repo subtree and the run-scoped artifacts dir are.
+    assert str(shared_root) not in chowned
+    assert len(chown_calls) == 2
 
 @pytest.mark.asyncio
 async def test_launch_materializes_claude_anthropic_oauth_home_profile(
@@ -3345,12 +3354,16 @@ def test_build_generic_managed_agent_env_falls_back_to_run_id_without_workspace(
         request=request,
     )
 
-    run_root = (tmp_path / "workspaces" / "run-no-ws").resolve()
+    # The workspace-less fallback follows the documented
+    # ``<MOONMIND_AGENT_RUNTIME_STORE>/<run_id>/...`` convention and does NOT
+    # append the internal ``workspaces`` clone segment.
+    run_root = (tmp_path / "run-no-ws").resolve()
     assert env["MOONMIND_RUN_ROOT"] == str(run_root)
     assert env["MOONMIND_REPO_DIR"] == str(run_root / "repo")
     assert env["MOONMIND_ARTIFACTS_DIR"] == str(run_root / "artifacts" / "run-no-ws")
     assert env["CI"] == "1"
     assert (run_root / "artifacts" / "run-no-ws").is_dir()
+    assert "workspaces" not in env["MOONMIND_RUN_ROOT"]
 
 
 def test_sanitize_artifacts_step_segment_blocks_traversal():
@@ -3363,3 +3376,175 @@ def test_sanitize_artifacts_step_segment_blocks_traversal():
     # An empty/degenerate segment never collapses to a traversal token.
     assert ManagedRuntimeLauncher._sanitize_artifacts_step_segment("..") == "step"
     assert ManagedRuntimeLauncher._sanitize_artifacts_step_segment("") == "step"
+
+
+@pytest.mark.asyncio
+async def test_launch_chowns_external_artifacts_dir_on_privilege_drop(
+    tmp_path, monkeypatch
+):
+    """For external workspaces the artifacts dir lives outside the chowned
+    ownership root, so it must be chowned explicitly to avoid a PermissionError
+    when privileges are dropped to the app user (MM-861)."""
+
+    class _FakeProcess:
+        pid = 9223
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        return _FakeProcess()
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    chown_calls: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kw):
+        if cmd[:2] == ("chown", "-R"):
+            chown_calls.append(cmd)
+        return None
+
+    original_exists = Path.exists
+
+    def _mock_exists(self):
+        if str(self) == "/home/app/.claude.json":
+            return True
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _mock_exists)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+    # Simulate running as root so the privilege-drop chown path runs.
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+
+    # An external workspace (NOT under a ``workspaces`` parent) whose repo dir
+    # is the chown ownership root; its sibling artifacts dir falls outside it.
+    workspace = tmp_path / "shared" / "checkout"
+    workspace.mkdir(parents=True)
+    (workspace / ".git").mkdir()
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-external-ws",
+        request=_make_request(),
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    run_root = workspace.resolve().parent
+    artifacts_dir = run_root / "artifacts" / "run-external-ws"
+
+    chowned_targets = {str(call[-1]) for call in chown_calls}
+    # The repo subtree is chowned as the ownership root...
+    assert str(workspace.resolve()) in chowned_targets
+    # ...and the out-of-tree artifacts dir is chowned explicitly to app:app.
+    assert str(artifacts_dir) in chowned_targets
+    artifacts_chown = next(
+        call for call in chown_calls if str(call[-1]) == str(artifacts_dir)
+    )
+    assert "app:app" in artifacts_chown
+    assert artifacts_dir.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_launch_skips_redundant_artifacts_chown_for_internal_workspace(
+    tmp_path, monkeypatch
+):
+    """When the workspace lives under the run root, the recursive ownership-root
+    chown already covers the artifacts dir, so no second chown is issued."""
+
+    class _FakeProcess:
+        pid = 9224
+        returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        return _FakeProcess()
+
+    async def _fake_resolve(*args, **kwargs):
+        return None
+
+    chown_calls: list[tuple[object, ...]] = []
+
+    async def _fake_run_checked_command(self, *cmd, **kw):
+        if cmd[:2] == ("chown", "-R"):
+            chown_calls.append(cmd)
+        return None
+
+    original_exists = Path.exists
+
+    def _mock_exists(self):
+        if str(self) == "/home/app/.claude.json":
+            return True
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _mock_exists)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.resolve_github_token_for_launch",
+        _fake_resolve,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.ManagedRuntimeLauncher._run_checked_command",
+        _fake_run_checked_command,
+    )
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+
+    workspace = tmp_path / "workspaces" / "run-internal-ws" / "repo"
+    workspace.mkdir(parents=True)
+    (workspace / ".git").mkdir()
+
+    profile = _make_profile(
+        runtime_id="claude_code",
+        command_template=["claude", "-p", "hello"],
+        env_overrides={},
+        passthrough_env_keys=[],
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="run-internal-ws",
+        request=_make_request(),
+        profile=profile,
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    # Only the single ownership-root chown; the artifacts dir is already covered.
+    assert len(chown_calls) == 1
+    assert str(workspace.resolve().parent) in {str(call[-1]) for call in chown_calls}

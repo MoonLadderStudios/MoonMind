@@ -2248,6 +2248,34 @@ class DockerCodexManagedSessionController:
             f"failed to inspect managed session container {container_id}: {details}"
         )
 
+    @staticmethod
+    def _build_generic_managed_agent_env(
+        request: LaunchCodexManagedSessionRequest,
+    ) -> dict[str, str]:
+        """Build the generic, project-agnostic managed-agent env vars (MM-861).
+
+        Every managed agent session — including workflow-scoped managed Codex
+        sessions launched here — receives the same generic workspace
+        coordinates so a managed agent behaves like a developer machine with the
+        repository checked out, identical across project types:
+
+        - ``MOONMIND_REPO_DIR``      -> the checked-out repository directory
+        - ``MOONMIND_RUN_ROOT``      -> the per-run/session workspace root
+        - ``MOONMIND_ARTIFACTS_DIR`` -> the durable artifact spool area
+        - ``CI``                     -> ``"1"``
+
+        Values are derived from the resolved session paths (all absolute POSIX
+        paths inside the container) so they always point at the real
+        directories ``_ensure_workspace_paths`` provisions.
+        """
+        run_root = str(PurePosixPath(request.artifact_spool_path).parent)
+        return {
+            "MOONMIND_REPO_DIR": request.workspace_path,
+            "MOONMIND_RUN_ROOT": run_root,
+            "MOONMIND_ARTIFACTS_DIR": request.artifact_spool_path,
+            "CI": "1",
+        }
+
     async def launch_session(
         self,
         request: LaunchCodexManagedSessionRequest,
@@ -2272,6 +2300,12 @@ class DockerCodexManagedSessionController:
         await self._ensure_workspace_paths(request)
         session_environment = dict(request.environment)
         session_environment.pop("GITHUB_TOKEN", None)
+        # MM-861: expose the generic, project-agnostic workspace env vars to the
+        # managed session container. These are MoonMind-owned and set
+        # authoritatively (last-wins over caller/profile passthrough) so values
+        # are identical across project types and cannot be spoofed by the
+        # incoming environment.
+        session_environment.update(self._build_generic_managed_agent_env(request))
         session_environment["CODEX_HOME"] = request.codex_home_path
         session_environment["CODEX_CONFIG_HOME"] = request.codex_home_path
         session_environment["CODEX_CONFIG_PATH"] = str(

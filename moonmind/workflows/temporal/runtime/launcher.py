@@ -315,7 +315,15 @@ class ManagedRuntimeLauncher:
             repo_dir = Path(resolved_workspace_path).resolve()
             run_root = repo_dir.parent
         else:
-            run_root = (cls._workspace_root() / run_id).resolve()
+            # Workspace-less launches fall back to the documented
+            # ``/work/agent_jobs/<run_id>/...`` convention derived directly from
+            # ``MOONMIND_AGENT_RUNTIME_STORE``. ``_workspace_root()`` appends a
+            # ``workspaces`` segment used by the internal clone layout, which
+            # would diverge from the published run-root contract.
+            store_root = Path(
+                os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+            ).resolve()
+            run_root = (store_root / run_id).resolve()
             repo_dir = run_root / "repo"
 
         step_id = cls._resolve_generic_env_step_id(run_id=run_id, request=request)
@@ -362,6 +370,20 @@ class ManagedRuntimeLauncher:
             "app:app",
             str(path.parent),
             str(path),
+        )
+
+    @staticmethod
+    def _path_within(candidate: str | Path, root: str | Path | None) -> bool:
+        """Return True when ``candidate`` is ``root`` or nested beneath it."""
+        if not root:
+            return False
+        try:
+            resolved_candidate = Path(candidate).resolve()
+            resolved_root = Path(root).resolve()
+        except OSError:
+            return False
+        return resolved_candidate == resolved_root or resolved_candidate.is_relative_to(
+            resolved_root
         )
 
     def _resolve_workspace_ownership_root(
@@ -1290,6 +1312,20 @@ class ManagedRuntimeLauncher:
                 await self._run_checked_command(
                     "chown", "-R", "app:app", ownership_root,
                 )
+                # MM-861: the pre-created artifacts dir lives under the run root
+                # and is owned by root until the recursive chown above runs. For
+                # external workspaces the ownership root is only the repo subtree,
+                # so the sibling artifacts dir stays root-owned and the
+                # privilege-dropped app user hits PermissionError writing
+                # MOONMIND_ARTIFACTS_DIR. Chown it explicitly when it is outside
+                # the ownership root.
+                artifacts_dir = env_overrides.get("MOONMIND_ARTIFACTS_DIR")
+                if artifacts_dir and not self._path_within(
+                    artifacts_dir, ownership_root
+                ):
+                    await self._run_checked_command(
+                        "chown", "-R", "app:app", artifacts_dir,
+                    )
 
             if _needs_priv_drop:
                 # runuser -u does not rewrite HOME/USER/LOGNAME for us when we pass

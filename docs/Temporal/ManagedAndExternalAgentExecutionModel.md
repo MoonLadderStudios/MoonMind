@@ -599,10 +599,11 @@ The managed path follows the same conceptual lifecycle as the external path:
 ### 8.2.1 Generic managed-agent environment
 
 Every managed agent session receives the same generic, project-agnostic
-environment variables, regardless of project type or runtime. The runtime
-launcher injects these authoritatively so a managed agent behaves like a
-developer machine with the repository checked out, and behavior is identical
-across project types (no engine- or project-specific values):
+environment variables, regardless of project type or runtime. Both managed
+launch paths — the one-shot `ManagedRuntimeLauncher` and the workflow-scoped
+managed-session controller — inject these authoritatively so a managed agent
+behaves like a developer machine with the repository checked out, and behavior
+is identical across project types (no engine- or project-specific values):
 
 | Variable | Value |
 | --- | --- |
@@ -615,8 +616,10 @@ Paths follow the workspace convention in
 `docs/ManagedAgents/DockerSidecarRuntime.md` §5.2 and are derived from the
 resolved run workspace so they always point at the real directories. The
 `<step_id>` segment is the Step Execution logical step id when present, and is
-run-scoped otherwise. These MoonMind-owned values take precedence over any
-profile- or passthrough-supplied values for the same keys.
+run-scoped otherwise. For workflow-scoped managed sessions the values map to
+the session's resolved repo, run root, and durable artifact spool. These
+MoonMind-owned values take precedence over any profile- or passthrough-supplied
+values for the same keys.
 
 ## 8.3 Managed runtime supervisor
 
