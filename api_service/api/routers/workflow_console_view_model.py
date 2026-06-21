@@ -43,6 +43,7 @@ _SSH_GIT_RE = re.compile(
 _GITHUB_REPOSITORY_DISCOVERY_URL = "https://api.github.com/user/repos"
 _GITHUB_REPOSITORY_METADATA_URL_TEMPLATE = "https://api.github.com/repos/{repository}"
 _GITHUB_BRANCH_DISCOVERY_URL_TEMPLATE = "https://api.github.com/repos/{repository}/branches"
+_GITHUB_ISSUE_DISCOVERY_URL_TEMPLATE = "https://api.github.com/repos/{repository}/issues"
 _GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS = 5.0
 _GITHUB_REPOSITORY_DISCOVERY_CACHE_TTL_SECONDS = 60.0
 _GITHUB_REPOSITORY_OPTIONS_CACHE: dict[
@@ -398,6 +399,74 @@ def build_repository_branch_options(repository: str) -> dict[str, Any]:
         "defaultBranch": default_branch,
     }
 
+
+def build_repository_issue_options(repository: str, query: str = "") -> dict[str, Any]:
+    """Build GitHub issue suggestions through MoonMind-owned GitHub lookup."""
+
+    normalized_repository = _normalize_repository_value(repository)
+    if not normalized_repository:
+        return {
+            "items": [],
+            "error": "Repository must be owner/repo before issues can be loaded.",
+        }
+
+    github_enabled = bool(getattr(settings.github, "github_enabled", True))
+    github_token = str(getattr(settings.github, "github_token", "") or "").strip()
+    if not github_enabled or not github_token:
+        return {"items": [], "error": "GitHub issue lookup is unavailable."}
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {github_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    params: dict[str, Any] = {"state": "open", "per_page": 20}
+    normalized_query = str(query or "").strip()
+    if normalized_query.startswith("#") and normalized_query[1:].isdigit():
+        issue_number = normalized_query[1:]
+        url = f"https://api.github.com/repos/{normalized_repository}/issues/{issue_number}"
+        urls = [(url, None)]
+    else:
+        url = _GITHUB_ISSUE_DISCOVERY_URL_TEMPLATE.format(repository=normalized_repository)
+        urls = [(url, params)]
+
+    items: list[dict[str, Any]] = []
+    try:
+        with httpx.Client(timeout=_GITHUB_REPOSITORY_DISCOVERY_TIMEOUT_SECONDS) as client:
+            for request_url, request_params in urls:
+                response = client.get(request_url, headers=headers, params=request_params)
+                response.raise_for_status()
+                payload = response.json()
+                raw_items = payload if isinstance(payload, list) else [payload]
+                for raw in raw_items:
+                    if not isinstance(raw, Mapping) or raw.get("pull_request"):
+                        continue
+                    title = str(raw.get("title") or "").strip()
+                    number = raw.get("number")
+                    body = str(raw.get("body") or "")
+                    if normalized_query and not normalized_query.startswith("#"):
+                        haystack = f"{number} {title} {body}".lower()
+                        if normalized_query.lower() not in haystack:
+                            continue
+                    labels = raw.get("labels") if isinstance(raw.get("labels"), list) else []
+                    items.append({
+                        "repository": normalized_repository,
+                        "number": number,
+                        "title": title,
+                        "body": body,
+                        "url": str(raw.get("html_url") or ""),
+                        "state": str(raw.get("state") or ""),
+                        "labels": [
+                            str(label.get("name") if isinstance(label, Mapping) else label)
+                            for label in labels
+                            if str(label.get("name") if isinstance(label, Mapping) else label).strip()
+                        ],
+                    })
+    except (httpx.HTTPStatusError, httpx.TransportError, httpx.TimeoutException):
+        return {"items": [], "error": "GitHub issue lookup is unavailable."}
+
+    return {"items": items, "error": None}
+
 def _jira_create_page_enabled() -> bool:
     """Return whether the Create-page Jira browser rollout is enabled."""
 
@@ -639,6 +708,7 @@ def build_runtime_config(
             **jira_sources,
             "github": {
                 "branches": "/api/github/branches?repository={repository}",
+                "issues": "/api/github/issues?repository={repository}&q={query}",
             },
 
         },

@@ -1,0 +1,197 @@
+slug: issue-implement-work-pr
+title: Issue Implement Work and Pull Request
+description: Complete remaining issue implementation work, verify it, and publish
+  a pull request using provider-neutral issue inputs.
+scope: global
+version: 1.0.0
+tags:
+- implementation
+- verification
+- pull-request
+- issue
+requiredCapabilities:
+- git
+- gh
+annotations:
+  sourceSkill: issue-implement-work-pr
+  issueProvider: neutral
+  output: pull-request
+inputs:
+- name: issue_provider
+  label: Issue Provider
+  type: text
+  required: true
+- name: issue_ref
+  label: Issue Reference
+  type: text
+  required: true
+- name: brief_artifact_path
+  label: Brief Artifact Path
+  type: text
+  required: true
+- name: assessment_artifact_path
+  label: Assessment Artifact Path
+  type: text
+  required: true
+- name: pr_artifact_path
+  label: Pull Request Artifact Path
+  type: text
+  required: true
+- name: constraints
+  label: Constraints
+  type: textarea
+  required: false
+  default: ''
+steps:
+- title: Implement the issue
+  instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
+    from the assess step) before doing anything.
+
+
+    If the recorded verdict is FULLY_IMPLEMENTED, make no code changes and report
+    that implementation is skipped because the issue is already implemented in the
+    current repository state.
+
+
+    If the recorded verdict is BLOCKED, stop without changing code and report the
+    blocking evidence from the assessment.
+
+
+    If the recorded verdict is PARTIALLY_IMPLEMENTED, treat the assessment''s unmet
+    and partially-met requirements as the authoritative bounded backlog. Finish only
+    the remaining gaps. Do not redo work that is already satisfied and do not broaden
+    scope.
+
+
+    If the recorded verdict is NOT_IMPLEMENTED, implement the work described by {{
+    inputs.issue_provider }} issue {{ inputs.issue_ref }} using the loaded issue preset
+    brief as the authoritative implementation input.
+
+
+    Additional constraints:
+
+    {{ inputs.constraints }}
+
+
+    Scope the implementation strictly to what the brief and acceptance criteria describe.
+    Do not broaden scope, refactor unrelated code, or introduce backwards-compatibility
+    shims unless the brief explicitly requires them.
+
+
+    Follow the project''s testing standards: add or update tests that cover the behavior
+    changes required by the brief, and confirm the relevant unit and integration tests
+    pass locally before continuing.
+
+
+    Preserve {{ inputs.issue_provider }} issue {{ inputs.issue_ref }} in commit messages
+    and in any implementation artifacts so downstream verification and the pull request
+    can reference it.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Verify implementation
+  instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
+    from the assess step) before doing anything.
+
+
+    If the recorded verdict is FULLY_IMPLEMENTED and the implementation step did no
+    code changes, report verification as already satisfied by the initial assessment
+    and skip rerunning verification.
+
+
+    If the recorded verdict is BLOCKED, stop without running verification and report
+    the blocking evidence from the assessment.
+
+
+    Otherwise verify that the implementation for {{ inputs.issue_provider }} issue
+    {{ inputs.issue_ref }} satisfies the loaded preset brief and acceptance criteria.
+
+
+    Re-read the issue preset brief and confirm every required behavior change is implemented
+    and covered by tests. Run the focused unit and integration checks named by the
+    brief or implied by the changed code paths.
+
+
+    If gaps remain, fix them now before proceeding to pull request creation. Do not
+    create a pull request until the implementation matches the brief and the relevant
+    tests pass.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git
+- title: Create pull request
+  annotations:
+    issueImplementRole: pull-request-handoff
+  instructions: 'Read {{ inputs.assessment_artifact_path }} (or the recorded verdict
+    from the assess step) before doing anything.
+
+
+    If the recorded verdict is FULLY_IMPLEMENTED and the implementation step did no
+    code changes, skip pull request creation entirely and report it as skipped because
+    there is nothing new to publish. Do not write {{ inputs.pr_artifact_path }} in
+    this case. The final step will move {{ inputs.issue_ref }} directly to Done.
+
+
+    If the recorded verdict is BLOCKED, stop without creating a pull request and report
+    the blocking evidence from the assessment.
+
+
+    Otherwise create a pull request for the completed work for {{ inputs.issue_provider
+    }} issue {{ inputs.issue_ref }}.
+
+
+    This Issue Implement handoff step is the explicit PR-publication step for this
+    preset. It intentionally owns pull request creation before the {{ inputs.issue_provider
+    }} code review transition so the confirmed pull request URL is available to both
+    {{ inputs.issue_provider }} and MoonMind publish handling. If generic managed-runtime
+    guidance says not to push or create a pull request, treat this step-specific handoff
+    instruction as the controlling instruction for this step only. If the task is
+    submitted with PR merge automation enabled, the parent workflow must use the pull
+    request URL produced by this step as the published PR and then run merge automation
+    against that PR; on a successful merge the parent workflow will transition {{
+    inputs.issue_provider }} issue {{ inputs.issue_ref }} to Done automatically. If
+    the runtime instructions, task parameters, authentication, remote configuration,
+    branch protection, or repository permissions prevent committing, pushing, or creating
+    the pull request in this step, stop before changing Jira to Code Review and report
+    the exact blocker.
+
+
+    First confirm the working tree contains only intentional changes for this issue
+    and no raw credentials. Commit the work with a concise message that includes {{
+    inputs.issue_ref }}. Push the current non-protected work branch and create a non-draft
+    pull request with the available authenticated GitHub tooling.
+
+
+    The pull request must be ready for review, not a draft. Do not pass draft flags
+    when creating it. If the available tool or repository default creates a draft
+    pull request, immediately mark it ready for review (for example, with the authenticated
+    GitHub tooling''s ready-for-review command) and verify the final pull request
+    isDraft value is false before continuing.
+
+
+    The pull request title must include {{ inputs.issue_ref }}. The pull request body
+    must include:
+
+    - the issue reference
+
+    - a summary of the implementation
+
+    - tests run
+
+    - remaining risks
+
+
+    After creation and non-draft verification, record the confirmed pull request URL
+    in the step result and in a local handoff artifact at {{ inputs.pr_artifact_path
+    }} with keys issue_provider, issue_ref, pull_request_url, and, for Jira compatibility
+    when issue_provider is jira, jira_issue_key. Do not continue unless the pull_request_url
+    is a GitHub pull request URL for the current work branch and the pull request
+    is confirmed non-draft.'
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git

@@ -743,28 +743,113 @@ def _jira_project_default_for_context(repository: str | None) -> str | None:
     ) or _single_allowed_jira_project_key()
 
 
+def _render_issue_ref_template(
+    template: str,
+    issue_value: Mapping[str, Any],
+) -> str:
+    rendered = str(template or "")
+    for key, value in issue_value.items():
+        token_value = str(value or "").strip()
+        rendered = rendered.replace("{{ " + str(key) + " }}", token_value)
+        rendered = rendered.replace("{{" + str(key) + "}}", token_value)
+        rendered = rendered.replace("{" + str(key) + "}", token_value)
+    return rendered.strip()
+
+
+def _issue_object_from_ref(
+    *,
+    provider: str,
+    ref_value: str,
+    ref_path: Sequence[Any] | None,
+) -> dict[str, Any] | None:
+    ref = ref_value.strip()
+    if not ref:
+        return None
+    if provider == "github":
+        match = re.fullmatch(
+            r"(?:https://github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:/issues/|#)(\d+)",
+            ref,
+        )
+        if match:
+            return {"repository": match.group(1), "number": int(match.group(2))}
+    keys = [str(item or "").strip() for item in (ref_path or []) if str(item or "").strip()]
+    if keys:
+        target: dict[str, Any] = {}
+        cursor = target
+        for key in keys[:-1]:
+            cursor[key] = {}
+            cursor = cursor[key]
+        cursor[keys[-1]] = ref
+        return target
+    return None
+
+
+def _apply_issue_input_overrides(
+    *,
+    annotations: Mapping[str, Any] | None,
+    submitted: dict[str, Any],
+) -> dict[str, Any]:
+    issue_input = (annotations or {}).get("issueInput")
+    if not isinstance(issue_input, Mapping):
+        return submitted
+    object_input = str(issue_input.get("objectInput") or "").strip()
+    ref_input = str(issue_input.get("refInput") or "").strip()
+    if not object_input or not ref_input:
+        return submitted
+    adjusted = dict(submitted)
+    provider = str(issue_input.get("provider") or "").strip().lower()
+    issue_value = adjusted.get(object_input)
+    if isinstance(issue_value, Mapping):
+        ref_template = str(issue_input.get("refTemplate") or "").strip()
+        ref_path = issue_input.get("refPath")
+        issue_ref = ""
+        if ref_template:
+            issue_ref = _render_issue_ref_template(ref_template, issue_value)
+        elif isinstance(ref_path, Sequence) and not isinstance(ref_path, (str, bytes, bytearray)):
+            cursor: Any = issue_value
+            for path_item in ref_path:
+                if not isinstance(cursor, Mapping):
+                    cursor = None
+                    break
+                cursor = cursor.get(str(path_item or "").strip())
+            issue_ref = str(cursor or "").strip()
+        if issue_ref and not str(adjusted.get(ref_input) or "").strip():
+            adjusted[ref_input] = issue_ref
+        return adjusted
+    legacy_ref = str(adjusted.get(ref_input) or "").strip()
+    if legacy_ref:
+        ref_path_raw = issue_input.get("refPath")
+        ref_path = (
+            ref_path_raw
+            if isinstance(ref_path_raw, Sequence)
+            and not isinstance(ref_path_raw, (str, bytes, bytearray))
+            else None
+        )
+        issue_object = _issue_object_from_ref(
+            provider=provider,
+            ref_value=legacy_ref,
+            ref_path=ref_path,
+        )
+        if issue_object is not None:
+            adjusted[object_input] = issue_object
+    return adjusted
+
+
 def _apply_contextual_input_overrides(
     *,
     slug: str,
     inputs_schema: list[dict[str, Any]],
     submitted: dict[str, Any],
     context: Mapping[str, Any] | None,
+    annotations: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    adjusted = dict(submitted)
-    if slug in ("jira-orchestrate", "jira-implement"):
-        jira_issue = adjusted.get("jira_issue")
-        if isinstance(jira_issue, Mapping):
-            issue_key = str(jira_issue.get("key") or "").strip()
-            if issue_key and not str(adjusted.get("jira_issue_key") or "").strip():
-                adjusted["jira_issue_key"] = issue_key
-        elif str(adjusted.get("jira_issue_key") or "").strip():
-            adjusted["jira_issue"] = {
-                "key": str(adjusted.get("jira_issue_key") or "").strip()
-            }
-        return adjusted
+    adjusted = _apply_issue_input_overrides(
+        annotations=annotations,
+        submitted=dict(submitted),
+    )
 
     if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
-        return submitted
+        return adjusted
 
     repository = _repository_from_context(context)
     project_key = _jira_project_default_for_context(repository)
@@ -1717,6 +1802,7 @@ class PresetCatalogService:
                         inputs_schema=child_schema,
                         submitted=dict(input_mapping),
                         context=variables.get("context"),
+                        annotations=child_version.annotations or {},
                     )
                     child_inputs = self._resolve_inputs(
                         schema=child_schema,
@@ -1931,6 +2017,7 @@ class PresetCatalogService:
             inputs_schema=effective_schema,
             submitted=dict(inputs or {}),
             context=effective_context,
+            annotations=selected_version.annotations or {},
         )
         validated_inputs = self._resolve_inputs(
             schema=effective_schema,

@@ -1,0 +1,75 @@
+slug: issue-implement-assessment
+title: Issue Implement Assessment
+description: Assess whether an issue brief is already implemented before provider-specific
+  lifecycle updates run.
+scope: global
+version: 1.0.0
+tags:
+- implementation
+- assessment
+- issue
+requiredCapabilities:
+- git
+annotations:
+  sourceSkill: issue-implement-assessment
+  issueProvider: neutral
+inputs:
+- name: issue_provider
+  label: Issue Provider
+  type: text
+  required: true
+- name: issue_ref
+  label: Issue Reference
+  type: text
+  required: true
+- name: issue_url
+  label: Issue URL
+  type: text
+  required: false
+  default: ''
+- name: brief_artifact_path
+  label: Brief Artifact Path
+  type: text
+  required: true
+- name: assessment_artifact_path
+  label: Assessment Artifact Path
+  type: text
+  required: true
+steps:
+- title: Assess existing implementation state
+  annotations:
+    issueImplementRole: initial-assessment
+  instructions: "Before changing Jira or writing any code, assess whether {{ inputs.issue_provider\
+    \ }} issue {{ inputs.issue_ref }} is already implemented against the current state\
+    \ of the repository checkout.\n\nUse the existing issue-verification approach\
+    \ as the model: pick branch mode when a feature branch is checked out with commits\
+    \ ahead of its base ref, otherwise use main/trunk mode. Compare the loaded issue\
+    \ preset brief and acceptance criteria against the actual repository contents\
+    \ (and, in branch mode, against the diff between the current branch and its base\
+    \ ref). In main/trunk mode also search recent merge history for the issue reference.\n\
+    \nDo not edit any code, do not run long verification suites, and do not mutate\
+    \ Jira during this step. Read-only inspection only.\n\nClassify the result into\
+    \ exactly one verdict:\n\n- FULLY_IMPLEMENTED: every in-scope requirement in the\
+    \ issue preset brief is already satisfied by the current repository state (or\
+    \ by an identified merged change on the default branch). No new code work is needed.\n\
+    - PARTIALLY_IMPLEMENTED: some in-scope requirements are met but at least one is\
+    \ missing or only partially satisfied. New code work is required to complete the\
+    \ issue.\n- NOT_IMPLEMENTED: none of the in-scope requirements are reflected in\
+    \ the current repository state. A full implementation pass is required.\n- BLOCKED:\
+    \ the requirements are too ambiguous to assess, or required Jira/repo evidence\
+    \ is unavailable. Do not guess; report BLOCKED with the exact missing evidence\
+    \ and stop the preset.\n\nRecord the verdict and a concise list of met/partially-met/unmet\
+    \ requirements in the step result AND in a local handoff artifact at {{ inputs.assessment_artifact_path\
+    \ }} with keys issue_provider, issue_ref, issue_url, verdict, branch, base_ref,\
+    \ mode, summary, and requirements (list of objects with description and status\
+    \ of met, partially_met, not_met, or unverifiable).\n\nThe verdict written here\
+    \ is the controlling input for every later step in this preset: the blocker preflight,\
+    \ the In Progress transition, the implementation step, the verification step,\
+    \ the pull request step, and the final Jira transition all gate on this verdict.\
+    \ Be conservative \u2014 only choose FULLY_IMPLEMENTED when the evidence clearly\
+    \ supports it."
+  skill:
+    id: auto
+    args: {}
+    requiredCapabilities:
+    - git

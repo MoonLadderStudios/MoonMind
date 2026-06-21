@@ -18,7 +18,7 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
             {"title": "Load Jira preset brief"},
             {"title": "Finalize Jira status"},
         ],
-        applied_template={"slug": "jira-implement", "version": "1.0.0"},
+        applied_template={"slug": "jira-implement", "version": "1.1.0"},
     )
 
     assert payload["type"] == "task"
@@ -28,7 +28,7 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
     assert request_payload["publishMode"] == "pr"
     assert request_payload["mergeAutomation"] == {"enabled": True}
     assert request_payload["idempotencyKey"] == (
-        "jira-implement:MM-770:MoonLadderStudios/MoonMind:codex_cli:1.0.0:"
+        "jira-implement:MM-770:MoonLadderStudios/MoonMind:codex_cli:1.1.0:"
         "pr-merge-automation-expanded-steps"
     )
 
@@ -46,18 +46,18 @@ def test_build_payload_uses_jira_implement_pr_with_merge_automation() -> None:
     }
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "scope": "global",
     }
     assert task["presetSchedule"] == {
         "source": "batch",
         "reason": "jira_issue_batch",
         "presetSlug": "jira-implement",
-        "presetVersion": "1.0.0",
+        "presetVersion": "1.1.0",
         "jiraIssueKey": "MM-770",
     }
     assert task["appliedStepTemplates"] == [
-        {"slug": "jira-implement", "version": "1.0.0"}
+        {"slug": "jira-implement", "version": "1.1.0"}
     ]
 
 
@@ -66,21 +66,21 @@ def test_build_payload_idempotency_key_includes_run_shaping_inputs() -> None:
         issue_key="MM-770",
         repository="MoonLadderStudios/MoonMind",
         runtime="codex_cli",
-        preset_version="1.0.0",
+        preset_version="1.1.0",
         expanded_steps=[],
     )["payload"]["idempotencyKey"]
     changed_repository = build_payload(
         issue_key="MM-770",
         repository="MoonLadderStudios/Other",
         runtime="codex_cli",
-        preset_version="1.0.0",
+        preset_version="1.1.0",
         expanded_steps=[],
     )["payload"]["idempotencyKey"]
     changed_runtime = build_payload(
         issue_key="MM-770",
         repository="MoonLadderStudios/MoonMind",
         runtime="claude_code",
-        preset_version="1.0.0",
+        preset_version="1.1.0",
         expanded_steps=[],
     )["payload"]["idempotencyKey"]
     changed_version = build_payload(
@@ -104,7 +104,7 @@ def test_build_expand_payload_targets_jira_issue_picker_input() -> None:
     )
 
     assert payload == {
-        "version": "1.0.0",
+        "version": "1.1.0",
         "inputs": {"jira_issue": {"key": "MM-779"}, "constraints": ""},
         "context": {
             "repository": "MoonLadderStudios/MoonMind",
@@ -130,7 +130,7 @@ def test_post_json_returns_failure_for_urlopen_exceptions(monkeypatch) -> None:
 def test_main_continues_after_expand_failure(monkeypatch, capsys) -> None:
     expanded = {
         "steps": [{"title": f"Step {index}"} for index in range(8)],
-        "appliedTemplate": {"slug": "jira-implement", "version": "1.0.0"},
+        "appliedTemplate": {"slug": "jira-implement", "version": "1.1.0"},
     }
 
     def fake_expand_jira_implement(**kwargs):

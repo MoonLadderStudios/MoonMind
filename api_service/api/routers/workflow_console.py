@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.base import get_async_session
 from api_service.api.routers.workflow_console_view_model import (
     build_repository_branch_options,
+    build_repository_issue_options,
     resolve_dashboard_runtime_config,
 )
 from api_service.auth_providers import get_current_user
@@ -130,6 +131,23 @@ class DashboardBranchListResponse(BaseModel):
     items: list[DashboardBranchOption] = Field(default_factory=list)
     error: str | None = Field(None)
     default_branch: str | None = Field(None, alias="defaultBranch")
+
+class DashboardIssueOption(BaseModel):
+    """Serializable GitHub issue option exposed to dashboard clients."""
+
+    repository: str
+    number: int
+    title: str = ""
+    body: str = ""
+    url: str = ""
+    state: str = ""
+    labels: list[str] = Field(default_factory=list)
+
+class DashboardIssueListResponse(BaseModel):
+    """Dashboard response containing GitHub issue options for one repository."""
+
+    items: list[DashboardIssueOption] = Field(default_factory=list)
+    error: str | None = Field(None)
 
 class _ValidatedSkillZip(BaseModel):
     skill_name: str
@@ -854,6 +872,18 @@ async def list_dashboard_github_branches(
 
     payload = build_repository_branch_options(repository)
     return DashboardBranchListResponse(**payload)
+
+
+@router.get("/api/github/issues", response_model=DashboardIssueListResponse)
+async def list_dashboard_github_issues(
+    repository: str = Query(..., min_length=1),
+    q: str = Query(""),
+    _user: User = Depends(get_current_user()),
+) -> DashboardIssueListResponse:
+    """List GitHub issues through MoonMind so browsers never call GitHub directly."""
+
+    payload = build_repository_issue_options(repository, q)
+    return DashboardIssueListResponse(**payload)
 
 @router.post(
     "/api/workflows/skills",

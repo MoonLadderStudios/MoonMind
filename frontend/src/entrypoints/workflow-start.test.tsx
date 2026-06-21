@@ -44,6 +44,7 @@ const mockPayload: BootPayload = {
         },
         github: {
           branches: "/api/github/branches?repository={repository}",
+          issues: "/api/github/issues?repository={repository}&q={query}",
         },
       },
       system: {
@@ -15491,6 +15492,14 @@ describe("Task Create schema-driven capability inputs", () => {
               version: "1.0.0",
             },
             {
+              slug: "github-schema-preset",
+              scope: "global",
+              title: "GitHub Schema Preset",
+              description: "Schema-driven GitHub preset.",
+              latestVersion: "1.0.0",
+              version: "1.0.0",
+            },
+            {
               slug: "generic-schema-preset",
               scope: "global",
               title: "Generic Schema Preset",
@@ -15532,6 +15541,47 @@ describe("Task Create schema-driven capability inputs", () => {
               widget: "jira.issue-picker",
               allowManualKeyEntry: true,
               searchPlaceholder: "Search Jira issues",
+            },
+          },
+          defaults: {},
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/presets/github-schema-preset?scope=global")) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          slug: "github-schema-preset",
+          scope: "global",
+          title: "GitHub Schema Preset",
+          description: "Schema-driven GitHub preset.",
+          latestVersion: "1.0.0",
+          version: "1.0.0",
+          inputSchema: {
+            type: "object",
+            required: ["github_issue"],
+            properties: {
+              github_issue: {
+                type: "object",
+                title: "GitHub issue",
+                required: ["repository", "number"],
+                properties: {
+                  repository: { type: "string", title: "Repository" },
+                  number: { type: "integer", title: "Issue number" },
+                  title: { type: "string" },
+                  body: { type: "string" },
+                  url: { type: "string", format: "uri" },
+                  state: { type: "string" },
+                  labels: { type: "array", items: { type: "string" } },
+                },
+              },
+            },
+          },
+          uiSchema: {
+            github_issue: {
+              widget: "github.issue-picker",
+              allowManualIssueEntry: true,
+              searchPlaceholder: "Search GitHub issues",
             },
           },
           defaults: {},
@@ -15601,6 +15651,27 @@ describe("Task Create schema-driven capability inputs", () => {
             mode: "draft",
             unsafe_default: "token=raw-secret",
           },
+        }),
+      } as Response);
+    }
+    if (url.startsWith("/api/presets/github-schema-preset:expand?scope=global")) {
+      const payload = JSON.parse(String(init?.body || "{}")) as {
+        inputs?: Record<string, unknown>;
+      };
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          steps: [
+            {
+              id: "tpl:github-schema-preset:1.0.0:01",
+              title: "Use GitHub issue",
+              instructions: "Use GitHub issue.",
+              tool: { type: "tool", id: "github.load_issue_preset_brief", inputs: payload.inputs },
+            },
+          ],
+          appliedTemplate: { slug: "github-schema-preset", version: "1.0.0", inputs: payload.inputs },
+          capabilities: ["gh"],
+          warnings: [],
         }),
       } as Response);
     }
@@ -15716,6 +15787,70 @@ describe("Task Create schema-driven capability inputs", () => {
         }),
       ).toBe(true);
     });
+  });
+
+
+
+  it("renders github.issue-picker from schema metadata and normalizes manual issue URL", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::github-schema-preset" },
+    });
+
+    const issueInput = await within(step).findByLabelText("GitHub issue");
+    fireEvent.change(issueInput, {
+      target: { value: "https://github.com/MoonLadderStudios/MoonMind/issues/123" },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, request]) => {
+          if (!String(url).startsWith("/api/presets/github-schema-preset:expand")) {
+            return false;
+          }
+          const payload = JSON.parse(String(request?.body || "{}")) as {
+            inputs?: { github_issue?: { repository?: string; number?: number; url?: string } };
+          };
+          return (
+            payload.inputs?.github_issue?.repository === "MoonLadderStudios/MoonMind" &&
+            payload.inputs?.github_issue?.number === 123 &&
+            payload.inputs?.github_issue?.url === "https://github.com/MoonLadderStudios/MoonMind/issues/123"
+          );
+        }),
+      ).toBe(true);
+    });
+  });
+
+  it("blocks github.issue-picker expansion until a valid issue is entered", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::github-schema-preset" },
+    });
+    await within(step).findByLabelText("GitHub issue");
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(within(step).getAllByText("A GitHub issue is required.").length).toBeGreaterThan(0);
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/presets/github-schema-preset:expand"),
+      ),
+    ).toBe(false);
   });
 
   it("blocks dependent preset actions with field-addressable required errors", async () => {
