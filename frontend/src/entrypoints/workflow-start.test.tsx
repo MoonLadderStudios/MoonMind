@@ -13430,6 +13430,28 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(stepsSection).not.toBeNull();
   });
 
+  it("hides Priority and Max Attempts behind the Advanced mode toggle", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    await screen.findByLabelText("Instructions");
+    const executionControls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    );
+    expect(executionControls).not.toBeNull();
+    const controls = executionControls as HTMLElement;
+
+    expect(within(controls).queryByLabelText("Priority")).toBeNull();
+    expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).getByLabelText("Priority")).toBeTruthy();
+    expect(within(controls).getByLabelText("Max Attempts")).toBeTruthy();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).queryByLabelText("Priority")).toBeNull();
+    expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
+  });
+
   it("blocks invalid MM-641 authoring drafts before creating executions", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 

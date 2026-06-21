@@ -10763,32 +10763,34 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Execution controls"
           aria-label="Execution controls"
         >
-        <div className="grid-2" data-runtime-visibility="worker">
-          <label>
-            Priority
-            <div className="priority-slider-container">
+        {showAdvancedStepOptions ? (
+          <div className="grid-2" data-runtime-visibility="worker">
+            <label>
+              Priority
+              <div className="priority-slider-container">
+                <input
+                  type="range"
+                  name="priority"
+                  min="-10"
+                  max="10"
+                  value={priority}
+                  onChange={(event) => setPriority(Number(event.target.value))}
+                />
+                <output>{priority}</output>
+              </div>
+            </label>
+            <label>
+              Max Attempts
               <input
-                type="range"
-                name="priority"
-                min="-10"
-                max="10"
-                value={priority}
-                onChange={(event) => setPriority(Number(event.target.value))}
+                type="number"
+                min="1"
+                name="maxAttempts"
+                value={maxAttempts}
+                onChange={(event) => setMaxAttempts(Number(event.target.value))}
               />
-              <output>{priority}</output>
-            </div>
-          </label>
-          <label>
-            Max Attempts
-            <input
-              type="number"
-              min="1"
-              name="maxAttempts"
-              value={maxAttempts}
-              onChange={(event) => setMaxAttempts(Number(event.target.value))}
-            />
-          </label>
-        </div>
+            </label>
+          </div>
+        ) : null}
 
         <label className="checkbox">
           <input
