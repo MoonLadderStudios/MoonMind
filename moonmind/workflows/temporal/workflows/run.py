@@ -5216,6 +5216,18 @@ class MoonMindRunWorkflow:
             return {"status": "canceled"}
 
         await self._run_proposals_stage(parameters=parameters)
+        if self._cancel_requested:
+            await self._run_finalizing_stage(
+                parameters=parameters, status="canceled", error=None
+            )
+            self._close_status = CLOSE_STATUS_CANCELED
+            self._set_state(STATE_CANCELED, summary="Execution canceled.")
+            await self._record_terminal_state(
+                state=STATE_CANCELED,
+                close_status=CLOSE_STATUS_CANCELED,
+                summary="Execution canceled.",
+            )
+            return {"status": "canceled"}
 
         self._set_state(STATE_FINALIZING, summary="Finalizing execution.")
 
@@ -5252,6 +5264,15 @@ class MoonMindRunWorkflow:
         await self._run_finalizing_stage(
             parameters=parameters, status=finalizing_status, error=finalizing_error
         )
+        if self._cancel_requested:
+            self._close_status = CLOSE_STATUS_CANCELED
+            self._set_state(STATE_CANCELED, summary="Execution canceled.")
+            await self._record_terminal_state(
+                state=STATE_CANCELED,
+                close_status=CLOSE_STATUS_CANCELED,
+                summary="Execution canceled.",
+            )
+            return {"status": "canceled"}
 
         if publish_failure or continuation_failure:
             self._close_status = CLOSE_STATUS_FAILED

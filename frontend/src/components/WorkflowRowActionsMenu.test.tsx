@@ -56,6 +56,7 @@ describe('WorkflowRowActionsMenu', () => {
 
     expect(await screen.findByRole('menuitem', { name: 'Pause' })).toBeTruthy();
     expect(screen.getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Force cancel' })).toBeTruthy();
     expect(
       fetchSpy.mock.calls.filter(
         ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
@@ -109,6 +110,28 @@ describe('WorkflowRowActionsMenu', () => {
       expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
         action: 'cancel',
         graceful: true,
+      });
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('posts a forced cancel request when force cancel is selected', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
+
+    await waitFor(() => {
+      const cancelCall = fetchSpy.mock.calls.find(([url, init]) => {
+        if (String(url) !== '/api/executions/wf-123/cancel') return false;
+        const body = JSON.parse(String((init as RequestInit).body));
+        return body.graceful === false;
+      });
+      expect(cancelCall).toBeTruthy();
+      expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
+        action: 'cancel',
+        graceful: false,
+        reason: 'Force canceled by operator from Mission Control.',
       });
     });
     confirmSpy.mockRestore();

@@ -5412,6 +5412,16 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     cancelMutation.mutate({ action: 'cancel', graceful: true });
   };
 
+  const onForceCancel = () => {
+    setActionError(null);
+    if (!window.confirm('Force cancel this task? This terminates the Temporal workflow immediately.')) return;
+    cancelMutation.mutate({
+      action: 'cancel',
+      graceful: false,
+      reason: 'Force canceled by operator from Mission Control.',
+    });
+  };
+
   const onReject = () => {
     setActionError(null);
     if (!window.confirm('Reject this task?')) return;
@@ -5558,6 +5568,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       onApprove,
       onReject,
       onCancel,
+      onForceCancel,
       onSendMessage: () => {
         const message = window.prompt('Operator message', '');
         if (message?.trim()) onSendMessage(message.trim());

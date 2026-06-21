@@ -21,6 +21,7 @@ function noopHandlers(): WorkflowActionHandlers {
     onApprove: vi.fn(),
     onReject: vi.fn(),
     onCancel: vi.fn(),
+    onForceCancel: vi.fn(),
     onSendMessage: vi.fn(),
     onBypassDependencies: vi.fn(),
     onCreateRemediation: vi.fn(),
@@ -78,6 +79,7 @@ describe('buildWorkflowActionMenuItems', () => {
     expect(items.map((item) => item.id)).toEqual([
       'bypass-dependency-wait',
       'cancel',
+      'force-cancel',
       'create-remediation-task',
       'rename',
       'pause',
@@ -88,6 +90,7 @@ describe('buildWorkflowActionMenuItems', () => {
     ]);
     expect(items.find((item) => item.id === 'reject')?.danger).toBe(true);
     expect(items.find((item) => item.id === 'cancel')?.danger).toBe(true);
+    expect(items.find((item) => item.id === 'force-cancel')?.danger).toBe(true);
     expect(items.find((item) => item.id === 'bypass-dependency-wait')?.danger).toBe(true);
   });
 

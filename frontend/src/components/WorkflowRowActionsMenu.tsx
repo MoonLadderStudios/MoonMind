@@ -359,6 +359,15 @@ export function WorkflowRowActionsMenu({
           if (!window.confirm('Cancel this task?')) return;
           cancelMutation.mutate({ action: 'cancel', graceful: true });
         },
+        onForceCancel: () => {
+          setActionError(null);
+          if (!window.confirm('Force cancel this task? This terminates the Temporal workflow immediately.')) return;
+          cancelMutation.mutate({
+            action: 'cancel',
+            graceful: false,
+            reason: 'Force canceled by operator from Mission Control.',
+          });
+        },
         onSendMessage: () => {
           setActionError(null);
           const message = window.prompt('Operator message', '');

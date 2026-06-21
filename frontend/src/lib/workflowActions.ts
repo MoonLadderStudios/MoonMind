@@ -52,6 +52,7 @@ export type WorkflowActionHandlers = {
   onApprove: () => void;
   onReject: () => void;
   onCancel: () => void;
+  onForceCancel: () => void;
   onSendMessage: () => void;
   onBypassDependencies: () => void;
   onCreateRemediation: () => void;
@@ -198,6 +199,14 @@ export function buildWorkflowActionMenuItems(
     disabledReason: disabledReason('canCancel'),
     danger: true,
     onSelect: handlers.onCancel,
+  });
+  addButton({
+    id: 'force-cancel',
+    label: 'Force cancel',
+    available: Boolean(actions.canCancel),
+    disabledReason: disabledReason('canCancel'),
+    danger: true,
+    onSelect: handlers.onForceCancel,
   });
   if (taskEditingOn) {
     addLink({
