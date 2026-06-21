@@ -1440,13 +1440,81 @@ async def test_create_proposal_records_sanitized_delivery_failure() -> None:
     assert proposal.provider_metadata["delivery"]["error"]["sanitizedReason"] == (
         "provider rejected request"
     )
-    persisted_metadata = repo.create_proposal.await_args.kwargs["provider_metadata"]
-    assert proposal.provider_metadata is not persisted_metadata
-    assert proposal.provider_metadata["delivery"] is not persisted_metadata["delivery"]
+
+
+@pytest.mark.asyncio
+async def test_record_delivery_failure_assigns_fresh_metadata_with_record_id() -> None:
+    repo = AsyncMock()
+    record = SimpleNamespace(
+        id=uuid4(),
+        status=WorkflowProposalStatus.OPEN,
+        title="Add tests",
+        summary="Add follow-up",
+        category="tests",
+        tags=["tests"],
+        repository="Moon/Repo",
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="hash",
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        priority_override_reason=None,
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        origin_source=WorkflowProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_metadata={"workflow_id": "wf-1"},
+        origin_external_id="wf-1",
+        provider="github",
+        external_key=None,
+        external_url=None,
+        delivered_at=None,
+        last_synced_at=None,
+        workflow_snapshot_ref=None,
+        provider_metadata={},
+        resolved_policy={"provider": "github"},
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
+    )
+    repo.create_proposal.return_value = record
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    proposal = await service.record_delivery_failure(
+        title="Add Tests",
+        summary="Ensure coverage",
+        category="Tests",
+        tags=["tests"],
+        workflow_create_request={
+            "type": "workflow",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {"repository": "Moon/Repo"},
+        },
+        origin_source=WorkflowProposalOriginSource.WORKFLOW,
+        origin_id=None,
+        origin_external_id="wf-1",
+        origin_metadata={"workflow_id": "wf-1"},
+        proposed_by_worker_id="worker-1",
+        proposed_by_user_id=None,
+        provider="github",
+        target_class="workflow_repo",
+        reason="provider rejected request",
+        recoverable_next_action="Check provider configuration.",
+        retryable=True,
+        repository="Moon/Repo",
+        resolved_policy={"provider": "github"},
+    )
+
+    initial_metadata = repo.create_proposal.await_args.kwargs["provider_metadata"]
+    assert proposal.provider_metadata is not initial_metadata
+    assert proposal.provider_metadata["delivery"] is not initial_metadata["delivery"]
     assert proposal.provider_metadata["delivery"]["error"]["deliveryRecordId"] == str(
         record.id
     )
-    assert persisted_metadata["delivery"]["error"]["deliveryRecordId"] == str(record.id)
+    assert initial_metadata["delivery"]["error"]["deliveryRecordId"] == str(record.id)
 
 
 @pytest.mark.asyncio
