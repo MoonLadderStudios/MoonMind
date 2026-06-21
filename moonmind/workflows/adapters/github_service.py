@@ -743,6 +743,138 @@ class GitHubService:
             summary=f"GitHub issue updated: {data.get('html_url')}",
         )
 
+    async def set_issue_labels(
+        self,
+        *,
+        repo: str,
+        issue_number: str,
+        labels: list[str],
+        github_token: str | None = None,
+    ) -> GitHubIssueResult:
+        """Replace the labels on a GitHub Issue without rewriting title or body.
+
+        Used by proposal review-state transitions so the original issue text is
+        preserved as the human audit trail while MoonMind updates state labels.
+        """
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return GitHubIssueResult(
+                externalKey=issue_number,
+                updated=False,
+                summary=resolution_error
+                or self._missing_auth_summary("update issue labels"),
+            )
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.patch(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}",
+                    headers=headers,
+                    json={"labels": labels or []},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as exc:
+                summary = self._github_permission_summary(exc.response)
+                return GitHubIssueResult(
+                    externalKey=issue_number,
+                    updated=False,
+                    summary=(
+                        "GitHub set issue labels failed with HTTP "
+                        f"{exc.response.status_code}"
+                        + (
+                            f" for {repo}#{issue_number}. {summary}"
+                            if summary
+                            else f" for {repo}#{issue_number}."
+                        )
+                    ),
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return GitHubIssueResult(
+                    externalKey=issue_number,
+                    updated=False,
+                    summary=(
+                        "GitHub set issue labels request failed: "
+                        f"{exc.__class__.__name__}"
+                    ),
+                )
+        return GitHubIssueResult(
+            externalKey=str(data.get("number") or issue_number),
+            externalUrl=data.get("html_url"),
+            updated=True,
+            summary=f"GitHub issue labels updated: {data.get('html_url')}",
+        )
+
+    async def comment_on_issue(
+        self,
+        *,
+        repo: str,
+        issue_number: str,
+        body: str,
+        github_token: str | None = None,
+    ) -> GitHubIssueResult:
+        """Post a comment on a GitHub Issue via REST API.
+
+        Comments are additive review-trail entries (for example a promotion
+        execution link); they never replace the original issue body.
+        """
+
+        token, resolution_error = await self.resolve_github_token(
+            github_token,
+            repo=repo,
+        )
+        if not token:
+            return GitHubIssueResult(
+                externalKey=issue_number,
+                created=False,
+                summary=resolution_error
+                or self._missing_auth_summary("comment on an issue"),
+            )
+        headers = self._github_headers(token)
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await client.post(
+                    f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments",
+                    headers=headers,
+                    json={"body": body},
+                )
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as exc:
+                summary = self._github_permission_summary(exc.response)
+                return GitHubIssueResult(
+                    externalKey=issue_number,
+                    created=False,
+                    summary=(
+                        "GitHub issue comment failed with HTTP "
+                        f"{exc.response.status_code}"
+                        + (
+                            f" for {repo}#{issue_number}. {summary}"
+                            if summary
+                            else f" for {repo}#{issue_number}."
+                        )
+                    ),
+                )
+            except (httpx.TransportError, httpx.TimeoutException) as exc:
+                return GitHubIssueResult(
+                    externalKey=issue_number,
+                    created=False,
+                    summary=(
+                        "GitHub issue comment request failed: "
+                        f"{exc.__class__.__name__}"
+                    ),
+                )
+        return GitHubIssueResult(
+            externalKey=issue_number,
+            externalUrl=data.get("html_url"),
+            created=True,
+            summary=f"GitHub issue comment posted: {data.get('html_url')}",
+        )
+
     # -- PR operations ----------------------------------------------------
 
     async def create_pull_request(

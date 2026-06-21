@@ -26,6 +26,7 @@ from moonmind.workflows.proposals.models import (
     WorkflowProposalStatus,
 )
 from moonmind.workflows.proposals.delivery import (
+    ProposalDecisionStateUpdate,
     ProposalDeliveryError,
     ProviderDecisionEvent,
     ProviderDecisionResult,
@@ -1580,6 +1581,15 @@ class WorkflowProposalService:
         await self._repository.refresh(proposal)
         return result
 
+    @staticmethod
+    def _promoted_execution_url(execution_id: str | None) -> str | None:
+        """Render the Mission Control link for a promoted execution id."""
+
+        cleaned = str(execution_id or "").strip()
+        if not cleaned:
+            return None
+        return f"/workflows/{cleaned}?source=temporal"
+
     async def _sync_provider_decision_state_if_configured(
         self,
         *,
@@ -1588,34 +1598,45 @@ class WorkflowProposalService:
         resulting_state: str,
         promoted_execution_id: str | None,
     ) -> None:
-        """Best-effort external review state update through a trusted adapter."""
+        """Push the accepted review-state transition through a trusted adapter.
+
+        Updates the provider issue state labels and appends an audit comment
+        (with the promoted execution link for promotions) while preserving the
+        original issue as the human audit trail. Rejected or unverified events
+        are never pushed to the provider issue. Promotion comments are deferred
+        until the promoted execution id is attached.
+        """
 
         updater = getattr(self._delivery_service, "record_decision", None)
         if not callable(updater):
             return
-        payload = self._scrub_json(
-            {
-                "proposalId": str(getattr(proposal, "id", "")),
-                "provider": getattr(proposal, "provider", None),
-                "externalKey": getattr(proposal, "external_key", None),
-                "decision": result.decision,
-                "accepted": result.accepted,
-                "actor": result.actor,
-                "providerEventId": result.provider_event_id,
-                "reason": result.reason,
-                "note": result.note,
-                "resultingExternalState": resulting_state,
-                "promotedExecutionId": promoted_execution_id,
-            }
+        if not result.accepted:
+            return
+        if result.decision == "promote" and not promoted_execution_id:
+            return
+        if not self._clean_str(getattr(proposal, "external_key", "")):
+            return
+
+        update = ProposalDecisionStateUpdate(
+            decision=result.decision,
+            accepted=result.accepted,
+            actor=result.actor,
+            provider_event_id=result.provider_event_id,
+            resulting_state=resulting_state,
+            reason=result.reason,
+            note=result.note,
+            priority=result.priority,
+            promoted_execution_id=promoted_execution_id,
+            promoted_execution_url=self._promoted_execution_url(promoted_execution_id),
+        )
+        provider_metadata = (
+            dict(getattr(proposal, "provider_metadata", {}))
+            if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
+            else {}
         )
         try:
-            await updater(payload)
+            sync_result = await updater(request_from_proposal(proposal), update)
         except Exception as exc:  # pragma: no cover - adapter-specific
-            provider_metadata = (
-                dict(getattr(proposal, "provider_metadata", {}))
-                if isinstance(getattr(proposal, "provider_metadata", {}), Mapping)
-                else {}
-            )
             warnings = provider_metadata.get("providerDecisionUpdateWarnings")
             warning_rows: list[dict[str, Any]] = (
                 list(warnings) if isinstance(warnings, list) else []
@@ -1629,8 +1650,56 @@ class WorkflowProposalService:
                     }
                 )
             )
-            provider_metadata["providerDecisionUpdateWarnings"] = warning_rows
+            provider_metadata["providerDecisionUpdateWarnings"] = warning_rows[-100:]
             proposal.provider_metadata = provider_metadata
+            return
+
+        # A provider adapter can return without raising yet still report that the
+        # promotion state was not applied (for example a missing GitHub token).
+        # Surface those as warnings instead of recording a successful sync.
+        if isinstance(sync_result, Mapping) and not sync_result.get("applied", True):
+            warnings = provider_metadata.get("providerDecisionUpdateWarnings")
+            warning_rows: list[dict[str, Any]] = (
+                list(warnings) if isinstance(warnings, list) else []
+            )
+            warning_rows.append(
+                self._scrub_json(
+                    {
+                        "providerEventId": result.provider_event_id,
+                        "decision": result.decision,
+                        "resultingExternalState": resulting_state,
+                        "promotedExecutionId": promoted_execution_id,
+                        "promotedExecutionUrl": update.promoted_execution_url,
+                        "reason": sync_result.get("reason")
+                        or "provider_state_update_failed",
+                        "result": dict(sync_result),
+                    }
+                )
+            )
+            provider_metadata["providerDecisionUpdateWarnings"] = warning_rows[-100:]
+            proposal.provider_metadata = provider_metadata
+            return
+
+        sync_rows = provider_metadata.get("providerDecisionStateSyncs")
+        rows: list[dict[str, Any]] = (
+            list(sync_rows) if isinstance(sync_rows, list) else []
+        )
+        rows.append(
+            self._scrub_json(
+                {
+                    "providerEventId": result.provider_event_id,
+                    "decision": result.decision,
+                    "resultingExternalState": resulting_state,
+                    "promotedExecutionId": promoted_execution_id,
+                    "promotedExecutionUrl": update.promoted_execution_url,
+                    "result": dict(sync_result)
+                    if isinstance(sync_result, Mapping)
+                    else None,
+                }
+            )
+        )
+        provider_metadata["providerDecisionStateSyncs"] = rows[-100:]
+        proposal.provider_metadata = provider_metadata
 
     async def attach_provider_decision_execution(
         self,
