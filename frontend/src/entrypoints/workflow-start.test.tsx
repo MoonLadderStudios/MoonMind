@@ -13430,6 +13430,79 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(stepsSection).not.toBeNull();
   });
 
+  it("hides Priority and Max Attempts behind the Advanced mode toggle", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    await screen.findByLabelText("Instructions");
+    const executionControls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    );
+    expect(executionControls).not.toBeNull();
+    const controls = executionControls as HTMLElement;
+
+    expect(within(controls).queryByLabelText("Priority")).toBeNull();
+    expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).getByLabelText("Priority")).toBeTruthy();
+    expect(within(controls).getByLabelText("Max Attempts")).toBeTruthy();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).queryByLabelText("Priority")).toBeNull();
+    expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
+  });
+
+  it("ignores hidden Priority and Max Attempts values when Advanced mode is off", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest("section");
+    expect(primaryStep).not.toBeNull();
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run end-to-end regression flow." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+    fireEvent.change(
+      within(primaryStep as HTMLElement).getByLabelText(/Skill \(optional\)/),
+      { target: { value: "speckit-orchestrate" } },
+    );
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    // Reveal the advanced controls, set a non-default Priority and an invalid
+    // Max Attempts, then hide the controls again before submitting.
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.change(within(controls).getByLabelText("Priority"), {
+      target: { value: "7" },
+    });
+    fireEvent.change(within(controls).getByLabelText("Max Attempts"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).queryByLabelText("Priority")).toBeNull();
+    expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    // The hidden non-default Priority is dropped and the hidden invalid Max
+    // Attempts neither blocks submission nor leaks through: defaults are sent.
+    const request = latestCreateRequest();
+    expect(request.priority).toBe(0);
+    expect(request.maxAttempts).toBe(3);
+  });
+
   it("blocks invalid MM-641 authoring drafts before creating executions", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 

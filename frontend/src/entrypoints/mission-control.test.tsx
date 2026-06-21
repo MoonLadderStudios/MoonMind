@@ -170,6 +170,14 @@ describe('Mission Control shared entry', () => {
     });
   });
 
+  it('does not register a Mission Control proposal review page for MM-859', async () => {
+    renderWithClient(<MissionControlApp payload={{ page: 'proposals', apiBase: '/api' }} />);
+
+    expect(await screen.findByText('Unknown Mission Control page:')).toBeTruthy();
+    expect(screen.getByText('proposals')).toBeTruthy();
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
+  });
+
   it('does not render operational metrics on the workflows home dashboard', async () => {
     renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
@@ -535,6 +543,8 @@ describe('Mission Control shared entry', () => {
     expect(dashboardTemplate).toContain('class="dashboard-root"');
     expect(dashboardTemplate).toContain('class="masthead"');
     expect(navigationTemplate).toContain('class="route-nav"');
+    expect(navigationTemplate).not.toContain('/proposals');
+    expect(navigationTemplate).not.toContain('Proposals');
 
     for (const selector of [
       '.dashboard-root',

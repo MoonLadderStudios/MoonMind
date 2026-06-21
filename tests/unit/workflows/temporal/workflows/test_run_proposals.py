@@ -64,15 +64,19 @@ async def test_run_proposals_stage_propagates_policy(
             return {"submitted_count": 1}
         return {}
 
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
 
     parameters = {
         "repo": "org/repo",
         "task": {
             "proposeTasks": True,
             "proposalPolicy": {
-                "max_items": {"project": 5},
-                "targets": ["project"],
+                "max_items": {"workflow_repo": 5},
+                "targets": ["workflow_repo"],
                 "default_runtime": "claude",
             }
         }
@@ -86,8 +90,8 @@ async def test_run_proposals_stage_propagates_policy(
     
     submit_payload = captured[1][1]
     policy_payload = submit_payload["policy"]
-    assert policy_payload["maxItems"] == {"project": 5}
-    assert policy_payload["targets"] == ["project"]
+    assert policy_payload["maxItems"] == {"workflow_repo": 5}
+    assert policy_payload["targets"] == ["workflow_repo"]
     assert policy_payload["defaultRuntime"] == "claude"
 
     assert mock_run_workflow._proposals_generated == 1
@@ -117,7 +121,11 @@ async def test_run_proposals_stage_passes_compact_telemetry_signals(
             return []
         return {}
 
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
 
     await mock_run_workflow._run_proposals_stage(
         parameters={"repo": "org/repo", "task": {"proposeTasks": True}}
@@ -170,7 +178,11 @@ async def test_run_proposals_stage_does_not_fabricate_signal_from_diagnostics_re
             return []
         return {}
 
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
 
     await mock_run_workflow._run_proposals_stage(
         parameters={"repo": "org/repo", "task": {"proposeTasks": True}}
@@ -226,7 +238,11 @@ async def test_run_proposals_stage_records_operator_visible_outcomes(
             }
         return {}
 
-    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
 
     await mock_run_workflow._run_proposals_stage(
         parameters={"repo": "org/repo", "task": {"proposeTasks": True}}
@@ -474,3 +490,222 @@ async def test_run_proposals_stage_skipped_when_globally_disabled(
     await mock_run_workflow._run_proposals_stage(parameters=parameters)
 
     assert len(captured) == 0
+
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_passes_artifact_refs_instead_of_raw_inputs(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_generate_payload: dict[str, Any] = {}
+    mock_run_workflow._input_ref = "artifact://run-input"
+    mock_run_workflow._plan_ref = "artifact://plan"
+    mock_run_workflow._logs_ref = "artifact://logs"
+    mock_run_workflow._summary_ref = "artifact://summary"
+    mock_run_workflow._report_ref = "artifact://reports/run-summary"
+    mock_run_workflow._last_step_id = "agent-step"
+    mock_run_workflow._last_step_summary = "Agent completed with diagnostics."
+    mock_run_workflow._last_diagnostics_ref = "artifact://diag-last"
+    step_row = {
+        "logicalStepId": "agent-step",
+        "refs": {
+            "latestStepExecutionManifestRef": "artifact://step-manifest-latest",
+            "stepExecutionManifestRefs": [
+                "artifact://step-manifest-1",
+                "artifact://step-manifest-latest",
+            ],
+        },
+        "artifacts": {
+            "outputSummary": "artifact://output-summary",
+            "outputPrimary": "artifact://agent-run-result",
+            "runtimeStdout": "artifact://stdout",
+            "runtimeStderr": "artifact://stderr",
+            "runtimeMergedLogs": "artifact://merged-logs",
+            "runtimeDiagnostics": "artifact://diag-step",
+            "providerSnapshot": "artifact://provider-snapshot",
+            "stepExecutionManifestRef": "artifact://step-manifest-latest",
+        },
+    }
+    mock_run_workflow._step_ledger_rows = [step_row]
+    mock_run_workflow._step_ledger_by_id = {"agent-step": step_row}
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "proposal.generate":
+            captured_generate_payload.update(
+                json.loads(json.dumps(payload, default=_to_serializable))
+            )
+            return []
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={
+            "repo": "org/repo",
+            "task": {
+                "proposeTasks": True,
+                "instructions": "raw secret-bearing task input should stay by ref",
+                "steps": [
+                    {
+                        "id": "agent-step",
+                        "title": "Agent step",
+                        "type": "skill",
+                        "instructions": "raw step prompt should stay by ref",
+                        "skill": {"id": "jira-implement"},
+                        "source": {
+                            "kind": "preset-derived",
+                            "presetId": "preset-1",
+                            "includePath": ["root", "implement"],
+                            "originalStepId": "implement-story",
+                        },
+                    }
+                ],
+                "runtime": {"mode": "codex", "effort": 2},
+                "skills": {"include": [{"name": "pr-resolver"}]},
+                "authoredPresets": [
+                    {
+                        "id": "preset-1",
+                        "name": "Implementation preset",
+                        "version": "2026-06-21",
+                        "sourceRef": "artifact://preset-source",
+                        "body": "raw preset body should not cross workflow history",
+                    }
+                ],
+                "proposalIdea": "Add missing proposal hardening test coverage",
+            },
+            "logs": "raw logs should stay by artifact ref",
+            "diagnostics": {"raw": "raw diagnostics should stay by ref"},
+        }
+    )
+
+    assert captured_generate_payload["parameters"] == {
+        "workflow": {
+            "proposalIdea": "Add missing proposal hardening test coverage",
+            "runtime": {"mode": "codex", "effort": 2},
+            "skills": {"include": [{"name": "pr-resolver"}]},
+            "steps": [
+                {
+                    "id": "agent-step",
+                    "title": "Agent step",
+                    "type": "skill",
+                    "skill": {"id": "jira-implement"},
+                    "source": {
+                        "kind": "preset-derived",
+                        "presetId": "preset-1",
+                        "includePath": ["root", "implement"],
+                        "originalStepId": "implement-story",
+                    },
+                }
+            ],
+            "authoredPresets": [
+                {
+                    "id": "preset-1",
+                    "name": "Implementation preset",
+                    "version": "2026-06-21",
+                    "sourceRef": "artifact://preset-source",
+                    "index": 0,
+                }
+            ],
+        }
+    }
+    serialized_payload = json.dumps(captured_generate_payload, sort_keys=True)
+    assert "raw secret-bearing task input" not in serialized_payload
+    assert "raw step prompt" not in serialized_payload
+    assert "raw logs should stay" not in serialized_payload
+    assert "raw diagnostics should stay" not in serialized_payload
+    assert "raw preset body" not in serialized_payload
+
+    assert captured_generate_payload["evidenceRefs"] == {
+        "inputRef": "artifact://run-input",
+        "planRef": "artifact://plan",
+        "logsRef": "artifact://logs",
+        "summaryRef": "artifact://summary",
+        "finishSummaryRef": "artifact://reports/run-summary",
+        "diagnosticsRef": "artifact://diag-last",
+        "lastStep": {
+            "id": "agent-step",
+            "outputRefs": {
+                "summaryRef": "artifact://output-summary",
+                "primaryRef": "artifact://agent-run-result",
+                "stdoutRef": "artifact://stdout",
+                "stderrRef": "artifact://stderr",
+                "logsRef": "artifact://merged-logs",
+                "diagnosticsRef": "artifact://diag-step",
+                "providerSnapshotRef": "artifact://provider-snapshot",
+                "stepExecutionManifestRef": "artifact://step-manifest-latest",
+                "stepExecutionManifestRefs": [
+                    "artifact://step-manifest-1",
+                    "artifact://step-manifest-latest",
+                ],
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_proposals_stage_passes_resolved_skill_metadata_by_ref(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_generate_payload: dict[str, Any] = {}
+    mock_run_workflow._last_step_id = "agent-step"
+    step_row = {
+        "logicalStepId": "agent-step",
+        "refs": {
+            "latestStepExecutionManifestRef": "artifact://skill-step-manifest",
+            "stepExecutionManifestRefs": ["artifact://skill-step-manifest"],
+        },
+        "artifacts": {
+            "outputPrimary": "artifact://agent-run-result",
+            "runtimeDiagnostics": "artifact://diag-step",
+            "stepExecutionManifestRef": "artifact://skill-step-manifest",
+        },
+    }
+    mock_run_workflow._step_ledger_rows = [step_row]
+    mock_run_workflow._step_ledger_by_id = {"agent-step": step_row}
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "proposal.generate":
+            captured_generate_payload.update(
+                json.loads(json.dumps(payload, default=_to_serializable))
+            )
+            return []
+        return {}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+
+    await mock_run_workflow._run_proposals_stage(
+        parameters={
+            "repo": "org/repo",
+            "task": {
+                "proposeTasks": True,
+                "skills": {
+                    "include": [{"name": "jira-implement"}],
+                    "metadata": "raw resolved skill metadata must not be embedded",
+                },
+            },
+        }
+    )
+
+    serialized_payload = json.dumps(captured_generate_payload, sort_keys=True)
+    assert "raw resolved skill metadata" not in serialized_payload
+    assert captured_generate_payload["parameters"]["workflow"]["skills"] == {
+        "include": [{"name": "jira-implement"}],
+    }
+    assert captured_generate_payload["evidenceRefs"]["lastStep"]["outputRefs"][
+        "stepExecutionManifestRef"
+    ] == "artifact://skill-step-manifest"
+    assert captured_generate_payload["evidenceRefs"]["lastStep"]["outputRefs"][
+        "primaryRef"
+    ] == "artifact://agent-run-result"
+    assert captured_generate_payload["evidenceRefs"]["lastStep"]["outputRefs"][
+        "diagnosticsRef"
+    ] == "artifact://diag-step"

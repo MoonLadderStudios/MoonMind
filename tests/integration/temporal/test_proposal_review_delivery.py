@@ -217,9 +217,9 @@ async def test_proposal_submit_persists_external_delivery_result() -> None:
     assert delivery.requests[0].origin_metadata["workflow_id"] == "wf-1"
     assert delivery.requests[0].origin_metadata["source"] == "workflow"
     assert delivery.requests[0].origin_metadata["id"] == "wf-1"
-    assert record.resolved_policy["target"] == "project"
+    assert record.resolved_policy["target"] == "workflow_repo"
     assert record.resolved_policy["provider"] == "github"
-    assert record.resolved_policy["capacity"]["project"]["accepted"] == 1
+    assert record.resolved_policy["capacity"]["workflow_repo"]["accepted"] == 1
     assert record.resolved_policy["delivery"]["provider"] == "github"
 
 
@@ -363,10 +363,11 @@ async def test_provider_approval_creates_one_run_from_stored_snapshot() -> None:
     assert len(executions) == 1
     payload = executions[0]["initialParameters"]
     assert payload["targetRuntime"] == "codex"
-    assert payload["workflow"]["authoredPresets"] == [
+    workflow = payload["workflow"]
+    assert workflow["authoredPresets"] == [
         {"presetId": "runtime-quality-followup"}
     ]
-    assert payload["workflow"]["steps"][0]["source"] == {"kind": "preset-derived"}
+    assert workflow["steps"][0]["source"] == {"kind": "preset-derived"}
     assert "unsafe edited text" not in str(payload)
 
     duplicate = await _promote_provider_event(

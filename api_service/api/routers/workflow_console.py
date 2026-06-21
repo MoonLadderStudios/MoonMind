@@ -606,41 +606,6 @@ async def workflow_console_root(
         user=_user,
     )
 
-@router.get("/proposals", response_class=HTMLResponse)
-async def workflow_proposals_route(
-    request: Request,
-    session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the React-powered proposals page."""
-    return await _render_react_page(
-        request,
-        "proposals",
-        "/proposals",
-        data_wide_panel=True,
-        session=session,
-        user=_user,
-    )
-
-@router.get("/proposals/{proposal_id}", response_class=HTMLResponse)
-async def workflow_proposal_detail_route(
-    request: Request,
-    proposal_id: str,
-    session: AsyncSession = Depends(get_async_session),
-    _user: User = Depends(get_current_user()),
-) -> HTMLResponse:
-    """Serve the proposals shell for proposal deep links."""
-    if not _is_safe_detail_segment(proposal_id):
-        _raise_dashboard_route_not_found()
-    return await _render_react_page(
-        request,
-        "proposals",
-        f"/proposals/{proposal_id}",
-        data_wide_panel=True,
-        session=session,
-        user=_user,
-    )
-
 @router.get("/schedules", response_class=HTMLResponse)
 async def schedules_route(
     request: Request,
