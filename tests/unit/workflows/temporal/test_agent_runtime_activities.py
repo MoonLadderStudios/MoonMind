@@ -2827,6 +2827,51 @@ async def test_fetch_result_does_not_use_stale_session_text_for_failed_runs(
     assert "operator_summary" not in result.metadata
     controller.fetch_session_summary.assert_not_awaited()
 
+async def test_fetch_result_reads_managed_runtime_local_stdout_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = "36064b4d-1adc-4a48-8ac6-9b6224d0394a"
+    artifact_root = tmp_path / "managed-runtime-artifacts"
+    stdout_path = artifact_root / run_id / "stdout.log"
+    stdout_path.parent.mkdir(parents=True)
+    stdout_path.write_text(
+        "You've hit your session limit · resets 3:20am (UTC)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_managed_runtime_artifact_root",
+        lambda: artifact_root,
+    )
+
+    store = _make_store(tmp_path)
+    store.save(
+        ManagedRunRecord(
+            runId=run_id,
+            agentId="claude_code",
+            runtimeId="claude_code",
+            status="failed",
+            startedAt=datetime.now(tz=UTC),
+            errorMessage="Provider API rate limit exceeded",
+            failureClass="integration_error",
+            providerErrorCode="429",
+            stdoutArtifactRef=f"{run_id}/stdout.log",
+        )
+    )
+
+    activities = TemporalAgentRuntimeActivities(run_store=store)
+    result = await activities.agent_runtime_fetch_result(
+        {"run_id": run_id, "agent_id": "claude_code"}
+    )
+
+    assert result.summary == "Provider API rate limit exceeded"
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "429"
+    assert result.metadata["operator_summary"] == (
+        "You've hit your session limit · resets 3:20am (UTC)"
+    )
+
 async def test_fetch_result_failed_returns_typed_model(tmp_path: Path) -> None:
     """T5.2 — failed run returns typed AgentRunResult with correct failure_class."""
     store = _make_store(tmp_path)

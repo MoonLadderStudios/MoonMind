@@ -8560,7 +8560,7 @@ class TemporalAgentRuntimeActivities:
         self,
         record: ManagedRunRecord,
     ) -> str | None:
-        if self._artifact_service is None or not record.stdout_artifact_ref:
+        if not record.stdout_artifact_ref:
             return None
 
         text = await self._read_stdout_artifact_tail(
@@ -8581,6 +8581,13 @@ class TemporalAgentRuntimeActivities:
         run_id: str,
         max_bytes: int,
     ) -> str | None:
+        text = self._read_managed_runtime_artifact_tail(
+            artifact_ref=artifact_id,
+            max_bytes=max_bytes,
+        )
+        if text is not None:
+            return text
+
         if self._artifact_service is None:
             return None
 
@@ -8622,9 +8629,10 @@ class TemporalAgentRuntimeActivities:
             return payload.decode("utf-8", errors="replace")
 
         try:
-            _, payload = await self._artifact_service.read_bytes(
+            _, payload = await self._artifact_service.read(
                 artifact_id=artifact_id,
                 principal="system:agent_runtime",
+                allow_restricted_raw=False,
             )
         except Exception:
             logger.debug(
@@ -8635,6 +8643,38 @@ class TemporalAgentRuntimeActivities:
             return None
 
         return payload[-max_bytes:].decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _read_managed_runtime_artifact_tail(
+        *,
+        artifact_ref: str,
+        max_bytes: int,
+    ) -> str | None:
+        ref = str(artifact_ref or "").strip()
+        if not ref:
+            return None
+
+        root = _managed_runtime_artifact_root().resolve()
+        path = (root / ref).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError:
+            logger.warning("Rejected managed runtime artifact ref outside root: %s", ref)
+            return None
+        if not path.is_file():
+            return None
+        try:
+            return TemporalAgentRuntimeActivities._read_path_tail_text(
+                path,
+                max_bytes=max_bytes,
+            )
+        except OSError:
+            logger.debug(
+                "Failed to read managed runtime artifact tail for ref %s",
+                ref,
+                exc_info=True,
+            )
+            return None
 
     @staticmethod
     def _read_path_tail_text(path: Path, *, max_bytes: int) -> str:

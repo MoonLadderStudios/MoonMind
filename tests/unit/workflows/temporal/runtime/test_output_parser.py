@@ -96,6 +96,14 @@ class TestDefaultStrategyClassifyExit:
         assert status == "failed"
         assert failure == "integration_error"
 
+    def test_claude_rate_limited_session_variant(self) -> None:
+        s = ClaudeCodeStrategy()
+        stdout = "You've hit your session limit · resets 3:20am (UTC)"
+        result = s.classify_result(exit_code=1, stdout=stdout, stderr="")
+        assert result.status == "failed"
+        assert result.failure_class == "integration_error"
+        assert result.provider_error_code == "429"
+
     def test_codex_success(self) -> None:
         s = CodexCliStrategy()
         status, failure = s.classify_exit(0, "", "")
@@ -228,6 +236,15 @@ class TestClaudeCodeOutputParser:
         assert result.rate_limited
         assert any("usage limit" in message.lower() for message in result.error_messages)
 
+    def test_parse_detects_session_limit_message(self) -> None:
+        parser = ClaudeCodeOutputParser()
+        result = parser.parse(
+            "You've hit your session limit · resets 3:20am (UTC)\n",
+            "",
+        )
+        assert result.rate_limited
+        assert any("session limit" in message.lower() for message in result.error_messages)
+
     def test_parse_ignores_clean_output(self) -> None:
         parser = ClaudeCodeOutputParser()
         result = parser.parse(
@@ -241,6 +258,16 @@ class TestClaudeCodeOutputParser:
         parser = ClaudeCodeOutputParser()
         events = parser.parse_stream_chunk(
             "You've hit your limit · resets 1pm (UTC)\n"
+        )
+        assert len(events) == 1
+        assert events[0]["type"] == "rate_limit"
+        assert events[0]["provider"] == "claude_code"
+        assert events[0]["status_code"] == 429
+
+    def test_parse_stream_chunk_emits_session_limit_event(self) -> None:
+        parser = ClaudeCodeOutputParser()
+        events = parser.parse_stream_chunk(
+            "You've hit your session limit · resets 3:20am (UTC)\n"
         )
         assert len(events) == 1
         assert events[0]["type"] == "rate_limit"
@@ -288,6 +315,25 @@ class TestStrategyClassifyResultRateLimit:
         result = s.classify_result(
             exit_code=1,
             stdout="You've hit your limit · resets 1pm (UTC)\n",
+            stderr="",
+        )
+        assert result.status == "failed"
+        assert result.failure_class == "integration_error"
+        assert result.provider_error_code == "429"
+        assert provider_error_requires_cooldown(
+            provider_error_code=result.provider_error_code,
+            retry_recommendation=None,
+        )
+
+    def test_claude_code_session_limit_emits_429_provider_error_code(self) -> None:
+        from moonmind.workflows.provider_failures import (
+            provider_error_requires_cooldown,
+        )
+
+        s = ClaudeCodeStrategy()
+        result = s.classify_result(
+            exit_code=1,
+            stdout="You've hit your session limit · resets 3:20am (UTC)\n",
             stderr="",
         )
         assert result.status == "failed"
