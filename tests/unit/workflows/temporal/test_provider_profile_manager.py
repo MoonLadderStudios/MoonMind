@@ -15,6 +15,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     HandoffReservation,
     PendingRequest,
     PRIORITY_PENDING_REQUESTS_PATCH,
+    QUEUE_ORDER_PENDING_REQUESTS_PATCH,
     SLOT_HANDOFF_RESERVATION_PATCH,
     VERIFY_PENDING_REQUESTS_PATCH,
     WORKFLOW_NAME,
@@ -923,6 +924,55 @@ class TestProviderProfileManagerHelpers:
         assert data["leases"]["p1"] == ["wf1"]
         assert data["cooldowns"]["p1"] == "2099-01-01T00:00:00+00:00"
 
+    def test_build_continue_as_new_preserves_pending_queue_order(self):
+        wf = self._make_workflow()
+        wf._pending_requests = [
+            PendingRequest(
+                "wf-older",
+                "codex_cli",
+                priority=0,
+                queue_order=100,
+                queued_at="2026-06-22T10:00:00+00:00",
+            )
+        ]
+
+        data = wf._build_continue_as_new_input()
+
+        assert data["pending_requests"] == [
+            {
+                "requester_workflow_id": "wf-older",
+                "runtime_id": "codex_cli",
+                "priority": 0,
+                "queue_order": 100,
+                "queued_at": "2026-06-22T10:00:00+00:00",
+                "execution_profile_ref": None,
+                "profile_selector": None,
+                "lease_group_id": None,
+            }
+        ]
+
+    def test_restore_state_preserves_pending_queue_order(self):
+        wf = self._make_workflow()
+        wf._restore_state(
+            {
+                "runtime_id": "codex_cli",
+                "pending_requests": [
+                    {
+                        "requester_workflow_id": "wf-older",
+                        "runtime_id": "codex_cli",
+                        "priority": "0",
+                        "queue_order": "100",
+                        "queued_at": "2026-06-22T10:00:00+00:00",
+                    }
+                ],
+            }
+        )
+
+        assert len(wf._pending_requests) == 1
+        restored = wf._pending_requests[0]
+        assert restored.queue_order == 100
+        assert restored.queued_at == "2026-06-22T10:00:00+00:00"
+
     def test_build_continue_as_new_preserves_handoff_reservations(self):
         wf = self._make_workflow()
         wf._handoff_reservations["run-1"] = HandoffReservation(
@@ -965,6 +1015,158 @@ class TestProviderProfileManagerHelpers:
         assert len(wf._pending_requests) == 1
         assert wf._pending_requests[0].execution_profile_ref == "p2"
         assert wf._pending_requests[0].lease_group_id == "run-1"
+
+    def test_request_slot_records_queue_metadata(self):
+        wf = self._make_workflow()
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.return_value = True
+            wf.request_slot(
+                {
+                    "requester_workflow_id": "run-1:agent:step-1",
+                    "runtime_id": "codex_cli",
+                    "priority": "0",
+                    "queue_order": "42",
+                    "queued_at": "2026-06-22T10:00:00+00:00",
+                }
+            )
+
+        assert wf._pending_requests[0].queue_order == 42
+        assert wf._pending_requests[0].queued_at == "2026-06-22T10:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_equal_priority_uses_queue_order_not_signal_arrival(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+        )
+        wf._pending_requests = [
+            PendingRequest("wf-newer", "codex_cli", priority=0, queue_order=200),
+            PendingRequest("wf-older", "codex_cli", priority=0, queue_order=100),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: patch_id in {
+                PRIORITY_PENDING_REQUESTS_PATCH,
+                QUEUE_ORDER_PENDING_REQUESTS_PATCH,
+            }
+            await wf._drain_queue()
+
+        assert assigned == [("wf-older", "p1")]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "wf-newer"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_priority_still_wins_over_queue_order(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+        )
+        wf._pending_requests = [
+            PendingRequest("wf-older-low", "codex_cli", priority=0, queue_order=100),
+            PendingRequest("wf-newer-high", "codex_cli", priority=10, queue_order=200),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: patch_id in {
+                PRIORITY_PENDING_REQUESTS_PATCH,
+                QUEUE_ORDER_PENDING_REQUESTS_PATCH,
+            }
+            await wf._drain_queue()
+
+        assert assigned == [("wf-newer-high", "p1")]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "wf-older-low"
+        ]
+
+    def test_missing_queue_order_preserves_arrival_order(self):
+        requests = [
+            PendingRequest("wf-b", "codex_cli", priority=0),
+            PendingRequest("wf-a", "codex_cli", priority=0),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=MoonMindProviderProfileManagerWorkflow._pending_request_sort_key,
+        )
+
+        assert [request.requester_workflow_id for request in ordered] == [
+            "wf-b",
+            "wf-a",
+        ]
+
+    def test_missing_queue_order_stays_ahead_of_explicit_newer_requests(self):
+        requests = [
+            PendingRequest("wf-legacy", "codex_cli", priority=0),
+            PendingRequest("wf-new", "codex_cli", priority=0, queue_order=1),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=MoonMindProviderProfileManagerWorkflow._pending_request_sort_key,
+        )
+
+        assert [request.requester_workflow_id for request in ordered] == [
+            "wf-legacy",
+            "wf-new",
+        ]
+
+    def test_missing_queue_order_can_use_queued_at_fallback(self):
+        requests = [
+            PendingRequest(
+                "wf-newer",
+                "codex_cli",
+                priority=0,
+                queued_at="2026-06-22T10:02:00+00:00",
+            ),
+            PendingRequest(
+                "wf-older",
+                "codex_cli",
+                priority=0,
+                queued_at="2026-06-22T10:01:00+00:00",
+            ),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=MoonMindProviderProfileManagerWorkflow._pending_request_sort_key,
+        )
+
+        assert [request.requester_workflow_id for request in ordered] == [
+            "wf-older",
+            "wf-newer",
+        ]
 
     @pytest.mark.asyncio
     async def test_acquire_slot_update_reserves_without_callback_signal(self):
