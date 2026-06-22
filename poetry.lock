@@ -5629,18 +5629,18 @@ tinycss2 = ">=0.6.0"
 
 [[package]]
 name = "temporalio"
-version = "1.28.0"
+version = "1.29.0"
 description = "Temporal.io Python SDK"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "temporalio-1.28.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:544e48028d83ffda51d6e0cdb1bf27babc868b3f63adb0e1613efcbbaab197a3"},
-    {file = "temporalio-1.28.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:737f3d9c470514ed0e4922ebe00ef4a186c82343e195d26b9c485e0bfcc4f14d"},
-    {file = "temporalio-1.28.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1b8ecc38c2cdae5efe8b127b1cbe726e9c92b10bc506753f1074957984fc6d7d"},
-    {file = "temporalio-1.28.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:17a9993342d4ba4ae0c4b37a95e8f2aa488379d0917a637d8fdd5f4332aad3e2"},
-    {file = "temporalio-1.28.0-cp310-abi3-win_amd64.whl", hash = "sha256:41381cbd68d1206c55750147118de3962bcc79229a61035296f3c0af44a3d006"},
-    {file = "temporalio-1.28.0.tar.gz", hash = "sha256:eb390ee968204a9f8fda91544d6f03497a7614acbfcc9862b5bd08a2d26edb04"},
+    {file = "temporalio-1.29.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:9d18f989fbea13014e3221de034fbd1945ec05499b663195f0eacb49cc922986"},
+    {file = "temporalio-1.29.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:28bc12b64a7ffc08f7709897d3a0c93faa8972227734669f248cb7de2ce3e69f"},
+    {file = "temporalio-1.29.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:dd02a107c3f5fa088ed5e4aeda9af91d11afbc53dfd5b28d730776354b159297"},
+    {file = "temporalio-1.29.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:950b42e05793762eb7b4b3809e78c9e9dcdf2f23f797aa939ac17eca8ad9b3d3"},
+    {file = "temporalio-1.29.0-cp310-abi3-win_amd64.whl", hash = "sha256:8969718f947c6b9df3b51ab4a71bad67abfce81a1023aa1a598a224b712b713a"},
+    {file = "temporalio-1.29.0.tar.gz", hash = "sha256:3fbfddc5f847956ca20c2e671d3f09cefdb2ab6f0d6a6d59664c6102e922f80b"},
 ]
 
 [package.dependencies]
@@ -5657,7 +5657,7 @@ grpc = ["grpcio (>=1.48.2,<2)"]
 lambda-worker-otel = ["opentelemetry-api (>=1.11.1,<2)", "opentelemetry-exporter-otlp-proto-grpc (>=1.11.1,<2)", "opentelemetry-sdk (>=1.11.1,<2)", "opentelemetry-sdk-extension-aws (>=2.0.0,<3)", "opentelemetry-semantic-conventions (>=0.40b0,<1)"]
 langgraph = ["langgraph (>=1.1.0)"]
 langsmith = ["langsmith (>=0.7.34,<0.9)"]
-openai-agents = ["mcp (>=1.9.4,<2)", "openai-agents (>=0.17.1)"]
+openai-agents = ["mcp (>=1.9.4,<2)", "openai-agents (>=0.17.5)"]
 opentelemetry = ["opentelemetry-api (>=1.11.1,<2)", "opentelemetry-sdk (>=1.11.1,<2)"]
 pydantic = ["pydantic (>=2.0.0,<3)"]
 strands-agents = ["strands-agents (>=1.39.0)"]
@@ -6505,4 +6505,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "f0209dab2163a07ba2ea527ab48cdf2b57611fb38da96d97587cf54fdf6c32f4"
+content-hash = "e001859c4214e6b1e27546a1759158923eaedac20a8f140c02cc238d98c2a803"
