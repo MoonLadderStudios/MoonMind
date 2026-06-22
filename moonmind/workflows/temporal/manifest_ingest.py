@@ -756,7 +756,14 @@ def _apply_manifest_node_update(
 import asyncio
 from datetime import timedelta
 
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, SearchAttributeKey, SearchAttributePair
+
+from moonmind.workflows.temporal.scheduled_start import (
+    MM_SCHEDULED_FOR_SEARCH_ATTRIBUTE,
+    temporal_scheduled_start_time,
+)
+
+MANIFEST_RECURRING_SCHEDULED_START_PATCH = "manifest-recurring-scheduled-start-v1"
 
 with workflow.unsafe.imports_passed_through():
     pass
@@ -784,6 +791,35 @@ class ManifestIngestWorkflow:
         self._running_tasks: dict[str, asyncio.Task[Any]] = {}
         self._workflow_id: str = info.workflow_id
         self._run_id: str = info.run_id
+
+    def _upsert_scheduled_for_search_attribute(self) -> None:
+        if not self._scheduled_start_patch_enabled():
+            return
+        scheduled_start = temporal_scheduled_start_time(workflow.info())
+        if scheduled_start is None:
+            return
+        try:
+            workflow.upsert_search_attributes(
+                [
+                    SearchAttributePair(
+                        SearchAttributeKey.for_datetime(
+                            MM_SCHEDULED_FOR_SEARCH_ATTRIBUTE
+                        ),
+                        scheduled_start,
+                    )
+                ]
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to upsert manifest scheduled_for search attribute",
+                extra={"error": str(exc)},
+            )
+
+    def _scheduled_start_patch_enabled(self) -> bool:
+        try:
+            return workflow.patched(MANIFEST_RECURRING_SCHEDULED_START_PATCH)
+        except Exception:
+            return False
 
     async def _compile_manifest(
         self,
@@ -846,6 +882,7 @@ class ManifestIngestWorkflow:
         self._manifest_ref = parameters.get("manifestArtifactRef")
         if not self._manifest_ref:
             raise ValueError("manifestArtifactRef is required")
+        self._upsert_scheduled_for_search_attribute()
 
         requested_by = _resolve_workflow_requested_by(
             parameters,

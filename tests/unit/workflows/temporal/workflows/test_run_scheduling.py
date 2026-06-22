@@ -53,6 +53,7 @@ def test_initializes_recurring_run_from_temporal_scheduled_start_time(monkeypatc
         lambda self: ("user", "user-1"),
     )
     monkeypatch.setattr(workflow, "memo", lambda: {})
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
     monkeypatch.setattr(
         workflow,
         "info",
@@ -86,6 +87,44 @@ def test_initializes_recurring_run_from_temporal_scheduled_start_time(monkeypatc
 
     assert result[-1] == scheduled_start.isoformat()
     assert workflow_instance._scheduled_for == scheduled_start.isoformat()
+
+def test_initializes_recurring_run_from_string_temporal_scheduled_start_time(
+    monkeypatch,
+):
+    scheduled_start = "2026-06-22T09:30:00+00:00"
+    workflow_instance = MoonMindUserWorkflow()
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "user-1"),
+    )
+    monkeypatch.setattr(workflow, "memo", lambda: {})
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        workflow,
+        "info",
+        lambda: SimpleNamespace(
+            typed_search_attributes=None,
+            search_attributes={"TemporalScheduledStartTime": scheduled_start},
+        ),
+    )
+
+    result = workflow_instance._initialize_from_payload(
+        {
+            "workflow_type": "MoonMind.UserWorkflow",
+            "initial_parameters": {
+                "system": {
+                    "recurrence": {
+                        "definitionId": "364cc408-29c9-4745-beae-bad55aacd9b5"
+                    }
+                }
+            },
+        }
+    )
+
+    assert result[-1] == scheduled_start
+    assert workflow_instance._scheduled_for == scheduled_start
 
 @pytest.mark.asyncio
 async def test_run_workflow_scheduled(mock_run_environment):

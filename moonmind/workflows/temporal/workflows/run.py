@@ -133,6 +133,7 @@ from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
+from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
 from moonmind.workflows.temporal.activity_catalog import (
     INTEGRATIONS_TASK_QUEUE,
     WORKFLOW_TASK_QUEUE,
@@ -376,6 +377,7 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
+RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -5384,8 +5386,14 @@ class MoonMindRunWorkflow:
             "scheduledFor",
             "scheduled_for",
         )
-        if not scheduled_for and self._has_recurrence_metadata(parameters):
-            scheduled_for = self._temporal_scheduled_start_time()
+        if (
+            not scheduled_for
+            and self._has_recurrence_metadata(parameters)
+            and workflow.patched(RUN_RECURRING_SCHEDULED_START_PATCH)
+        ):
+            temporal_scheduled_for = temporal_scheduled_start_time(workflow.info())
+            if temporal_scheduled_for is not None:
+                scheduled_for = temporal_scheduled_for.isoformat()
 
         if input_ref:
             self._input_ref = input_ref
@@ -5402,29 +5410,6 @@ class MoonMindRunWorkflow:
             return False
         recurrence_payload = system_payload.get("recurrence")
         return isinstance(recurrence_payload, Mapping) and bool(recurrence_payload)
-
-    def _temporal_scheduled_start_time(self) -> Optional[str]:
-        info = workflow.info()
-        scheduled_start_key = SearchAttributeKey.for_datetime(
-            "TemporalScheduledStartTime"
-        )
-        typed_search_attributes = getattr(info, "typed_search_attributes", None)
-        if typed_search_attributes is not None:
-            scheduled_start = typed_search_attributes.get(scheduled_start_key)
-            if isinstance(scheduled_start, datetime):
-                return scheduled_start.isoformat()
-
-        search_attributes = getattr(info, "search_attributes", {}) or {}
-        values = search_attributes.get("TemporalScheduledStartTime") or []
-        if not values:
-            return None
-        scheduled_start = values[0]
-        if isinstance(scheduled_start, datetime):
-            return scheduled_start.isoformat()
-        if isinstance(scheduled_start, str):
-            normalized = scheduled_start.strip()
-            return normalized or None
-        return None
 
     def _record_bounded_story_loop_context(
         self,
