@@ -1443,6 +1443,140 @@ class TestProviderProfileManagerHelpers:
         assert assigned == [("wf-older", "p1")]
 
     @pytest.mark.asyncio
+    async def test_ordering_lookup_bounds_schedule_to_start(self):
+        # The best-effort ordering lookup must bound how long it waits for a
+        # worker so a starved activity task queue cannot leave slots idle.
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._pending_requests = [
+            PendingRequest("wf-older", "codex_cli", priority=0),
+            PendingRequest("wf-newer", "codex_cli", priority=0),
+        ]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(return_value={"orders": {}})
+            await wf._order_pending_requests_by_schedule()
+
+        _, kwargs = mock_wf.execute_activity.call_args
+        assert kwargs["schedule_to_start_timeout"] == timedelta(seconds=30)
+
+    @pytest.mark.asyncio
+    async def test_resolved_orders_cached_across_drain_cycles(self):
+        # Immutable scheduled/created times are cached, so a second drain cycle
+        # with the same pending ids does not re-query the database.
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = self._single_slot_profile()
+        wf._pending_requests = [
+            PendingRequest("wf-newer", "codex_cli", priority=0),
+            PendingRequest("wf-older", "codex_cli", priority=0),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        orders = {
+            "wf-newer": {"scheduled_for": "2026-06-22T10:05:00+00:00"},
+            "wf-older": {"scheduled_for": "2026-06-22T10:00:00+00:00"},
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(return_value={"orders": orders})
+            # First cycle assigns the single slot to the earliest-scheduled
+            # request and queries the ordering activity.
+            await wf._drain_queue()
+            assert assigned == [("wf-older", "p1")]
+            mock_wf.execute_activity.assert_awaited_once()
+
+            # Free the slot; the still-pending request is already cached.
+            wf._profiles["p1"] = self._single_slot_profile()
+            await wf._drain_queue()
+
+        # The remaining request drained without a second ordering lookup.
+        assert assigned == [("wf-older", "p1"), ("wf-newer", "p1")]
+        mock_wf.execute_activity.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resolved_orders_only_queries_uncached_ids(self):
+        # When a new request joins an already-resolved set, only the new id is
+        # looked up.
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._resolved_orders = {
+            "wf-older": {"scheduled_for": "2026-06-22T10:00:00+00:00"},
+        }
+        wf._pending_requests = [
+            PendingRequest("wf-older", "codex_cli", priority=0),
+            PendingRequest("wf-newer", "codex_cli", priority=0),
+        ]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(
+                return_value={
+                    "orders": {
+                        "wf-newer": {"scheduled_for": "2026-06-22T10:05:00+00:00"}
+                    }
+                }
+            )
+            ordered = await wf._order_pending_requests_by_schedule()
+
+        args, _ = mock_wf.execute_activity.call_args
+        assert args[1]["workflow_ids"] == ["wf-newer"]
+        assert [req.requester_workflow_id for req in ordered] == [
+            "wf-older",
+            "wf-newer",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_resolved_orders_cache_drops_stale_ids(self):
+        # Cached entries for requests that are no longer pending are pruned so
+        # the cache stays bounded for this long-lived workflow.
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._resolved_orders = {
+            "wf-gone": {"scheduled_for": "2026-06-22T09:00:00+00:00"},
+            "wf-here": {"scheduled_for": "2026-06-22T10:00:00+00:00"},
+        }
+        wf._pending_requests = [
+            PendingRequest("wf-here", "codex_cli", priority=0),
+        ]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(return_value={"orders": {}})
+            await wf._order_pending_requests_by_schedule()
+
+        # Nothing new to look up, and the stale id was dropped.
+        mock_wf.execute_activity.assert_not_awaited()
+        assert set(wf._resolved_orders) == {"wf-here"}
+
+    @pytest.mark.asyncio
     async def test_acquire_slot_update_reserves_without_callback_signal(self):
         wf = self._make_workflow()
         wf._runtime_id = "pentestgpt"

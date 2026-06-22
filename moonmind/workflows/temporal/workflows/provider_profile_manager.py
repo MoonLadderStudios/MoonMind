@@ -318,6 +318,12 @@ class MoonMindProviderProfileManagerWorkflow:
         self._has_new_events: bool = False
         self._profile_refresh_requested: bool = False
         self._has_db_profile_snapshot: bool = False
+        # Cache of resolved scheduled/created ordering keyed by queue-order
+        # workflow id. Workflow creation/scheduled times are immutable, so a
+        # resolved entry never has to be re-queried; this keeps the
+        # ``provider_profile.pending_request_order`` activity from re-hitting the
+        # database for the same ids on every drain cycle.
+        self._resolved_orders: dict[str, dict[str, Any]] = {}
 
     # -- Signals ---------------------------------------------------------------
 
@@ -1032,15 +1038,38 @@ class MoonMindProviderProfileManagerWorkflow:
         If the ordering lookup activity fails, this logs enough context to
         diagnose the failure and falls back to the deterministic queue-order /
         priority sort so slot assignment is never blocked for that drain cycle.
+
+        Resolved orders are cached per queue-order workflow id (their scheduled
+        and created timestamps are immutable), so each id is only looked up
+        once; subsequent drain cycles reuse the cache instead of re-querying the
+        database. The lookup is also bounded with a ``schedule_to_start_timeout``
+        so that a starved activity task queue cannot leave available
+        provider-profile slots idle indefinitely waiting on this best-effort,
+        non-critical ordering call -- it times out and falls back to the
+        deterministic queue-order drain instead.
         """
         lookup_ids = self._pending_request_order_lookup_ids()
-        order_by_workflow_id: dict[str, dict[str, Any]] = {}
-        if lookup_ids:
+        # Drop cached entries for ids that are no longer pending so the cache
+        # stays bounded over the lifetime of this long-lived workflow.
+        if self._resolved_orders:
+            lookup_set = set(lookup_ids)
+            self._resolved_orders = {
+                workflow_id: order
+                for workflow_id, order in self._resolved_orders.items()
+                if workflow_id in lookup_set
+            }
+        uncached_ids = [
+            workflow_id
+            for workflow_id in lookup_ids
+            if workflow_id not in self._resolved_orders
+        ]
+        if uncached_ids:
             try:
                 result = await workflow.execute_activity(
                     "provider_profile.pending_request_order",
-                    {"workflow_ids": lookup_ids},
+                    {"workflow_ids": uncached_ids},
                     task_queue=ACTIVITY_TASK_QUEUE,
+                    schedule_to_start_timeout=timedelta(seconds=30),
                     start_to_close_timeout=timedelta(seconds=30),
                     retry_policy=RetryPolicy(
                         initial_interval=timedelta(seconds=2),
@@ -1051,7 +1080,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 )
                 orders = (result or {}).get("orders")
                 if isinstance(orders, dict):
-                    order_by_workflow_id = orders
+                    for workflow_id in uncached_ids:
+                        resolved = orders.get(workflow_id)
+                        self._resolved_orders[workflow_id] = (
+                            resolved if isinstance(resolved, dict) else {}
+                        )
             except Exception:
                 self._get_logger().warning(
                     "pending_request_order activity failed; falling back to "
@@ -1066,7 +1099,7 @@ class MoonMindProviderProfileManagerWorkflow:
         return sorted(
             self._pending_requests,
             key=lambda request: self._scheduled_pending_request_sort_key(
-                request, order_by_workflow_id
+                request, self._resolved_orders
             ),
         )
 
