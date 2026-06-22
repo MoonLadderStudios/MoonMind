@@ -650,7 +650,10 @@ async def test_mm693_zero_interval_docker_capability_probe_yields(
         input_text: str | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
-        if command[:4] == ("docker", "exec", "ctr-1", "docker"):
+        if (
+            command[:3] == ("docker", "exec", "-e")
+            and command[4:6] == ("ctr-1", "docker")
+        ):
             return 1, "", "docker daemon unavailable"
         raise AssertionError(f"unexpected command: {command}")
 

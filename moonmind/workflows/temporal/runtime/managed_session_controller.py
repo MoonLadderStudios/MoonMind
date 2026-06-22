@@ -2764,6 +2764,8 @@ class DockerCodexManagedSessionController:
                         }
                     }
                 }
+            else:
+                docker_capability_metadata = {}
             docker_capability_metadata = self._merge_capability_metadata(
                 {
                     "capabilities": {
