@@ -1534,12 +1534,20 @@ tbody tr:hover {
   background: transparent;
 }
 
+.workflow-list-data-slab .queue-table-wrapper:has(
+  .workflow-list-header-filter-popover,
+  .td-workflow-actions-popover
+) {
+  overflow: visible;
+}
+
 .queue-table-wrapper table {
   border: 0;
   border-collapse: separate;
   border-spacing: 0;
   border-radius: 0;
   background: transparent;
+  overflow: visible;
   table-layout: fixed;
   max-width: 100%;
   margin: 0;
