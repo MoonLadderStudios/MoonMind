@@ -58,6 +58,9 @@ _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
 _MANAGED_SESSION_CONTAINER_UID = 1000
+_EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
+_CLEAR_REQUEST_METADATA_KEY = "lastClearRequest"
+_EMPTY_ASSISTANT_TURN_METADATA_KEY = "emptyAssistantTurn"
 _MANAGED_SESSION_CONTAINER_GID = 1000
 _MANAGED_SESSION_CONTAINER_USER = (
     f"{_MANAGED_SESSION_CONTAINER_UID}:{_MANAGED_SESSION_CONTAINER_GID}"
@@ -152,6 +155,41 @@ def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
         "lastAssistantText": truncated,
         "lastAssistantTextTruncated": True,
         "lastAssistantTextOriginalChars": len(normalized),
+    }
+
+
+def _is_empty_assistant_turn_response(
+    response: CodexManagedSessionTurnResponse,
+) -> bool:
+    if response.metadata.get("failureCause") == _EMPTY_ASSISTANT_FAILURE_CAUSE:
+        return True
+    retry_action = str(response.metadata.get("retryRecommendedAction") or "").strip()
+    reason = str(response.metadata.get("reason") or "").strip()
+    return retry_action == "clear_session" and "produced no assistant output" in reason
+
+
+def _empty_assistant_turn_metadata(
+    record_metadata: Mapping[str, Any],
+    response: CodexManagedSessionTurnResponse,
+) -> dict[str, Any]:
+    existing = record_metadata.get(_EMPTY_ASSISTANT_TURN_METADATA_KEY)
+    previous_count = 0
+    if isinstance(existing, Mapping):
+        try:
+            previous_count = int(existing.get("consecutiveCount") or 0)
+        except (TypeError, ValueError):
+            previous_count = 0
+    count = max(previous_count, 0) + 1
+    return {
+        "failureCause": _EMPTY_ASSISTANT_FAILURE_CAUSE,
+        "consecutiveCount": count,
+        "lastTurnId": response.turn_id,
+        "lastSessionEpoch": response.session_state.session_epoch,
+        "lastThreadId": response.session_state.thread_id,
+        "retryRecommendedAction": "clear_session",
+        "lastReason": str(response.metadata.get("reason") or "").strip()
+        or "codex app-server turn produced no assistant output",
+        "updatedAt": datetime.now(tz=UTC).isoformat(),
     }
 
 def _managed_session_docker_network(
@@ -2649,6 +2687,17 @@ class DockerCodexManagedSessionController:
                 assistant_text = terminal_response.metadata.get("assistantText")
                 if isinstance(assistant_text, str) and assistant_text.strip():
                     record_metadata.update(_last_assistant_text_metadata(assistant_text))
+                    record_metadata.pop(_EMPTY_ASSISTANT_TURN_METADATA_KEY, None)
+                empty_assistant_turn = _is_empty_assistant_turn_response(
+                    terminal_response
+                )
+                if empty_assistant_turn:
+                    record_metadata[_EMPTY_ASSISTANT_TURN_METADATA_KEY] = (
+                        _empty_assistant_turn_metadata(
+                            record_metadata,
+                            terminal_response,
+                        )
+                    )
                 updated_record = await self._session_store.update(
                     request.session_id,
                     session_epoch=terminal_response.session_state.session_epoch,
@@ -2683,6 +2732,28 @@ class DockerCodexManagedSessionController:
                                 "action": "send_turn",
                                 "assistantText": terminal_response.metadata.get("assistantText"),
                                 "reason": request.reason,
+                            },
+                        )
+                    elif empty_assistant_turn:
+                        await self._emit_session_event(
+                            record=updated_record,
+                            kind="empty_assistant_turn_detected",
+                            text=(
+                                "Codex app-server completed a turn without "
+                                "assistant output; session clear is recommended."
+                            ),
+                            turn_id=terminal_response.turn_id,
+                            active_turn_id=(
+                                terminal_response.session_state.active_turn_id
+                            ),
+                            metadata={
+                                "action": "send_turn",
+                                "failureCause": _EMPTY_ASSISTANT_FAILURE_CAUSE,
+                                "retryRecommendedAction": "clear_session",
+                                "reason": terminal_response.metadata.get("reason"),
+                                "consecutiveCount": record_metadata[
+                                    _EMPTY_ASSISTANT_TURN_METADATA_KEY
+                                ]["consecutiveCount"],
                             },
                         )
         return terminal_response
@@ -2787,6 +2858,35 @@ class DockerCodexManagedSessionController:
         if session_store is not None:
             previous_record = session_store.load(request.session_id)
             if previous_record is not None:
+                last_clear = previous_record.metadata.get(_CLEAR_REQUEST_METADATA_KEY)
+                if (
+                    request.request_id
+                    and isinstance(last_clear, Mapping)
+                    and last_clear.get("requestId") == request.request_id
+                    and last_clear.get("status") == "completed"
+                    and (
+                        previous_record.session_epoch
+                        == last_clear.get("newSessionEpoch")
+                    )
+                    and previous_record.thread_id == last_clear.get("newThreadId")
+                    and previous_record.latest_reset_boundary_ref
+                ):
+                    return CodexManagedSessionHandle(
+                        runtimeFamily=request.runtime_family,
+                        sessionState=previous_record.session_state(),
+                        status=self._handle_status_from_record_status(
+                            previous_record.status
+                        ),
+                        imageRef=previous_record.image_ref,
+                        controlUrl=previous_record.control_url,
+                        metadata={
+                            "idempotentReplay": True,
+                            "requestId": request.request_id,
+                            "latestResetBoundaryRef": (
+                                previous_record.latest_reset_boundary_ref
+                            ),
+                        },
+                    )
                 if (
                     previous_record.session_epoch == request.session_epoch + 1
                     and previous_record.container_id == request.container_id
@@ -2814,6 +2914,17 @@ class DockerCodexManagedSessionController:
         )
         if previous_record is not None:
             assert session_store is not None
+            record_metadata = dict(previous_record.metadata)
+            if request.request_id:
+                record_metadata[_CLEAR_REQUEST_METADATA_KEY] = {
+                    "requestId": request.request_id,
+                    "status": "accepted",
+                    "previousSessionEpoch": previous_record.session_epoch,
+                    "newSessionEpoch": handle.session_state.session_epoch,
+                    "previousThreadId": previous_record.thread_id,
+                    "newThreadId": handle.session_state.thread_id,
+                    "reason": request.reason,
+                }
             updated_record = await session_store.update(
                 request.session_id,
                 session_epoch=handle.session_state.session_epoch,
@@ -2825,13 +2936,44 @@ class DockerCodexManagedSessionController:
                 status=self._record_status_from_handle_status(handle.status),
                 updated_at=datetime.now(tz=UTC),
                 error_message=None,
+                metadata=record_metadata,
             )
             if self._session_supervisor is not None:
-                await self._session_supervisor.publish_reset_artifacts(
+                updated_record = await self._session_supervisor.publish_reset_artifacts(
                     previous_record=previous_record,
                     record=updated_record,
                     action="clear_session",
                     reason=request.reason,
+                )
+            if request.request_id:
+                completed_metadata = dict(updated_record.metadata)
+                raw_clear_metadata = completed_metadata.get(_CLEAR_REQUEST_METADATA_KEY)
+                clear_metadata = (
+                    dict(raw_clear_metadata)
+                    if isinstance(raw_clear_metadata, Mapping)
+                    else {}
+                )
+                clear_metadata.update(
+                    {
+                        "requestId": request.request_id,
+                        "status": "completed",
+                        "previousSessionEpoch": previous_record.session_epoch,
+                        "newSessionEpoch": updated_record.session_epoch,
+                        "previousThreadId": previous_record.thread_id,
+                        "newThreadId": updated_record.thread_id,
+                        "latestControlEventRef": (
+                            updated_record.latest_control_event_ref
+                        ),
+                        "latestResetBoundaryRef": (
+                            updated_record.latest_reset_boundary_ref
+                        ),
+                    }
+                )
+                completed_metadata[_CLEAR_REQUEST_METADATA_KEY] = clear_metadata
+                await session_store.update(
+                    request.session_id,
+                    metadata=completed_metadata,
+                    updated_at=datetime.now(tz=UTC),
                 )
         else:
             await self._persist_handle_transition(

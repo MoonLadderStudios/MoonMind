@@ -599,6 +599,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         binding=binding,
                         new_thread_id=reset_thread_id,
                         reason="retry_after_empty_assistant_output",
+                        request_id=(
+                            f"{binding.agent_run_id}:empty-assistant-clear:"
+                            f"{previous_locator.session_epoch}:"
+                            f"{previous_locator.thread_id}"
+                        ),
                     )
                     current_locator = self._locator_from_state(
                         session_state=reset_handle.session_state,
@@ -631,6 +636,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         retry_metadata = _turn_failure_metadata_from_activity_error(
                             retry_error
                         )
+                        if _is_empty_assistant_turn_failure(retry_metadata):
+                            retry_metadata["selfHealExhausted"] = True
+                            retry_metadata["selfHealAction"] = "clear_session"
+                            retry_metadata["selfHealAttempts"] = 1
                         retry_metadata["sessionInterventions"] = session_interventions
                         retry_metadata["priorTurnFailure"] = turn_metadata
                         publication = await self._publish_failure_artifacts(
@@ -1055,20 +1064,34 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         binding: CodexManagedSessionBinding,
         new_thread_id: str,
         reason: str | None = None,
+        request_id: str | None = None,
     ) -> CodexManagedSessionHandle:
         locator = await self._current_locator(binding)
-        handle = await self._coerce_handle(
-            self._clear_remote_session(
-                CodexManagedSessionClearRequest(
-                    sessionId=locator.session_id,
-                    sessionEpoch=locator.session_epoch,
-                    containerId=locator.container_id,
-                    threadId=locator.thread_id,
-                    newThreadId=new_thread_id,
-                    reason=reason,
-                )
+        try:
+            handle = await self._clear_session_with_locator(
+                locator=locator,
+                new_thread_id=new_thread_id,
+                reason=reason,
+                request_id=request_id,
             )
-        )
+        except Exception as exc:
+            if not _is_session_locator_mismatch_error(exc):
+                raise
+            refreshed_locator = await self._current_locator(binding)
+            if (
+                refreshed_locator.session_epoch > locator.session_epoch
+                and refreshed_locator.thread_id == new_thread_id
+            ):
+                handle = await self._coerce_handle(
+                    self._session_status(refreshed_locator)
+                )
+            else:
+                handle = await self._clear_session_with_locator(
+                    locator=refreshed_locator,
+                    new_thread_id=new_thread_id,
+                    reason=reason,
+                    request_id=request_id,
+                )
         await self._attach_runtime_handles(
             {
                 "sessionEpoch": handle.session_state.session_epoch,
@@ -1086,6 +1109,28 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
+
+    async def _clear_session_with_locator(
+        self,
+        *,
+        locator: CodexManagedSessionLocator,
+        new_thread_id: str,
+        reason: str | None,
+        request_id: str | None,
+    ) -> CodexManagedSessionHandle:
+        return await self._coerce_handle(
+            self._clear_remote_session(
+                CodexManagedSessionClearRequest(
+                    sessionId=locator.session_id,
+                    sessionEpoch=locator.session_epoch,
+                    containerId=locator.container_id,
+                    threadId=locator.thread_id,
+                    newThreadId=new_thread_id,
+                    reason=reason,
+                    requestId=request_id,
+                )
+            )
+        )
 
     async def interrupt_turn(
         self,
