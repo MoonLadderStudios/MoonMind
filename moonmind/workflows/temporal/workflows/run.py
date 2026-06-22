@@ -5384,6 +5384,8 @@ class MoonMindRunWorkflow:
             "scheduledFor",
             "scheduled_for",
         )
+        if not scheduled_for and self._has_recurrence_metadata(parameters):
+            scheduled_for = self._temporal_scheduled_start_time()
 
         if input_ref:
             self._input_ref = input_ref
@@ -5393,6 +5395,36 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _has_recurrence_metadata(self, parameters: Mapping[str, Any]) -> bool:
+        system_payload = parameters.get("system")
+        if not isinstance(system_payload, Mapping):
+            return False
+        recurrence_payload = system_payload.get("recurrence")
+        return isinstance(recurrence_payload, Mapping) and bool(recurrence_payload)
+
+    def _temporal_scheduled_start_time(self) -> Optional[str]:
+        info = workflow.info()
+        scheduled_start_key = SearchAttributeKey.for_datetime(
+            "TemporalScheduledStartTime"
+        )
+        typed_search_attributes = getattr(info, "typed_search_attributes", None)
+        if typed_search_attributes is not None:
+            scheduled_start = typed_search_attributes.get(scheduled_start_key)
+            if isinstance(scheduled_start, datetime):
+                return scheduled_start.isoformat()
+
+        search_attributes = getattr(info, "search_attributes", {}) or {}
+        values = search_attributes.get("TemporalScheduledStartTime") or []
+        if not values:
+            return None
+        scheduled_start = values[0]
+        if isinstance(scheduled_start, datetime):
+            return scheduled_start.isoformat()
+        if isinstance(scheduled_start, str):
+            normalized = scheduled_start.strip()
+            return normalized or None
+        return None
 
     def _record_bounded_story_loop_context(
         self,

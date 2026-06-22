@@ -566,7 +566,6 @@ class TemporalClientAdapter:
             k: v if isinstance(v, list) else [v]
             for k, v in (search_attributes or {}).items()
         }
-        formatted_sa["mm_scheduled_for"] = ["{{.ScheduleTime}}"]
         typed_search_attributes = _build_typed_search_attributes(formatted_sa)
 
         try:
