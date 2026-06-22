@@ -203,7 +203,43 @@ def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> 
             imageRef="moonmind:latest",
         )
 
-def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
+def test_mm866_launch_request_serializes_lazy_docker_capability_contract() -> None:
+    request = LaunchCodexManagedSessionRequest(
+        agentRunId="task-123",
+        sessionId="sess-123",
+        threadId="thread-1",
+        workspacePath="/work/task/repo",
+        sessionWorkspacePath="/work/task/session",
+        artifactSpoolPath="/work/task/artifacts",
+        codexHomePath="/work/task/codex-home",
+        imageRef="moonmind:latest",
+        dockerCapability={
+            "allowed": True,
+            "mode": "sidecar-dind-rootless",
+            "activation": "on_demand",
+            "state": "not_started",
+            "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
+            "composeSupport": True,
+            "timeoutSeconds": 30,
+            "intervalSeconds": 1,
+        },
+    )
+
+    payload = request.model_dump(mode="json", by_alias=True)
+
+    assert payload["dockerCapability"] == {
+        "allowed": True,
+        "mode": "sidecar-dind-rootless",
+        "activation": "on_demand",
+        "state": "not_started",
+        "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
+        "composeSupport": True,
+        "manifestImageRef": None,
+        "timeoutSeconds": 30.0,
+        "intervalSeconds": 1.0,
+    }
+
+def test_mm866_launch_request_accepts_legacy_required_docker_capability_payload() -> None:
     request = LaunchCodexManagedSessionRequest(
         agentRunId="task-123",
         sessionId="sess-123",
@@ -215,25 +251,18 @@ def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
         imageRef="moonmind:latest",
         dockerCapability={
             "required": True,
-            "mode": "sidecar-dind-rootless",
+            "mode": "sidecar-dind",
             "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
             "composeSupport": True,
-            "timeoutSeconds": 30,
-            "intervalSeconds": 1,
         },
     )
 
     payload = request.model_dump(mode="json", by_alias=True)
 
-    assert payload["dockerCapability"] == {
-        "required": True,
-        "mode": "sidecar-dind-rootless",
-        "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
-        "composeSupport": True,
-        "manifestImageRef": None,
-        "timeoutSeconds": 30.0,
-        "intervalSeconds": 1.0,
-    }
+    assert payload["dockerCapability"]["allowed"] is True
+    assert payload["dockerCapability"]["activation"] == "on_launch"
+    assert payload["dockerCapability"]["state"] == "not_started"
+    assert "required" not in payload["dockerCapability"]
 
 def test_launch_codex_managed_session_request_rejects_local_control_mode() -> None:
     with pytest.raises(ValidationError, match="Input should be 'remote_container'"):

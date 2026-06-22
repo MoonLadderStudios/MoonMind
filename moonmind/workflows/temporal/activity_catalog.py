@@ -598,15 +598,6 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
-            activity_type="provider_profile.pending_request_order",
-            family="provider_profile",
-            capability_class="artifacts",
-            task_queue=cfg.activity_artifacts_task_queue,
-            fleet=ARTIFACTS_FLEET,
-            timeouts=TemporalActivityTimeouts(10, 30),
-            retries=_activity_retries(max_attempts=2, max_interval_seconds=10),
-        ),
-        TemporalActivityDefinition(
             activity_type="provider_profile.ensure_manager",
             family="provider_profile",
             capability_class="artifacts",
@@ -644,6 +635,15 @@ def build_default_activity_catalog(
         ),
         TemporalActivityDefinition(
             activity_type="provider_profile.sync_slot_leases",
+            family="provider_profile",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
+        ),
+        TemporalActivityDefinition(
+            activity_type="provider_profile.pending_request_order",
             family="provider_profile",
             capability_class="artifacts",
             task_queue=cfg.activity_artifacts_task_queue,

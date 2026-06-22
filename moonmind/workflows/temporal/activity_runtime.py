@@ -152,6 +152,8 @@ from moonmind.schemas.managed_session_models import (
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionEnsureDockerSidecarRequest,
+    ManagedSessionEnsureDockerSidecarResponse,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
@@ -914,6 +916,11 @@ class ManagedSessionController(Protocol):
     ) -> CodexManagedSessionHandle | Mapping[str, Any]:
         pass
 
+    async def ensure_docker_sidecar(
+        self, request: ManagedSessionEnsureDockerSidecarRequest, /
+    ) -> ManagedSessionEnsureDockerSidecarResponse | Mapping[str, Any]:
+        pass
+
     async def terminate_session(
         self, request: TerminateCodexManagedSessionRequest, /
     ) -> CodexManagedSessionHandle | Mapping[str, Any]:
@@ -1125,10 +1132,6 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "workspace.apply_policy": ("sandbox", "workspace_apply_policy"),
     "workspace.classify_git_effect": ("sandbox", "workspace_classify_git_effect"),
     "provider_profile.list": ("artifacts", "provider_profile_list"),
-    "provider_profile.pending_request_order": (
-        "artifacts",
-        "provider_profile_pending_request_order",
-    ),
     "provider_profile.ensure_manager": ("artifacts", "provider_profile_ensure_manager"),
     "provider_profile.reset_manager": ("artifacts", "provider_profile_reset_manager"),
     "provider_profile.manager_state": ("artifacts", "provider_profile_manager_state"),
@@ -1139,6 +1142,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "provider_profile.sync_slot_leases": (
         "artifacts",
         "provider_profile_sync_slot_leases",
+    ),
+    "provider_profile.pending_request_order": (
+        "artifacts",
+        "provider_profile_pending_request_order",
     ),
     "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
     "oauth_session.start_auth_runner": ("agent_runtime", "oauth_session_start_auth_runner"),
@@ -1213,6 +1220,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.clear_session": (
         "agent_runtime",
         "agent_runtime_clear_session",
+    ),
+    "agent_runtime.ensure_docker_sidecar": (
+        "agent_runtime",
+        "agent_runtime_ensure_docker_sidecar",
     ),
     "agent_runtime.terminate_session": (
         "agent_runtime",
@@ -8059,6 +8070,35 @@ class TemporalAgentRuntimeActivities:
             response,
             activity_type="agent_runtime.clear_session",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_ensure_docker_sidecar(
+        self,
+        request: Mapping[str, Any]
+        | ManagedSessionEnsureDockerSidecarRequest
+        | None = None,
+        /,
+    ) -> ManagedSessionEnsureDockerSidecarResponse:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.ensure_docker_sidecar"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarRequest,
+        )
+        response = await _await_with_activity_heartbeats(
+            controller.ensure_docker_sidecar(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.ensure_docker_sidecar",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+            },
+        )
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarResponse,
         )
 
     async def agent_runtime_terminate_session(
