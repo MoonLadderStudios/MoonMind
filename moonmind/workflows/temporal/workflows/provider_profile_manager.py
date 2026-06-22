@@ -52,10 +52,15 @@ PRIORITY_PENDING_REQUESTS_PATCH = (
 QUEUE_ORDER_PENDING_REQUESTS_PATCH = (
     "provider-profile-manager-queue-order-pending-requests-v1"
 )
+SCHEDULED_PENDING_REQUESTS_PATCH = (
+    "provider-profile-manager-scheduled-pending-requests-v1"
+)
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
 _VERIFY_WORKFLOW_STATUS_BATCH_SIZE = 100
+_PENDING_REQUEST_ORDER_BATCH_SIZE = 100
+_FAR_FUTURE_SORT_VALUE = "9999-12-31T23:59:59.999999+00:00"
 
 logger = logging.getLogger(__name__)
 
@@ -915,6 +920,7 @@ class MoonMindProviderProfileManagerWorkflow:
         remaining: list[PendingRequest] = []
         leases_changed = False
         pending_requests = self._pending_requests
+        order_by_workflow_id: dict[str, dict[str, Any]] = {}
         if workflow.patched(PRIORITY_PENDING_REQUESTS_PATCH):
             pending_requests = sorted(
                 self._pending_requests,
@@ -925,6 +931,17 @@ class MoonMindProviderProfileManagerWorkflow:
                 self._pending_requests,
                 key=self._pending_request_sort_key,
             )
+        if workflow.patched(SCHEDULED_PENDING_REQUESTS_PATCH):
+            resolved_order = await self._resolve_pending_request_order()
+            if resolved_order is not None:
+                order_by_workflow_id = resolved_order
+                pending_requests = sorted(
+                    self._pending_requests,
+                    key=lambda request: self._scheduled_pending_request_sort_key(
+                        request,
+                        order_by_workflow_id,
+                    ),
+                )
         for req in pending_requests:
             # Check if this requester already has a lease (e.g. from a retried workflow task)
             existing_profile_id = None
@@ -993,6 +1010,90 @@ class MoonMindProviderProfileManagerWorkflow:
             request.queue_order,
             queued_at,
         )
+
+    @staticmethod
+    def _pending_request_order_workflow_id(request: PendingRequest) -> str:
+        return request.lease_group_id or request.requester_workflow_id
+
+    @classmethod
+    def _scheduled_pending_request_sort_key(
+        cls,
+        request: PendingRequest,
+        order_by_workflow_id: dict[str, dict[str, Any]],
+    ) -> tuple[int, str, str, str, str]:
+        workflow_id = cls._pending_request_order_workflow_id(request)
+        ordering = order_by_workflow_id.get(workflow_id, {})
+        scheduled_for = cls._normalize_order_timestamp(ordering.get("scheduled_for"))
+        created_at = cls._normalize_order_timestamp(ordering.get("created_at"))
+        return (
+            -request.priority,
+            scheduled_for or _FAR_FUTURE_SORT_VALUE,
+            created_at or _FAR_FUTURE_SORT_VALUE,
+            workflow_id,
+            request.requester_workflow_id,
+        )
+
+    @staticmethod
+    def _normalize_order_timestamp(value: object) -> str | None:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    def _pending_request_order_workflow_ids(self) -> list[str]:
+        """Return queue-order lookup IDs, preferring parent lease groups."""
+        return list(
+            dict.fromkeys(
+                self._pending_request_order_workflow_id(request)
+                for request in self._pending_requests
+                if self._pending_request_order_workflow_id(request)
+            )
+        )
+
+    async def _resolve_pending_request_order(self) -> dict[str, dict[str, Any]] | None:
+        """Fetch scheduled/created ordering data for pending requests.
+
+        The lookup is best-effort. If the activity fails, the manager keeps
+        draining with the previously patched priority/queue-order fallback.
+        """
+        workflow_ids = self._pending_request_order_workflow_ids()
+        if not workflow_ids:
+            return {}
+
+        order_by_workflow_id: dict[str, dict[str, Any]] = {}
+        for start in range(
+            0,
+            len(workflow_ids),
+            _PENDING_REQUEST_ORDER_BATCH_SIZE,
+        ):
+            batch = workflow_ids[start : start + _PENDING_REQUEST_ORDER_BATCH_SIZE]
+            try:
+                result = await workflow.execute_activity(
+                    "provider_profile.pending_request_order",
+                    {"workflow_ids": batch},
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=10),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=1),
+                        backoff_coefficient=2.0,
+                        maximum_interval=timedelta(seconds=10),
+                        maximum_attempts=2,
+                    ),
+                )
+            except Exception as exc:
+                self._get_logger().warning(
+                    "provider_profile.pending_request_order failed for runtime %s "
+                    "(pending_count=%s, batch_size=%s): %s",
+                    self._runtime_id,
+                    len(self._pending_requests),
+                    len(batch),
+                    exc,
+                )
+                return None
+            if isinstance(result, dict):
+                for workflow_id, ordering in result.items():
+                    if isinstance(workflow_id, str) and isinstance(ordering, dict):
+                        order_by_workflow_id[workflow_id] = ordering
+        return order_by_workflow_id
 
     @staticmethod
     def _normalize_selector(

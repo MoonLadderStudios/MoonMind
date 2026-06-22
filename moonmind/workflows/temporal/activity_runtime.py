@@ -1125,6 +1125,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "workspace.apply_policy": ("sandbox", "workspace_apply_policy"),
     "workspace.classify_git_effect": ("sandbox", "workspace_classify_git_effect"),
     "provider_profile.list": ("artifacts", "provider_profile_list"),
+    "provider_profile.pending_request_order": (
+        "artifacts",
+        "provider_profile_pending_request_order",
+    ),
     "provider_profile.ensure_manager": ("artifacts", "provider_profile_ensure_manager"),
     "provider_profile.reset_manager": ("artifacts", "provider_profile_reset_manager"),
     "provider_profile.manager_state": ("artifacts", "provider_profile_manager_state"),

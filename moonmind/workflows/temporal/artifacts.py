@@ -3092,6 +3092,57 @@ class TemporalArtifactActivities:
 
         return results
 
+    async def provider_profile_pending_request_order(
+        self,
+        *,
+        workflow_ids: list[str],
+    ) -> dict[str, dict[str, str | None]]:
+        """Return compact scheduled/created ordering data for workflow IDs."""
+        from sqlalchemy import select
+
+        from api_service.db.base import get_async_session_context
+        from api_service.db.models import TemporalExecutionCanonicalRecord
+
+        unique_workflow_ids = [
+            workflow_id
+            for workflow_id in dict.fromkeys(
+                str(workflow_id).strip()
+                for workflow_id in workflow_ids[:100]
+                if workflow_id is not None
+            )
+            if workflow_id
+        ]
+        if not unique_workflow_ids:
+            return {}
+
+        async with get_async_session_context() as session:
+            stmt = (
+                select(
+                    TemporalExecutionCanonicalRecord.workflow_id,
+                    TemporalExecutionCanonicalRecord.scheduled_for,
+                    TemporalExecutionCanonicalRecord.created_at,
+                )
+                .where(
+                    TemporalExecutionCanonicalRecord.workflow_id.in_(
+                        unique_workflow_ids
+                    )
+                )
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+
+        ordering: dict[str, dict[str, str | None]] = {}
+        for workflow_id, scheduled_for, created_at in rows:
+            ordering[workflow_id] = {
+                "scheduled_for": scheduled_for.isoformat()
+                if scheduled_for is not None
+                else None,
+                "created_at": created_at.isoformat()
+                if created_at is not None
+                else None,
+            }
+        return ordering
+
     async def provider_profile_sync_slot_leases(
         self,
         *,
