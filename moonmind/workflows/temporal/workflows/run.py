@@ -437,6 +437,7 @@ RUN_MOONSPEC_VERIFY_PUBLICATION_GATE_PATCH = (
 RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
 )
+RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
@@ -936,7 +937,58 @@ class MoonMindRunWorkflow:
             non_retryable_error_types=list(route.retries.non_retryable_error_codes),
         )
 
-    def _execute_kwargs_for_route(self, route: TemporalActivityRoute) -> dict[str, Any]:
+    @staticmethod
+    def _coerce_retry_attempts_override(value: Any, *, field_name: str) -> int:
+        if isinstance(value, bool):
+            raise ValueError(f"{field_name} must be an integer >= 1")
+        try:
+            attempts = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} must be an integer >= 1") from exc
+        if attempts < 1:
+            raise ValueError(f"{field_name} must be an integer >= 1")
+        return attempts
+
+    def _step_retry_attempts_override(
+        self,
+        *,
+        node_inputs: Mapping[str, Any] | None = None,
+        node_options: Mapping[str, Any] | None = None,
+    ) -> int | None:
+        if isinstance(node_options, Mapping):
+            retries_override = node_options.get("retries_override")
+            if isinstance(retries_override, Mapping):
+                for key in ("max_attempts", "maxAttempts"):
+                    if key in retries_override:
+                        return self._coerce_retry_attempts_override(
+                            retries_override[key],
+                            field_name=f"node.options.retries_override.{key}",
+                        )
+
+        if isinstance(node_inputs, Mapping):
+            for key in ("maxAttempts", "max_attempts"):
+                if key in node_inputs:
+                    return self._coerce_retry_attempts_override(
+                        node_inputs[key],
+                        field_name=f"node.inputs.{key}",
+                    )
+        return None
+
+    def _execute_kwargs_for_route(
+        self,
+        route: TemporalActivityRoute,
+        *,
+        max_attempts_override: int | None = None,
+    ) -> dict[str, Any]:
+        retry_policy = self._retry_policy_for_route(route)
+        if max_attempts_override is not None:
+            retry_policy = RetryPolicy(
+                initial_interval=timedelta(seconds=5),
+                backoff_coefficient=2.0,
+                maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
+                maximum_attempts=max_attempts_override,
+                non_retryable_error_types=list(route.retries.non_retryable_error_codes),
+            )
         kwargs: dict[str, Any] = {
             "task_queue": route.task_queue,
             "start_to_close_timeout": timedelta(
@@ -945,7 +997,7 @@ class MoonMindRunWorkflow:
             "schedule_to_close_timeout": timedelta(
                 seconds=route.timeouts.schedule_to_close_seconds
             ),
-            "retry_policy": self._retry_policy_for_route(route),
+            "retry_policy": retry_policy,
         }
         if route.timeouts.heartbeat_timeout_seconds is not None:
             kwargs["heartbeat_timeout"] = timedelta(
@@ -5663,6 +5715,7 @@ class MoonMindRunWorkflow:
         # reordering it strands in-flight user workflow histories before
         # cancellation/failure handling.
         workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)
+        step_retry_overrides_enabled = workflow.patched(RUN_STEP_RETRY_OVERRIDES_PATCH)
         previous_step_outputs: Mapping[str, Any] = {}
         execution_result: Any = None
         for index, node in enumerate(ordered_nodes, start=1):
@@ -6070,6 +6123,11 @@ class MoonMindRunWorkflow:
                             version=tool_version,
                         )
                         route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(definition)
+                        node_options = (
+                            node.get("options")
+                            if isinstance(node.get("options"), Mapping)
+                            else {}
+                        )
                         execute_payload = {
                             "registry_snapshot_ref": snapshot.artifact_ref,
                             "principal": self._principal(),
@@ -6085,7 +6143,7 @@ class MoonMindRunWorkflow:
                                     "version": tool_version,
                                 },
                                 "inputs": node_inputs,
-                                "options": node.get("options") or {},
+                                "options": node_options,
                             },
                             "context": {
                                 "namespace": workflow.info().namespace,
@@ -6101,11 +6159,22 @@ class MoonMindRunWorkflow:
                                 operation="execute",
                             ),
                         }
+                        max_attempts_override = (
+                            self._step_retry_attempts_override(
+                                node_inputs=node_inputs,
+                                node_options=node_options,
+                            )
+                            if step_retry_overrides_enabled
+                            else None
+                        )
                         execution_result = await workflow.execute_activity(
                             route.activity_type,
                             execute_payload,
                             cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                            **self._execute_kwargs_for_route(route),
+                            **self._execute_kwargs_for_route(
+                                route,
+                                max_attempts_override=max_attempts_override,
+                            ),
                         )
 
                     else:
@@ -6155,6 +6224,7 @@ class MoonMindRunWorkflow:
                                 task_skills=task_skills,
                                 workflow_parameters=parameters,
                                 failure_mode=failure_mode,
+                                step_retry_overrides_enabled=step_retry_overrides_enabled,
                             )
                         )
                         if self._cancel_requested:
@@ -7589,6 +7659,7 @@ class MoonMindRunWorkflow:
         task_skills: Any = None,
         workflow_parameters: Mapping[str, Any] | None = None,
         agent_request: Any = None,
+        step_retry_overrides_enabled: bool = False,
     ) -> tuple[Any, bool]:
         skipped = False
         recheck_count = 0
@@ -7715,6 +7786,24 @@ class MoonMindRunWorkflow:
                     raise ValueError(
                         "skill Jira blocker recheck requires activity context"
                     )
+                max_attempts_override = None
+                if step_retry_overrides_enabled:
+                    invocation_payload = execute_payload.get("invocation_payload")
+                    if isinstance(invocation_payload, Mapping):
+                        invocation_inputs = invocation_payload.get("inputs")
+                        invocation_options = invocation_payload.get("options")
+                        max_attempts_override = self._step_retry_attempts_override(
+                            node_inputs=(
+                                invocation_inputs
+                                if isinstance(invocation_inputs, Mapping)
+                                else None
+                            ),
+                            node_options=(
+                                invocation_options
+                                if isinstance(invocation_options, Mapping)
+                                else None
+                            ),
+                        )
                 if coalesce_wait:
                     recheck_payload = self._compact_jira_blocker_recheck_payload(
                         execute_payload
@@ -7731,7 +7820,10 @@ class MoonMindRunWorkflow:
                         route.activity_type,
                         recheck_payload,
                         cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        **self._execute_kwargs_for_route(route),
+                        **self._execute_kwargs_for_route(
+                            route,
+                            max_attempts_override=max_attempts_override,
+                        ),
                     )
                 except Exception as exc:
                     diagnostic = self._record_failure_diagnostic(

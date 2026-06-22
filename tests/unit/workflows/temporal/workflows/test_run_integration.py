@@ -17,6 +17,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
+    RUN_STEP_RETRY_OVERRIDES_PATCH,
     RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
     RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     MoonMindRunWorkflow,
@@ -342,6 +343,98 @@ async def test_run_integration_legacy_unpatched_poll_completion_still_completes(
     )
 
     assert mock_run_workflow._external_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._integration = None
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload), kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "jira.check_blockers",
+                                "version": "1.0",
+                                "description": "Check Jira blockers",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {
+                                    "capabilities": ["integration:jira"]
+                                },
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 60,
+                                        "schedule_to_close_seconds": 120,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "check-blockers",
+                        "tool": {
+                            "type": "skill",
+                            "name": "jira.check_blockers",
+                            "version": "1.0",
+                        },
+                        "inputs": {
+                            "targetIssueKey": "MM-866",
+                            "maxAttempts": 3,
+                        },
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_STEP_RETRY_OVERRIDES_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={},
+        plan_ref="art:sha256:plan",
+    )
+
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 1
+    retry_policy = tool_calls[0][2]["retry_policy"]
+    assert retry_policy.maximum_attempts == 3
+    assert tool_calls[0][1]["invocation_payload"]["inputs"]["maxAttempts"] == 3
+
 
 @pytest.mark.asyncio
 async def test_run_execution_stage_bundles_consecutive_jules_nodes(
