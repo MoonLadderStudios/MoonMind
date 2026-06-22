@@ -55,6 +55,9 @@ QUEUE_ORDER_PENDING_REQUESTS_PATCH = (
 SCHEDULED_PENDING_REQUESTS_PATCH = (
     "provider-profile-manager-scheduled-pending-requests-v1"
 )
+SCHEDULED_PENDING_REQUESTS_CACHE_PATCH = (
+    "provider-profile-manager-scheduled-pending-requests-cache-v1"
+)
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -315,6 +318,7 @@ class MoonMindProviderProfileManagerWorkflow:
         self._has_new_events: bool = False
         self._profile_refresh_requested: bool = False
         self._has_db_profile_snapshot: bool = False
+        self._resolved_workflow_orders: dict[str, dict[str, Any]] = {}
 
     # -- Signals ---------------------------------------------------------------
 
@@ -1057,15 +1061,34 @@ class MoonMindProviderProfileManagerWorkflow:
         """
         workflow_ids = self._pending_request_order_workflow_ids()
         if not workflow_ids:
+            self._resolved_workflow_orders = {}
             return {}
+
+        cache_enabled = workflow.patched(SCHEDULED_PENDING_REQUESTS_CACHE_PATCH)
+        if cache_enabled:
+            current_ids = set(workflow_ids)
+            self._resolved_workflow_orders = {
+                workflow_id: ordering
+                for workflow_id, ordering in self._resolved_workflow_orders.items()
+                if workflow_id in current_ids
+            }
+            missing_workflow_ids = [
+                workflow_id
+                for workflow_id in workflow_ids
+                if workflow_id not in self._resolved_workflow_orders
+            ]
+        else:
+            missing_workflow_ids = workflow_ids
 
         order_by_workflow_id: dict[str, dict[str, Any]] = {}
         for start in range(
             0,
-            len(workflow_ids),
+            len(missing_workflow_ids),
             _PENDING_REQUEST_ORDER_BATCH_SIZE,
         ):
-            batch = workflow_ids[start : start + _PENDING_REQUEST_ORDER_BATCH_SIZE]
+            batch = missing_workflow_ids[
+                start : start + _PENDING_REQUEST_ORDER_BATCH_SIZE
+            ]
             try:
                 result = await workflow.execute_activity(
                     "provider_profile.pending_request_order",
@@ -1093,7 +1116,15 @@ class MoonMindProviderProfileManagerWorkflow:
                 for workflow_id, ordering in result.items():
                     if isinstance(workflow_id, str) and isinstance(ordering, dict):
                         order_by_workflow_id[workflow_id] = ordering
-        return order_by_workflow_id
+        if not cache_enabled:
+            return order_by_workflow_id
+
+        self._resolved_workflow_orders.update(order_by_workflow_id)
+        return {
+            workflow_id: self._resolved_workflow_orders[workflow_id]
+            for workflow_id in workflow_ids
+            if workflow_id in self._resolved_workflow_orders
+        }
 
     @staticmethod
     def _normalize_selector(

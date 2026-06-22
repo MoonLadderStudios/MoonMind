@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     PendingRequest,
     PRIORITY_PENDING_REQUESTS_PATCH,
     QUEUE_ORDER_PENDING_REQUESTS_PATCH,
+    SCHEDULED_PENDING_REQUESTS_CACHE_PATCH,
     SCHEDULED_PENDING_REQUESTS_PATCH,
     SLOT_HANDOFF_RESERVATION_PATCH,
     VERIFY_PENDING_REQUESTS_PATCH,
@@ -1300,6 +1301,56 @@ class TestProviderProfileManagerHelpers:
         assert assigned == [("wf-older", "p1")]
 
     @pytest.mark.asyncio
+    async def test_pending_order_lookup_caches_resolved_order_and_prunes_removed_requests(
+        self,
+    ):
+        wf = self._make_workflow()
+        wf._pending_requests = [
+            PendingRequest("wf-a", "codex_cli"),
+            PendingRequest("wf-b", "codex_cli"),
+        ]
+        calls: list[dict[str, list[str]]] = []
+
+        async def fake_execute_activity(
+            _activity_name: str,
+            payload: dict[str, list[str]],
+            **_: object,
+        ):
+            calls.append(payload)
+            return {
+                workflow_id: {
+                    "scheduled_for": None,
+                    "created_at": f"2026-06-22T10:0{index}:00+00:00",
+                }
+                for index, workflow_id in enumerate(payload["workflow_ids"])
+            }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.execute_activity.side_effect = fake_execute_activity
+            mock_wf.patched.side_effect = lambda patch_id: patch_id == (
+                SCHEDULED_PENDING_REQUESTS_CACHE_PATCH
+            )
+            first = await wf._resolve_pending_request_order()
+            second = await wf._resolve_pending_request_order()
+
+            wf._pending_requests = [
+                PendingRequest("wf-b", "codex_cli"),
+                PendingRequest("wf-c", "codex_cli"),
+            ]
+            third = await wf._resolve_pending_request_order()
+
+        assert calls == [
+            {"workflow_ids": ["wf-a", "wf-b"]},
+            {"workflow_ids": ["wf-c"]},
+        ]
+        assert sorted(first) == ["wf-a", "wf-b"]
+        assert second == first
+        assert sorted(third) == ["wf-b", "wf-c"]
+        assert sorted(wf._resolved_workflow_orders) == ["wf-b", "wf-c"]
+
+    @pytest.mark.asyncio
     async def test_scheduled_order_patch_legacy_path_keeps_queue_order_behavior(self):
         wf = self._make_workflow()
         wf._runtime_id = "codex_cli"
@@ -2154,7 +2205,7 @@ class TestProviderProfileSyncSlotLeasesActivity:
 class TestProviderProfilePendingRequestOrderActivity:
     """Contract tests for provider_profile.pending_request_order."""
 
-    def test_activity_queries_canonical_execution_order_fields(self):
+    def test_activity_queries_execution_order_fields(self):
         import inspect
         from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
@@ -2163,9 +2214,11 @@ class TestProviderProfilePendingRequestOrderActivity:
         )
 
         assert "TemporalExecutionCanonicalRecord" in source
+        assert "TemporalExecutionRecord" in source
         assert "TemporalExecutionCanonicalRecord.workflow_id" in source
-        assert "TemporalExecutionCanonicalRecord.scheduled_for" in source
+        assert "TemporalExecutionRecord.scheduled_for" in source
         assert "TemporalExecutionCanonicalRecord.created_at" in source
+        assert ".join(" in source
         assert ".where(" in source
         assert ".in_(" in source
 

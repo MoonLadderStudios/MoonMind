@@ -3101,7 +3101,10 @@ class TemporalArtifactActivities:
         from sqlalchemy import select
 
         from api_service.db.base import get_async_session_context
-        from api_service.db.models import TemporalExecutionCanonicalRecord
+        from api_service.db.models import (
+            TemporalExecutionCanonicalRecord,
+            TemporalExecutionRecord,
+        )
 
         unique_workflow_ids = [
             workflow_id
@@ -3119,8 +3122,13 @@ class TemporalArtifactActivities:
             stmt = (
                 select(
                     TemporalExecutionCanonicalRecord.workflow_id,
-                    TemporalExecutionCanonicalRecord.scheduled_for,
+                    TemporalExecutionRecord.scheduled_for,
                     TemporalExecutionCanonicalRecord.created_at,
+                )
+                .join(
+                    TemporalExecutionRecord,
+                    TemporalExecutionRecord.workflow_id
+                    == TemporalExecutionCanonicalRecord.workflow_id,
                 )
                 .where(
                     TemporalExecutionCanonicalRecord.workflow_id.in_(
