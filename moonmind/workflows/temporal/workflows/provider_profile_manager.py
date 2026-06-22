@@ -49,6 +49,9 @@ BILLING_AWARE_PROFILE_SELECTION_PATCH = (
 PRIORITY_PENDING_REQUESTS_PATCH = (
     "provider-profile-manager-priority-pending-requests-v1"
 )
+QUEUE_ORDER_PENDING_REQUESTS_PATCH = (
+    "provider-profile-manager-queue-order-pending-requests-v1"
+)
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -93,6 +96,8 @@ class SlotRequestPayload(TypedDict):
     requester_workflow_id: str
     runtime_id: str
     priority: int
+    queue_order: int | None
+    queued_at: str | None
     execution_profile_ref: str | None
     lease_group_id: str | None
 
@@ -239,6 +244,8 @@ class PendingRequest:
     requester_workflow_id: str
     runtime_id: str
     priority: int = 0
+    queue_order: int | None = None
+    queued_at: str | None = None
     execution_profile_ref: str | None = None
     profile_selector: Optional[dict[str, Any]] = None
     lease_group_id: str | None = None
@@ -312,12 +319,16 @@ class MoonMindProviderProfileManagerWorkflow:
         self._event_count += 1
         self._has_new_events = True
         priority = self._normalize_request_priority(payload.get("priority"))
+        queue_order = self._normalize_queue_order(payload.get("queue_order"))
+        queued_at = self._normalize_optional_string(payload.get("queued_at"))
         if not workflow.patched(SLOT_HANDOFF_RESERVATION_PATCH):
             self._pending_requests.append(
                 PendingRequest(
                     requester_workflow_id=payload["requester_workflow_id"],
                     runtime_id=payload.get("runtime_id", self._runtime_id or ""),
                     priority=priority,
+                    queue_order=queue_order,
+                    queued_at=queued_at,
                     execution_profile_ref=payload.get("execution_profile_ref"),
                     profile_selector=payload.get("profile_selector"),
                 )
@@ -327,6 +338,8 @@ class MoonMindProviderProfileManagerWorkflow:
             requester_workflow_id=payload["requester_workflow_id"],
             runtime_id=payload.get("runtime_id", self._runtime_id or ""),
             priority=priority,
+            queue_order=queue_order,
+            queued_at=queued_at,
             execution_profile_ref=payload.get("execution_profile_ref"),
             profile_selector=payload.get("profile_selector"),
             lease_group_id=self._normalize_optional_string(
@@ -507,6 +520,8 @@ class MoonMindProviderProfileManagerWorkflow:
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
                     "priority": r.priority,
+                    "queue_order": r.queue_order,
+                    "queued_at": r.queued_at,
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                     "lease_group_id": r.lease_group_id,
@@ -642,6 +657,8 @@ class MoonMindProviderProfileManagerWorkflow:
                 requester_workflow_id=req.get("requester_workflow_id", ""),
                 runtime_id=req.get("runtime_id", ""),
                 priority=self._normalize_request_priority(req.get("priority")),
+                queue_order=self._normalize_queue_order(req.get("queue_order")),
+                queued_at=self._normalize_optional_string(req.get("queued_at")),
                 execution_profile_ref=req.get("execution_profile_ref"),
                 profile_selector=req.get("profile_selector"),
                 lease_group_id=self._normalize_optional_string(
@@ -793,6 +810,15 @@ class MoonMindProviderProfileManagerWorkflow:
             return 0
 
     @staticmethod
+    def _normalize_queue_order(value: object) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
     def _coerce_handoff_ttl_seconds(value: object) -> int:
         try:
             seconds = int(value or 0)
@@ -894,6 +920,11 @@ class MoonMindProviderProfileManagerWorkflow:
                 self._pending_requests,
                 key=lambda request: -request.priority,
             )
+        if workflow.patched(QUEUE_ORDER_PENDING_REQUESTS_PATCH):
+            pending_requests = sorted(
+                self._pending_requests,
+                key=self._pending_request_sort_key,
+            )
         for req in pending_requests:
             # Check if this requester already has a lease (e.g. from a retried workflow task)
             existing_profile_id = None
@@ -943,6 +974,21 @@ class MoonMindProviderProfileManagerWorkflow:
         # Persist lease changes to DB for crash recovery
         if leases_changed and workflow.patched(DB_LEASE_PERSISTENCE_PATCH):
             await self._sync_leases_to_db()
+
+    @staticmethod
+    def _pending_request_sort_key(
+        request: PendingRequest,
+    ) -> tuple[int, int, int, str, str]:
+        missing_order = 1 if request.queue_order is None else 0
+        order = request.queue_order if request.queue_order is not None else 0
+        queued_at = request.queued_at or ""
+        return (
+            -request.priority,
+            missing_order,
+            order,
+            queued_at,
+            request.requester_workflow_id,
+        )
 
     @staticmethod
     def _normalize_selector(
@@ -1307,6 +1353,8 @@ class MoonMindProviderProfileManagerWorkflow:
                     "requester_workflow_id": r.requester_workflow_id,
                     "runtime_id": r.runtime_id,
                     "priority": r.priority,
+                    "queue_order": r.queue_order,
+                    "queued_at": r.queued_at,
                     "execution_profile_ref": r.execution_profile_ref,
                     "profile_selector": r.profile_selector,
                     "lease_group_id": r.lease_group_id,

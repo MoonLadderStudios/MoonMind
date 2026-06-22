@@ -5933,6 +5933,7 @@ class MoonMindRunWorkflow:
                                 resolved_skillset_ref=resolved_skillset_ref,
                                 workflow_parameters=parameters,
                                 step_execution=current_step_execution,
+                                queue_order=index,
                                 attempt_reason=attempt_reason,
                             )
                             if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
@@ -7552,6 +7553,7 @@ class MoonMindRunWorkflow:
                 resolved_skillset_ref=resolved_skillset_ref,
                 workflow_parameters=workflow_parameters,
                 step_execution=self._step_execution_for(node_id) or 1,
+                queue_order=self._step_execution_for(node_id) or 1,
                 attempt_reason="policy_revalidation",
             )
             child_workflow_id = (
@@ -10504,6 +10506,7 @@ class MoonMindRunWorkflow:
         resolved_skillset_ref: str | None = None,
         workflow_parameters: Mapping[str, Any] | None = None,
         step_execution: int | None = None,
+        queue_order: int | None = None,
         attempt_reason: str = "initial_execution",
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
@@ -10873,6 +10876,11 @@ class MoonMindRunWorkflow:
             self._step_execution_retrieval_manifest_artifacts[
                 (node_id, execution_ordinal)
             ] = dict(retrieval_manifest_artifact)
+        if queue_order is not None:
+            moonmind_payload["queueOrder"] = queue_order
+        workflow_start_time = getattr(wf_info, "start_time", None)
+        if isinstance(workflow_start_time, datetime):
+            moonmind_payload["queuedAt"] = workflow_start_time.isoformat()
         metadata_payload["moonmind"] = moonmind_payload
         parameters["metadata"] = metadata_payload
         projection_context = attempt_context.to_manifest_projection().get("context")
