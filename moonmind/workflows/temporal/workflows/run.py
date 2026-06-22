@@ -82,6 +82,9 @@ with workflow.unsafe.imports_passed_through():
         StepExecutionCheckpointBoundary,
         build_step_checkpoint_id,
     )
+    from moonmind.workflows.temporal.managed_session_errors import (
+        is_managed_session_locator_mismatch_error,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
@@ -8198,7 +8201,7 @@ class MoonMindRunWorkflow:
                 request_id=request_id,
             )
         except Exception as exc:
-            if not self._is_managed_session_locator_mismatch_error(exc):
+            if not is_managed_session_locator_mismatch_error(exc):
                 raise
             refreshed_snapshot = (
                 await self._load_workflow_scoped_session_snapshot_for_clear(
@@ -8257,31 +8260,6 @@ class MoonMindRunWorkflow:
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(clear_route),
         )
-
-    @staticmethod
-    def _is_managed_session_locator_mismatch_error(exc: BaseException) -> bool:
-        markers = (
-            "sessionid does not match the active managed session",
-            "sessionepoch does not match the active managed session",
-            "containerid does not match the active managed session",
-            "threadid does not match the active managed session",
-            "sessionepoch does not match the durable managed session record",
-            "containerid does not match the durable managed session record",
-            "threadid does not match the durable managed session record",
-        )
-        current: BaseException | None = exc
-        seen: set[int] = set()
-        while current is not None and id(current) not in seen:
-            seen.add(id(current))
-            message = str(getattr(current, "message", "") or current).strip().lower()
-            if any(marker in message for marker in markers):
-                return True
-            current = getattr(current, "cause", None) or getattr(
-                current, "__cause__", None
-            )
-            if not isinstance(current, BaseException):
-                current = None
-        return False
 
     async def _terminate_workflow_scoped_session_via_activity_then_signal(
         self,
