@@ -1143,6 +1143,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "provider_profile_sync_slot_leases",
     ),
+    "provider_profile.pending_request_order": (
+        "artifacts",
+        "provider_profile_pending_request_order",
+    ),
     "oauth_session.ensure_volume": ("agent_runtime", "oauth_session_ensure_volume"),
     "oauth_session.start_auth_runner": ("agent_runtime", "oauth_session_start_auth_runner"),
     "oauth_session.update_terminal_session": ("artifacts", "oauth_session_update_terminal_session"),
