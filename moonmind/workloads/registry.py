@@ -92,6 +92,7 @@ class RunnerProfileRegistry:
         *,
         workspace_root: str | Path,
         allowed_image_registries: Iterable[str] | None = None,
+        profile_image_overrides: Mapping[str, str] | None = None,
     ) -> "RunnerProfileRegistry":
         registry_path = Path(path)
         if not registry_path.exists():
@@ -104,6 +105,7 @@ class RunnerProfileRegistry:
             registry_path,
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries,
+            profile_image_overrides=profile_image_overrides,
         )
 
     @classmethod
@@ -113,11 +115,15 @@ class RunnerProfileRegistry:
         *,
         workspace_root: str | Path,
         allowed_image_registries: Iterable[str] | None = None,
+        profile_image_overrides: Mapping[str, str] | None = None,
     ) -> "RunnerProfileRegistry":
         registry_path = Path(path)
         raw_text = registry_path.read_text(encoding="utf-8")
         payload = _load_registry_payload(registry_path, raw_text)
-        profiles = _extract_profiles(payload)
+        profiles = _apply_profile_image_overrides(
+            _extract_profiles(payload),
+            profile_image_overrides or {},
+        )
         return cls(
             profiles,
             workspace_root=workspace_root,
@@ -379,3 +385,20 @@ def _extract_profiles(payload: Any) -> list[RunnerProfile]:
         seen.add(profile.id)
         profiles.append(profile)
     return profiles
+
+def _apply_profile_image_overrides(
+    profiles: Iterable[RunnerProfile],
+    overrides: Mapping[str, str],
+) -> list[RunnerProfile]:
+    if not overrides:
+        return list(profiles)
+    normalized = {str(profile_id): str(image) for profile_id, image in overrides.items()}
+    return [
+        RunnerProfile.model_validate(
+            profile.model_dump(mode="json", by_alias=True)
+            | {"image": normalized[profile.id]}
+        )
+        if profile.id in normalized
+        else profile
+        for profile in profiles
+    ]

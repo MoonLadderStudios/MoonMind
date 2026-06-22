@@ -21,6 +21,10 @@ from moonmind.workloads.registry import (
 )
 
 WORKSPACE_ROOT = Path("/work/agent_jobs")
+PENTEST_RUNNER_IMAGE = (
+    "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0@"
+    "sha256:a9e35914533968d4f6e394ea8b08f3c5b885eb136ecfacf4990bfeb04d3a11f6"
+)
 
 def _profile_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
@@ -421,9 +425,41 @@ def test_pentest_runner_defaults_registry_and_publish_workflow_do_not_drift(
     assert domain_profile.image == settings_image
     assert workload_profile is not None
     assert workload_profile.image == settings_image
-    assert settings_image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
-    assert "pentest_image_name=${IMAGE_NAME}-pentestgpt" in publish_workflow
-    assert "./docker/pentestgpt-runner/Dockerfile" in publish_workflow
+    assert settings_image == PENTEST_RUNNER_IMAGE
+    assert "pentest_image_name=${IMAGE_NAME}-pentestgpt" not in publish_workflow
+    assert "./docker/pentestgpt-runner/Dockerfile" not in publish_workflow
+
+
+def test_runner_profile_registry_can_override_pentest_image_from_settings() -> None:
+    settings_image = PENTEST_RUNNER_IMAGE
+    registry = RunnerProfileRegistry.load_file(
+        Path("config/workloads/default-runner-profiles.yaml"),
+        workspace_root=WORKSPACE_ROOT,
+        allowed_image_registries=("ghcr.io",),
+        profile_image_overrides={
+            "pentestgpt-safe": settings_image,
+            "pentestgpt-vpn-lab": settings_image,
+        },
+    )
+
+    workload_profile = registry.get("pentestgpt-safe")
+
+    assert workload_profile is not None
+    assert workload_profile.image == settings_image
+
+
+@pytest.mark.parametrize("unsafe_image", ["python", "python:latest"])
+def test_runner_profile_registry_revalidates_image_overrides(
+    unsafe_image: str,
+) -> None:
+    with pytest.raises(ValidationError, match="tag or digest|latest"):
+        RunnerProfileRegistry.load_file(
+            Path("config/workloads/default-runner-profiles.yaml"),
+            workspace_root=WORKSPACE_ROOT,
+            profile_image_overrides={
+                "pentestgpt-safe": unsafe_image,
+            },
+        )
 
 @pytest.mark.parametrize(
     ("overrides", "message"),
