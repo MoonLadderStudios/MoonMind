@@ -4657,6 +4657,14 @@ def _degraded_step_execution_projection_payload(
 def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
     raw_state = str(record.state.value).strip().lower()
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None))
+    memo = dict(getattr(record, "memo", None) or {})
+    waiting_reason = (
+        str(getattr(record, "waiting_reason", "") or "").strip()
+        or str(memo.get("waiting_reason") or "").strip()
+    )
+    is_operator_paused = (
+        bool(getattr(record, "paused", False)) or waiting_reason == "operator_paused"
+    )
     if not settings.temporal_dashboard.actions_enabled:
         return ExecutionActionCapabilityModel(
             disabled_reasons={
@@ -4719,6 +4727,14 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "timed_out": {"can_edit_for_rerun", "can_rerun"},
     }
     enabled = state_actions.get(raw_state, set())
+    if is_operator_paused and raw_state not in {
+        "completed",
+        "failed",
+        "canceled",
+        "terminated",
+        "timed_out",
+    }:
+        enabled = (enabled - {"can_pause"}) | {"can_resume"}
     has_workflow_input_snapshot = bool(
         _workflow_input_snapshot_ref_from_memo(dict(getattr(record, "memo", None) or {}))
     )
@@ -4784,6 +4800,9 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
                 if not has_workflow_input_snapshot:
                     disabled_reasons[alias] = "original_task_input_snapshot_missing"
                     continue
+        if field_name == "can_pause" and is_operator_paused:
+            disabled_reasons[alias] = "already_paused"
+            continue
         disabled_reasons[alias] = "state_not_eligible"
     return ExecutionActionCapabilityModel(
         can_set_title="can_set_title" in enabled,
