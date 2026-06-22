@@ -136,6 +136,30 @@ already recorded. This is the automatic recovery boundary for old histories:
 existing runs replay their recorded preparation order, while new runs use the
 current preferred order.
 
+### 3.3 Session-event mapping
+
+Codex managed sessions are session-aware Live Logs runtimes (`codex_cli` in the
+per-runtime conformance matrix; see `docs/Observability/LiveLogs.md` §8.5). The
+session controller and supervisor emit normalized `RunObservabilityEvent`s on the
+`session` stream as the managed session progresses:
+
+| Control action / transition | Observability event kind | Emitted by |
+| --- | --- | --- |
+| `start_session` | `session_started` | controller |
+| `resume_session` / active-turn change on status read | `session_resumed` | controller |
+| `send_turn` (turn accepted) | `turn_started` | controller + supervisor |
+| successful turn completion | `turn_completed` | controller |
+| `interrupt_turn` | `turn_interrupted` | controller |
+| `clear_session` (new thread, new epoch) | `session_cleared` + `session_reset_boundary` | supervisor |
+| `terminate_session` | `session_terminated` | controller |
+| continuity artifact publication | `summary_published` / `checkpoint_published` | supervisor |
+
+Every session event carries the bounded session identity (`session_id`,
+`session_epoch`, `container_id`, `thread_id`, `active_turn_id`) and bounded
+metadata only; large payloads are referenced by artifact refs. The declared
+emission set is enforced by the conformance matrix in
+`tests/unit/observability/test_live_logs_runtime_conformance.py`.
+
 ## 4. Session Identity
 
 The canonical bounded session identity is:

@@ -8,6 +8,7 @@ Related:
 - [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)
 - [`docs/ManagedAgents/DockerOutOfDocker.md`](./DockerOutOfDocker.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
+- [`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md)
 
 ## Purpose
 
@@ -36,6 +37,14 @@ The bounded session identity remains:
 - `container_id`
 - `thread_id`
 - `active_turn_id`
+
+Session reset boundaries, thread and turn lifecycle transitions, and continuity
+publications are projected into the run-global Live Logs timeline as normalized
+`session`-stream observability events. The Codex control-action → event-kind
+mapping is defined in
+[`CodexCliManagedSessions.md`](./CodexCliManagedSessions.md) §3.3, and the
+per-runtime conformance contract lives in
+[`docs/Observability/LiveLogs.md`](../Observability/LiveLogs.md) §8.5.
 
 Control-plane Docker workload containers remain available through
 [`DockerOutOfDocker.md`](./DockerOutOfDocker.md) for MoonMind admin/update,

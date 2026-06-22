@@ -294,16 +294,18 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - Live-log spool transport with SSE delivery to Mission Control.
 - Structured JSON logs with run/worker correlation context.
 - Token cost estimates and pricing-aware routing metadata.
-- Live Logs desired-state contract for a session-aware merged timeline, ANSI parsing, virtualized rendering, artifact-backed replay, and rollout gates.
-- Mission Control viewer pieces for structured observability history, session snapshots, EventSource live follow, ANSI rendering, and virtualized timelines are present behind feature/config rollout.
+- Session-aware Live Logs foundation: durable `observability.events.jsonl` journal with a run-global `sequence`, normalized event kinds (process/system/session/turn/approval/publication/reset-boundary), shared append-only spool transport with `since` resume, and structured history as the preferred initial-load surface.
+- Observability API hardening: `/observability-summary` always exposes `degradedReason`; `/observability/events` returns `source`/`degraded` ordering metadata; `/logs/merged` exposes `X-Merged-Order-Source`; `/logs/stream` returns 410 Gone on ended runs and emits connect/disconnect/error/resume-hit-miss/fallback-source metrics.
+- Mission Control session-aware timeline viewer with distinct row types, session snapshot badges, reset/epoch banners, structured-history-before-SSE loading, and graceful artifact fallback, shipped behind feature/config rollout gates.
+- Per-runtime session-aware conformance matrix declaring expected event kinds; `codex_cli` conforms today and new runtimes must add a conformance entry.
 
 ### Remaining work
 - [ ] **14.1** OpenTelemetry instrumentation — FastAPI middleware, Temporal client/worker interceptors, and activity-layer spans with provider/model/token attributes.
   *Done means:* API→workflow→activity→provider spans correlated end-to-end with bounded metric labels.
 - [ ] **14.2** Per-step token/cost attribution in Mission Control — cost primitives exist but are not attributed and displayed per step.
   *Done means:* per-step cost visible in workflow detail and reconcilable with billing/routing estimates.
-- [ ] **14.3** Session-aware live-log timeline rollout — complete the LiveLogs.md rollout: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process transport as authoritative path, artifact-backed replay, and "live-stream failure never fails run" behavior.
-  *Done means:* live timeline plus replay are available for target managed runtimes without relying on SSE success.
+- [ ] **14.3** Session-aware live-log timeline rollout — the core rollout is shipped: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process spool transport with `since` resume, structured-history-first replay, observability-summary/events/merged/stream API hardening (`degradedReason`, `source`/`degraded`, `X-Merged-Order-Source`, 410-on-ended, resume hit/miss metrics), and "live-stream failure never fails the run and never erases durable history" behavior with backend integration coverage. Remaining: extend the per-runtime session-aware conformance matrix beyond `codex_cli` as additional managed-session runtimes ship.
+  *Done means:* live timeline plus replay are available for every managed runtime that claims session-aware support, each backed by a conformance-matrix entry, without relying on SSE success.
 - [ ] **14.4** Trace/log deep links from workflow detail — jump from a step in Mission Control to its correlated trace and log slice.
   *Done means:* every step row links to its trace and log slice via correlation IDs.
 

@@ -1,8 +1,8 @@
 # Live Logs and Session-Aware Run Observability in MoonMind
 
-Status: Desired state
+Status: Implemented (session-aware rollout in progress)
 Owners: MoonMind Platform
-Last updated: 2026-04-08
+Last updated: 2026-06-22
 
 **Replaces or substantially rewrites:**
 - `docs/Temporal/LiveWorkflowManagement.md`
@@ -37,9 +37,23 @@ This keeps observability deterministic, persistent, auditable, and independent f
 
 ### 1.1 Implementation tracking
 
-This document is the canonical desired-state architecture for managed-run observability.
+This document is the canonical desired-state architecture for managed-run observability. Detailed rollout sequencing and remaining migration work belong in [`docs/MoonMindRoadmap.md`](../MoonMindRoadmap.md) under Milestone 14.3.
 
-Rollout sequencing, implementation status, and remaining migration work belong in .
+The session-aware Live Logs foundation is now shipped against `main`. The table below records what is shipped versus still gated so operators can reason about current behavior:
+
+| Area | Status |
+| --- | --- |
+| Durable `observability.events.jsonl` journal with run-global `sequence` | Shipped |
+| Normalized event kinds (process / system / session / turn / approval / publication / reset-boundary) | Shipped (`ObservabilityEventKind`) |
+| Shared append-only spool transport with `since` resume | Shipped |
+| Structured history preferred for `/observability/events`; `source`/`degraded` metadata in the body | Shipped |
+| `/observability-summary` exposes `degradedReason` (`run_ended` / `live_stream_unavailable` / `null`) | Shipped |
+| `/logs/merged` exposes the ordering source via the `X-Merged-Order-Source` header | Shipped |
+| SSE `/logs/stream` with 410-Gone on ended runs and resume from `since` | Shipped |
+| Stream metrics: connect / disconnect / error / resume hit-miss / fallback source | Shipped |
+| `live_stream_capable` capability flag populated at launch and exposed via API | Shipped |
+| Mission Control session-aware timeline viewer | Shipped (feature-flag gated default) |
+| Per-runtime session-aware conformance matrix | Shipped for `codex_cli`; new runtimes must add a conformance entry (see §8.5) |
 
 ---
 
@@ -440,6 +454,7 @@ Rules for merged tail:
 - `merged_log_artifact_ref` is optional
 - the endpoint must handle partial artifacts and still return whatever durably captured content is available
 - when a historical run lacks structured event history and spool metadata, the endpoint may fall back to labeled `stdout`/`stderr` concatenation with an explicit warning that chronological session-aware ordering is unavailable
+- the computed ordering source is exposed to the UI in the `X-Merged-Order-Source` response header, one of `journal`, `spool`, `legacy-log-artifact`, or `artifact-fallback`, so the client can flag degraded ordering
 
 ---
 
@@ -504,6 +519,16 @@ The normalized event stream should represent at least these MoonMind-side semant
 - approval resolution → `approval_resolved`
 
 The adapter may use Codex App Server or another internal harness behind the boundary, but the MoonMind browser contract remains normalized and stable.
+
+## 8.5 Per-runtime session-aware conformance
+
+Whether a managed runtime is expected to emit session-aware timeline events is declared as runtime metadata, not inferred:
+
+- `MANAGED_SESSION_LIVE_LOGS_CONFORMANCE` (in `moonmind/schemas/agent_runtime_models.py`) maps each canonical managed-session runtime id to the set of `ObservabilityEventKind` values it is expected to emit. A runtime present in this registry "claims session-aware Live Logs support".
+- `REQUIRED_SESSION_AWARE_OBSERVABILITY_EVENT_KINDS` is the minimum lifecycle every session-aware runtime must emit: `session_started`, `session_resumed`, `session_terminated`, `session_cleared`, `session_reset_boundary`, `turn_started`, `turn_completed`, and `turn_interrupted`.
+- `runtime_claims_session_aware_live_logs()` and `expected_observability_event_kinds()` are the helpers callers use to branch on capability.
+
+Conformance is enforced by a per-runtime parity matrix (`tests/unit/observability/test_live_logs_runtime_conformance.py`) that binds each declared kind to a real emission site in that runtime's controller/supervisor source. Today `codex_cli` is the only session-aware managed runtime; any new runtime that claims session-aware support must add a conformance entry and keep the matrix green. Non-session-aware managed runs still produce `stdout`/`stderr`/`system` events and diagnostics.
 
 ---
 
@@ -701,9 +726,14 @@ Example payload:
 Expected HTTP behavior:
 - **active run, streaming available**: respond with `200 text/event-stream` and stream events
 - **active run, streaming not supported**: respond with `200` and an appropriate status event or empty stream; caller falls back to artifact-backed retrieval
-- **ended run**: respond with `200` and a single terminal event or empty stream indicating `ended`; caller must not reconnect
+- **ended run**: the endpoint responds with `410 Gone`; the caller must not reconnect and must reconstruct the durable timeline from artifacts
 - **artifacts missing or partial**: the stream endpoint returns whatever is available; the summary indicates artifact status
 - **stream unavailable**: respond with `503` or an error event; caller transitions to artifact-backed mode
+
+Live-stream metrics (tag `stream=livelogs`):
+- `livelogs.stream.connect`, `livelogs.stream.disconnect`, `livelogs.stream.error`
+- `livelogs.stream.resume` with tag `result=hit|miss` — emitted when a `since` cursor is supplied, classifying whether the first replayed chunk is contiguous with the cursor (`hit`) or sits past a gap (`miss`)
+- `livelogs.history.source` and `livelogs.history.latency` with tag `source=journal|spool|artifacts` record the fallback source chosen for structured reads
 
 ## 11.3 Reconnect behavior
 
@@ -750,6 +780,7 @@ Minimum required response fields:
 - `supports_live_streaming`
 - `live_stream_id`
 - `live_stream_status` (`available`, `ended`, `unavailable`)
+- `degraded_reason` (`degradedReason`): always present, `null` when live streaming is available, `run_ended` for terminal runs, `live_stream_unavailable` when the runtime does not declare live streaming
 - `last_log_at`
 - `last_log_offset`
 - `intervention_capabilities`
@@ -796,6 +827,7 @@ Rules:
 - historical reads must come from durable storage or durable artifacts, not only from the transient live stream
 - the endpoint may return a bounded tail window rather than the full history by default
 - when a run predates structured event persistence, the system may fall back to the plain merged-tail path
+- the response body includes `source` (`journal`, `spool`, or `artifacts`), `degraded` (boolean), and `degradedReason` (`artifact_fallback` when the artifact fallback path cannot guarantee run-global ordering, else `null`) so the UI can communicate degraded ordering
 
 ## 12.3 Tail endpoints
 

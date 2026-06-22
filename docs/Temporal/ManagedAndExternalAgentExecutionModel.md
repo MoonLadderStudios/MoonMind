@@ -631,9 +631,13 @@ Responsibilities include:
 * spawn runtime processes or containers
 * track identifiers and workspace paths
 * stream stdout/stderr to artifact-backed storage (durability comes first)
+* write a durable structured event journal (`observability.events.jsonl`, referenced by `observabilityEventsRef`) whenever a workspace path exists, so structured history is the preferred initial-load source for `/observability/events`
+* assign every emitted record a run-global monotonically increasing `sequence` shared across `stdout`, `stderr`, `system`, and `session` streams
 * emit live log records for active subscribers via the shared cross-process observability transport (secondary; must not break artifact persistence or run completion if live publish fails)
 * update `last_log_at` and `last_log_offset` metadata after each captured chunk, for use by the observability summary API
 * generate `system` event annotations where needed (e.g. run start, truncation notices, timeout classification)
+* for session-aware managed runtimes, emit normalized session and turn lifecycle and reset-boundary events (`session_started`/`session_resumed`/`session_terminated`/`session_cleared`/`session_reset_boundary`, `turn_started`/`turn_completed`/`turn_interrupted`) per the per-runtime conformance matrix in `docs/Observability/LiveLogs.md` §8.5; events carry bounded metadata only and use artifact refs for large payloads
+* populate the `live_stream_capable` capability flag at launch and expose it through the observability summary so the UI knows whether session timeline events are expected
 * hand off live log chunks to the shared live-stream transport boundary as they are captured
 * record state transitions
 * classify exit states

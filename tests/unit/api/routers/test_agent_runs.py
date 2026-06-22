@@ -2980,3 +2980,427 @@ def test_post_agent_run_artifact_session_control_rejects_blank_follow_up_message
     )
 
     assert response.status_code == 422
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#2558 — degraded/source metadata + resume metrics
+# ---------------------------------------------------------------------------
+
+def test_get_observability_summary_degraded_reason_run_ended(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """Terminal runs expose degradedReason=run_ended (live follow is gone)."""
+    test_client, _ = client
+    for terminal_status in ("completed", "failed", "canceled", "timed_out"):
+        mock_record = MagicMock()
+        mock_record.model_dump.return_value = {"status": terminal_status}
+        mock_record.status = terminal_status
+        mock_record.live_stream_capable = True
+
+        with patch(
+            "api_service.api.routers.agent_runs.ManagedRunStore.load",
+            return_value=mock_record,
+        ):
+            response = test_client.get(
+                f"/api/agent-runs/{uuid4()}/observability-summary"
+            )
+
+        body = response.json()["summary"]
+        assert body["liveStreamStatus"] == "ended"
+        assert body["degradedReason"] == "run_ended"
+
+def test_get_observability_summary_degraded_reason_live_stream_unavailable(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = False
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability-summary")
+
+    body = response.json()["summary"]
+    assert body["liveStreamStatus"] == "unavailable"
+    assert body["degradedReason"] == "live_stream_unavailable"
+
+def test_get_observability_summary_degraded_reason_absent_when_available(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        response = test_client.get(f"/api/agent-runs/{uuid4()}/observability-summary")
+
+    body = response.json()["summary"]
+    assert body["liveStreamStatus"] == "available"
+    assert body["degradedReason"] is None
+
+def test_get_agent_run_observability_events_body_reports_journal_source(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    """The structured-history path reports source=journal and is not degraded."""
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        json.dumps(
+            {
+                "runId": "run-1",
+                "sequence": 5,
+                "stream": "stdout",
+                "text": "persisted stdout\n",
+                "timestamp": "2026-04-08T00:00:00Z",
+                "kind": "stdout_chunk",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        with patch(
+            "api_service.api.routers.agent_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(
+                f"/api/agent-runs/{uuid4()}/observability/events"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "journal"
+    assert body["degraded"] is False
+    assert body["degradedReason"] is None
+
+def test_get_agent_run_observability_events_prefers_journal_over_spool(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    """Source precedence: structured journal wins even when a spool exists."""
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        json.dumps(
+            {
+                "runId": "run-1",
+                "sequence": 9,
+                "stream": "stdout",
+                "text": "from journal\n",
+                "timestamp": "2026-04-08T00:00:00Z",
+                "kind": "stdout_chunk",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "live_streams.spool").write_text(
+        json.dumps(
+            {
+                "runId": "run-1",
+                "sequence": 2,
+                "stream": "stdout",
+                "text": "from spool\n",
+                "timestamp": "2026-04-08T00:00:00Z",
+                "kind": "stdout_chunk",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(workspace)
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        with patch(
+            "api_service.api.routers.agent_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(
+                f"/api/agent-runs/{uuid4()}/observability/events"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "journal"
+    assert [event["text"] for event in body["events"]] == ["from journal\n"]
+
+def test_get_agent_run_observability_events_artifact_fallback_is_degraded(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """The stdout/stderr artifact fallback path is flagged degraded."""
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.workspace_path = "/tmp/workspace"
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        with patch(
+            "api_service.api.routers.agent_runs._load_agent_run_session_record",
+            return_value=None,
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs._load_agent_run_observability_events",
+                return_value=(
+                    [
+                        {
+                            "sequence": 1,
+                            "stream": "stdout",
+                            "text": "line\n",
+                            "timestamp": "2026-04-08T00:00:00Z",
+                            "kind": "stdout_chunk",
+                        }
+                    ],
+                    "artifacts",
+                ),
+            ):
+                response = test_client.get(
+                    f"/api/agent-runs/{uuid4()}/observability/events"
+                )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "artifacts"
+    assert body["degraded"] is True
+    assert body["degradedReason"] == "artifact_fallback"
+
+def test_get_agent_run_observability_events_orders_mixed_kinds_by_sequence(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    """Mixed stdout/system/session rows are returned ordered by run-global sequence."""
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    # Written out of order on purpose; identical timestamps isolate the
+    # sequence ordering.
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 3,
+                        "stream": "stdout",
+                        "text": "stdout\n",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "stdout_chunk",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 1,
+                        "stream": "system",
+                        "text": "annotation\n",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "system_annotation",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 2,
+                        "stream": "session",
+                        "text": "boundary\n",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "session_reset_boundary",
+                        "sessionId": "sess-1",
+                        "sessionEpoch": 2,
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        with patch(
+            "api_service.api.routers.agent_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(
+                f"/api/agent-runs/{uuid4()}/observability/events"
+            )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [1, 2, 3]
+    assert [event["kind"] for event in body["events"]] == [
+        "system_annotation",
+        "session_reset_boundary",
+        "stdout_chunk",
+    ]
+
+def _resume_metric_calls(metrics: MagicMock) -> list:
+    return [
+        call
+        for call in metrics.increment.call_args_list
+        if call.args and call.args[0] == "livelogs.stream.resume"
+    ]
+
+def test_stream_agent_run_live_logs_emits_resume_hit_metric(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A contiguous resume (first chunk == since + 1) records result=hit."""
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workspace_path = "/tmp/workspace"
+    metrics = MagicMock()
+
+    async def _follow(*args, **kwargs):
+        yield RunObservabilityEvent(
+            runId="run-1",
+            sequence=11,
+            stream="stdout",
+            text="hello\n",
+            timestamp="2026-04-08T00:00:01Z",
+            kind="stdout_chunk",
+        )
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        with patch(
+            "api_service.api.routers.agent_runs.get_metrics_emitter",
+            return_value=metrics,
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs.SpoolLogReader.follow",
+                new=_follow,
+            ):
+                response = test_client.get(
+                    f"/api/agent-runs/{uuid4()}/logs/stream?since=10"
+                )
+
+    assert response.status_code == 200
+    resume_calls = _resume_metric_calls(metrics)
+    assert len(resume_calls) == 1
+    assert resume_calls[0].kwargs["tags"] == {"stream": "livelogs", "result": "hit"}
+
+def test_stream_agent_run_live_logs_emits_resume_miss_metric(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """A gapped resume (first chunk > since + 1) records result=miss."""
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workspace_path = "/tmp/workspace"
+    metrics = MagicMock()
+
+    async def _follow(*args, **kwargs):
+        yield RunObservabilityEvent(
+            runId="run-1",
+            sequence=13,
+            stream="stdout",
+            text="hello\n",
+            timestamp="2026-04-08T00:00:01Z",
+            kind="stdout_chunk",
+        )
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        with patch(
+            "api_service.api.routers.agent_runs.get_metrics_emitter",
+            return_value=metrics,
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs.SpoolLogReader.follow",
+                new=_follow,
+            ):
+                response = test_client.get(
+                    f"/api/agent-runs/{uuid4()}/logs/stream?since=10"
+                )
+
+    assert response.status_code == 200
+    resume_calls = _resume_metric_calls(metrics)
+    assert len(resume_calls) == 1
+    assert resume_calls[0].kwargs["tags"] == {"stream": "livelogs", "result": "miss"}
+
+def test_stream_agent_run_live_logs_skips_resume_metric_without_since(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """No since cursor means no resume hit/miss classification."""
+    test_client, _ = client
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workspace_path = "/tmp/workspace"
+    metrics = MagicMock()
+
+    async def _follow(*args, **kwargs):
+        yield RunObservabilityEvent(
+            runId="run-1",
+            sequence=1,
+            stream="stdout",
+            text="hello\n",
+            timestamp="2026-04-08T00:00:01Z",
+            kind="stdout_chunk",
+        )
+
+    with patch(
+        "api_service.api.routers.agent_runs.ManagedRunStore.load",
+        return_value=mock_record,
+    ):
+        with patch(
+            "api_service.api.routers.agent_runs.get_metrics_emitter",
+            return_value=metrics,
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs.SpoolLogReader.follow",
+                new=_follow,
+            ):
+                response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stream")
+
+    assert response.status_code == 200
+    assert _resume_metric_calls(metrics) == []

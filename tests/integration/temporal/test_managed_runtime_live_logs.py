@@ -7,9 +7,11 @@ to artifact storage. Uses short-lived real subprocesses where noted.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -487,5 +489,234 @@ async def test_long_running_launch_is_visible_through_observability_routes(
             diagnostics_response = client.get(f"/api/agent-runs/{run_id}/diagnostics")
             assert diagnostics_response.status_code == 200
             assert '"stdout"' in diagnostics_response.text
+    finally:
+        app.dependency_overrides.clear()
+
+# ---------------------------------------------------------------------------
+# MoonLadderStudios/MoonMind#2558 — reset-boundary + stream-failure scenarios
+# ---------------------------------------------------------------------------
+
+
+def _build_app() -> FastAPI:
+    app = FastAPI()
+    app.include_router(agent_runs_router, prefix="/api")
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=uuid4(),
+        email="admin@example.com",
+        is_superuser=True,
+    )
+    return app
+
+
+def _seed_run_with_journal(
+    *,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_id: str,
+    events: list[dict],
+    status: str = "running",
+) -> tuple[ManagedRunStore, Path]:
+    """Seed a managed run with a durable observability journal artifact."""
+    agent_jobs_root = tmp_path / "agent_jobs"
+    store_root = agent_jobs_root / "managed_runs"
+    artifacts_root = agent_jobs_root / "artifacts"
+    workspace = tmp_path / "workspace"
+    store_root.mkdir(parents=True)
+    artifacts_root.mkdir(parents=True)
+    workspace.mkdir()
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(agent_jobs_root))
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(agent_jobs_root))
+
+    journal_dir = artifacts_root / run_id
+    journal_dir.mkdir(parents=True)
+    (journal_dir / "observability.events.jsonl").write_text(
+        "\n".join(json.dumps(event) for event in events) + "\n",
+        encoding="utf-8",
+    )
+
+    store = ManagedRunStore(store_root)
+    record = ManagedRunRecord(
+        run_id=run_id,
+        agent_id="agent-livelogs",
+        runtime_id="codex_cli",
+        status=status,
+        pid=4242,
+        started_at=datetime(2026, 4, 8, 0, 0, tzinfo=UTC),
+        workspace_path=str(workspace),
+        observability_events_ref=f"{run_id}/observability.events.jsonl",
+        live_stream_capable=True,
+    )
+    store.save(record)
+    return store, workspace
+
+
+@pytest.mark.asyncio
+async def test_reset_boundary_session_event_visible_through_observability_routes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A reset-boundary session event surfaces in the durable timeline."""
+    run_id = f"reset-{uuid4().hex[:8]}"
+    events = [
+        {
+            "runId": run_id,
+            "sequence": 1,
+            "stream": "stdout",
+            "text": "starting work\n",
+            "timestamp": "2026-04-08T00:00:00Z",
+            "kind": "stdout_chunk",
+        },
+        {
+            "runId": run_id,
+            "sequence": 2,
+            "stream": "session",
+            "text": "Epoch boundary reached. Session sess-1 now on epoch 2.\n",
+            "timestamp": "2026-04-08T00:00:01Z",
+            "kind": "session_reset_boundary",
+            "sessionId": "sess-1",
+            "sessionEpoch": 2,
+            "threadId": "thread-2",
+        },
+        {
+            "runId": run_id,
+            "sequence": 3,
+            "stream": "stdout",
+            "text": "after reset\n",
+            "timestamp": "2026-04-08T00:00:02Z",
+            "kind": "stdout_chunk",
+        },
+    ]
+    _seed_run_with_journal(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        run_id=run_id,
+        events=events,
+    )
+
+    app = _build_app()
+    try:
+        with TestClient(app) as client:
+            events_resp = client.get(f"/api/agent-runs/{run_id}/observability/events")
+            assert events_resp.status_code == 200
+            body = events_resp.json()
+            assert body["source"] == "journal"
+            assert body["degraded"] is False
+            # Mixed stdout/session rows ordered by run-global sequence.
+            assert [event["sequence"] for event in body["events"]] == [1, 2, 3]
+            boundary = next(
+                event
+                for event in body["events"]
+                if event["kind"] == "session_reset_boundary"
+            )
+            assert boundary["sessionId"] == "sess-1"
+            assert boundary["sessionEpoch"] == 2
+            assert boundary["threadId"] == "thread-2"
+
+            # The reset-boundary event can be filtered explicitly.
+            filtered = client.get(
+                f"/api/agent-runs/{run_id}/observability/events"
+                "?stream=session&kind=session_reset_boundary"
+            )
+            assert filtered.status_code == 200
+            filtered_events = filtered.json()["events"]
+            assert [event["kind"] for event in filtered_events] == [
+                "session_reset_boundary"
+            ]
+
+            merged = client.get(f"/api/agent-runs/{run_id}/logs/merged")
+            assert merged.status_code == 200
+            assert merged.headers["x-merged-order-source"] == "journal"
+            assert "session (session_reset_boundary)" in merged.text
+            assert "Epoch boundary reached" in merged.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_live_stream_failure_preserves_durable_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A live-stream error must not fail the run or erase durable history."""
+    run_id = f"streamfail-{uuid4().hex[:8]}"
+    events = [
+        {
+            "runId": run_id,
+            "sequence": 1,
+            "stream": "stdout",
+            "text": "durable line\n",
+            "timestamp": "2026-04-08T00:00:00Z",
+            "kind": "stdout_chunk",
+        },
+        {
+            "runId": run_id,
+            "sequence": 2,
+            "stream": "session",
+            "text": "Session started.\n",
+            "timestamp": "2026-04-08T00:00:01Z",
+            "kind": "session_started",
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+        },
+    ]
+    store, _workspace = _seed_run_with_journal(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        run_id=run_id,
+        events=events,
+    )
+
+    metrics = MagicMock()
+
+    async def _raising_follow(*args, **kwargs):
+        raise RuntimeError("spool read failed")
+        yield  # pragma: no cover - marks this as an async generator
+
+    app = _build_app()
+    try:
+        # The live stream fails mid-connection. The endpoint must surface the
+        # error (and record the stream-error metric) without mutating the run.
+        with TestClient(app, raise_server_exceptions=False) as client:
+            with patch(
+                "api_service.api.routers.agent_runs.get_metrics_emitter",
+                return_value=metrics,
+            ):
+                with patch(
+                    "api_service.api.routers.agent_runs.SpoolLogReader.follow",
+                    new=_raising_follow,
+                ):
+                    try:
+                        client.get(f"/api/agent-runs/{run_id}/logs/stream?since=0")
+                    except RuntimeError:
+                        # Depending on transport buffering the failure may
+                        # propagate to the client; either way the run is intact.
+                        pass
+
+        assert any(
+            call.args and call.args[0] == "livelogs.stream.error"
+            for call in metrics.increment.call_args_list
+        )
+
+        # The run is not marked failed by a live-stream error.
+        reloaded = store.load(run_id)
+        assert reloaded is not None
+        assert reloaded.status == "running"
+
+        # Durable history is still fully reconstructable from artifacts.
+        with TestClient(app) as client:
+            events_resp = client.get(f"/api/agent-runs/{run_id}/observability/events")
+            assert events_resp.status_code == 200
+            body = events_resp.json()
+            assert body["source"] == "journal"
+            assert [event["sequence"] for event in body["events"]] == [1, 2]
+
+            merged = client.get(f"/api/agent-runs/{run_id}/logs/merged")
+            assert merged.status_code == 200
+            assert "durable line" in merged.text
+
+            summary = client.get(f"/api/agent-runs/{run_id}/observability-summary")
+            assert summary.status_code == 200
+            assert summary.json()["summary"]["liveStreamStatus"] == "available"
     finally:
         app.dependency_overrides.clear()

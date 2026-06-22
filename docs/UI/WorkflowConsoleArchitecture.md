@@ -412,9 +412,9 @@ Rules:
 
 For the workflow detail observability area (Live Logs panel), the correct fetch sequence is:
 
-1. `GET /api/agent-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability, and the freshest managed-session snapshot when present)
-2. `GET /api/agent-runs/{id}/logs/merged` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
-3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/agent-runs/{id}/logs/stream`
+1. `GET /api/agent-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability, `degradedReason`, and the freshest managed-session snapshot when present)
+2. Prefer `GET /api/agent-runs/{id}/observability/events` for the structured session-aware timeline (it returns `source`, `degraded`, and `degradedReason`); `GET /api/agent-runs/{id}/logs/merged` remains the merged-text fallback. **Initial content must be visible before any SSE connection is attempted**
+3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/agent-runs/{id}/logs/stream` (resume from the last `sequence` via `since=`)
 4. If the stream connection fails or is unavailable, remain in artifact-backed mode — do not leave the panel blank
 
 Rules:
@@ -558,6 +558,7 @@ Connection lifecycle is governed by panel open/close and tab visibility:
 * stream errors must not erase visible logs; the panel always shows the last artifact-backed state on error
 * ended runs are fully usable through artifact-backed views — operators do not need a live connection to inspect completed work
 * if `supports_live_streaming: false`, the panel shows artifact-backed content with no stream connection attempt
+* the visible fallback/degraded indicator is driven by backend signals, not inferred: `degradedReason` from `observability-summary` (`run_ended` / `live_stream_unavailable` / `null`), `source` + `degraded` from `observability/events` (`degradedReason: artifact_fallback` when ordering is best-effort), and the `X-Merged-Order-Source` header from `logs/merged` (`journal` / `spool` / `legacy-log-artifact` / `artifact-fallback`)
 
 ## 12.6 Stream provenance requirements
 
@@ -566,8 +567,9 @@ Log records must carry per-line stream provenance:
 * `stdout` — captured from the managed runtime's standard output
 * `stderr` — captured from the managed runtime's standard error
 * `system` — MoonMind supervisor annotations, reconnect notices, truncation warnings
+* `session` — session-aware lifecycle rows (carrying a `kind`), surfaced as distinct timeline row types: session lifecycle (`session_started`/`session_resumed`/`session_cleared`/`session_terminated`), turn lifecycle (`turn_started`/`turn_completed`/`turn_interrupted`), reset/epoch boundaries (`session_reset_boundary`/`reset_boundary_published`), approvals (`approval_requested`/`approval_resolved`), and publications (`summary_published`/`checkpoint_published`)
 
-Stream provenance is required for correct line rendering and for the merged view. The API must include `stream` on every record.
+Stream provenance is required for correct line rendering and for the merged view. The API must include `stream` on every record, and a `kind` on every `session` record. Reset/epoch boundary rows render as explicit banners or separators rather than plain lines.
 
 ## 12.7 Feature flags for observability rollout
 

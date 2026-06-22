@@ -1747,6 +1747,89 @@ class RunObservabilityEvent(BaseModel):
 
 LiveLogChunk = RunObservabilityEvent
 
+# ---------------------------------------------------------------------------
+# Session-aware Live Logs conformance contract
+# ---------------------------------------------------------------------------
+#
+# These declarations are the runtime metadata that say whether a managed
+# runtime is expected to emit session-aware timeline events, and which kinds.
+# They back the per-runtime Live Logs conformance/parity matrix tests so that
+# any runtime claiming session-aware support must keep emitting the required
+# lifecycle events.
+
+#: Session lifecycle kinds a session-aware runtime must emit.
+SESSION_LIFECYCLE_OBSERVABILITY_EVENT_KINDS: tuple[ObservabilityEventKind, ...] = (
+    "session_started",
+    "session_resumed",
+    "session_terminated",
+    "session_cleared",
+    "session_reset_boundary",
+)
+
+#: Turn lifecycle kinds a session-aware runtime must emit.
+TURN_LIFECYCLE_OBSERVABILITY_EVENT_KINDS: tuple[ObservabilityEventKind, ...] = (
+    "turn_started",
+    "turn_completed",
+    "turn_interrupted",
+)
+
+#: The minimum set of event kinds every session-aware Live Logs runtime must
+#: emit for the timeline to render session/turn/reset boundaries correctly.
+REQUIRED_SESSION_AWARE_OBSERVABILITY_EVENT_KINDS: frozenset[ObservabilityEventKind] = (
+    frozenset(SESSION_LIFECYCLE_OBSERVABILITY_EVENT_KINDS)
+    | frozenset(TURN_LIFECYCLE_OBSERVABILITY_EVENT_KINDS)
+)
+
+#: Per-runtime declaration of the observability event kinds each session-aware
+#: managed runtime is expected to emit. Keyed by canonical managed-session
+#: runtime id. A runtime present here "claims session-aware Live Logs support".
+MANAGED_SESSION_LIVE_LOGS_CONFORMANCE: dict[str, frozenset[ObservabilityEventKind]] = {
+    "codex_cli": frozenset(
+        {
+            "stdout_chunk",
+            "stderr_chunk",
+            "system_annotation",
+            "session_started",
+            "session_resumed",
+            "session_terminated",
+            "session_cleared",
+            "session_reset_boundary",
+            "turn_started",
+            "turn_completed",
+            "turn_interrupted",
+            "summary_published",
+            "checkpoint_published",
+        }
+    ),
+}
+
+def runtime_claims_session_aware_live_logs(runtime_id: str | None) -> bool:
+    """Return True when the runtime declares session-aware Live Logs support."""
+
+    if not runtime_id:
+        return False
+    canonical = canonical_managed_session_runtime_id(runtime_id) or str(
+        runtime_id
+    ).strip()
+    return canonical in MANAGED_SESSION_LIVE_LOGS_CONFORMANCE
+
+def expected_observability_event_kinds(
+    runtime_id: str | None,
+) -> frozenset[ObservabilityEventKind]:
+    """Return the event kinds a session-aware runtime is expected to emit.
+
+    Returns an empty frozenset for runtimes that do not claim session-aware
+    Live Logs support, so callers can branch on capability without a lookup
+    error.
+    """
+
+    if not runtime_id:
+        return frozenset()
+    canonical = canonical_managed_session_runtime_id(runtime_id) or str(
+        runtime_id
+    ).strip()
+    return MANAGED_SESSION_LIVE_LOGS_CONFORMANCE.get(canonical, frozenset())
+
 class ProviderCapabilityDescriptor(BaseModel):
     """Declares what an external agent provider supports at runtime."""
 

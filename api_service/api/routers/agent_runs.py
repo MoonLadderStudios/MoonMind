@@ -1148,12 +1148,19 @@ async def get_observability_summary(
         if is_terminal:
             supports_live = False
             live_stream_status = "ended"
+            # The run has finished: live follow is gone and the timeline is
+            # reconstructed from durable artifacts/structured history.
+            degraded_reason = "run_ended"
         elif raw_live_stream_capable is True:
             supports_live = True
             live_stream_status = "available"
+            degraded_reason = None
         else:  # Catches False and None
             supports_live = False
             live_stream_status = "unavailable"
+            # The runtime did not declare session-aware live streaming, so the
+            # UI must rely on durable stdout/stderr/system content only.
+            degraded_reason = "live_stream_unavailable"
 
         base = record.model_dump(by_alias=True)
         session_record = await asyncio.to_thread(_load_agent_run_session_record, str(id))
@@ -1166,6 +1173,9 @@ async def get_observability_summary(
             base["sessionStatus"] = session_record.status
         base["supportsLiveStreaming"] = supports_live
         base["liveStreamStatus"] = live_stream_status
+        # Always expose the fallback/degraded reason field (null when live
+        # streaming is available) so the UI can render a stable indicator.
+        base["degradedReason"] = degraded_reason
         base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
         return {"summary": base}
     finally:
@@ -1334,9 +1344,18 @@ async def get_agent_run_observability_events(
         if truncated:
             events = events[:limit]
 
+        # The artifact fallback path reconstructs rows from separate
+        # stdout/stderr/diagnostics artifacts and cannot guarantee a single
+        # run-global ordering, so flag it as degraded for the UI. Structured
+        # journal and the shared spool both carry the run-global sequence.
+        degraded = source == "artifacts"
+        degraded_reason = "artifact_fallback" if degraded else None
         response = {
             "events": events,
             "truncated": truncated,
+            "source": source,
+            "degraded": degraded,
+            "degradedReason": degraded_reason,
             "sessionSnapshot": _build_session_snapshot(session_record)
             or _build_record_session_snapshot(record),
         }
@@ -1413,6 +1432,11 @@ async def stream_agent_run_live_logs(
     reader = SpoolLogReader(workspace_path=str(job_workspace))
 
     async def _instrumented_generator():
+        # When the client asks to resume from a cursor, classify the first
+        # replayed chunk as a resume hit (contiguous with the cursor) or a
+        # resume miss (a gap, e.g. the spool rotated past the cursor).
+        resume_requested = since is not None
+        resume_classified = False
         try:
             # We yield lines encoded as JSON for SSE Transport
             async for chunk in reader.follow(
@@ -1421,11 +1445,18 @@ async def stream_agent_run_live_logs(
             ):
                 if await request.is_disconnected():
                     break
+                if resume_requested and not resume_classified:
+                    resume_classified = True
+                    result = "hit" if chunk.sequence == since_sequence + 1 else "miss"
+                    _emit_livelogs_metric_increment(
+                        "livelogs.stream.resume",
+                        tags={**tags, "result": result},
+                    )
                 json_str = chunk.model_dump_json(by_alias=True, exclude_none=True)
                 yield f"data: {json_str}\n\n".encode("utf-8")
-                
+
                 # Check terminal status once every few chunks if possible or dynamically,
-                # but our reader naturally expires/stops if told so. We'll verify terminal 
+                # but our reader naturally expires/stops if told so. We'll verify terminal
                 if is_terminal_agent_run_state(record.status):
                     # We continue generating until spool dries, then safely break
                     pass
