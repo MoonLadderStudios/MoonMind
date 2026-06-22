@@ -159,14 +159,27 @@ describe('Workflows Entrypoint', () => {
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    const row = (await screen.findByRole('link', { name: 'Example task' })).closest('tr');
-    expect(row).toBeTruthy();
-    const dateCells = row?.querySelectorAll('.queue-table-cell-date');
+    const row = await screen.findByRole('row', { name: /Example task/ });
+    const dateCells = row.querySelectorAll('.queue-table-cell-date');
     expect(dateCells).toHaveLength(3);
-    for (const cell of Array.from(dateCells || [])) {
-      expect(cell.textContent).toContain('/26');
+    const expectedDates = [
+      '2026-06-21T12:00:00Z',
+      '2026-06-21T12:01:00Z',
+      '2026-06-21T12:02:00Z',
+    ].map((iso) =>
+      new Date(iso).toLocaleString(undefined, {
+        year: '2-digit',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+    );
+    Array.from(dateCells).forEach((cell, index) => {
+      expect(cell.textContent).toBe(expectedDates[index]);
       expect(cell.textContent).not.toContain('2026');
-    }
+    });
   });
 
   it('does not query or render operational metrics on the workflow overview', async () => {
