@@ -1538,7 +1538,7 @@ tbody tr:hover {
   .workflow-list-header-filter-popover,
   .td-workflow-actions-popover
 ) {
-  overflow: visible;
+  padding-bottom: min(18rem, 45vh);
 }
 
 .queue-table-wrapper table {
@@ -1547,7 +1547,6 @@ tbody tr:hover {
   border-spacing: 0;
   border-radius: 0;
   background: transparent;
-  overflow: visible;
   table-layout: fixed;
   max-width: 100%;
   margin: 0;

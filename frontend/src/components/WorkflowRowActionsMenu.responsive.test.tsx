@@ -76,17 +76,18 @@ describe('WorkflowRowActionsMenu responsive layout', () => {
 });
 
 describe('Workflow list table dropdown overflow', () => {
-  it('allows table filter and action popovers to escape the table wrapper while open', () => {
+  it('reserves vertical room for table filter and action popovers without disabling horizontal scroll', () => {
     const wrapperBlock = cssRuleBlock(
       `.workflow-list-data-slab .queue-table-wrapper:has(
         .workflow-list-header-filter-popover,
         .td-workflow-actions-popover
       )`,
     );
-    expect(wrapperBlock).toContain('overflow: visible;');
+    expect(wrapperBlock).toContain('padding-bottom: min(18rem, 45vh);');
+    expect(wrapperBlock).not.toContain('overflow: visible;');
 
     const tableBlock = cssRuleBlock('.queue-table-wrapper table');
-    expect(tableBlock).toContain('overflow: visible;');
+    expect(tableBlock).not.toContain('overflow: visible;');
   });
 });
 
