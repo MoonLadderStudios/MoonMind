@@ -447,6 +447,20 @@ def test_runner_profile_registry_can_override_pentest_image_from_settings() -> N
     assert workload_profile is not None
     assert workload_profile.image == settings_image
 
+
+@pytest.mark.parametrize("unsafe_image", ["python", "python:latest"])
+def test_runner_profile_registry_revalidates_image_overrides(
+    unsafe_image: str,
+) -> None:
+    with pytest.raises(ValidationError, match="tag or digest|latest"):
+        RunnerProfileRegistry.load_file(
+            Path("config/workloads/default-runner-profiles.yaml"),
+            workspace_root=WORKSPACE_ROOT,
+            profile_image_overrides={
+                "pentestgpt-safe": unsafe_image,
+            },
+        )
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

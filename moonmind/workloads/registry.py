@@ -394,7 +394,10 @@ def _apply_profile_image_overrides(
         return list(profiles)
     normalized = {str(profile_id): str(image) for profile_id, image in overrides.items()}
     return [
-        profile.model_copy(update={"image": normalized[profile.id]})
+        RunnerProfile.model_validate(
+            profile.model_dump(mode="json", by_alias=True)
+            | {"image": normalized[profile.id]}
+        )
         if profile.id in normalized
         else profile
         for profile in profiles

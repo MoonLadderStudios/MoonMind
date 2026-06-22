@@ -34,7 +34,9 @@ def __getattr__(name: str) -> object:
     if name in _TOOL_BRIDGE_EXPORTS:
         from moonmind.workloads import tool_bridge
 
-        return getattr(tool_bridge, name)
+        value = getattr(tool_bridge, name)
+        globals()[name] = value
+        return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
