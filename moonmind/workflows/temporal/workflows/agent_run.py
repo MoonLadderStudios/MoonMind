@@ -1642,6 +1642,8 @@ class MoonMindAgentRun:
             try:
                 payload["queue_order"] = int(raw_queue_order)
             except (TypeError, ValueError):
+                # Queue metadata is best-effort; invalid values should not block
+                # otherwise valid slot requests.
                 pass
         raw_queued_at = moonmind_map.get("queuedAt", moonmind_map.get("queued_at"))
         queued_at = str(raw_queued_at or "").strip()

@@ -1110,7 +1110,7 @@ class TestProviderProfileManagerHelpers:
             "wf-older-low"
         ]
 
-    def test_missing_queue_order_uses_deterministic_fallback(self):
+    def test_missing_queue_order_preserves_arrival_order(self):
         requests = [
             PendingRequest("wf-b", "codex_cli", priority=0),
             PendingRequest("wf-a", "codex_cli", priority=0),
@@ -1122,8 +1122,50 @@ class TestProviderProfileManagerHelpers:
         )
 
         assert [request.requester_workflow_id for request in ordered] == [
-            "wf-a",
             "wf-b",
+            "wf-a",
+        ]
+
+    def test_missing_queue_order_stays_ahead_of_explicit_newer_requests(self):
+        requests = [
+            PendingRequest("wf-legacy", "codex_cli", priority=0),
+            PendingRequest("wf-new", "codex_cli", priority=0, queue_order=1),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=MoonMindProviderProfileManagerWorkflow._pending_request_sort_key,
+        )
+
+        assert [request.requester_workflow_id for request in ordered] == [
+            "wf-legacy",
+            "wf-new",
+        ]
+
+    def test_missing_queue_order_can_use_queued_at_fallback(self):
+        requests = [
+            PendingRequest(
+                "wf-newer",
+                "codex_cli",
+                priority=0,
+                queued_at="2026-06-22T10:02:00+00:00",
+            ),
+            PendingRequest(
+                "wf-older",
+                "codex_cli",
+                priority=0,
+                queued_at="2026-06-22T10:01:00+00:00",
+            ),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=MoonMindProviderProfileManagerWorkflow._pending_request_sort_key,
+        )
+
+        assert [request.requester_workflow_id for request in ordered] == [
+            "wf-older",
+            "wf-newer",
         ]
 
     @pytest.mark.asyncio

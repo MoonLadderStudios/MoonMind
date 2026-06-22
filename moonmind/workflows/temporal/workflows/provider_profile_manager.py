@@ -978,16 +978,20 @@ class MoonMindProviderProfileManagerWorkflow:
     @staticmethod
     def _pending_request_sort_key(
         request: PendingRequest,
-    ) -> tuple[int, int, int, str, str]:
-        missing_order = 1 if request.queue_order is None else 0
-        order = request.queue_order if request.queue_order is not None else 0
+    ) -> tuple[int, int, int, str]:
         queued_at = request.queued_at or ""
+        if request.queue_order is None:
+            return (
+                -request.priority,
+                0,
+                0,
+                queued_at,
+            )
         return (
             -request.priority,
-            missing_order,
-            order,
+            1,
+            request.queue_order,
             queued_at,
-            request.requester_workflow_id,
         )
 
     @staticmethod
