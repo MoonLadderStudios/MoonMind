@@ -978,22 +978,51 @@ ManagedSessionDockerCapabilityMode = Literal[
     "sidecar-dind",
     "sidecar-dind-rootless",
 ]
+ManagedSessionDockerActivation = Literal[
+    "denied",
+    "on_demand",
+    "on_launch",
+]
+ManagedSessionDockerState = Literal[
+    "not_allowed",
+    "not_started",
+    "starting",
+    "ready",
+    "failed",
+]
 
 class ManagedSessionDockerCapabilityRequest(BaseModel):
-    """Requested Docker capability readiness contract for managed-session launch."""
+    """Requested Docker authorization/materialization contract for launch."""
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    required: bool = Field(False, alias="required")
+    allowed: bool = Field(True, alias="allowed")
     mode: ManagedSessionDockerCapabilityMode = Field("sidecar-dind", alias="mode")
-    docker_host: str | None = Field(None, alias="dockerHost")
-    compose_support: bool = Field(False, alias="composeSupport")
+    activation: ManagedSessionDockerActivation = Field("on_demand", alias="activation")
+    state: ManagedSessionDockerState = Field("not_started", alias="state")
+    docker_host: str | None = Field(
+        "unix:///var/run/moonmind-docker/docker.sock",
+        alias="dockerHost",
+    )
+    compose_support: bool = Field(True, alias="composeSupport")
     manifest_image_ref: str | None = Field(None, alias="manifestImageRef")
     timeout_seconds: float = Field(60.0, alias="timeoutSeconds", ge=0)
     interval_seconds: float = Field(2.0, alias="intervalSeconds", ge=0)
 
     @model_validator(mode="after")
     def _normalize(self) -> "ManagedSessionDockerCapabilityRequest":
+        if not self.allowed:
+            self.activation = "denied"
+            self.state = "not_allowed"
+            self.docker_host = None
+        elif self.activation == "denied":
+            raise ValueError(
+                "dockerCapability.activation=denied requires allowed=false"
+            )
+        elif self.state == "not_allowed":
+            raise ValueError(
+                "dockerCapability.state=not_allowed requires allowed=false"
+            )
         if self.docker_host is not None:
             self.docker_host = require_non_blank(
                 self.docker_host,
@@ -1005,6 +1034,41 @@ class ManagedSessionDockerCapabilityRequest(BaseModel):
                 field_name="dockerCapability.manifestImageRef",
             )
         return self
+
+class ManagedSessionEnsureDockerSidecarRequest(BaseModel):
+    """Explicit request to materialize a managed session's Docker sidecar."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
+    container_id: NonBlankStr = Field(..., alias="containerId")
+    thread_id: NonBlankStr | None = Field(None, alias="threadId")
+    reason: NonBlankStr | None = Field(None, alias="reason")
+    compose_required: bool = Field(False, alias="composeRequired")
+
+class ManagedSessionDockerDaemonStatus(BaseModel):
+    """Observed daemon readiness for a managed session Docker sidecar."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    ready: bool = Field(False, alias="ready")
+    version: str = Field("", alias="version")
+
+class ManagedSessionEnsureDockerSidecarResponse(BaseModel):
+    """Result of idempotent managed-session Docker sidecar activation."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    state: ManagedSessionDockerState = Field(..., alias="state")
+    docker_host: str | None = Field(None, alias="dockerHost")
+    mode: ManagedSessionDockerCapabilityMode = Field("sidecar-dind", alias="mode")
+    compose_available: bool = Field(False, alias="composeAvailable")
+    daemon: ManagedSessionDockerDaemonStatus = Field(
+        default_factory=ManagedSessionDockerDaemonStatus,
+        alias="daemon",
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata")
 
 class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     """Launch contract for a workflow-scoped remote Codex session container."""
@@ -4667,8 +4731,13 @@ __all__ = [
     "ManagedSessionRuntimeId",
     "ManagedGitHubCredentialDescriptor",
     "ManagedGitHubCredentialSource",
+    "ManagedSessionDockerActivation",
     "ManagedSessionDockerCapabilityMode",
     "ManagedSessionDockerCapabilityRequest",
+    "ManagedSessionDockerDaemonStatus",
+    "ManagedSessionDockerState",
+    "ManagedSessionEnsureDockerSidecarRequest",
+    "ManagedSessionEnsureDockerSidecarResponse",
     "ManagedSessionContainerBackend",
     "MANAGED_SESSION_CONTROL_ACTIONS",
     "ManagedSessionControlAction",

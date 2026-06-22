@@ -203,7 +203,7 @@ def test_launch_managed_session_request_rejects_claude_code_runtime_family() -> 
             imageRef="moonmind:latest",
         )
 
-def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
+def test_mm866_launch_request_serializes_lazy_docker_capability_contract() -> None:
     request = LaunchCodexManagedSessionRequest(
         agentRunId="task-123",
         sessionId="sess-123",
@@ -214,8 +214,10 @@ def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
         codexHomePath="/work/task/codex-home",
         imageRef="moonmind:latest",
         dockerCapability={
-            "required": True,
+            "allowed": True,
             "mode": "sidecar-dind-rootless",
+            "activation": "on_demand",
+            "state": "not_started",
             "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
             "composeSupport": True,
             "timeoutSeconds": 30,
@@ -226,8 +228,10 @@ def test_mm693_launch_request_serializes_docker_capability_contract() -> None:
     payload = request.model_dump(mode="json", by_alias=True)
 
     assert payload["dockerCapability"] == {
-        "required": True,
+        "allowed": True,
         "mode": "sidecar-dind-rootless",
+        "activation": "on_demand",
+        "state": "not_started",
         "dockerHost": "unix:///var/run/moonmind-docker/docker.sock",
         "composeSupport": True,
         "manifestImageRef": None,

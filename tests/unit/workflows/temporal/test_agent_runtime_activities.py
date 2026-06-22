@@ -41,6 +41,7 @@ from moonmind.schemas.managed_session_models import (
     CodexManagedSessionSummary,
     CodexManagedSessionTurnResponse,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionEnsureDockerSidecarResponse,
 )
 from moonmind.schemas.temporal_activity_models import (
     AgentRuntimeCancelInput,
@@ -1564,6 +1565,34 @@ async def test_launch_session_delegates_to_remote_session_controller() -> None:
     assert isinstance(result, CodexManagedSessionHandle)
     assert result.session_state.container_id == "ctr-1"
     controller.launch_session.assert_awaited_once()
+
+async def test_mm866_ensure_docker_sidecar_delegates_to_remote_controller() -> None:
+    controller = AsyncMock()
+    controller.ensure_docker_sidecar = AsyncMock(
+        return_value=ManagedSessionEnsureDockerSidecarResponse(
+            state="ready",
+            dockerHost="unix:///var/run/moonmind-docker/docker.sock",
+            mode="sidecar-dind",
+            composeAvailable=True,
+            daemon={"ready": True, "version": "27.0.0"},
+        )
+    )
+    activities = TemporalAgentRuntimeActivities(session_controller=controller)
+
+    result = await activities.agent_runtime_ensure_docker_sidecar(
+        {
+            "sessionId": "sess-1",
+            "sessionEpoch": 1,
+            "containerId": "ctr-1",
+            "threadId": "thread-1",
+            "reason": "repo uses docker compose for tests",
+            "composeRequired": True,
+        }
+    )
+
+    assert result.state == "ready"
+    assert result.compose_available is True
+    controller.ensure_docker_sidecar.assert_awaited_once()
 
 async def test_launch_session_heartbeats_while_waiting_for_remote_session_controller(
     monkeypatch: pytest.MonkeyPatch,
