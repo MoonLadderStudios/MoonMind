@@ -38,7 +38,8 @@ def _request(workspace_root: Path) -> LaunchCodexManagedSessionRequest:
             "MOONMIND_WORKFLOW_DOCKER_MODE": "profiles",
         },
         dockerCapability={
-            "required": True,
+            "allowed": True,
+            "activation": "on_launch",
             "manifestImageRef": (
                 "ghcr.io/moonladderstudios/moonmind-unreal-runner"
                 "@sha256:"

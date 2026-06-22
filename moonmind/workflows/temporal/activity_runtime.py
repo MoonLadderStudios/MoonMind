@@ -152,6 +152,8 @@ from moonmind.schemas.managed_session_models import (
     FetchCodexManagedSessionSummaryRequest,
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
+    ManagedSessionEnsureDockerSidecarRequest,
+    ManagedSessionEnsureDockerSidecarResponse,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
     SteerCodexManagedSessionTurnRequest,
@@ -914,6 +916,11 @@ class ManagedSessionController(Protocol):
     ) -> CodexManagedSessionHandle | Mapping[str, Any]:
         pass
 
+    async def ensure_docker_sidecar(
+        self, request: ManagedSessionEnsureDockerSidecarRequest, /
+    ) -> ManagedSessionEnsureDockerSidecarResponse | Mapping[str, Any]:
+        pass
+
     async def terminate_session(
         self, request: TerminateCodexManagedSessionRequest, /
     ) -> CodexManagedSessionHandle | Mapping[str, Any]:
@@ -1209,6 +1216,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.clear_session": (
         "agent_runtime",
         "agent_runtime_clear_session",
+    ),
+    "agent_runtime.ensure_docker_sidecar": (
+        "agent_runtime",
+        "agent_runtime_ensure_docker_sidecar",
     ),
     "agent_runtime.terminate_session": (
         "agent_runtime",
@@ -8055,6 +8066,35 @@ class TemporalAgentRuntimeActivities:
             response,
             activity_type="agent_runtime.clear_session",
             model_type=CodexManagedSessionHandle,
+        )
+
+    async def agent_runtime_ensure_docker_sidecar(
+        self,
+        request: Mapping[str, Any]
+        | ManagedSessionEnsureDockerSidecarRequest
+        | None = None,
+        /,
+    ) -> ManagedSessionEnsureDockerSidecarResponse:
+        controller = self._require_session_controller(
+            activity_type="agent_runtime.ensure_docker_sidecar"
+        )
+        validated = self._validate_session_request(
+            request,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarRequest,
+        )
+        response = await _await_with_activity_heartbeats(
+            controller.ensure_docker_sidecar(validated),
+            heartbeat_payload={
+                "activityType": "agent_runtime.ensure_docker_sidecar",
+                "sessionId": validated.session_id,
+                "containerId": validated.container_id,
+            },
+        )
+        return self._validate_session_response(
+            response,
+            activity_type="agent_runtime.ensure_docker_sidecar",
+            model_type=ManagedSessionEnsureDockerSidecarResponse,
         )
 
     async def agent_runtime_terminate_session(
