@@ -1009,6 +1009,18 @@ class ManagedSessionDockerCapabilityRequest(BaseModel):
     timeout_seconds: float = Field(60.0, alias="timeoutSeconds", ge=0)
     interval_seconds: float = Field(2.0, alias="intervalSeconds", ge=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_required_payload(cls, value: object) -> object:
+        if not isinstance(value, dict) or "required" not in value:
+            return value
+        migrated = dict(value)
+        required = bool(migrated.pop("required"))
+        migrated.setdefault("allowed", True)
+        migrated.setdefault("activation", "on_launch" if required else "on_demand")
+        migrated.setdefault("state", "not_started")
+        return migrated
+
     @model_validator(mode="after")
     def _normalize(self) -> "ManagedSessionDockerCapabilityRequest":
         if not self.allowed:

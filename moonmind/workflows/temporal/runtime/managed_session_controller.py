@@ -488,11 +488,7 @@ class DockerCodexManagedSessionController:
     def _docker_activation_at_launch(
         capability: ManagedSessionDockerCapabilityRequest | None,
     ) -> bool:
-        return (
-            capability is not None
-            and capability.allowed
-            and capability.activation == "on_launch"
-        )
+        return capability is not None and capability.allowed
 
     def _session_docker_sidecar_image(self) -> str:
         return (
@@ -1325,6 +1321,7 @@ class DockerCodexManagedSessionController:
                 docker_network=docker_network,
             )
         else:
+            await self._run((self._docker_binary, "start", sidecar_name))
             await self._wait_docker_sidecar_ready(sidecar_name)
 
         probe_capability = ManagedSessionDockerCapabilityRequest(
@@ -2549,8 +2546,14 @@ class DockerCodexManagedSessionController:
         if docker_sidecar_enabled:
             session_environment["DOCKER_HOST"] = f"unix://{_SESSION_DOCKER_SOCKET_PATH}"
             session_environment.pop("SYSTEM_DOCKER_HOST", None)
-        else:
+            if docker_capability is not None and docker_capability.activation == "on_demand":
+                session_environment["MOONMIND_DOCKER_ACTIVATION_COMMAND"] = "true"
+        elif docker_capability is None:
             self._apply_unrestricted_docker_session_environment(session_environment)
+        else:
+            session_environment.pop("DOCKER_HOST", None)
+            session_environment.pop("SYSTEM_DOCKER_HOST", None)
+            session_environment.pop("MOONMIND_DOCKER_ACTIVATION_COMMAND", None)
         docker_pull_diagnostics: dict[str, Any] = {
             "pullAuth": "anonymous",
             "registry": "ghcr.io",
@@ -2630,9 +2633,13 @@ class DockerCodexManagedSessionController:
         docker_network = self._network_name or _managed_session_docker_network(
             session_environment
         )
-        unrestricted_proxy_network = self._unrestricted_docker_proxy_network(
-            session_environment=session_environment,
-            docker_network=docker_network,
+        unrestricted_proxy_network = (
+            None
+            if docker_capability is not None
+            else self._unrestricted_docker_proxy_network(
+                session_environment=session_environment,
+                docker_network=docker_network,
+            )
         )
         if docker_network:
             run_command.extend(["--network", docker_network])

@@ -175,8 +175,8 @@ RUN apt-get update && \
 
 RUN install -d -m 0755 /usr/libexec/moonmind && \
     mv /usr/bin/docker /usr/libexec/moonmind/docker-real
-COPY api_service/docker/moonmind-docker-wrapper.sh /usr/local/bin/docker
-RUN chmod 0755 /usr/local/bin/docker /usr/libexec/moonmind/docker-real
+COPY api_service/docker/moonmind-docker-wrapper.sh /usr/bin/docker
+RUN chmod 0755 /usr/bin/docker /usr/libexec/moonmind/docker-real
 
 # Ensure the non-root ``app`` user exists for Temporal workers and the bundled
 # CLIs remain executable from its PATH.

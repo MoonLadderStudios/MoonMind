@@ -20,8 +20,10 @@ if [ "$first_arg" = "system" ]; then
     fi
 fi
 
-if [ -n "${MOONMIND_DOCKER_ACTIVATION_COMMAND:-}" ]; then
+SENTINEL="/tmp/.moonmind_docker_activated"
+if [ -n "${MOONMIND_DOCKER_ACTIVATION_COMMAND:-}" ] && [ ! -f "$SENTINEL" ]; then
     sh -c "$MOONMIND_DOCKER_ACTIVATION_COMMAND"
+    touch "$SENTINEL"
 fi
 
 exec "$REAL_DOCKER" "$@"
