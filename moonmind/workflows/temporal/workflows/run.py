@@ -133,6 +133,7 @@ from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
+from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
 from moonmind.workflows.temporal.activity_catalog import (
     INTEGRATIONS_TASK_QUEUE,
     WORKFLOW_TASK_QUEUE,
@@ -376,6 +377,7 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
+RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -5384,6 +5386,14 @@ class MoonMindRunWorkflow:
             "scheduledFor",
             "scheduled_for",
         )
+        if (
+            not scheduled_for
+            and self._has_recurrence_metadata(parameters)
+            and workflow.patched(RUN_RECURRING_SCHEDULED_START_PATCH)
+        ):
+            temporal_scheduled_for = temporal_scheduled_start_time(workflow.info())
+            if temporal_scheduled_for is not None:
+                scheduled_for = temporal_scheduled_for.isoformat()
 
         if input_ref:
             self._input_ref = input_ref
@@ -5393,6 +5403,13 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _has_recurrence_metadata(self, parameters: Mapping[str, Any]) -> bool:
+        system_payload = parameters.get("system")
+        if not isinstance(system_payload, Mapping):
+            return False
+        recurrence_payload = system_payload.get("recurrence")
+        return isinstance(recurrence_payload, Mapping) and bool(recurrence_payload)
 
     def _record_bounded_story_loop_context(
         self,

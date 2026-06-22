@@ -14,6 +14,7 @@ from uuid import UUID
 
 import pytest
 from temporalio.client import ScheduleOverlapPolicy, ScheduleUpdate
+from temporalio.common import SearchAttributeKey
 
 from moonmind.workflows.temporal.client import (
     MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
@@ -78,6 +79,35 @@ class TestCreateSchedule:
         
         schedule_arg = call_args[0][1]
         assert schedule_arg.action.id == f"mm:{_TEST_UUID}:{{{{.ScheduleTime}}}}"
+
+    @pytest.mark.asyncio
+    async def test_does_not_template_scheduled_for_search_attribute(self) -> None:
+        mock_handle = MagicMock()
+        mock_handle.id = _SCHEDULE_ID
+        mock_client = MagicMock()
+        mock_client.create_schedule = AsyncMock(return_value=mock_handle)
+
+        adapter = _make_adapter(mock_client)
+        await adapter.create_schedule(
+            definition_id=_TEST_UUID,
+            cron_expression="0 0 * * *",
+            workflow_type="MoonMind.UserWorkflow",
+            search_attributes={"mm_owner_id": "user-1"},
+        )
+
+        schedule_arg = mock_client.create_schedule.call_args[0][1]
+        typed_search_attributes = schedule_arg.action.typed_search_attributes
+        assert typed_search_attributes is not None
+        assert (
+            typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_owner_id"))
+            == "user-1"
+        )
+        assert (
+            typed_search_attributes.get(
+                SearchAttributeKey.for_datetime("mm_scheduled_for")
+            )
+            is None
+        )
 
     @pytest.mark.asyncio
     async def test_overlap_policy_passed_through(self) -> None:

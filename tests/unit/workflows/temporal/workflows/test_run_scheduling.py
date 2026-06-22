@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -7,6 +8,11 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker, UnsandboxedWorkflowRunner
 
 from temporalio import workflow
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 from moonmind.workflows.temporal.workflows.run import (
     DEPENDENCY_GATE_PATCH,
     MoonMindUserWorkflow,
@@ -36,6 +42,89 @@ def mock_run_environment(monkeypatch):
     async def fake_execution_stage(*args, **kwargs): pass
     monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
     monkeypatch.setattr(MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage)
+
+def test_initializes_recurring_run_from_temporal_scheduled_start_time(monkeypatch):
+    scheduled_start = datetime(2026, 6, 22, 9, 30, tzinfo=timezone.utc)
+    workflow_instance = MoonMindUserWorkflow()
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "user-1"),
+    )
+    monkeypatch.setattr(workflow, "memo", lambda: {})
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        workflow,
+        "info",
+        lambda: SimpleNamespace(
+            typed_search_attributes=TypedSearchAttributes(
+                [
+                    SearchAttributePair(
+                        SearchAttributeKey.for_datetime(
+                            "TemporalScheduledStartTime"
+                        ),
+                        scheduled_start,
+                    )
+                ]
+            ),
+            search_attributes={},
+        ),
+    )
+
+    result = workflow_instance._initialize_from_payload(
+        {
+            "workflow_type": "MoonMind.UserWorkflow",
+            "initial_parameters": {
+                "system": {
+                    "recurrence": {
+                        "definitionId": "364cc408-29c9-4745-beae-bad55aacd9b5"
+                    }
+                }
+            },
+        }
+    )
+
+    assert result[-1] == scheduled_start.isoformat()
+    assert workflow_instance._scheduled_for == scheduled_start.isoformat()
+
+def test_initializes_recurring_run_from_string_temporal_scheduled_start_time(
+    monkeypatch,
+):
+    scheduled_start = "2026-06-22T09:30:00+00:00"
+    workflow_instance = MoonMindUserWorkflow()
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow,
+        "_trusted_owner_metadata",
+        lambda self: ("user", "user-1"),
+    )
+    monkeypatch.setattr(workflow, "memo", lambda: {})
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        workflow,
+        "info",
+        lambda: SimpleNamespace(
+            typed_search_attributes=None,
+            search_attributes={"TemporalScheduledStartTime": scheduled_start},
+        ),
+    )
+
+    result = workflow_instance._initialize_from_payload(
+        {
+            "workflow_type": "MoonMind.UserWorkflow",
+            "initial_parameters": {
+                "system": {
+                    "recurrence": {
+                        "definitionId": "364cc408-29c9-4745-beae-bad55aacd9b5"
+                    }
+                }
+            },
+        }
+    )
+
+    assert result[-1] == scheduled_start
+    assert workflow_instance._scheduled_for == scheduled_start
 
 @pytest.mark.asyncio
 async def test_run_workflow_scheduled(mock_run_environment):
