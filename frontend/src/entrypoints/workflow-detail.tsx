@@ -5482,6 +5482,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     );
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
+  // The remediation mode/authority/action-policy controls only render on the Artifacts
+  // tab, so only expose the Remediate action there. Surfacing it on other tabs would let
+  // the operator submit with default remediation settings without seeing those controls.
+  const remediationActionAvailable = canCreateRemediation && detailSubroute === 'artifacts';
   const canShowEditWorkflow = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const editTaskUnavailableReason = canShowEditWorkflow
     ? null
@@ -5531,7 +5535,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     selectedRecoveryStepDisabledReason: selectedRecoveryStep?.reason
       ? formatStatusLabel(selectedRecoveryStep.reason)
       : 'selected step is not eligible',
-    canCreateRemediation,
+    canCreateRemediation: remediationActionAvailable,
     handlers: {
       onRename,
       onEditTask: () => {
@@ -5759,89 +5763,89 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           ) : null}
 
           {detailSubroute === 'overview' ? (
-          <div className="td-facts-region">
-            <SkillProvenanceBadge
-              resolvedSkillsetRef={execution.resolvedSkillsetRef}
-              taskSkills={execution.taskSkills}
-              targetSkill={execution.targetSkill}
-              skillRuntime={execution.skillRuntime}
-            />
+            <div className="td-facts-region">
+              <SkillProvenanceBadge
+                resolvedSkillsetRef={execution.resolvedSkillsetRef}
+                taskSkills={execution.taskSkills}
+                targetSkill={execution.targetSkill}
+                skillRuntime={execution.skillRuntime}
+              />
 
-            <FactGroup title="Runtime">
-              {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
-              {execution.model ? (
-                <Fact label="Model">
-                  <code className="text-xs">{execution.model}</code>
-                </Fact>
-              ) : null}
-              {execution.profileId ? (
-                <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
-              ) : null}
-              {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
-              {execution.priority !== null && execution.priority !== undefined ? (
-                <Fact label="Priority">{execution.priority}</Fact>
-              ) : null}
-            </FactGroup>
+              <FactGroup title="Runtime">
+                {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
+                {execution.model ? (
+                  <Fact label="Model">
+                    <code className="text-xs">{execution.model}</code>
+                  </Fact>
+                ) : null}
+                {execution.profileId ? (
+                  <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
+                ) : null}
+                {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
+                {execution.priority !== null && execution.priority !== undefined ? (
+                  <Fact label="Priority">{execution.priority}</Fact>
+                ) : null}
+              </FactGroup>
 
-            <FactGroup title="Git & Publish">
-              {execution.repository ? (
-                <Fact label="Repository">
-                  <code className="text-xs break-all">{execution.repository}</code>
-                </Fact>
-              ) : null}
-              {execution.publishMode ? (
-                <Fact label="Publish Mode">
-                  {formatPublishModeLabel(execution.publishMode)}
-                </Fact>
-              ) : null}
-              {execution.startingBranch ? (
-                <Fact label="Starting Branch">
-                  <code className="text-xs break-all">{execution.startingBranch}</code>
-                </Fact>
-              ) : null}
-              {execution.targetBranch ? (
-                <Fact label="Target Branch">
-                  <code className="text-xs break-all">{execution.targetBranch}</code>
-                </Fact>
-              ) : null}
-              {prUrl ? (
-                <Fact label="PR Link">
-                  <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
-                    {prUrl}
-                  </a>
-                </Fact>
-              ) : null}
-            </FactGroup>
+              <FactGroup title="Git & Publish">
+                {execution.repository ? (
+                  <Fact label="Repository">
+                    <code className="text-xs break-all">{execution.repository}</code>
+                  </Fact>
+                ) : null}
+                {execution.publishMode ? (
+                  <Fact label="Publish Mode">
+                    {formatPublishModeLabel(execution.publishMode)}
+                  </Fact>
+                ) : null}
+                {execution.startingBranch ? (
+                  <Fact label="Starting Branch">
+                    <code className="text-xs break-all">{execution.startingBranch}</code>
+                  </Fact>
+                ) : null}
+                {execution.targetBranch ? (
+                  <Fact label="Target Branch">
+                    <code className="text-xs break-all">{execution.targetBranch}</code>
+                  </Fact>
+                ) : null}
+                {prUrl ? (
+                  <Fact label="PR Link">
+                    <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
+                      {prUrl}
+                    </a>
+                  </Fact>
+                ) : null}
+              </FactGroup>
 
-            <FactGroup title="Lifecycle">
-              <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
-              <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
-              <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
-              <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
-              {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
-              {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
-            </FactGroup>
+              <FactGroup title="Lifecycle">
+                <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
+                <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
+                <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
+                <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
+                {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
+                {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
+              </FactGroup>
 
-            <FactGroup title="Temporal">
-              <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
-              <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
-              {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
-              <Fact label="Source">Temporal</Fact>
-              <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
-              <Fact label="Entry">{execution.entry || '—'}</Fact>
-              <Fact label="Current Run ID">
-                <code className="text-xs break-all">{latestRunId || '—'}</code>
-              </Fact>
-              {resolvedAgentRunId ? (
-                <Fact label="Workflow Run">
-                  <code className="text-xs break-all">{resolvedAgentRunId}</code>
+              <FactGroup title="Temporal">
+                <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
+                <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
+                {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
+                <Fact label="Source">Temporal</Fact>
+                <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
+                <Fact label="Entry">{execution.entry || '—'}</Fact>
+                <Fact label="Current Run ID">
+                  <code className="text-xs break-all">{latestRunId || '—'}</code>
                 </Fact>
-              ) : null}
-              <Fact label="Workflow ID">
-                <code className="text-xs break-all">{workflowId}</code>
-              </Fact>
-            </FactGroup>
-          </div>
+                {resolvedAgentRunId ? (
+                  <Fact label="Workflow Run">
+                    <code className="text-xs break-all">{resolvedAgentRunId}</code>
+                  </Fact>
+                ) : null}
+                <Fact label="Workflow ID">
+                  <code className="text-xs break-all">{workflowId}</code>
+                </Fact>
+              </FactGroup>
+            </div>
           ) : null}
 
           {detailSubroute === 'overview' && runSummary ? (
@@ -6181,7 +6185,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             />
           ) : null}
 
-          {detailSubroute === 'artifacts' && actionsOn && actions && canCreateRemediation ? (
+          {actionsOn && actions && remediationActionAvailable ? (
             <section className="stack td-actions-region">
               <div className="stack td-remediation-create-preview">
                 <h4>Remediation create preview</h4>

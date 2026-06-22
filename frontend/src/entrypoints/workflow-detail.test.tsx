@@ -2434,6 +2434,9 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('opens a Workflow actions menu with labels for every currently available workflow operation', async () => {
+    // Remediate is only available on the Artifacts surface where its create-preview
+    // controls render, so exercise the full menu from the Artifacts subroute.
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -2549,6 +2552,69 @@ describe('Workflow Detail Entrypoint', () => {
     ]) {
       expect(within(menu).getByRole('menuitem', { name: label })).toBeTruthy();
     }
+  });
+
+  it('hides the Remediate action off the Artifacts surface where its controls are unavailable', async () => {
+    // The remediation mode/authority/action-policy controls only render on the Artifacts
+    // tab; surfacing Remediate elsewhere would submit default settings without operator choice.
+    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Action menu task',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canSetTitle: true,
+        canCancel: true,
+      },
+      stepsHref: '/api/executions/test-123/steps',
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => ({ steps: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
+
+    const trigger = await screen.findByRole('button', { name: 'Workflow actions' });
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('menu', { name: 'Workflow actions' });
+    expect(within(menu).getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
   });
 
   it('routes menu selections through existing handlers and preserves destructive confirmations', async () => {
