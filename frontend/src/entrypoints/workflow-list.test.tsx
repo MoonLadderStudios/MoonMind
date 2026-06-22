@@ -137,6 +137,38 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
+  it('renders workflow table dates with two-digit years', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            scheduledFor: '2026-06-21T12:00:00Z',
+            createdAt: '2026-06-21T12:01:00Z',
+            closedAt: '2026-06-21T12:02:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = (await screen.findByRole('link', { name: 'Example task' })).closest('tr');
+    expect(row).toBeTruthy();
+    const dateCells = row?.querySelectorAll('.queue-table-cell-date');
+    expect(dateCells).toHaveLength(3);
+    for (const cell of Array.from(dateCells || [])) {
+      expect(cell.textContent).toContain('/26');
+      expect(cell.textContent).not.toContain('2026');
+    }
+  });
+
   it('does not query or render operational metrics on the workflow overview', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
