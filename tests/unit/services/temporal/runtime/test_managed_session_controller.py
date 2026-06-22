@@ -3791,6 +3791,97 @@ async def test_controller_clear_session_publishes_durable_reset_artifacts(
     assert publication.latest_control_event_ref == "sess-1/session.control_event.epoch-2.json"
     assert publication.latest_reset_boundary_ref == "sess-1/session.reset_boundary.epoch-2.json"
 
+
+@pytest.mark.asyncio
+async def test_controller_clear_session_request_id_returns_published_duplicate(
+    tmp_path: Path,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+    store = ManagedSessionStore(tmp_path / "session-store")
+    artifact_storage = _LocalArtifactStorage(tmp_path / "published")
+    supervisor = ManagedSessionSupervisor(
+        store=store,
+        log_streamer=RuntimeLogStreamer(artifact_storage),
+        artifact_storage=artifact_storage,
+        poll_interval_seconds=0.01,
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-1",
+            threadId="logical-thread-1",
+            runtimeId="codex_cli",
+            imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+            controlUrl="docker-exec://mm-codex-session-sess-1",
+            status="ready",
+            workspacePath="/work/agent_jobs/task-1/repo",
+            sessionWorkspacePath="/work/agent_jobs/task-1/session",
+            artifactSpoolPath="/work/agent_jobs/task-1/artifacts",
+            startedAt=datetime(2026, 4, 7, 8, 0, tzinfo=UTC),
+        )
+    )
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if "clear_session" in command:
+            return (
+                0,
+                json.dumps(
+                    {
+                        "sessionState": {
+                            "sessionId": "sess-1",
+                            "sessionEpoch": 2,
+                            "containerId": "ctr-1",
+                            "threadId": "logical-thread-2",
+                        },
+                        "status": "ready",
+                        "imageRef": "ghcr.io/moonladderstudios/moonmind:latest",
+                        "controlUrl": "docker-exec://mm-codex-session-sess-1",
+                    }
+                ),
+                "",
+            )
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=supervisor,
+        command_runner=_fake_runner,
+    )
+
+    request = CodexManagedSessionClearRequest(
+        sessionId="sess-1",
+        sessionEpoch=1,
+        containerId="ctr-1",
+        threadId="logical-thread-1",
+        newThreadId="logical-thread-2",
+        requestId="clear-request-1",
+        reason="reset stale context",
+    )
+    first = await controller.clear_session(request)
+    duplicate = await controller.clear_session(request)
+
+    assert first.session_state.session_epoch == 2
+    assert duplicate.session_state.session_epoch == 2
+    assert duplicate.metadata["idempotentReplay"] is True
+    assert duplicate.metadata["requestId"] == "clear-request-1"
+    assert len([command for command in commands if "clear_session" in command]) == 1
+    stored = store.load("sess-1")
+    assert stored is not None
+    assert stored.metadata["lastClearRequest"]["status"] == "completed"
+    assert stored.metadata["lastClearRequest"]["requestId"] == "clear-request-1"
+
+
 @pytest.mark.asyncio
 async def test_controller_send_turn_tolerates_event_publication_failure(
     tmp_path: Path,
@@ -3860,6 +3951,104 @@ async def test_controller_send_turn_tolerates_event_publication_failure(
     )
 
     assert response.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_records_empty_assistant_metadata(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    session_supervisor = Mock()
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "vendor-turn-1",
+                "status": "failed",
+                "metadata": {
+                    "reason": (
+                        "codex app-server turn/completed produced no assistant output"
+                    ),
+                    "failureClass": "transient",
+                    "failureCause": "app_server_protocol_empty_turn",
+                    "retryRecommendedAction": "clear_session",
+                },
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+    )
+
+    response = await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+            instructions="Inspect the workspace",
+        )
+    )
+
+    assert response.status == "failed"
+    stored = store.load("sess-1")
+    assert stored is not None
+    empty_turn = stored.metadata["emptyAssistantTurn"]
+    assert empty_turn["failureCause"] == "app_server_protocol_empty_turn"
+    assert empty_turn["consecutiveCount"] == 1
+    session_supervisor.emit_session_event.assert_any_call(
+        record=stored,
+        text=(
+            "Codex app-server completed a turn without assistant output; "
+            "session clear is recommended."
+        ),
+        kind="empty_assistant_turn_detected",
+        turn_id="vendor-turn-1",
+        active_turn_id=None,
+        metadata={
+            "action": "send_turn",
+            "failureCause": "app_server_protocol_empty_turn",
+            "retryRecommendedAction": "clear_session",
+            "reason": "codex app-server turn/completed produced no assistant output",
+            "consecutiveCount": 1,
+        },
+    )
+
 
 @pytest.mark.asyncio
 async def test_controller_clear_session_preserves_retrieval_metadata_in_durable_outputs(

@@ -1326,6 +1326,77 @@ def test_agent_session_legacy_control_action_signal_replays_clear_session(
     assert status["lastControlAction"] == "clear_session"
     assert status["lastControlReason"] == "Replay old clear event"
 
+
+def test_agent_session_epoch_bearing_clear_signal_applies_exact_snapshot_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
+    )
+
+    clear_payload = {
+        "action": "clear_session",
+        "reason": "Apply exact clear state",
+        "sessionEpoch": 2,
+        "containerId": "container-1",
+        "threadId": "thread-2",
+        "activeTurnId": None,
+    }
+
+    workflow.apply_control_action(clear_payload)
+    workflow.apply_control_action(clear_payload)
+
+    status = workflow.get_status()
+    assert status["status"] == AGENT_SESSION_STATUS_ACTIVE
+    assert status["binding"]["sessionEpoch"] == 2
+    assert status["threadId"] == "thread-2"
+    assert status["activeTurnId"] is None
+    assert status["lastControlAction"] == "clear_session"
+    assert status["lastControlReason"] == "Apply exact clear state"
+
+
+def test_agent_session_attach_clear_handles_clear_stale_active_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindAgentSessionWorkflow(_workflow_input())
+    workflow.attach_runtime_handles(
+        _runtime_handles(
+            {
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": "turn-1",
+            }
+        )
+    )
+
+    workflow.attach_runtime_handles(
+        _runtime_handles(
+            {
+                "sessionEpoch": 2,
+                "containerId": "container-1",
+                "threadId": "thread-2",
+                "activeTurnId": None,
+                "lastControlAction": "clear_session",
+                "lastControlReason": "reset",
+            }
+        )
+    )
+
+    status = workflow.get_status()
+    assert status["binding"]["sessionEpoch"] == 2
+    assert status["threadId"] == "thread-2"
+    assert status["activeTurnId"] is None
+
+
 @pytest.mark.asyncio
 async def test_agent_session_async_mutators_wait_for_workflow_lock(
     monkeypatch: pytest.MonkeyPatch,

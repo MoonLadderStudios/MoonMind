@@ -1107,6 +1107,7 @@ class CodexManagedSessionClearRequest(CodexManagedSessionLocator):
 
     new_thread_id: NonBlankStr = Field(..., alias="newThreadId")
     reason: NonBlankStr | None = Field(None, alias="reason")
+    request_id: NonBlankStr | None = Field(None, alias="requestId")
 
     @model_validator(mode="after")
     def _require_new_thread(self) -> "CodexManagedSessionClearRequest":

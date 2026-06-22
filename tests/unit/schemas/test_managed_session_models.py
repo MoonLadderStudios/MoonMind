@@ -68,6 +68,21 @@ def test_managed_session_plane_contract_exposes_canonical_control_actions() -> N
         "terminate_session",
     )
 
+def test_clear_session_request_accepts_compact_request_id() -> None:
+    request = CodexManagedSessionClearRequest(
+        sessionId="sess-1",
+        sessionEpoch=1,
+        containerId="ctr-1",
+        threadId="thread-1",
+        newThreadId="thread-2",
+        requestId="wf:run:step:1:clear_session",
+    )
+
+    assert request.request_id == "wf:run:step:1:clear_session"
+    assert request.model_dump(mode="json", by_alias=True)["requestId"] == (
+        "wf:run:step:1:clear_session"
+    )
+
 def test_managed_session_plane_contract_rejects_non_canonical_overrides() -> None:
     with pytest.raises(ValidationError, match="Input should be False"):
         ManagedSessionPlaneContract(cross_task_reuse=True)

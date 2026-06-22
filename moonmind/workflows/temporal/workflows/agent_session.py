@@ -491,6 +491,8 @@ class MoonMindAgentSessionWorkflow:
             self._thread_id = payload.thread_id
         if payload.active_turn_id is not None:
             self._active_turn_id = payload.active_turn_id
+        elif payload.last_control_action == "clear_session":
+            self._active_turn_id = None
         if payload.session_epoch is not None:
             self._binding = self._binding.model_copy(
                 update={"session_epoch": payload.session_epoch}
@@ -517,6 +519,9 @@ class MoonMindAgentSessionWorkflow:
         container_value = payload.get("containerId") or payload.get("container_id")
         thread_value = payload.get("threadId") or payload.get("thread_id")
         active_turn_value = payload.get("activeTurnId") or payload.get("active_turn_id")
+        session_epoch_value = payload.get("sessionEpoch") or payload.get(
+            "session_epoch"
+        )
 
         reason = str(reason_value).strip() or None if reason_value is not None else None
         container_id = (
@@ -532,6 +537,14 @@ class MoonMindAgentSessionWorkflow:
             if active_turn_value is not None
             else None
         )
+        session_epoch = None
+        if session_epoch_value is not None:
+            try:
+                parsed_epoch = int(session_epoch_value)
+            except (TypeError, ValueError):
+                parsed_epoch = None
+            if parsed_epoch is not None and parsed_epoch >= 1:
+                session_epoch = parsed_epoch
 
         binding = self._require_binding()
         self._last_control_action = action
@@ -540,6 +553,21 @@ class MoonMindAgentSessionWorkflow:
         if action == "clear_session":
             if thread_id is None:
                 raise ValueError("clear_session requires threadId")
+            if session_epoch is not None:
+                if session_epoch < binding.session_epoch:
+                    self._update_operator_visibility("stale clear ignored")
+                    return
+                self._status = AGENT_SESSION_STATUS_CLEARING
+                self._thread_id = thread_id
+                self._active_turn_id = active_turn_id
+                if container_id is not None:
+                    self._container_id = container_id
+                self._binding = binding.model_copy(
+                    update={"session_epoch": session_epoch}
+                )
+                self._status = AGENT_SESSION_STATUS_ACTIVE
+                self._update_operator_visibility("cleared to new epoch")
+                return
             self._status = AGENT_SESSION_STATUS_CLEARING
             if self._container_id and self._thread_id:
                 cleared = CodexManagedSessionState(
@@ -894,6 +922,7 @@ class MoonMindAgentSessionWorkflow:
                             threadId=locator.thread_id,
                             newThreadId=next_thread_id,
                             reason=request.reason,
+                            requestId=request.request_id,
                         ).model_dump(by_alias=True),
                     )
                 )
