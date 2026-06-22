@@ -3092,6 +3092,63 @@ class TemporalArtifactActivities:
 
         return results
 
+    async def provider_profile_pending_request_order(
+        self,
+        *,
+        workflow_ids: list[str],
+    ) -> dict[str, Any]:
+        """Resolve scheduled queue ordering for pending provider-profile requests.
+
+        Looks up the ``scheduled_for`` / ``created_at`` timestamps for a bounded
+        list of workflow ids from the canonical execution projection so the
+        ProviderProfileManager can use existing queue order as the tie-breaker
+        for equal-priority slot requests (MM-869).
+
+        Returns ``{"orders": {workflow_id: {"scheduled_for": ISO, "created_at":
+        ISO}}}`` with compact UTC ISO-8601 timestamp strings. Only ordering
+        timestamps are returned; no other execution data is exposed. Workflow
+        ids without a matching execution record are simply omitted, and the
+        manager applies a deterministic fallback for them. Safe to call
+        repeatedly from the long-lived manager workflow.
+        """
+        from sqlalchemy import select
+
+        from api_service.db.models import TemporalExecutionRecord
+        from api_service.db.base import get_async_session_context
+
+        unique_ids = list(
+            dict.fromkeys(
+                str(wf_id).strip()
+                for wf_id in (workflow_ids or [])
+                if str(wf_id or "").strip()
+            )
+        )
+        orders: dict[str, dict[str, str]] = {}
+        if not unique_ids:
+            return {"orders": orders}
+
+        def _iso_utc(value: datetime) -> str:
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=UTC)
+            return value.astimezone(UTC).isoformat()
+
+        async with get_async_session_context() as session:
+            stmt = select(
+                TemporalExecutionRecord.workflow_id,
+                TemporalExecutionRecord.scheduled_for,
+                TemporalExecutionRecord.created_at,
+            ).where(TemporalExecutionRecord.workflow_id.in_(unique_ids))
+            result = await session.execute(stmt)
+            for workflow_id, scheduled_for, created_at in result.all():
+                entry: dict[str, str] = {}
+                if scheduled_for is not None:
+                    entry["scheduled_for"] = _iso_utc(scheduled_for)
+                if created_at is not None:
+                    entry["created_at"] = _iso_utc(created_at)
+                orders[workflow_id] = entry
+
+        return {"orders": orders}
+
     async def provider_profile_sync_slot_leases(
         self,
         *,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -16,6 +16,7 @@ from moonmind.workflows.temporal.workflows.provider_profile_manager import (
     PendingRequest,
     PRIORITY_PENDING_REQUESTS_PATCH,
     QUEUE_ORDER_PENDING_REQUESTS_PATCH,
+    SCHEDULED_PENDING_REQUESTS_PATCH,
     SLOT_HANDOFF_RESERVATION_PATCH,
     VERIFY_PENDING_REQUESTS_PATCH,
     WORKFLOW_NAME,
@@ -1168,6 +1169,279 @@ class TestProviderProfileManagerHelpers:
             "wf-newer",
         ]
 
+    # -- MM-869: scheduled-order tie-breaker -------------------------------
+
+    @staticmethod
+    def _single_slot_profile() -> ProfileSlotState:
+        return ProfileSlotState(
+            profile_id="p1",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+        )
+
+    def _drain_patches(self, *, scheduled: bool) -> set[str]:
+        patches = {PRIORITY_PENDING_REQUESTS_PATCH, QUEUE_ORDER_PENDING_REQUESTS_PATCH}
+        if scheduled:
+            patches.add(SCHEDULED_PENDING_REQUESTS_PATCH)
+        return patches
+
+    def test_pending_request_order_lookup_ids_prefers_lease_group(self):
+        wf = self._make_workflow()
+        wf._pending_requests = [
+            PendingRequest("wf-1", "codex_cli", lease_group_id="parent-1"),
+            PendingRequest("wf-2", "codex_cli"),
+            PendingRequest("wf-3", "codex_cli", lease_group_id="parent-1"),
+        ]
+
+        assert wf._pending_request_order_lookup_ids() == ["parent-1", "wf-2"]
+
+    @pytest.mark.asyncio
+    async def test_scheduled_order_breaks_equal_priority_ties(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = self._single_slot_profile()
+        # Signals arrive in reverse scheduled order.
+        wf._pending_requests = [
+            PendingRequest("wf-newer", "codex_cli", priority=0),
+            PendingRequest("wf-older", "codex_cli", priority=0),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        orders = {
+            "wf-newer": {"scheduled_for": "2026-06-22T10:05:00+00:00"},
+            "wf-older": {"scheduled_for": "2026-06-22T10:00:00+00:00"},
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(return_value={"orders": orders})
+            await wf._drain_queue()
+
+        assert assigned == [("wf-older", "p1")]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "wf-newer"
+        ]
+        mock_wf.execute_activity.assert_awaited_once()
+        args, _ = mock_wf.execute_activity.call_args
+        assert args[0] == "provider_profile.pending_request_order"
+        assert set(args[1]["workflow_ids"]) == {"wf-newer", "wf-older"}
+
+    @pytest.mark.asyncio
+    async def test_priority_still_wins_over_scheduled_order(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = self._single_slot_profile()
+        wf._pending_requests = [
+            PendingRequest("wf-low-early", "codex_cli", priority=0),
+            PendingRequest("wf-high-late", "codex_cli", priority=10),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        orders = {
+            "wf-low-early": {"scheduled_for": "2026-06-22T10:00:00+00:00"},
+            "wf-high-late": {"scheduled_for": "2026-06-22T10:05:00+00:00"},
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(return_value={"orders": orders})
+            await wf._drain_queue()
+
+        assert assigned == [("wf-high-late", "p1")]
+
+    def test_scheduled_sort_key_falls_back_to_created_at(self):
+        orders = {
+            "wf-a": {"created_at": "2026-06-22T09:59:00+00:00"},
+            "wf-b": {"created_at": "2026-06-22T09:58:00+00:00"},
+        }
+        requests = [
+            PendingRequest("wf-a", "codex_cli", priority=0),
+            PendingRequest("wf-b", "codex_cli", priority=0),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=lambda req: (
+                MoonMindProviderProfileManagerWorkflow._scheduled_pending_request_sort_key(
+                    req, orders
+                )
+            ),
+        )
+
+        assert [req.requester_workflow_id for req in ordered] == ["wf-b", "wf-a"]
+
+    def test_scheduled_sort_key_final_fallback_by_workflow_id(self):
+        # No scheduled_for or created_at for either request.
+        orders: dict[str, dict[str, str]] = {}
+        requests = [
+            PendingRequest("wf-b", "codex_cli", priority=0),
+            PendingRequest("wf-a", "codex_cli", priority=0),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=lambda req: (
+                MoonMindProviderProfileManagerWorkflow._scheduled_pending_request_sort_key(
+                    req, orders
+                )
+            ),
+        )
+
+        assert [req.requester_workflow_id for req in ordered] == ["wf-a", "wf-b"]
+
+    def test_scheduled_sort_key_uses_lease_group_id_for_lookup(self):
+        orders = {
+            "parent-late": {"scheduled_for": "2026-06-22T10:05:00+00:00"},
+            "parent-early": {"scheduled_for": "2026-06-22T10:00:00+00:00"},
+        }
+        requests = [
+            PendingRequest(
+                "wf-child-a", "codex_cli", priority=0, lease_group_id="parent-late"
+            ),
+            PendingRequest(
+                "wf-child-b", "codex_cli", priority=0, lease_group_id="parent-early"
+            ),
+        ]
+
+        ordered = sorted(
+            requests,
+            key=lambda req: (
+                MoonMindProviderProfileManagerWorkflow._scheduled_pending_request_sort_key(
+                    req, orders
+                )
+            ),
+        )
+
+        assert [req.requester_workflow_id for req in ordered] == [
+            "wf-child-b",
+            "wf-child-a",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_ordering_lookup_uses_lease_group_id_as_primary_key(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = self._single_slot_profile()
+        wf._pending_requests = [
+            PendingRequest(
+                "wf-child-a", "codex_cli", priority=0, lease_group_id="parent-late"
+            ),
+            PendingRequest(
+                "wf-child-b", "codex_cli", priority=0, lease_group_id="parent-early"
+            ),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        orders = {
+            "parent-late": {"scheduled_for": "2026-06-22T10:05:00+00:00"},
+            "parent-early": {"scheduled_for": "2026-06-22T10:00:00+00:00"},
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(return_value={"orders": orders})
+            await wf._drain_queue()
+
+        args, _ = mock_wf.execute_activity.call_args
+        assert set(args[1]["workflow_ids"]) == {"parent-late", "parent-early"}
+        assert assigned == [("wf-child-b", "p1")]
+
+    @pytest.mark.asyncio
+    async def test_ordering_activity_failure_falls_back_without_blocking(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = self._single_slot_profile()
+        wf._pending_requests = [
+            PendingRequest("wf-newer", "codex_cli", priority=0, queue_order=200),
+            PendingRequest("wf-older", "codex_cli", priority=0, queue_order=100),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=True)
+            )
+            mock_wf.execute_activity = AsyncMock(side_effect=RuntimeError("boom"))
+            # Drain must not raise even though the ordering activity failed.
+            await wf._drain_queue()
+
+        # Fallback to the deterministic queue-order sort: queue_order 100 wins.
+        assert assigned == [("wf-older", "p1")]
+        assert [req.requester_workflow_id for req in wf._pending_requests] == [
+            "wf-newer"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_scheduled_ordering_gated_behind_patch(self):
+        wf = self._make_workflow()
+        wf._runtime_id = "codex_cli"
+        wf._profiles["p1"] = self._single_slot_profile()
+        wf._pending_requests = [
+            PendingRequest("wf-newer", "codex_cli", priority=0, queue_order=200),
+            PendingRequest("wf-older", "codex_cli", priority=0, queue_order=100),
+        ]
+        assigned: list[tuple[str, str]] = []
+
+        async def fake_signal(requester_workflow_id: str, profile_id: str) -> None:
+            assigned.append((requester_workflow_id, profile_id))
+
+        wf._signal_slot_assigned = fake_signal  # type: ignore[method-assign]
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.now.return_value = datetime(2026, 6, 22, tzinfo=timezone.utc)
+            # Legacy replay path: scheduled patch is NOT enabled.
+            mock_wf.patched.side_effect = lambda patch_id: (
+                patch_id in self._drain_patches(scheduled=False)
+            )
+            mock_wf.execute_activity = AsyncMock(return_value={"orders": {}})
+            await wf._drain_queue()
+
+        # Legacy queue-order behavior preserved; no ordering activity call.
+        mock_wf.execute_activity.assert_not_awaited()
+        assert assigned == [("wf-older", "p1")]
+
     @pytest.mark.asyncio
     async def test_acquire_slot_update_reserves_without_callback_signal(self):
         wf = self._make_workflow()
@@ -1701,6 +1975,24 @@ def test_provider_profile_manager_state_runtime_binding():
         "provider_profile_manager_state",
     )
 
+def test_provider_profile_pending_request_order_in_catalog():
+    from moonmind.workflows.temporal.activity_catalog import (
+        build_default_activity_catalog,
+    )
+
+    catalog = build_default_activity_catalog()
+    route = catalog.resolve_activity("provider_profile.pending_request_order")
+    assert route.task_queue == "mm.activity.artifacts"
+    assert route.fleet == "artifacts"
+
+def test_provider_profile_pending_request_order_runtime_binding():
+    from moonmind.workflows.temporal.activity_runtime import _ACTIVITY_HANDLER_ATTRS
+
+    assert _ACTIVITY_HANDLER_ATTRS["provider_profile.pending_request_order"] == (
+        "artifacts",
+        "provider_profile_pending_request_order",
+    )
+
 # ---------------------------------------------------------------------------
 # DB Lease Sync: workflow-side behavior tests
 # ---------------------------------------------------------------------------
@@ -1902,6 +2194,104 @@ class TestProviderProfileSyncSlotLeasesActivity:
         # Load should return granted_at from the DB row
         assert '"granted_at"' in source
         assert "row.granted_at" in source
+
+class TestProviderProfilePendingRequestOrderActivity:
+    """Tests for the provider_profile.pending_request_order activity (MM-869)."""
+
+    @staticmethod
+    def _activities():
+        from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
+
+        return TemporalArtifactActivities(None)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _patch_session(rows: list[tuple]):
+        import contextlib
+
+        class _Result:
+            def all(self) -> list[tuple]:
+                return rows
+
+        class _FakeSession:
+            async def execute(self, _stmt):
+                return _Result()
+
+        @contextlib.asynccontextmanager
+        async def _ctx():
+            yield _FakeSession()
+
+        return patch(
+            "api_service.db.base.get_async_session_context",
+            side_effect=lambda: _ctx(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_empty_input_returns_empty_orders(self):
+        activities = self._activities()
+        result = await activities.provider_profile_pending_request_order(
+            workflow_ids=[]
+        )
+        assert result == {"orders": {}}
+
+    @pytest.mark.asyncio
+    async def test_returns_compact_iso_timestamps(self):
+        activities = self._activities()
+        rows = [
+            (
+                "mm:workflow-a",
+                datetime(2026, 6, 22, 10, 0, tzinfo=timezone.utc),
+                datetime(2026, 6, 22, 9, 58, tzinfo=timezone.utc),
+            ),
+            (
+                "mm:workflow-b",
+                None,
+                datetime(2026, 6, 22, 9, 59, tzinfo=timezone.utc),
+            ),
+        ]
+        with self._patch_session(rows):
+            result = await activities.provider_profile_pending_request_order(
+                workflow_ids=["mm:workflow-a", "mm:workflow-b", "mm:workflow-a"]
+            )
+
+        assert result == {
+            "orders": {
+                "mm:workflow-a": {
+                    "scheduled_for": "2026-06-22T10:00:00+00:00",
+                    "created_at": "2026-06-22T09:58:00+00:00",
+                },
+                "mm:workflow-b": {
+                    "created_at": "2026-06-22T09:59:00+00:00",
+                },
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_naive_timestamps_are_normalized_to_utc(self):
+        activities = self._activities()
+        rows = [
+            (
+                "mm:workflow-a",
+                datetime(2026, 6, 22, 10, 0),  # naive -> assume UTC
+                None,
+            ),
+        ]
+        with self._patch_session(rows):
+            result = await activities.provider_profile_pending_request_order(
+                workflow_ids=["mm:workflow-a"]
+            )
+
+        assert result["orders"]["mm:workflow-a"]["scheduled_for"].endswith("+00:00")
+
+    @pytest.mark.asyncio
+    async def test_missing_records_are_omitted(self):
+        activities = self._activities()
+        # DB returns nothing for the requested ids.
+        with self._patch_session([]):
+            result = await activities.provider_profile_pending_request_order(
+                workflow_ids=["mm:unknown"]
+            )
+
+        assert result == {"orders": {}}
 
 def test_verify_lease_holders_exists():
     """Ensure the workflow exposes the expected API."""

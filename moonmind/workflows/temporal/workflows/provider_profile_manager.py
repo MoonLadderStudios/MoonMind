@@ -52,6 +52,14 @@ PRIORITY_PENDING_REQUESTS_PATCH = (
 QUEUE_ORDER_PENDING_REQUESTS_PATCH = (
     "provider-profile-manager-queue-order-pending-requests-v1"
 )
+SCHEDULED_PENDING_REQUESTS_PATCH = (
+    "provider-profile-manager-scheduled-pending-requests-v1"
+)
+
+# Deterministic sort sentinel for pending requests whose scheduled queue order
+# cannot be resolved (missing scheduled_for / created_at). ISO-8601 strings sort
+# lexically, so this value sorts after any real UTC timestamp.
+_FAR_FUTURE_ORDER_VALUE = "9999-12-31T23:59:59.999999+00:00"
 
 # Continue-as-new threshold to bound history growth.
 _MAX_EVENTS_BEFORE_CONTINUE_AS_NEW = 2000
@@ -925,6 +933,8 @@ class MoonMindProviderProfileManagerWorkflow:
                 self._pending_requests,
                 key=self._pending_request_sort_key,
             )
+        if workflow.patched(SCHEDULED_PENDING_REQUESTS_PATCH):
+            pending_requests = await self._order_pending_requests_by_schedule()
         for req in pending_requests:
             # Check if this requester already has a lease (e.g. from a retried workflow task)
             existing_profile_id = None
@@ -992,6 +1002,101 @@ class MoonMindProviderProfileManagerWorkflow:
             1,
             request.queue_order,
             queued_at,
+        )
+
+    def _pending_request_order_lookup_ids(self) -> list[str]:
+        """Collect the parent/root queue-order keys for pending slot requests.
+
+        Slot requests originate from ``MoonMind.AgentRun`` child workflows, but
+        the visible queue order belongs to the parent/root workflow. ``lease_group_id``
+        is derived from the parent workflow id when present, so it is the primary
+        lookup key; the requester workflow id is used only as a fallback.
+        """
+        lookup_ids: list[str] = []
+        for request in self._pending_requests:
+            workflow_id = self._normalize_optional_string(
+                request.lease_group_id or request.requester_workflow_id
+            )
+            if workflow_id:
+                lookup_ids.append(workflow_id)
+        return list(dict.fromkeys(lookup_ids))
+
+    async def _order_pending_requests_by_schedule(self) -> list[PendingRequest]:
+        """Order pending requests by existing scheduled queue order (MM-869).
+
+        Resolves ``scheduled_for`` / ``created_at`` for each pending request's
+        parent queue-order key via the ``provider_profile.pending_request_order``
+        activity, then sorts by priority DESC, scheduled_for ASC, created_at ASC,
+        queue-order key ASC, requester_workflow_id ASC.
+
+        If the ordering lookup activity fails, this logs enough context to
+        diagnose the failure and falls back to the deterministic queue-order /
+        priority sort so slot assignment is never blocked for that drain cycle.
+        """
+        lookup_ids = self._pending_request_order_lookup_ids()
+        order_by_workflow_id: dict[str, dict[str, Any]] = {}
+        if lookup_ids:
+            try:
+                result = await workflow.execute_activity(
+                    "provider_profile.pending_request_order",
+                    {"workflow_ids": lookup_ids},
+                    task_queue=ACTIVITY_TASK_QUEUE,
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(
+                        initial_interval=timedelta(seconds=2),
+                        backoff_coefficient=2.0,
+                        maximum_interval=timedelta(seconds=30),
+                        maximum_attempts=3,
+                    ),
+                )
+                orders = (result or {}).get("orders")
+                if isinstance(orders, dict):
+                    order_by_workflow_id = orders
+            except Exception:
+                self._get_logger().warning(
+                    "pending_request_order activity failed; falling back to "
+                    "queue-order drain for %d pending request(s) on runtime %s",
+                    len(self._pending_requests),
+                    self._runtime_id,
+                )
+                return sorted(
+                    self._pending_requests,
+                    key=self._pending_request_sort_key,
+                )
+        return sorted(
+            self._pending_requests,
+            key=lambda request: self._scheduled_pending_request_sort_key(
+                request, order_by_workflow_id
+            ),
+        )
+
+    @classmethod
+    def _scheduled_pending_request_sort_key(
+        cls,
+        request: PendingRequest,
+        order_by_workflow_id: dict[str, dict[str, Any]],
+    ) -> tuple[int, str, str, str, str]:
+        workflow_id = (
+            cls._normalize_optional_string(
+                request.lease_group_id or request.requester_workflow_id
+            )
+            or ""
+        )
+        ordering = order_by_workflow_id.get(workflow_id) or {}
+        scheduled_for = (
+            cls._normalize_optional_string(ordering.get("scheduled_for"))
+            or _FAR_FUTURE_ORDER_VALUE
+        )
+        created_at = (
+            cls._normalize_optional_string(ordering.get("created_at"))
+            or _FAR_FUTURE_ORDER_VALUE
+        )
+        return (
+            -request.priority,
+            scheduled_for,
+            created_at,
+            workflow_id,
+            request.requester_workflow_id or "",
         )
 
     @staticmethod
