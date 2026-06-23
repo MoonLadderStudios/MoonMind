@@ -2241,7 +2241,21 @@ class TemporalExecutionService:
                 MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
             }[target_state]
 
-        record = await self._require_source_execution(workflow_id)
+        source_record = await self._load_source_execution(workflow_id)
+        if source_record is None:
+            projection_record = await self._load_projection_execution(
+                workflow_id,
+                include_orphaned=False,
+            )
+            if projection_record is None:
+                raise TemporalExecutionNotFoundError(
+                    f"Workflow execution {workflow_id} was not found"
+                )
+            record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord = (
+                projection_record
+            )
+        else:
+            record = source_record
         if record.state in TERMINAL_STATES and record.state is not target_state:
             raise TemporalExecutionValidationError(
                 f"Execution already terminal as {record.state.value}."
@@ -2254,9 +2268,12 @@ class TemporalExecutionService:
             )
             if record.close_status is None:
                 self._set_state(record, target_state, close_status=target_close_status)
-                await self._sync_integration_correlation_record(record)
-                await self._session.commit()
-                await self._session.refresh(record)
+                if isinstance(record, TemporalExecutionCanonicalRecord):
+                    await self._sync_integration_correlation_record(record)
+            await self._session.commit()
+            await self._session.refresh(record)
+            if isinstance(record, TemporalExecutionRecord):
+                return record
             await self._fan_out_dependency_resolution(record)
             return await self._sync_projection_best_effort(record)
 
@@ -2279,15 +2296,18 @@ class TemporalExecutionService:
             else:
                 self._update_summary(record, summary)
 
-        await self._sync_integration_correlation_record(record)
+        if isinstance(record, TemporalExecutionCanonicalRecord):
+            await self._sync_integration_correlation_record(record)
         await self._session.commit()
         await self._session.refresh(record)
+        if isinstance(record, TemporalExecutionRecord):
+            return record
         await self._fan_out_dependency_resolution(record)
         return await self._sync_projection_best_effort(record)
 
     def _record_finish_summary(
         self,
-        record: TemporalExecutionCanonicalRecord,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
         *,
         finish_outcome_code: str | None,
         finish_summary: dict[str, Any] | None,
@@ -3273,7 +3293,7 @@ class TemporalExecutionService:
 
     def _set_state(
         self,
-        record: TemporalExecutionCanonicalRecord,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
         state: MoonMindWorkflowState,
         *,
         close_status: TemporalExecutionCloseStatus | None = None,
@@ -3298,7 +3318,9 @@ class TemporalExecutionService:
             self._clear_waiting_metadata(record)
         self._touch(record)
 
-    def _touch(self, record: TemporalExecutionCanonicalRecord) -> None:
+    def _touch(
+        self, record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord
+    ) -> None:
         now = _utc_now()
         record.updated_at = now
 
@@ -3319,7 +3341,7 @@ class TemporalExecutionService:
 
     def _update_summary(
         self,
-        record: TemporalExecutionCanonicalRecord,
+        record: TemporalExecutionCanonicalRecord | TemporalExecutionRecord,
         summary: str,
         *,
         error_category: str | None = None,
