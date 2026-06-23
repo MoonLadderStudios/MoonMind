@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any
 from urllib import error, request
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 DEFAULT_RUNTIME = "codex_cli"
@@ -147,9 +147,9 @@ def expand_issue_implement(*, base_url: str, provider: str, issue: str, reposito
 
 def fetch_board_issues(*, base_url: str, board_id: str, project_key: str | None, timeout: float) -> dict[str, Any]:
     """Fetch a Jira board's issues grouped by column from the MoonMind API."""
-    url = f"{base_url.rstrip('/')}/api/jira/boards/{board_id}/issues"
+    url = f"{base_url.rstrip('/')}/api/jira/boards/{quote(board_id)}/issues"
     if project_key:
-        url += f"?projectKey={project_key}"
+        url += f"?projectKey={quote(project_key)}"
     req = request.Request(url, headers={"Accept": "application/json"}, method="GET")
     with request.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -212,10 +212,12 @@ def main() -> int:
     if args.board_id:
         try:
             board_issues = fetch_board_issues(base_url=args.base_url, board_id=args.board_id, project_key=args.project_key, timeout=args.timeout)
+            if not isinstance(board_issues, dict):
+                raise TypeError(f"Expected API response to be a dictionary, got {type(board_issues).__name__}")
+            discovered = extract_column_issue_keys(board_issues, args.column)
         except Exception as exc:
             print(json.dumps({"error": f"Failed to fetch board {args.board_id} issues: {exc}"}, indent=2))
             return 1
-        discovered = extract_column_issue_keys(board_issues, args.column)
         merged: list[str] = []
         seen: set[str] = set()
         for key in [*discovered, *issues]:
