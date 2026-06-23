@@ -202,10 +202,17 @@ def _insert_first_party_setup_stubs() -> None:
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
-    inspector = sa.inspect(op.get_bind())
-    return any(
-        column["name"] == column_name for column in inspector.get_columns(table_name)
-    )
+    bind = op.get_bind()
+    if bind is None:
+        return False
+    try:
+        inspector = sa.inspect(bind)
+        return any(
+            column["name"] == column_name for column in inspector.get_columns(table_name)
+        )
+    except Exception:
+        # This is an optional legacy column; if inspection is unavailable, skip it.
+        return False
 
 
 def _backfill_activation_state(

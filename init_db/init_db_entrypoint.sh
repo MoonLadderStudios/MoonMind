@@ -63,6 +63,20 @@ if version == "313_finish_summary_projection_fields":
         ).rowcount
     if updated != 1:
         raise SystemExit(1)
+if version == "316_provider_profile_activation_state":
+    print("Detected oversized Alembic revision stamp 316_provider_profile_activation_state; rewriting alembic_version to 316_provider_profile_auth_state before upgrade.")
+    with engine.begin() as connection:
+        updated = connection.execute(
+            text(
+                """
+                update alembic_version
+                set version_num = '316_provider_profile_auth_state'
+                where version_num = '316_provider_profile_activation_state'
+                """
+            )
+        ).rowcount
+    if updated != 1:
+        raise SystemExit(1)
 PY
 status=$?
 if [ $status -eq 42 ]; then
