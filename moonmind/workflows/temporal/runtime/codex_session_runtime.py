@@ -76,6 +76,10 @@ _TURN_ITEMS_PAGE_LIMIT = 200
 _TURN_ITEMS_MAX_PAGES = 20
 _EMPTY_ROLLOUT_READ_GRACE_SECONDS = 1.0
 _EMPTY_ROLLOUT_READ_RETRY_SECONDS = 0.1
+_SQLITE_STATE_RUNTIME_FAILURE_MARKERS: tuple[str, ...] = (
+    "failed to initialize sqlite state runtime",
+    "failed to initialize state runtime",
+)
 _SECRET_REDACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
@@ -563,6 +567,65 @@ class CodexManagedSessionRuntime:
                 notification_timeout_seconds=self._turn_completion_timeout_seconds,
             )
         return self._client
+
+    @staticmethod
+    def _is_sqlite_state_runtime_initialization_failure(error: BaseException) -> bool:
+        message = str(error).lower()
+        return any(
+            marker in message for marker in _SQLITE_STATE_RUNTIME_FAILURE_MARKERS
+        )
+
+    def _recover_sqlite_state_runtime_initialization(self) -> None:
+        """Best-effort recovery for transient Codex SQLite startup failures."""
+
+        self.close()
+        self._ensure_directories()
+        recovery_errors: list[str] = []
+        for sqlite_path in sorted(self._codex_home_path.glob("*.sqlite")):
+            connection: sqlite3.Connection | None = None
+            try:
+                connection = sqlite3.connect(
+                    str(sqlite_path),
+                    timeout=_LOG_RECOVERY_SQLITE_TIMEOUT_SECONDS,
+                )
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+            except sqlite3.Error as exc:
+                recovery_errors.append(f"{sqlite_path.name}: {exc}")
+            finally:
+                if connection is not None:
+                    connection.close()
+
+            shm_path = sqlite_path.with_name(sqlite_path.name + "-shm")
+            try:
+                shm_path.unlink()
+            except FileNotFoundError:
+                # Absence is expected when SQLite did not leave shared-memory state.
+                pass
+            except OSError as exc:
+                recovery_errors.append(f"{shm_path.name}: {exc}")
+
+        detail = ""
+        if recovery_errors:
+            detail = " errors=" + "; ".join(recovery_errors[:4])
+        self._append_spool(
+            "stderr",
+            "codex sqlite state runtime recovery: checkpointed sqlite WAL "
+            f"after app-server initialization failure{detail}\n",
+        )
+
+    def _initialized_app_server_client(self) -> CodexAppServerRpcClient:
+        client = self._app_server_client()
+        try:
+            client.initialize()
+            return client
+        except RuntimeError as exc:
+            if not self._is_sqlite_state_runtime_initialization_failure(exc):
+                raise
+            self._recover_sqlite_state_runtime_initialization()
+
+        client = self._app_server_client()
+        client.initialize()
+        return client
 
     def close(self) -> None:
         if self._client is not None:
@@ -2210,8 +2273,7 @@ class CodexManagedSessionRuntime:
         if not active_turn_id:
             return state
 
-        client = self._app_server_client()
-        client.initialize()
+        client = self._initialized_app_server_client()
         try:
             thread_payload = client.request(
                 "thread/read",
@@ -2310,8 +2372,7 @@ class CodexManagedSessionRuntime:
     ) -> CodexManagedSessionHandle:
         self._ensure_directories()
         self._seed_codex_home_from_auth_volume()
-        client = self._app_server_client()
-        client.initialize()
+        client = self._initialized_app_server_client()
         started = client.request("thread/start", {"cwd": str(self._workspace_path)})
         thread_payload = started.get("thread")
         if not isinstance(thread_payload, Mapping):
@@ -2361,8 +2422,7 @@ class CodexManagedSessionRuntime:
         request: SendCodexManagedSessionTurnRequest,
     ) -> CodexManagedSessionTurnResponse:
         state = self._validate_locator(request)
-        client = self._app_server_client()
-        client.initialize()
+        client = self._initialized_app_server_client()
         vendor_thread_id = self._recovery_thread(client=client, state=state)
         rollout_mirror = self._new_rollout_live_mirror(state)
 
@@ -2543,8 +2603,7 @@ class CodexManagedSessionRuntime:
                     "reason": "steer_turn requires the active managed-session turn id"
                 },
             )
-        client = self._app_server_client()
-        client.initialize()
+        client = self._initialized_app_server_client()
         vendor_thread_id = self._recovery_thread(client=client, state=state)
         steer_params: dict[str, Any] = {
             "threadId": vendor_thread_id,
@@ -2596,8 +2655,7 @@ class CodexManagedSessionRuntime:
                     )
                 },
             )
-        client = self._app_server_client()
-        client.initialize()
+        client = self._initialized_app_server_client()
         interrupt_params = {
             "threadId": state.vendor_thread_id,
             "turnId": request.turn_id,
@@ -2625,8 +2683,7 @@ class CodexManagedSessionRuntime:
         request: CodexManagedSessionClearRequest,
     ) -> CodexManagedSessionHandle:
         state = self._validate_locator(request)
-        client = self._app_server_client()
-        client.initialize()
+        client = self._initialized_app_server_client()
         started = client.request("thread/start", {"cwd": str(self._workspace_path)})
         thread_payload = started.get("thread")
         if not isinstance(thread_payload, Mapping):

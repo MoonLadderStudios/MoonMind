@@ -31,10 +31,12 @@ from tests.helpers.codex_session_runtime import (
     write_fake_app_server,
 )
 
+
 def _iso_timestamp(*, minutes_offset: int) -> str:
     return (
         datetime.now(UTC) + timedelta(minutes=minutes_offset)
     ).isoformat().replace("+00:00", "Z")
+
 
 def _write_fake_codex_logs(
     codex_home_path: str | Path,
@@ -57,6 +59,7 @@ def _write_fake_codex_logs(
     finally:
         connection.close()
     return log_path
+
 
 def _write_fake_codex_logs_with_timestamps(
     codex_home_path: str | Path,
@@ -84,6 +87,7 @@ def _write_fake_codex_logs_with_timestamps(
         connection.close()
     return log_path
 
+
 def _runtime_for_rollout_mirror(tmp_path: Path) -> CodexManagedSessionRuntime:
     request = launch_request(tmp_path)
     return CodexManagedSessionRuntime(
@@ -96,6 +100,77 @@ def _runtime_for_rollout_mirror(tmp_path: Path) -> CodexManagedSessionRuntime:
         container_id="ctr-1",
         app_server_command=("python3", "-c", "pass"),
     )
+
+
+def _write_flaky_sqlite_init_app_server(tmp_path: Path) -> Path:
+    script = tmp_path / "fake_flaky_sqlite_init_app_server.py"
+    marker_path = tmp_path / "sqlite-init-failed-once.marker"
+    script.write_text(
+        f"""
+import json
+import os
+import sys
+
+MARKER_PATH = {str(marker_path)!r}
+
+if not os.path.exists(MARKER_PATH):
+    with open(MARKER_PATH, "w", encoding="utf-8") as marker:
+        marker.write("failed once\\n")
+    sys.stderr.write(
+        "Error: failed to initialize sqlite state runtime under /tmp/codex-home\\n"
+    )
+    sys.stderr.flush()
+    sys.exit(1)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    msg_id = message.get("id")
+    method = message.get("method")
+    if method == "initialize":
+        sys.stdout.write(json.dumps({{
+            "id": msg_id,
+            "result": {{
+                "userAgent": "fake/0.1",
+                "codexHome": "/tmp/fake-codex-home",
+                "platformFamily": "unix",
+                "platformOs": "linux",
+            }},
+        }}) + "\\n")
+        sys.stdout.flush()
+    elif method == "thread/start":
+        sys.stdout.write(json.dumps({{
+            "id": msg_id,
+            "result": {{
+                "thread": {{
+                    "id": "vendor-thread-recovered",
+                    "preview": "",
+                    "ephemeral": False,
+                    "modelProvider": "openai",
+                    "createdAt": 1,
+                    "updatedAt": 1,
+                    "status": {{"type": "idle"}},
+                    "path": "/tmp/vendor-thread-recovered.jsonl",
+                    "cwd": "/work/repo",
+                    "cliVersion": "0.118.0",
+                    "source": "app-server",
+                    "agentNickname": None,
+                    "agentRole": None,
+                    "gitInfo": None,
+                    "name": None,
+                    "turns": [],
+                }}
+            }},
+        }}) + "\\n")
+        sys.stdout.flush()
+    else:
+        sys.stdout.write(json.dumps({{"id": msg_id, "result": {{}}}}) + "\\n")
+        sys.stdout.flush()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return script
+
 
 def _rollout_state(*, rollout_path: Path) -> CodexSessionRuntimeState:
     return CodexSessionRuntimeState(
@@ -152,6 +227,71 @@ def test_runtime_launch_session_persists_logical_thread_mapping(tmp_path: Path) 
     assert state_payload["logicalThreadId"] == "logical-thread-1"
     assert state_payload["vendorThreadId"] == "vendor-thread-1"
     assert state_payload["vendorThreadPath"] == "/tmp/vendor-thread-1.jsonl"
+
+
+def test_runtime_clear_session_recovers_sqlite_state_runtime_init_failure(
+    tmp_path: Path,
+) -> None:
+    launch_script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(launch_script)),
+    )
+    runtime.launch_session(request)
+    runtime.close()
+
+    sqlite_path = Path(request.codex_home_path) / "state_1.sqlite"
+    connection = sqlite3.connect(sqlite_path)
+    try:
+        connection.execute("CREATE TABLE state_probe (id INTEGER PRIMARY KEY)")
+        connection.commit()
+    finally:
+        connection.close()
+    shm_path = sqlite_path.with_name(sqlite_path.name + "-shm")
+    shm_path.write_bytes(b"stale-shm")
+
+    retry_script = _write_flaky_sqlite_init_app_server(tmp_path)
+    retry_runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(retry_script)),
+    )
+
+    try:
+        handle = retry_runtime.clear_session(
+            CodexManagedSessionClearRequest(
+                sessionId="sess-1",
+                sessionEpoch=1,
+                containerId="ctr-1",
+                threadId="logical-thread-1",
+                newThreadId="logical-thread-2",
+                reason="retry_after_empty_assistant_output",
+            )
+        )
+
+        assert handle.status == "ready"
+        assert handle.session_state.session_epoch == 2
+        assert handle.session_state.thread_id == "logical-thread-2"
+        assert handle.metadata["vendorThreadId"] == "vendor-thread-recovered"
+        assert not shm_path.exists()
+        stderr_text = (Path(request.artifact_spool_path) / "stderr.log").read_text(
+            encoding="utf-8"
+        )
+        assert "codex sqlite state runtime recovery" in stderr_text
+    finally:
+        retry_runtime.close()
 
 def test_runtime_send_turn_returns_terminal_completed_response(
     tmp_path: Path,

@@ -1907,6 +1907,83 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
 
 
 @pytest.mark.asyncio
+async def test_record_terminal_state_updates_projection_only_child_workflow(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
+        owner_id = str(uuid4())
+        workflow_id = "resolver:pr:1919:head:aaedf7f60dc1:h:7db9d8b831520627:1"
+        now = datetime.now(UTC)
+        projection = TemporalExecutionRecord(
+            workflow_id=workflow_id,
+            run_id=str(uuid4()),
+            namespace="default",
+            workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+            owner_id=owner_id,
+            owner_type=TemporalExecutionOwnerType.USER,
+            state=MoonMindWorkflowState.EXECUTING,
+            close_status=None,
+            entry="user_workflow",
+            search_attributes={
+                "mm_owner_type": "user",
+                "mm_owner_id": owner_id,
+                "mm_state": "executing",
+                "mm_updated_at": now.isoformat(),
+                "mm_entry": "user_workflow",
+            },
+            memo={"title": "Resolve PR #1919", "summary": "Executing."},
+            artifact_refs=[],
+            parameters={},
+            paused=False,
+            awaiting_external=False,
+            waiting_reason=None,
+            attention_required=False,
+            projection_version=1,
+            last_synced_at=now,
+            sync_state=TemporalExecutionProjectionSyncState.FRESH,
+            sync_error=None,
+            source_mode=TemporalExecutionProjectionSourceMode.PROJECTION_ONLY,
+            created_at=now,
+            started_at=now,
+            updated_at=now,
+            closed_at=None,
+        )
+        session.add(projection)
+        await session.commit()
+
+        result = await service.record_terminal_state(
+            workflow_id=workflow_id,
+            state="failed",
+            close_status="failed",
+            summary="codex app-server closed unexpectedly",
+            error_category="execution_error",
+            finish_outcome_code="FAILED",
+            finish_summary={"finishOutcome": {"code": "FAILED"}},
+        )
+
+        assert isinstance(result, TemporalExecutionRecord)
+        assert result.workflow_id == workflow_id
+        assert result.state is MoonMindWorkflowState.FAILED
+        assert result.close_status is TemporalExecutionCloseStatus.FAILED
+        assert result.closed_at is not None
+        assert result.finish_outcome_code == "FAILED"
+        assert result.finish_summary_json == {"finishOutcome": {"code": "FAILED"}}
+        assert result.memo["summary"] == (
+            "execution_error: codex app-server closed unexpectedly"
+        )
+        assert result.memo["error_category"] == "execution_error"
+        assert result.search_attributes["mm_state"] == "failed"
+        assert (
+            result.source_mode
+            is TemporalExecutionProjectionSourceMode.PROJECTION_ONLY
+        )
+        source = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+        assert source is None
+        mock_client_adapter.signal_workflow.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_record_terminal_state_preserves_existing_terminal_summary(
     tmp_path, mock_client_adapter
 ):
