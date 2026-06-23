@@ -63,6 +63,9 @@ from moonmind.workflows.temporal.remediation_tools import (
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
 
+def _valid_user_workflow_parameters() -> dict[str, object]:
+    return {"workflow": {"instructions": "Test workflow fixture."}}
+
 async def _create_target_and_remediation(
     session: AsyncSession,
     mock_client_adapter,
@@ -87,7 +90,7 @@ async def _create_target_and_remediation(
         plan_artifact_ref=None,
         manifest_artifact_ref=None,
         failure_policy=None,
-        initial_parameters={},
+        initial_parameters=_valid_user_workflow_parameters(),
         idempotency_key=None,
     )
     remediation = await execution_service.create_execution(
@@ -311,7 +314,7 @@ async def test_remediation_context_builder_creates_bounded_linked_artifact(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
             summary="Target summary",
         )
@@ -507,7 +510,7 @@ async def test_remediation_context_builder_enriches_agent_run_evidence_and_live_
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
             summary="Target summary",
         )
@@ -1617,7 +1620,7 @@ async def test_remediation_context_builder_rejects_non_remediation_workflow(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1790,7 +1793,7 @@ async def test_remediation_evidence_tools_read_only_context_declared_evidence(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         target_artifact, _upload = await artifact_service.create(
@@ -1927,7 +1930,7 @@ async def test_remediation_evidence_tools_gate_live_follow_by_context_policy(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         remediation = await execution_service.create_execution(
@@ -2050,7 +2053,7 @@ async def test_remediation_evidence_tools_prepare_action_request_rereads_target_
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
             summary="Initial target summary",
         )
@@ -2565,7 +2568,7 @@ async def test_remediation_context_builder_rejects_missing_target_record(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         session.add(

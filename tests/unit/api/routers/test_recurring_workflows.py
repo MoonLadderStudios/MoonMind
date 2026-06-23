@@ -38,7 +38,9 @@ def _definition(**overrides):
         "scope_ref": None,
         "target": {
             "workflowType": "MoonMind.UserWorkflow",
-            "initialParameters": {},
+            "initialParameters": {
+                "workflow": {"instructions": "Test recurring workflow fixture."}
+            },
         },
         "policy": {},
         "version": 1,

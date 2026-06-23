@@ -6203,6 +6203,25 @@ def test_create_execution_surfaces_domain_validation_errors(
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "invalid_execution_request"
 
+
+def test_create_execution_rejects_user_workflow_without_plan_source(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "workflowType": "MoonMind.UserWorkflow",
+            "title": "Run",
+            "initialParameters": {},
+        },
+    )
+
+    assert response.status_code == 422
+    service.create_execution.assert_not_awaited()
+
+
 def test_create_execution_routes_directly_to_temporal(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -6213,7 +6232,13 @@ def test_create_execution_routes_directly_to_temporal(
 
     response = test_client.post(
         "/api/executions",
-        json={"workflowType": "MoonMind.UserWorkflow", "title": "Test direct temporal"},
+        json={
+            "workflowType": "MoonMind.UserWorkflow",
+            "title": "Test direct temporal",
+            "initialParameters": {
+                "workflow": {"instructions": "Test direct temporal"}
+            },
+        },
     )
 
     assert response.status_code == 201
@@ -6379,7 +6404,13 @@ def test_create_execution_enforces_idempotency(
 
     response = test_client.post(
         "/api/executions",
-        json={"workflowType": "MoonMind.UserWorkflow", "idempotencyKey": "idem-123"},
+        json={
+            "workflowType": "MoonMind.UserWorkflow",
+            "idempotencyKey": "idem-123",
+            "initialParameters": {
+                "workflow": {"instructions": "Test idempotent create"}
+            },
+        },
     )
 
     assert response.status_code == 201

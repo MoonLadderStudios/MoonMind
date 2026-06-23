@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -42,9 +43,17 @@ from moonmind.workflows.temporal.service import (
     _get_managed_session_store_root,
 )
 from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLOW_TYPE
-from moonmind.schemas.temporal_models import RecoveryCheckpointModel
+from moonmind.schemas.temporal_models import (
+    CreateExecutionRequest,
+    RecoveryCheckpointModel,
+    has_user_workflow_plan_source,
+)
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
+
+
+def _valid_user_workflow_parameters() -> dict[str, object]:
+    return {"workflow": {"instructions": "Test workflow fixture."}}
 
 
 def _write_mm730_cutover_files(tmp_path):
@@ -146,6 +155,80 @@ async def _create_temporal_artifact(
     )
     await session.commit()
 
+
+def test_create_execution_request_rejects_user_workflow_without_plan_source():
+    with pytest.raises(ValidationError, match="requires non-empty instructions"):
+        CreateExecutionRequest.model_validate(
+            {
+                "workflowType": "MoonMind.UserWorkflow",
+                "title": "Run",
+                "initialParameters": {},
+            }
+        )
+
+
+def test_create_execution_request_accepts_workflow_skills_plan_source():
+    request = CreateExecutionRequest.model_validate(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "title": "Run skill",
+            "initialParameters": {
+                "workflow": {
+                    "skills": {
+                        "include": [{"name": "pr-resolver"}],
+                    },
+                },
+            },
+        }
+    )
+
+    assert request.workflow_type == "MoonMind.UserWorkflow"
+
+
+def test_user_workflow_plan_source_accepts_pydantic_artifact_refs():
+    class ArtifactRefModel(BaseModel):
+        artifact_id: str
+
+    assert has_user_workflow_plan_source(
+        initial_parameters={},
+        input_artifact_ref=ArtifactRefModel(artifact_id="art_input"),
+        plan_artifact_ref=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_execution_rejects_user_workflow_without_plan_source_before_start(
+    tmp_path, mock_client_adapter
+):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        with pytest.raises(
+            TemporalExecutionValidationError,
+            match="requires non-empty instructions",
+        ):
+            await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=uuid4(),
+                title="Run",
+                input_artifact_ref=None,
+                plan_artifact_ref=None,
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters={},
+                idempotency_key=None,
+            )
+
+        mock_client_adapter.start_workflow.assert_not_awaited()
+        records = (
+            await session.execute(select(TemporalExecutionCanonicalRecord))
+        ).scalars().all()
+        assert records == []
+
+
 @pytest.mark.asyncio
 async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path):
     async with temporal_db(tmp_path) as session:
@@ -217,7 +300,7 @@ async def test_create_execution_routes_user_workflow_after_mm730_cutover(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -258,6 +341,7 @@ async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicate
             initial_parameters={
                 "publishMode": "pr",
                 "workflow": {
+                    "instructions": "Test merge automation routing.",
                     "publish": {
                         "mode": "pr",
                         "mergeAutomation": {"enabled": True},
@@ -292,7 +376,10 @@ async def test_create_execution_keeps_default_priority_without_merge_automation(
             failure_policy=None,
             initial_parameters={
                 "publishMode": "pr",
-                "workflow": {"publish": {"mode": "pr"}},
+                "workflow": {
+                    "instructions": "Test default publish priority.",
+                    "publish": {"mode": "pr"},
+                },
             },
             idempotency_key=None,
         )
@@ -323,7 +410,7 @@ async def test_create_execution_returns_repair_pending_fallback_when_projection_
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="repair-pending-create",
         )
 
@@ -352,7 +439,7 @@ async def test_create_execution_defaults_missing_owner_to_system(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -426,7 +513,7 @@ async def test_create_execution_rejects_pending_upload_temporal_input_artifact_r
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={},
+                initial_parameters=_valid_user_workflow_parameters(),
                 idempotency_key=None,
             )
 
@@ -447,7 +534,7 @@ async def test_create_execution_rejects_unsupported_failure_policy(tmp_path):
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy="explode_loudly",
-                initial_parameters={},
+                initial_parameters=_valid_user_workflow_parameters(),
                 idempotency_key=None,
             )
 
@@ -468,7 +555,7 @@ async def test_create_execution_rejects_empty_failure_policy(tmp_path):
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy="",
-                initial_parameters={},
+                initial_parameters=_valid_user_workflow_parameters(),
                 idempotency_key=None,
             )
 
@@ -532,7 +619,7 @@ async def test_create_execution_rejects_dependency_run_id_identifier(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -604,7 +691,7 @@ async def test_create_execution_rejects_unauthorized_dependency(tmp_path, mock_c
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -640,7 +727,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         dep2 = await service.create_execution(
@@ -651,7 +738,7 @@ async def test_create_execution_persists_dependency_edges_and_supports_lookups(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -780,7 +867,7 @@ async def test_create_execution_persists_remediation_link_and_supports_lookups(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -868,7 +955,7 @@ async def test_record_remediation_approval_decision_appends_bounded_audit(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         remediation = await service.create_execution(
@@ -935,7 +1022,7 @@ async def test_record_remediation_approval_decision_rejects_non_pending_target(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -967,7 +1054,7 @@ async def test_create_execution_persists_supplied_matching_remediation_run_id(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1017,7 +1104,7 @@ async def test_create_execution_allows_observe_only_remediation_of_system_target
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1064,7 +1151,7 @@ async def test_create_execution_rejects_elevated_user_remediation_of_system_targ
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1130,7 +1217,7 @@ async def test_create_execution_rejects_remediation_run_id_identifier(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1237,7 +1324,7 @@ async def test_create_execution_rejects_mismatched_remediation_target_run_id(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1281,7 +1368,7 @@ async def test_create_execution_rejects_unsupported_remediation_authority_mode(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1323,7 +1410,7 @@ async def test_create_execution_rejects_incompatible_remediation_action_policy(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1412,7 +1499,7 @@ async def test_create_execution_rejects_nested_remediation_target(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         first_remediation = await service.create_execution(
@@ -1466,7 +1553,7 @@ async def test_create_execution_rejects_malformed_remediation_agent_run_ids(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -1620,7 +1707,7 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={},
+                initial_parameters=_valid_user_workflow_parameters(),
                 idempotency_key=None,
             )
             for index in range(1, 11)
@@ -1709,7 +1796,7 @@ async def test_mark_execution_succeeded_fans_out_dependency_resolution_signals(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         dependent_one = await service.create_execution(
@@ -1768,7 +1855,7 @@ async def test_record_terminal_state_fans_out_dependency_resolution_signals(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         dependent = await service.create_execution(
@@ -1834,7 +1921,7 @@ async def test_record_terminal_state_preserves_existing_terminal_summary(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         await service.cancel_execution(
@@ -1880,7 +1967,7 @@ async def test_record_terminal_state_indexes_finish_summary(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         finish_summary = {
@@ -1929,7 +2016,7 @@ async def test_record_terminal_state_derives_snake_case_finish_outcome_code(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         finish_summary = {
@@ -1978,7 +2065,7 @@ async def test_dependency_status_snapshot_repairs_stale_terminal_prerequisite(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         dependent = await service.create_execution(
@@ -2058,7 +2145,7 @@ async def test_dependency_status_snapshot_returns_stale_record_when_terminal_syn
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         prerequisite_workflow_id = prerequisite.workflow_id
@@ -2094,7 +2181,7 @@ async def test_mark_execution_failed_fanout_is_best_effort(tmp_path, mock_client
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         dependent_one = await service.create_execution(
@@ -2184,7 +2271,7 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
                         plan_artifact_ref=None,
                         manifest_artifact_ref=None,
                         failure_policy=None,
-                        initial_parameters={},
+                        initial_parameters=_valid_user_workflow_parameters(),
                         idempotency_key=key,
                     )
                     monkeypatch.setattr(
@@ -2217,7 +2304,7 @@ async def test_create_execution_returns_existing_record_after_idempotency_race(
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={},
+                initial_parameters=_valid_user_workflow_parameters(),
                 idempotency_key=key,
             )
 
@@ -2242,7 +2329,7 @@ async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="shared-idempotency-key",
         )
         service_record = await service.create_execution(
@@ -2254,7 +2341,7 @@ async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="shared-idempotency-key",
         )
         service_retry = await service.create_execution(
@@ -2266,7 +2353,7 @@ async def test_create_execution_scopes_idempotency_by_owner_type(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="shared-idempotency-key",
         )
 
@@ -2289,7 +2376,7 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         await service.create_execution(
@@ -2300,7 +2387,7 @@ async def test_list_executions_syncs_page_in_single_projection_commit(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -2999,7 +3086,7 @@ async def test_selected_step_recovery_rejects_step_without_checkpoint_evidence(
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3044,7 +3131,7 @@ async def test_selected_step_recovery_rejects_step_after_failed_step(
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3101,7 +3188,7 @@ async def test_failed_step_recovery_requires_hydrated_checkpoint_payload(
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3138,7 +3225,7 @@ async def test_failed_step_recovery_invalid_evidence_does_not_create_execution(
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3188,7 +3275,7 @@ async def test_failed_step_recovery_rejects_noncanonical_checkpoint_ref(
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3231,7 +3318,7 @@ async def test_failed_step_recovery_rejects_checkpoint_run_mismatch(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3271,7 +3358,7 @@ async def test_failed_step_recovery_rejects_checkpoint_plan_mismatch(
             plan_artifact_ref="artifact://plan/source",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3314,7 +3401,7 @@ async def test_failed_step_recovery_rejects_checkpoint_plan_digest_mismatch(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.FAILED
@@ -3358,7 +3445,7 @@ async def test_request_rerun_bounds_fresh_execution_idempotency_key(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         await service.cancel_execution(
@@ -3417,7 +3504,7 @@ async def test_request_rerun_creates_fresh_execution_when_temporal_reports_compl
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3551,7 +3638,7 @@ async def test_manifest_only_updates_rejected_for_non_manifest_workflow(
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3588,7 +3675,7 @@ async def test_request_rerun_clears_pause_flags_when_continuing_as_new(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3632,7 +3719,7 @@ async def test_update_execution_rejects_unknown_update_name(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3666,7 +3753,7 @@ async def test_update_execution_rejects_run_intervention_updates(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3704,7 +3791,7 @@ async def test_signal_pause_recovery_and_external_event_transitions(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3757,7 +3844,7 @@ async def test_signal_resume_forwards_payload_via_workflow_update(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3798,7 +3885,7 @@ async def test_signal_send_message_records_intervention_audit_without_state_chan
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -3951,7 +4038,7 @@ async def test_signal_skip_dependency_wait_routes_update_and_records_audit(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         created.state = MoonMindWorkflowState.WAITING_ON_DEPENDENCIES
@@ -3997,7 +4084,7 @@ async def test_signal_send_message_rejects_noncanonical_payload(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4112,7 +4199,7 @@ async def test_signal_execution_rejects_unknown_signal_name(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4172,7 +4259,7 @@ async def test_cancel_execution_terminal_record_skips_temporal_call(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         completed = await service.mark_execution_succeeded(
@@ -4210,7 +4297,7 @@ async def test_cancel_execution_records_reject_audit_action(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4374,7 +4461,7 @@ async def test_cancel_execution_best_effort_terminates_workflow_scoped_codex_ses
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4432,7 +4519,7 @@ async def test_cancel_execution_prefers_direct_session_record_load_for_codex_tas
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4501,7 +4588,7 @@ async def test_cancel_execution_ignores_best_effort_session_terminate_failure(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4559,7 +4646,7 @@ async def test_forced_cancel_marks_failed_with_terminated_close_status(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4773,7 +4860,7 @@ async def test_record_progress_triggers_continue_as_new_for_run_threshold(tmp_pa
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         original_run_id = created.run_id
@@ -4810,7 +4897,7 @@ async def test_signal_external_event_requires_source_and_event_type(tmp_path):
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4837,7 +4924,7 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4883,7 +4970,7 @@ async def test_configure_integration_monitoring_rejects_blank_external_operation
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -4922,7 +5009,7 @@ async def test_ingest_integration_callback_deduplicates_provider_event_ids(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         configured = await service.configure_integration_monitoring(
@@ -4986,7 +5073,7 @@ async def test_wait_cycle_continue_as_new_preserves_active_integration_monitorin
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         configured = await service.configure_integration_monitoring(
@@ -5037,7 +5124,7 @@ async def test_mark_execution_failed_rejects_unknown_error_category(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -5061,7 +5148,7 @@ async def test_projection_sync_markers_round_trip_between_stale_and_fresh(tmp_pa
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -5096,7 +5183,7 @@ async def test_update_execution_persists_repair_pending_when_projection_refresh_
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         previous_sync_at = created.last_synced_at
@@ -5152,7 +5239,7 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="visible-row",
         )
         hidden = await service.create_execution(
@@ -5163,7 +5250,7 @@ async def test_orphaned_projection_rows_are_repaired_from_canonical_lists(tmp_pa
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="hidden-row",
         )
 
@@ -5211,7 +5298,7 @@ async def test_orphaned_projection_rows_with_canonical_source_repair_on_read_and
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="hidden-describe-row",
         )
 
@@ -5308,7 +5395,7 @@ async def test_mark_execution_succeeded_rejects_terminal_execution(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
 
@@ -5341,7 +5428,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters={},
+                initial_parameters=_valid_user_workflow_parameters(),
                 idempotency_key=f"owner-a-{idx}",
             )
         await service.create_execution(
@@ -5352,7 +5439,7 @@ async def test_list_executions_filters_owner_and_paginates(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="owner-b-0",
         )
         await service.create_execution(
@@ -5422,7 +5509,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="older-row",
         )
         newer = await service.create_execution(
@@ -5433,7 +5520,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="newer-row",
         )
         tied_a = await service.create_execution(
@@ -5444,7 +5531,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="tied-a-row",
         )
         tied_b = await service.create_execution(
@@ -5455,7 +5542,7 @@ async def test_list_executions_orders_by_updated_at_then_workflow_id(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="tied-b-row",
         )
 
@@ -5517,7 +5604,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="late-scheduled-row",
         )
         early = await service.create_execution(
@@ -5528,7 +5615,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="early-scheduled-row",
         )
         running = await service.create_execution(
@@ -5539,7 +5626,7 @@ async def test_list_executions_orders_scheduled_rows_by_latest_scheduled_for(tmp
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="running-row",
         )
 
@@ -5594,7 +5681,7 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="matching-run",
             repository="Moon/Mind",
             integration="github",
@@ -5607,7 +5694,7 @@ async def test_list_executions_filters_entry_repo_and_integration(tmp_path):
             plan_artifact_ref=None,
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key="other-repo",
             repository="Other/Repo",
             integration="github",
@@ -5659,7 +5746,7 @@ async def test_polling_backoff_resets_after_status_change_and_updates_visibility
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         configured = await service.configure_integration_monitoring(
@@ -5722,7 +5809,7 @@ async def test_late_non_terminal_callback_is_ignored_after_terminal_completion(
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         await service.configure_integration_monitoring(
@@ -5778,7 +5865,7 @@ async def test_failed_poll_marks_integration_error_summary(tmp_path):
             plan_artifact_ref="artifact://plan/1",
             manifest_artifact_ref=None,
             failure_policy=None,
-            initial_parameters={},
+            initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
         await service.configure_integration_monitoring(
