@@ -2006,16 +2006,24 @@ def _provider_profile_prefers_proxy_first(profile: Mapping[str, Any]) -> bool:
         .strip()
         .lower()
     )
-    credential_source = str(
+    credential_source_raw = (
         profile.get("credential_source") or profile.get("credentialSource") or ""
-    ).strip()
-    materialization_mode = str(
+    )
+    credential_source = str(
+        getattr(credential_source_raw, "value", credential_source_raw)
+    ).strip().lower()
+    materialization_mode_raw = (
         profile.get("runtime_materialization_mode")
         or profile.get("runtimeMaterializationMode")
         or ""
-    ).strip()
+    )
+    materialization_mode = str(
+        getattr(materialization_mode_raw, "value", materialization_mode_raw)
+    ).strip().lower()
+    if provider == "minimax":
+        return False
     return (
-        provider in {"anthropic", "minimax", "openai"}
+        provider in {"anthropic", "openai"}
         and credential_source == "secret_ref"
         and materialization_mode in {"api_key_env", "env_bundle"}
     )

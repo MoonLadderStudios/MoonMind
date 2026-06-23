@@ -974,7 +974,13 @@ class ManagedRuntimeLauncher:
             raise RuntimeError(
                 f"Provider profile {profile_ref!r} is not launch-ready: disabled"
             )
-        if profile.auth_state is not None and profile.auth_state != "connected":
+        auth_state = profile.auth_state
+        if auth_state is not None:
+            auth_state_value = getattr(auth_state, "value", auth_state)
+            auth_state_normalized = str(auth_state_value).strip().lower()
+        else:
+            auth_state_normalized = None
+        if auth_state_normalized is not None and auth_state_normalized != "connected":
             raise RuntimeError(
                 f"Provider profile {profile_ref!r} is not launch-ready: "
                 f"auth_state={profile.auth_state!r}"

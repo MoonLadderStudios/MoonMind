@@ -570,6 +570,7 @@ def _codex_minimax_m27_file_templates() -> list[dict[str, object]]:
             "format": "toml",
             "merge_strategy": "deep_merge",
             "content_template": {
+                "profile": "m27",
                 "model_providers": {
                     "minimax": {
                         "name": "MiniMax Chat Completions API",

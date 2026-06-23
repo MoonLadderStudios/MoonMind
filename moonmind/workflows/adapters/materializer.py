@@ -304,9 +304,10 @@ class ProviderProfileMaterializer:
         raw = file_path.read_text(encoding="utf-8")
         if not raw.strip():
             return {}
-        if file_format == "json":
+        normalized_format = str(file_format).strip().lower()
+        if normalized_format == "json":
             parsed = json.loads(raw)
-        elif file_format == "toml":
+        elif normalized_format == "toml":
             parsed = tomllib.loads(raw)
         else:
             raise ValueError("deep_merge is supported only for json and toml fileTemplates")

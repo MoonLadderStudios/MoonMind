@@ -165,6 +165,17 @@ def test_apply_runtime_command_rendering_redacts_diagnostics(monkeypatch):
     assert render_metadata["diagnostics"]["message"] == "saw ***"
     assert "render-secret-value" not in str(render_metadata)
 
+def test_assert_profile_launch_ready_accepts_connected_enum_auth_state():
+    from api_service.db.models import ProviderProfileAuthState
+
+    profile = _make_profile(
+        enabled=True,
+        authState=ProviderProfileAuthState.CONNECTED,
+        disabledReason=None,
+    )
+
+    ManagedRuntimeLauncher._assert_profile_launch_ready(profile)
+
 def test_build_command_per_runtime():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)

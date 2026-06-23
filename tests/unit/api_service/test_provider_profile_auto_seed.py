@@ -216,6 +216,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     ]
     assert codex_mm_profile.file_templates[0]["merge_strategy"] == "deep_merge"
     assert codex_mm_profile.file_templates[0]["permissions"] == "0600"
+    assert codex_mm_profile.file_templates[0]["content_template"]["profile"] == "m27"
     assert codex_mm_profile.model_overrides == {"codex_profile_name": "m27"}
 
 @pytest.mark.asyncio

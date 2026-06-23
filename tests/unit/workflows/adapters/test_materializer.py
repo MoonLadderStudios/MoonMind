@@ -285,10 +285,11 @@ async def test_materializer_deep_merges_toml_file_templates_without_artifact_lin
         file_templates=[
             {
                 "path": "codex-home/config.toml",
-                "format": "toml",
+                "format": "TOML",
                 "mergeStrategy": "deep_merge",
                 "permissions": "0600",
                 "contentTemplate": {
+                    "profile": "m27",
                     "model_providers": {
                         "minimax": {
                             "name": "MiniMax Chat Completions API",
@@ -321,6 +322,7 @@ async def test_materializer_deep_merges_toml_file_templates_without_artifact_lin
     assert "[model_providers.minimax]" in content
     assert "[profiles.default]" in content
     assert "[profiles.m27]" in content
+    assert 'profile = "m27"' in content
     assert "resolved-minimax-key" not in content
     assert oct(config_path.stat().st_mode & 0o777) == "0o600"
     assert str(config_path) in materializer.generated_files
