@@ -16628,3 +16628,129 @@ describe("resolveDefaultProviderProfileId", () => {
     );
   });
 });
+
+describe("Task Create runtime switch layout stability", () => {
+  let fetchSpy: MockInstance;
+  let resolveClaudeProfiles:
+    | ((profiles: Array<Record<string, unknown>>) => void)
+    | null;
+
+  // The Runtime/Provider-profile row container is the parent of the wrapping
+  // <label> around the Runtime <select>. Its class toggles between "grid-2"
+  // (two columns / half width) and "stack" (single column / full width).
+  function runtimeRowContainer(): HTMLElement {
+    const container = screen.getByLabelText("Runtime").closest("label")
+      ?.parentElement;
+    expect(container).not.toBeNull();
+    return container as HTMLElement;
+  }
+
+  beforeEach(() => {
+    window.history.pushState({}, "Task Create", "/workflows/new");
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+    vi.mocked(navigateTo).mockReset();
+    resolveClaudeProfiles = null;
+    fetchSpy = vi
+      .spyOn(window, "fetch")
+      .mockImplementation((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("/api/v1/provider-profiles")) {
+          const runtimeId = new URL(`http://localhost${url}`).searchParams.get(
+            "runtime_id",
+          );
+          if (runtimeId === "claude_code") {
+            // Hold the switched-to runtime's profiles in-flight so the test
+            // can observe the layout while the refetch is still pending.
+            return new Promise<Response>((resolve) => {
+              resolveClaudeProfiles = (profiles) =>
+                resolve({
+                  ok: true,
+                  json: async () => profiles,
+                } as Response);
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            json: async () => [
+              {
+                profile_id: "profile:codex-default",
+                account_label: "Codex Default",
+                is_default: true,
+              },
+              {
+                profile_id: "profile:codex-secondary",
+                account_label: "Codex Secondary",
+                is_default: false,
+              },
+            ],
+          } as Response);
+        }
+        if (url.startsWith("/api/workflows/skills")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: { worker: [] } }),
+          } as Response);
+        }
+        if (url.startsWith("/api/github/branches")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [{ value: "main", label: "main", source: "github" }],
+              defaultBranch: "main",
+              error: null,
+            }),
+          } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [] }),
+        } as Response);
+      });
+  });
+
+  afterEach(() => {
+    fetchSpy.mockRestore();
+  });
+
+  it("keeps the Runtime/Provider-profile row at half width while a runtime switch refetches profiles", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    // The initial runtime (codex_cli) loads two provider profiles, so the row
+    // renders as the two-column grid (half width each).
+    await screen.findByLabelText("Provider profile");
+    expect(runtimeRowContainer().className).toContain("grid-2");
+
+    // Switch to a runtime whose provider profiles are still in-flight.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Runtime"), {
+        target: { value: "claude_code" },
+      });
+    });
+
+    // Regression (MM runtime-dropdown width flicker): the row must stay
+    // grid-2 during the refetch instead of collapsing to the full-width
+    // "stack" layout that hid the Provider profile field until the new
+    // profiles arrived.
+    expect(runtimeRowContainer().className).toContain("grid-2");
+    expect(runtimeRowContainer().className).not.toContain("stack");
+    expect(screen.getByLabelText("Provider profile")).toBeTruthy();
+
+    // Resolving the in-flight fetch swaps in the new runtime's profiles while
+    // the row stays at half width throughout.
+    await act(async () => {
+      resolveClaudeProfiles?.([
+        {
+          profile_id: "profile:claude-default",
+          account_label: "Claude Default",
+          is_default: true,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(runtimeRowContainer().className).toContain("grid-2");
+    });
+    expect(screen.getByLabelText("Provider profile")).toBeTruthy();
+  });
+});

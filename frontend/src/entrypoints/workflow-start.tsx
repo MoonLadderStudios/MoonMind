@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { SkillCombobox } from "../components/SkillCombobox";
@@ -4791,6 +4791,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       return (await response.json()) as ProviderProfile[];
     },
     enabled: Boolean(runtime),
+    // Keep the previously loaded profiles visible while a runtime switch
+    // refetches. Without this, the query key change empties `data`, which
+    // collapses the Runtime/Provider-profile row from `grid-2` to `stack`
+    // (full width) until the fetch resolves and it snaps back to half width.
+    placeholderData: keepPreviousData,
   });
 
   useEffect(() => {
