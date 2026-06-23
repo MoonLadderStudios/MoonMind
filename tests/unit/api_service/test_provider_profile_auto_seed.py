@@ -636,3 +636,36 @@ async def test_auto_seed_does_not_overwrite_custom_openrouter_codex_config_templ
         )
 
     assert profile.file_templates == custom_template
+
+
+@pytest.mark.asyncio
+async def test_auto_seed_first_party_stubs_have_default_readiness_labels(
+    _module_db, monkeypatch
+):
+    """First-party setup stubs carry the documented command_behavior labels."""
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    await _auto_seed_provider_profiles()
+
+    expected_command_behavior = {
+        "supported_auth_methods": ["oauth_volume", "secret_ref"],
+        "auth_actions": ["connect_oauth", "add_api_key"],
+        "auth_status_label": "Not connected",
+        "auth_readiness": {
+            "connected": False,
+            "launch_ready": False,
+        },
+    }
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedAgentProviderProfile))
+        profiles = {p.profile_id: p for p in result.scalars().all()}
+
+    for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS:
+        profile = profiles[profile_id]
+        assert profile.command_behavior == expected_command_behavior, profile_id
+        # Stubs stay pre-OAuth: no home_path_overrides until setup succeeds.
+        assert not profile.home_path_overrides

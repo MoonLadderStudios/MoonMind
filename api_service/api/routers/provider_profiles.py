@@ -710,7 +710,7 @@ async def commit_claude_manual_auth(
         {
             "auth_strategy": "claude_credential_methods",
             "auth_state": "connected",
-            "auth_actions": _claude_auth_actions_for_profile(profile),
+            "auth_actions": oauth_auth_actions_for_profile(profile),
             "auth_status_label": "Anthropic API key ready",
             "auth_readiness": {
                 "connected": True,
@@ -751,16 +751,21 @@ async def validate_claude_oauth_profile(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
+    """Validate an OAuth-backed provider profile against its auth volume.
+
+    Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+    handler name is retained for OpenAPI operation-id stability.
+    """
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
-    _require_claude_anthropic_profile(profile)
+    mapping = _require_first_party_oauth_profile(profile)
     if not profile.volume_ref or not profile.volume_mount_path:
         raise HTTPException(
             status_code=422,
-            detail="Claude OAuth validation requires OAuth volume metadata.",
+            detail=f"{mapping.label_prefix} OAuth validation requires OAuth volume metadata.",
         )
 
     try:
@@ -776,33 +781,27 @@ async def validate_claude_oauth_profile(
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail="Claude OAuth validation unavailable.",
+            detail=f"{mapping.label_prefix} OAuth validation unavailable.",
         ) from exc
 
     if not verification.get("verified", False):
         failed_at = datetime.now(UTC)
-        profile.enabled = False
-        profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
-        profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
-        profile.last_validated_at = failed_at
-        reason = redact_sensitive_payload(str(verification.get("reason") or "unknown"))
-        _update_claude_auth_behavior(
+        apply_oauth_validation_failure(
             profile,
-            auth_state="validation_failed",
-            status_label="Claude OAuth validation failed",
-            readiness={
-                "connected": False,
-                "last_validated_at": failed_at.isoformat(),
-                "backing_secret_exists": False,
-                "launch_ready": False,
-                "failure_reason": reason,
-            },
+            mapping=mapping,
+            reason=verification.get("reason"),
+            failed_at=failed_at,
         )
         await session.commit()
         await session.refresh(profile)
+        reason = (
+            profile.command_behavior.get("auth_readiness", {}).get("failure_reason")
+            if isinstance(profile.command_behavior, dict)
+            else None
+        )
         raise HTTPException(
             status_code=400,
-            detail=f"Claude OAuth validation failed: {reason}",
+            detail=f"{mapping.label_prefix} OAuth validation failed: {reason}",
         )
 
     validated_at = datetime.now(UTC)
@@ -813,23 +812,17 @@ async def validate_claude_oauth_profile(
         profile.first_authenticated_at = validated_at
     profile.last_validated_at = validated_at
     profile.last_auth_method = ProviderProfileAuthMethod.OAUTH_VOLUME
-    _update_claude_auth_behavior(
+    apply_oauth_connected_state(
         profile,
-        auth_state="connected",
-        status_label="Claude OAuth ready",
-        readiness={
-            "connected": True,
-            "last_validated_at": validated_at.isoformat(),
-            "backing_secret_exists": True,
-            "launch_ready": True,
-        },
+        mapping=mapping,
+        validated_at=validated_at,
     )
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
     return {
         "status": "ready",
-        "status_label": "Claude OAuth ready",
+        "status_label": f"{mapping.label_prefix} OAuth ready",
         "profile_id": profile.profile_id,
         "readiness": profile.command_behavior.get("auth_readiness")
         if isinstance(profile.command_behavior, dict)
@@ -842,12 +835,17 @@ async def disconnect_claude_oauth_profile(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
+    """Disconnect an OAuth-backed provider profile and clear its volume fields.
+
+    Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+    handler name is retained for OpenAPI operation-id stability.
+    """
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
-    _require_claude_anthropic_profile(profile)
+    mapping = _require_first_party_oauth_profile(profile)
 
     if profile.credential_source == ProviderCredentialSource.OAUTH_VOLUME:
         profile.credential_source = ProviderCredentialSource.NONE
@@ -859,10 +857,11 @@ async def disconnect_claude_oauth_profile(
     profile.auth_state = ProviderProfileAuthState.DISCONNECTED
     profile.disabled_reason = ProviderProfileDisabledReason.DISCONNECTED
     profile.last_validated_at = disconnected_at
-    _update_claude_auth_behavior(
+    update_oauth_command_behavior(
         profile,
+        mapping=mapping,
         auth_state="disconnected",
-        status_label="Claude OAuth disconnected",
+        status_label=f"{mapping.label_prefix} OAuth disconnected",
         readiness={
             "connected": False,
             "last_validated_at": disconnected_at.isoformat(),
@@ -875,7 +874,7 @@ async def disconnect_claude_oauth_profile(
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
     return {
         "status": "disconnected",
-        "status_label": "Claude OAuth disconnected",
+        "status_label": f"{mapping.label_prefix} OAuth disconnected",
         "profile_id": profile.profile_id,
     }
 
@@ -961,6 +960,21 @@ def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
             detail="Manual Claude auth is only supported for claude_code Anthropic profiles.",
         )
 
+
+def _require_first_party_oauth_profile(
+    row: ManagedAgentProviderProfile,
+) -> FirstPartyOAuthProfile:
+    mapping = get_first_party_oauth_profile(row.runtime_id, row.provider_id)
+    if mapping is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "OAuth lifecycle actions are only supported for first-party "
+                "Claude, Codex, and Gemini provider profiles."
+            ),
+        )
+    return mapping
+
 @dataclass(frozen=True, slots=True)
 class _ApiKeyMapping:
     runtime_id: str
@@ -1012,32 +1026,6 @@ def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMap
             ),
         )
     return mapping
-
-def _claude_auth_actions_for_profile(row: ManagedAgentProviderProfile) -> list[str]:
-    actions = ["use_api_key"]
-    if row.volume_ref or row.volume_mount_path:
-        actions.insert(0, "connect_oauth")
-        actions.extend(["validate_oauth", "disconnect_oauth"])
-    return actions
-
-def _update_claude_auth_behavior(
-    row: ManagedAgentProviderProfile,
-    *,
-    auth_state: str,
-    status_label: str,
-    readiness: dict[str, Any],
-) -> None:
-    behavior = dict(row.command_behavior or {})
-    behavior.update(
-        {
-            "auth_strategy": "claude_credential_methods",
-            "auth_state": auth_state,
-            "auth_actions": _claude_auth_actions_for_profile(row),
-            "auth_status_label": status_label,
-            "auth_readiness": readiness,
-        }
-    )
-    row.command_behavior = behavior
 
 def _looks_like_claude_manual_token(token: str) -> bool:
     return token.startswith("sk-ant-") and len(token) >= 12
@@ -1674,6 +1662,12 @@ def _row_to_dict(
     return payload
 
 from api_service.services.provider_profile_service import (
+    FirstPartyOAuthProfile,
+    apply_oauth_connected_state,
+    apply_oauth_validation_failure,
+    get_first_party_oauth_profile,
     normalize_runtime_default_profile,
+    oauth_auth_actions_for_profile,
     sync_provider_profile_manager,
+    update_oauth_command_behavior,
 )

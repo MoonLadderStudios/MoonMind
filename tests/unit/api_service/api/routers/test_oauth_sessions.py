@@ -1689,3 +1689,166 @@ async def test_claude_oauth_terminal_websocket_rejects_replayed_attach_token(
 
     assert websocket.closed == [4403]
     assert websocket.accepted is False
+
+
+@pytest.mark.asyncio
+async def test_finalize_failed_verification_disables_existing_profile(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failed OAuth verification must leave the visible profile disabled.
+
+    The generic finalize path (used by Codex/Gemini OAuth, not just the
+    Claude-only validate endpoint) must mark the profile
+    auth_state=validation_failed / disabled_reason=auth_invalid, not only fail
+    the OAuth session.
+    """
+    session_id = "oas_failverify_disable1"
+    profile_id = "codex-cli-failverify-disable"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="codex account",
+            )
+        )
+        await session.commit()
+
+    async def _failed_verify(**_kwargs):
+        return {"verified": False, "reason": "no_credentials_found"}
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_fail(_session_id, _reason):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _failed_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._fail_oauth_session_workflow",
+        _noop_fail,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 400
+
+    async with db_base.async_session_maker() as session:
+        oauth_session = await session.get(ManagedAgentOAuthSession, session_id)
+        assert oauth_session is not None
+        assert oauth_session.status == OAuthSessionStatus.FAILED
+
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is False
+        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+        assert (
+            profile.disabled_reason.value
+            if profile.disabled_reason
+            else None
+        ) == "auth_invalid"
+        readiness = (profile.command_behavior or {}).get("auth_readiness", {})
+        assert readiness.get("connected") is False
+        assert readiness.get("failure_reason") == "no_credentials_found"
+
+
+@pytest.mark.asyncio
+async def test_finalize_success_stamps_oauth_home_overrides_and_readiness(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OAuth-after-setup profiles persist documented home_path_overrides."""
+    session_id = "oas_gemini_homeoverrides1"
+    profile_id = "gemini-cli-home-overrides"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="gemini_cli",
+                profile_id=profile_id,
+                volume_ref="gemini_auth_volume",
+                volume_mount_path="/var/lib/gemini-auth",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="gemini account",
+                metadata_json={
+                    "provider_id": "google",
+                    "provider_label": "Google",
+                },
+            )
+        )
+        await session.commit()
+
+    async def _successful_verify(**_kwargs):
+        return {"verified": True}
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_complete(_session_id):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _successful_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _noop_sync,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _noop_complete,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 200
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.home_path_overrides == {
+            "GEMINI_HOME": "/var/lib/gemini-auth",
+            "GEMINI_CLI_HOME": "/var/lib/gemini-auth",
+        }
+        behavior = profile.command_behavior or {}
+        assert behavior.get("auth_strategy") == "gemini_credential_methods"
+        assert behavior.get("auth_status_label") == "Gemini OAuth ready"
+        assert behavior.get("auth_readiness", {}).get("connected") is True
