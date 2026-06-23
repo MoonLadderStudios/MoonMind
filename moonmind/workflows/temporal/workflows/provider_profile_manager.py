@@ -1165,6 +1165,10 @@ class MoonMindProviderProfileManagerWorkflow:
     ) -> Optional[ProfileSlotState]:
         """Find the best available profile matching the selector."""
         selector = self._normalize_selector(selector)
+        allow_default_fallback = False
+        if selector:
+            allow_default_fallback = bool(selector.pop("allowDefaultFallback", False))
+            selector = selector or None
         exact_profile_id = str(execution_profile_ref or "").strip()
         normalized_group_id = self._normalize_optional_string(lease_group_id)
         if normalized_group_id:
@@ -1230,6 +1234,9 @@ class MoonMindProviderProfileManagerWorkflow:
                 profile for profile in eligible_profiles if profile.is_default
             ]
             if workflow.patched(DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH):
+                if allow_default_fallback:
+                    self._sort_profiles_for_selection(eligible_profiles)
+                    return eligible_profiles[0]
                 if default_profiles:
                     eligible_profiles = default_profiles
                 elif configured_default_profiles:

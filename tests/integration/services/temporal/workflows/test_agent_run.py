@@ -274,9 +274,19 @@ class MockProviderProfileManager:
         self._leases: dict[str, str] = {}  # profile_id -> workflow_id
         self.cooldown_reports: list[dict] = []
         self.cooldowns: dict[str, str] = {}
+        self.default_profile_id = "default-managed"
+        self.selector_provider_map: dict[str, str] = {}
+        self.resolved_profiles: list[str] = []
 
     @workflow.signal
     def request_slot(self, payload: dict) -> None:
+        profile_id = payload.get("execution_profile_ref") or payload.get("profile_id")
+        if not profile_id:
+            profile_selector = payload.get("profile_selector") or {}
+            provider_id = profile_selector.get("providerId")
+            profile_id = self.selector_provider_map.get(provider_id)
+        if profile_id:
+            self.resolved_profiles.append(profile_id)
         self.pending_requests.append(payload)
 
     @workflow.signal
@@ -309,11 +319,16 @@ class MockProviderProfileManager:
             "pending_requests": self.pending_requests,
             "cooldown_reports": list(self.cooldown_reports),
             "cooldowns": dict(self.cooldowns),
+            "resolved_profiles": list(self.resolved_profiles),
         }
 
     @workflow.run
     async def run(self, input_payload: dict) -> dict:
         assign_slots = input_payload.get("assign_slots", True)
+        self.default_profile_id = input_payload.get(
+            "default_profile_id", self.default_profile_id
+        )
+        self.selector_provider_map = dict(input_payload.get("selector_provider_map") or {})
         while not self._shutdown:
             await workflow.wait_condition(lambda: len(self.pending_requests) > 0 or self._shutdown)
             if self._shutdown:
@@ -324,7 +339,10 @@ class MockProviderProfileManager:
                     profile_id = (
                         req.get("execution_profile_ref")
                         or req.get("profile_id")
-                        or "default-managed"
+                        or self.selector_provider_map.get(
+                            (req.get("profile_selector") or {}).get("providerId")
+                        )
+                        or self.default_profile_id
                     )
                     cooldown_until = self.cooldowns.get(profile_id)
                     if cooldown_until is not None:
@@ -565,12 +583,23 @@ async def test_agent_run_workflow_cancellation():
 
 @pytest.mark.asyncio
 async def test_agent_run_reports_managed_429_retry_summary_to_parent():
+    rate_limited_activities = [
+        mock_publish_artifacts,
+        mock_cancel,
+        mock_provider_profile_list,
+        mock_provider_profile_ensure_manager,
+        mock_provider_profile_reset_manager,
+        mock_agent_runtime_launch,
+        mock_agent_runtime_build_launch_context,
+        mock_agent_runtime_status_rate_limited,
+        mock_agent_runtime_fetch_result_rate_limited,
+    ]
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
             task_queue="agent-run-task-queue",
             workflows=[MoonMindAgentRun, MockProviderProfileManager, TestAgentRunParent],
-            activities=_COMMON_AGENT_RUN_ACTIVITIES,
+            activities=rate_limited_activities,
             workflow_runner=UnsandboxedWorkflowRunner(),
         ):
                 request = AgentExecutionRequest(
@@ -607,17 +636,8 @@ async def test_agent_run_reports_managed_429_retry_summary_to_parent():
                         break
                     await asyncio.sleep(0.1)
 
-                await child_handle.signal(
-                    MoonMindAgentRun.completion_signal,
-                    {
-                        "summary": "Gemini API rate limit exceeded",
-                        "failureClass": "integration_error",
-                        "providerErrorCode": "429",
-                    },
-                )
-
                 manager_state = {}
-                for _ in range(30):
+                for _ in range(60):
                     parent_state = await parent_handle.query(TestAgentRunParent.get_state)
                     manager_state = await manager_handle.query(MockProviderProfileManager.get_state)
                     if manager_state.get("cooldown_reports") and any(
@@ -1496,89 +1516,22 @@ async def test_openrouter_profile_cooldown_attaches_to_profile():
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter
 
         try:
-            @workflow.defn(name="MoonMind.ProviderProfileManager")
-            class MockProviderProfileManagerForOpenRouter:
-                def __init__(self):
-                    self._shutdown = False
-                    self.pending_requests = []
-                    self._leases: dict[str, str] = {}
-                    self.cooldown_reports: list[dict] = []
-                    self.cooldowns: dict[str, str] = {}
-
-                @workflow.signal
-                def request_slot(self, payload: dict) -> None:
-                    self.pending_requests.append(payload)
-
-                @workflow.signal
-                def release_slot(self, payload: dict) -> None:
-                    requester_id = payload.get("requester_workflow_id")
-                    to_remove = [p for p, wf in self._leases.items() if wf == requester_id]
-                    for p in to_remove:
-                        del self._leases[p]
-
-                @workflow.signal
-                def report_cooldown(self, payload: dict) -> None:
-                    self.cooldown_reports.append(dict(payload))
-                    profile_id = payload.get("profile_id", "test-openrouter-high-priority")
-                    cooldown_seconds = int(payload.get("cooldown_seconds", 0))
-                    self.cooldowns[profile_id] = (
-                        workflow.now() + timedelta(seconds=cooldown_seconds)
-                    ).isoformat()
-
-                @workflow.signal
-                def sync_profiles(self, payload: dict) -> None:
-                    pass
-
-                @workflow.query
-                def get_state(self) -> dict:
-                    return {
-                        "leases": dict(self._leases),
-                        "pending_requests": self.pending_requests,
-                        "cooldown_reports": list(self.cooldown_reports),
-                        "cooldowns": dict(self.cooldowns),
-                    }
-
-                @workflow.run
-                async def run(self, input_payload: dict) -> dict:
-                    assign_slots = input_payload.get("assign_slots", True)
-                    while not self._shutdown:
-                        await workflow.wait_condition(lambda: len(self.pending_requests) > 0 or self._shutdown)
-                        if self._shutdown:
-                            break
-                        while self.pending_requests:
-                            req = self.pending_requests.pop(0)
-                            if assign_slots:
-                                profile_id = (
-                                    req.get("execution_profile_ref")
-                                    or req.get("profile_id")
-                                    or "test-openrouter-high-priority"
-                                )
-                                cooldown_until = self.cooldowns.get(profile_id)
-                                if cooldown_until is not None:
-                                    cooldown_dt = datetime.fromisoformat(cooldown_until)
-                                    if workflow.now() < cooldown_dt:
-                                        self.pending_requests.insert(0, req)
-                                        await workflow.sleep(
-                                            (cooldown_dt - workflow.now()).total_seconds()
-                                        )
-                                        continue
-                                self._leases[profile_id] = req["requester_workflow_id"]
-                                handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
-                                await handle.signal("slot_assigned", {"profile_id": profile_id})
-                    return {}
-
             openrouter_activities = [
                 mock_publish_artifacts,
                 mock_cancel,
                 mock_provider_profile_list_openrouter,
                 mock_provider_profile_ensure_manager,
                 mock_provider_profile_reset_manager,
+                mock_agent_runtime_launch,
+                mock_agent_runtime_build_launch_context,
+                mock_agent_runtime_status,
+                mock_agent_runtime_fetch_result,
             ]
 
             async with Worker(
                 env.client,
                 task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManagerForOpenRouter],
+                workflows=[MoonMindAgentRun, MockProviderProfileManager],
                 activities=openrouter_activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
@@ -1593,8 +1546,12 @@ async def test_openrouter_profile_cooldown_attaches_to_profile():
                 runtime_id = "codex_cli"
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 manager_handle = await env.client.start_workflow(
-                    MockProviderProfileManagerForOpenRouter.run,
-                    {"runtime_id": request.agent_id, "assign_slots": True},
+                    MockProviderProfileManager.run,
+                    {
+                        "runtime_id": request.agent_id,
+                        "assign_slots": True,
+                        "default_profile_id": "test-openrouter-high-priority",
+                    },
                     id=manager_id,
                     task_queue="agent-run-task-queue",
                 )
@@ -1619,7 +1576,7 @@ async def test_openrouter_profile_cooldown_attaches_to_profile():
 
                 await asyncio.sleep(0.3)
 
-                manager_state = await manager_handle.query(MockProviderProfileManagerForOpenRouter.get_state)
+                manager_state = await manager_handle.query(MockProviderProfileManager.get_state)
 
                 # Assert cooldown report references the openrouter profile specifically
                 assert manager_state["cooldown_reports"], "Expected cooldown report to be recorded"
@@ -1650,89 +1607,22 @@ async def test_openrouter_profile_slot_leasing():
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter
 
         try:
-            @workflow.defn(name="MoonMind.ProviderProfileManager")
-            class MockProviderProfileManagerForSlotLeasing:
-                def __init__(self):
-                    self._shutdown = False
-                    self.pending_requests = []
-                    self._leases: dict[str, str] = {}
-                    self.cooldown_reports: list[dict] = []
-                    self.cooldowns: dict[str, str] = {}
-
-                @workflow.signal
-                def request_slot(self, payload: dict) -> None:
-                    self.pending_requests.append(payload)
-
-                @workflow.signal
-                def release_slot(self, payload: dict) -> None:
-                    requester_id = payload.get("requester_workflow_id")
-                    to_remove = [p for p, wf in self._leases.items() if wf == requester_id]
-                    for p in to_remove:
-                        del self._leases[p]
-
-                @workflow.signal
-                def report_cooldown(self, payload: dict) -> None:
-                    self.cooldown_reports.append(dict(payload))
-                    profile_id = payload.get("profile_id", "test-openrouter-high-priority")
-                    cooldown_seconds = int(payload.get("cooldown_seconds", 0))
-                    self.cooldowns[profile_id] = (
-                        workflow.now() + timedelta(seconds=cooldown_seconds)
-                    ).isoformat()
-
-                @workflow.signal
-                def sync_profiles(self, payload: dict) -> None:
-                    pass
-
-                @workflow.query
-                def get_state(self) -> dict:
-                    return {
-                        "leases": dict(self._leases),
-                        "pending_requests": self.pending_requests,
-                        "cooldown_reports": list(self.cooldown_reports),
-                        "cooldowns": dict(self.cooldowns),
-                    }
-
-                @workflow.run
-                async def run(self, input_payload: dict) -> dict:
-                    assign_slots = input_payload.get("assign_slots", True)
-                    while not self._shutdown:
-                        await workflow.wait_condition(lambda: len(self.pending_requests) > 0 or self._shutdown)
-                        if self._shutdown:
-                            break
-                        while self.pending_requests:
-                            req = self.pending_requests.pop(0)
-                            if assign_slots:
-                                profile_id = (
-                                    req.get("execution_profile_ref")
-                                    or req.get("profile_id")
-                                    or "test-openrouter-high-priority"
-                                )
-                                cooldown_until = self.cooldowns.get(profile_id)
-                                if cooldown_until is not None:
-                                    cooldown_dt = datetime.fromisoformat(cooldown_until)
-                                    if workflow.now() < cooldown_dt:
-                                        self.pending_requests.insert(0, req)
-                                        await workflow.sleep(
-                                            (cooldown_dt - workflow.now()).total_seconds()
-                                        )
-                                        continue
-                                self._leases[profile_id] = req["requester_workflow_id"]
-                                handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
-                                await handle.signal("slot_assigned", {"profile_id": profile_id})
-                    return {}
-
             openrouter_activities = [
                 mock_publish_artifacts,
                 mock_cancel,
                 mock_provider_profile_list_openrouter,
                 mock_provider_profile_ensure_manager,
                 mock_provider_profile_reset_manager,
+                mock_agent_runtime_launch,
+                mock_agent_runtime_build_launch_context,
+                mock_agent_runtime_status,
+                mock_agent_runtime_fetch_result,
             ]
 
             async with Worker(
                 env.client,
                 task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManagerForSlotLeasing],
+                workflows=[MoonMindAgentRun, MockProviderProfileManager],
                 activities=openrouter_activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
@@ -1747,8 +1637,12 @@ async def test_openrouter_profile_slot_leasing():
                 runtime_id = "codex_cli"
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 manager_handle = await env.client.start_workflow(
-                    MockProviderProfileManagerForSlotLeasing.run,
-                    {"runtime_id": request.agent_id, "assign_slots": True},
+                    MockProviderProfileManager.run,
+                    {
+                        "runtime_id": request.agent_id,
+                        "assign_slots": True,
+                        "default_profile_id": "test-openrouter-high-priority",
+                    },
                     id=manager_id,
                     task_queue="agent-run-task-queue",
                 )
@@ -1764,7 +1658,7 @@ async def test_openrouter_profile_slot_leasing():
 
                 await asyncio.sleep(0.5)
 
-                manager_state = await manager_handle.query(MockProviderProfileManagerForSlotLeasing.get_state)
+                manager_state = await manager_handle.query(MockProviderProfileManager.get_state)
 
                 # Assert slot is leased against the openrouter profile specifically
                 assert "test-openrouter-high-priority" in manager_state["leases"], (
@@ -1778,7 +1672,7 @@ async def test_openrouter_profile_slot_leasing():
                 await manager_handle.signal("release_slot", {"requester_workflow_id": "test-workflow-openrouter-slot"})
                 await asyncio.sleep(0.3)
 
-                manager_state_after = await manager_handle.query(MockProviderProfileManagerForSlotLeasing.get_state)
+                manager_state_after = await manager_handle.query(MockProviderProfileManager.get_state)
 
                 # Slot should be released
                 assert "test-openrouter-high-priority" not in manager_state_after.get("leases", {}), (
@@ -1799,89 +1693,22 @@ async def test_openrouter_profile_cancellation_releases_slot():
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter
 
         try:
-            @workflow.defn(name="MoonMind.ProviderProfileManager")
-            class MockProviderProfileManagerForCancel:
-                def __init__(self):
-                    self._shutdown = False
-                    self.pending_requests = []
-                    self._leases: dict[str, str] = {}
-                    self.cooldown_reports: list[dict] = []
-                    self.cooldowns: dict[str, str] = {}
-
-                @workflow.signal
-                def request_slot(self, payload: dict) -> None:
-                    self.pending_requests.append(payload)
-
-                @workflow.signal
-                def release_slot(self, payload: dict) -> None:
-                    requester_id = payload.get("requester_workflow_id")
-                    to_remove = [p for p, wf in self._leases.items() if wf == requester_id]
-                    for p in to_remove:
-                        del self._leases[p]
-
-                @workflow.signal
-                def report_cooldown(self, payload: dict) -> None:
-                    self.cooldown_reports.append(dict(payload))
-                    profile_id = payload.get("profile_id", "test-openrouter-high-priority")
-                    cooldown_seconds = int(payload.get("cooldown_seconds", 0))
-                    self.cooldowns[profile_id] = (
-                        workflow.now() + timedelta(seconds=cooldown_seconds)
-                    ).isoformat()
-
-                @workflow.signal
-                def sync_profiles(self, payload: dict) -> None:
-                    pass
-
-                @workflow.query
-                def get_state(self) -> dict:
-                    return {
-                        "leases": dict(self._leases),
-                        "pending_requests": self.pending_requests,
-                        "cooldown_reports": list(self.cooldown_reports),
-                        "cooldowns": dict(self.cooldowns),
-                    }
-
-                @workflow.run
-                async def run(self, input_payload: dict) -> dict:
-                    assign_slots = input_payload.get("assign_slots", True)
-                    while not self._shutdown:
-                        await workflow.wait_condition(lambda: len(self.pending_requests) > 0 or self._shutdown)
-                        if self._shutdown:
-                            break
-                        while self.pending_requests:
-                            req = self.pending_requests.pop(0)
-                            if assign_slots:
-                                profile_id = (
-                                    req.get("execution_profile_ref")
-                                    or req.get("profile_id")
-                                    or "test-openrouter-high-priority"
-                                )
-                                cooldown_until = self.cooldowns.get(profile_id)
-                                if cooldown_until is not None:
-                                    cooldown_dt = datetime.fromisoformat(cooldown_until)
-                                    if workflow.now() < cooldown_dt:
-                                        self.pending_requests.insert(0, req)
-                                        await workflow.sleep(
-                                            (cooldown_dt - workflow.now()).total_seconds()
-                                        )
-                                        continue
-                                self._leases[profile_id] = req["requester_workflow_id"]
-                                handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
-                                await handle.signal("slot_assigned", {"profile_id": profile_id})
-                    return {}
-
             openrouter_activities = [
                 mock_publish_artifacts,
                 mock_cancel,
                 mock_provider_profile_list_openrouter,
                 mock_provider_profile_ensure_manager,
                 mock_provider_profile_reset_manager,
+                mock_agent_runtime_launch,
+                mock_agent_runtime_build_launch_context,
+                mock_agent_runtime_status,
+                mock_agent_runtime_fetch_result,
             ]
 
             async with Worker(
                 env.client,
                 task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManagerForCancel],
+                workflows=[MoonMindAgentRun, MockProviderProfileManager],
                 activities=openrouter_activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
@@ -1896,8 +1723,12 @@ async def test_openrouter_profile_cancellation_releases_slot():
                 runtime_id = "codex_cli"
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 manager_handle = await env.client.start_workflow(
-                    MockProviderProfileManagerForCancel.run,
-                    {"runtime_id": request.agent_id, "assign_slots": True},
+                    MockProviderProfileManager.run,
+                    {
+                        "runtime_id": request.agent_id,
+                        "assign_slots": True,
+                        "default_profile_id": "test-openrouter-high-priority",
+                    },
                     id=manager_id,
                     task_queue="agent-run-task-queue",
                 )
@@ -1914,7 +1745,7 @@ async def test_openrouter_profile_cancellation_releases_slot():
                 await asyncio.sleep(0.5)
 
                 # Verify slot is leased before cancellation
-                manager_state_before = await manager_handle.query(MockProviderProfileManagerForCancel.get_state)
+                manager_state_before = await manager_handle.query(MockProviderProfileManager.get_state)
                 assert "test-openrouter-high-priority" in manager_state_before.get("leases", {}), (
                     f"Expected slot leased before cancellation, leases={manager_state_before['leases']}"
                 )
@@ -1925,7 +1756,7 @@ async def test_openrouter_profile_cancellation_releases_slot():
 
                 # Verify slot is released after cancellation
                 try:
-                    manager_state_after = await manager_handle.query(MockProviderProfileManagerForCancel.get_state)
+                    manager_state_after = await manager_handle.query(MockProviderProfileManager.get_state)
                 except Exception:
                     manager_state_after = {"leases": {}}
 
@@ -1950,97 +1781,22 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
             # This is tested at the mock provider list level — the activity returns the correct profiles.
             # The actual routing logic is tested in unit tests; this verifies the integration boundary.
 
-            @workflow.defn(name="MoonMind.ProviderProfileManager")
-            class MockProviderProfileManagerForRouting:
-                def __init__(self):
-                    self._shutdown = False
-                    self.pending_requests = []
-                    self._leases: dict[str, str] = {}
-                    self.cooldown_reports: list[dict] = []
-                    self.cooldowns: dict[str, str] = {}
-                    self.resolved_profiles = []
-
-                @workflow.signal
-                def request_slot(self, payload: dict) -> None:
-                    self.pending_requests.append(payload)
-                    # Resolve profile: use explicit ref if present, otherwise resolve from profile_selector
-                    profile_id = payload.get("execution_profile_ref") or payload.get("profile_id")
-                    if not profile_id:
-                        profile_selector = payload.get("profile_selector") or {}
-                        provider_id = profile_selector.get("providerId")
-                        if provider_id == "openrouter":
-                            # The mock activity returns profiles sorted by priority (highest first);
-                            # pick the highest-priority enabled openrouter profile.
-                            profile_id = "test-openrouter-high-priority"
-                    if profile_id:
-                        self.resolved_profiles.append(profile_id)
-
-                @workflow.signal
-                def release_slot(self, payload: dict) -> None:
-                    requester_id = payload.get("requester_workflow_id")
-                    to_remove = [p for p, wf in self._leases.items() if wf == requester_id]
-                    for p in to_remove:
-                        del self._leases[p]
-
-                @workflow.signal
-                def report_cooldown(self, payload: dict) -> None:
-                    self.cooldown_reports.append(dict(payload))
-
-                @workflow.signal
-                def sync_profiles(self, payload: dict) -> None:
-                    pass
-
-                @workflow.query
-                def get_state(self) -> dict:
-                    return {
-                        "leases": dict(self._leases),
-                        "pending_requests": self.pending_requests,
-                        "cooldown_reports": list(self.cooldown_reports),
-                        "cooldowns": dict(self.cooldowns),
-                        "resolved_profiles": self.resolved_profiles,
-                    }
-
-                @workflow.run
-                async def run(self, input_payload: dict) -> dict:
-                    assign_slots = input_payload.get("assign_slots", True)
-                    while not self._shutdown:
-                        await workflow.wait_condition(lambda: len(self.pending_requests) > 0 or self._shutdown)
-                        if self._shutdown:
-                            break
-                        while self.pending_requests:
-                            req = self.pending_requests.pop(0)
-                            if assign_slots:
-                                profile_id = (
-                                    req.get("execution_profile_ref")
-                                    or req.get("profile_id")
-                                    or "test-openrouter-high-priority"
-                                )
-                                cooldown_until = self.cooldowns.get(profile_id)
-                                if cooldown_until is not None:
-                                    cooldown_dt = datetime.fromisoformat(cooldown_until)
-                                    if workflow.now() < cooldown_dt:
-                                        self.pending_requests.insert(0, req)
-                                        await workflow.sleep(
-                                            (cooldown_dt - workflow.now()).total_seconds()
-                                        )
-                                        continue
-                                self._leases[profile_id] = req["requester_workflow_id"]
-                                handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
-                                await handle.signal("slot_assigned", {"profile_id": profile_id})
-                    return {}
-
             openrouter_activities = [
                 mock_publish_artifacts,
                 mock_cancel,
                 mock_provider_profile_list_openrouter,
                 mock_provider_profile_ensure_manager,
                 mock_provider_profile_reset_manager,
+                mock_agent_runtime_launch,
+                mock_agent_runtime_build_launch_context,
+                mock_agent_runtime_status,
+                mock_agent_runtime_fetch_result,
             ]
 
             async with Worker(
                 env.client,
                 task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManagerForRouting],
+                workflows=[MoonMindAgentRun, MockProviderProfileManager],
                 activities=openrouter_activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
@@ -2057,8 +1813,15 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
                 runtime_id = "codex_cli"
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 manager_handle = await env.client.start_workflow(
-                    MockProviderProfileManagerForRouting.run,
-                    {"runtime_id": request.agent_id, "assign_slots": True},
+                    MockProviderProfileManager.run,
+                    {
+                        "runtime_id": request.agent_id,
+                        "assign_slots": True,
+                        "default_profile_id": "test-openrouter-high-priority",
+                        "selector_provider_map": {
+                            "openrouter": "test-openrouter-high-priority"
+                        },
+                    },
                     id=manager_id,
                     task_queue="agent-run-task-queue",
                 )
@@ -2074,7 +1837,7 @@ async def test_profile_selector_provider_id_routes_to_openrouter():
 
                 await asyncio.sleep(0.5)
 
-                manager_state = await manager_handle.query(MockProviderProfileManagerForRouting.get_state)
+                manager_state = await manager_handle.query(MockProviderProfileManager.get_state)
 
                 # The manager should have resolved to the high-priority openrouter profile
                 assert "test-openrouter-high-priority" in manager_state.get("resolved_profiles", []), (
@@ -2095,96 +1858,22 @@ async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled(
         test_module.mock_provider_profile_list = mock_provider_profile_list_openrouter_disabled_high
 
         try:
-            @workflow.defn(name="MoonMind.ProviderProfileManager")
-            class MockProviderProfileManagerForFallback:
-                def __init__(self):
-                    self._shutdown = False
-                    self.pending_requests = []
-                    self._leases: dict[str, str] = {}
-                    self.cooldown_reports: list[dict] = []
-                    self.cooldowns: dict[str, str] = {}
-                    self.resolved_profiles = []
-
-                @workflow.signal
-                def request_slot(self, payload: dict) -> None:
-                    self.pending_requests.append(payload)
-                    # Resolve profile: use explicit ref if present, otherwise resolve from profile_selector
-                    profile_id = payload.get("execution_profile_ref") or payload.get("profile_id")
-                    if not profile_id:
-                        profile_selector = payload.get("profile_selector") or {}
-                        provider_id = profile_selector.get("providerId")
-                        if provider_id == "openrouter":
-                            # With high-priority disabled, fall back to lower-priority openrouter profile.
-                            profile_id = "test-openrouter-low-priority"
-                    if profile_id:
-                        self.resolved_profiles.append(profile_id)
-
-                @workflow.signal
-                def release_slot(self, payload: dict) -> None:
-                    requester_id = payload.get("requester_workflow_id")
-                    to_remove = [p for p, wf in self._leases.items() if wf == requester_id]
-                    for p in to_remove:
-                        del self._leases[p]
-
-                @workflow.signal
-                def report_cooldown(self, payload: dict) -> None:
-                    self.cooldown_reports.append(dict(payload))
-
-                @workflow.signal
-                def sync_profiles(self, payload: dict) -> None:
-                    pass
-
-                @workflow.query
-                def get_state(self) -> dict:
-                    return {
-                        "leases": dict(self._leases),
-                        "pending_requests": self.pending_requests,
-                        "cooldown_reports": list(self.cooldown_reports),
-                        "cooldowns": dict(self.cooldowns),
-                        "resolved_profiles": self.resolved_profiles,
-                    }
-
-                @workflow.run
-                async def run(self, input_payload: dict) -> dict:
-                    assign_slots = input_payload.get("assign_slots", True)
-                    while not self._shutdown:
-                        await workflow.wait_condition(lambda: len(self.pending_requests) > 0 or self._shutdown)
-                        if self._shutdown:
-                            break
-                        while self.pending_requests:
-                            req = self.pending_requests.pop(0)
-                            if assign_slots:
-                                profile_id = (
-                                    req.get("execution_profile_ref")
-                                    or req.get("profile_id")
-                                    or "test-openrouter-low-priority"
-                                )
-                                cooldown_until = self.cooldowns.get(profile_id)
-                                if cooldown_until is not None:
-                                    cooldown_dt = datetime.fromisoformat(cooldown_until)
-                                    if workflow.now() < cooldown_dt:
-                                        self.pending_requests.insert(0, req)
-                                        await workflow.sleep(
-                                            (cooldown_dt - workflow.now()).total_seconds()
-                                        )
-                                        continue
-                                self._leases[profile_id] = req["requester_workflow_id"]
-                                handle = workflow.get_external_workflow_handle(req["requester_workflow_id"])
-                                await handle.signal("slot_assigned", {"profile_id": profile_id})
-                    return {}
-
             openrouter_activities = [
                 mock_publish_artifacts,
                 mock_cancel,
                 mock_provider_profile_list_openrouter_disabled_high,
                 mock_provider_profile_ensure_manager,
                 mock_provider_profile_reset_manager,
+                mock_agent_runtime_launch,
+                mock_agent_runtime_build_launch_context,
+                mock_agent_runtime_status,
+                mock_agent_runtime_fetch_result,
             ]
 
             async with Worker(
                 env.client,
                 task_queue="agent-run-task-queue",
-                workflows=[MoonMindAgentRun, MockProviderProfileManagerForFallback],
+                workflows=[MoonMindAgentRun, MockProviderProfileManager],
                 activities=openrouter_activities,
                 workflow_runner=UnsandboxedWorkflowRunner(),
             ):
@@ -2202,8 +1891,15 @@ async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled(
                 runtime_id = "codex_cli"
                 manager_id = f"provider-profile-manager:{runtime_id}"
                 manager_handle = await env.client.start_workflow(
-                    MockProviderProfileManagerForFallback.run,
-                    {"runtime_id": request.agent_id, "assign_slots": True},
+                    MockProviderProfileManager.run,
+                    {
+                        "runtime_id": request.agent_id,
+                        "assign_slots": True,
+                        "default_profile_id": "test-openrouter-low-priority",
+                        "selector_provider_map": {
+                            "openrouter": "test-openrouter-low-priority"
+                        },
+                    },
                     id=manager_id,
                     task_queue="agent-run-task-queue",
                 )
@@ -2219,7 +1915,7 @@ async def test_profile_selector_falls_back_to_lower_priority_when_high_disabled(
 
                 await asyncio.sleep(0.5)
 
-                manager_state = await manager_handle.query(MockProviderProfileManagerForFallback.get_state)
+                manager_state = await manager_handle.query(MockProviderProfileManager.get_state)
 
                 # The manager should have resolved to the low-priority profile
                 assert "test-openrouter-low-priority" in manager_state.get("resolved_profiles", []), (

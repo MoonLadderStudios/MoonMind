@@ -402,6 +402,7 @@ class MoonMindAgentRun:
         self._profile_snapshots: dict[str, dict[str, Any]] = {}
         self._awaiting_slot_reason_override: str | None = None
         self._slot_wait_timeout_override_seconds: int | None = None
+        self._skip_default_profile_pin_once: bool = False
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
 
@@ -654,6 +655,50 @@ class MoonMindAgentRun:
             "Managed provider capacity exhausted for "
             f"{runtime_id}{profile_fragment}; retry scheduled for "
             f"{self._format_retry_timestamp(retry_at)} after {cooldown_seconds}s cooldown."
+        )
+
+    @staticmethod
+    def _provider_slot_intent_summary(
+        request: AgentExecutionRequest,
+    ) -> str:
+        parts: list[str] = []
+        exact_profile = str(request.execution_profile_ref or "").strip()
+        if exact_profile:
+            parts.append(f"exact_profile={exact_profile}")
+        selector_source = request.profile_selector
+        selector = (
+            selector_source.model_dump(by_alias=True, exclude_none=True)
+            if hasattr(selector_source, "model_dump")
+            else selector_source
+        )
+        if not isinstance(selector, Mapping):
+            selector = {}
+        provider_id = str(selector.get("providerId") or "").strip()
+        if provider_id:
+            parts.append(f"provider={provider_id}")
+        materialization = str(
+            selector.get("runtimeMaterializationMode") or ""
+        ).strip()
+        if materialization:
+            parts.append(f"materialization={materialization}")
+        tags_any = selector.get("tagsAny") or []
+        tags_all = selector.get("tagsAll") or []
+        if tags_any:
+            parts.append(f"tags_any={','.join(str(tag) for tag in tags_any)}")
+        if tags_all:
+            parts.append(f"tags_all={','.join(str(tag) for tag in tags_all)}")
+        return ", ".join(parts) if parts else "selector=auto"
+
+    def _build_provider_slot_waiting_reason(
+        self,
+        *,
+        runtime_id: str,
+        request: AgentExecutionRequest,
+    ) -> str:
+        intent = self._provider_slot_intent_summary(request)
+        return (
+            "Waiting for provider profile slot; "
+            f"runtime={runtime_id}; {intent}; missing_condition=capacity_or_cooldown."
         )
 
     @staticmethod
@@ -2163,8 +2208,11 @@ class MoonMindAgentRun:
         clear_invalid_profile_for_runtime_change: bool = False,
     ) -> None:
         if profile_count == 0:
+            intent = self._provider_slot_intent_summary(request)
             raise ApplicationError(
-                f"No enabled provider profiles found for runtime_id='{runtime_id}'",
+                "No launch-ready provider profiles found; "
+                f"runtime={runtime_id}; {intent}; "
+                "missing_condition=setup_required_or_policy.",
                 type="ProfileResolutionError",
                 non_retryable=True,
             )
@@ -2178,8 +2226,11 @@ class MoonMindAgentRun:
                 if clear_invalid_profile_for_runtime_change:
                     self._clear_runtime_profile_selection(request)
                     return
+                intent = self._provider_slot_intent_summary(request)
                 raise ApplicationError(
-                    f"Provider profile '{requested_profile_id}' not found for runtime_id='{runtime_id}'",
+                    "Requested provider profile is not launch-ready; "
+                    f"runtime={runtime_id}; {intent}; "
+                    "missing_condition=setup_required_or_policy.",
                     type="ProfileResolutionError",
                     non_retryable=True,
                 )
@@ -2521,6 +2572,14 @@ class MoonMindAgentRun:
                         by_alias=True,
                         exclude_none=True,
                     )
+                    if (
+                        self._skip_default_profile_pin_once
+                        and not request.execution_profile_ref
+                        and not self._profile_selector_has_constraints(
+                            request.profile_selector
+                        )
+                    ):
+                        selector_payload["allowDefaultFallback"] = True
                     if workflow.patched(SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID):
                         manager_handle = await self._ensure_manager_started(
                             manager_id,
@@ -2533,12 +2592,13 @@ class MoonMindAgentRun:
                         )
                         if workflow.patched(
                             PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID
-                        ):
+                        ) and not self._skip_default_profile_pin_once:
                             pinned_profile_id = self._default_execution_profile_ref(
                                 request
                             )
                             if pinned_profile_id:
                                 request.execution_profile_ref = pinned_profile_id
+                        self._skip_default_profile_pin_once = False
                         manager_handle = await self._ensure_manager_and_signal(
                             manager_id,
                             runtime_id,
@@ -2585,7 +2645,10 @@ class MoonMindAgentRun:
                         self.run_status = RunStatus.awaiting_slot
                         waiting_reason = (
                             self._awaiting_slot_reason_override
-                            or f"Waiting for provider profile slot on {runtime_id}"
+                            or self._build_provider_slot_waiting_reason(
+                                runtime_id=runtime_id,
+                                request=request,
+                            )
                         )
                         self._awaiting_slot_reason_override = None
                         await self._signal_parent_child_state_changed(
@@ -2611,6 +2674,9 @@ class MoonMindAgentRun:
                                         manager_id=manager_id,
                                         runtime_id=runtime_id,
                                     )
+                                    requested_execution_profile_ref = (
+                                        request.execution_profile_ref
+                                    )
                                     continue
                                 slot_wait_timeout_seconds = (
                                     self._slot_wait_timeout_override_seconds
@@ -2630,6 +2696,9 @@ class MoonMindAgentRun:
                                         request=request,
                                         manager_id=manager_id,
                                         runtime_id=runtime_id,
+                                    )
+                                    requested_execution_profile_ref = (
+                                        request.execution_profile_ref
                                     )
                                     continue
                             except TimeoutError:
@@ -3570,10 +3639,10 @@ class MoonMindAgentRun:
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
-                        if not workflow.patched(
-                            PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID
-                        ):
-                            request.execution_profile_ref = requested_execution_profile_ref
+                        request.execution_profile_ref = requested_execution_profile_ref
+                        self._skip_default_profile_pin_once = (
+                            requested_execution_profile_ref is None
+                        )
                         self.run_status = RunStatus.awaiting_slot
                         continue  # Retries loop
                     else:
@@ -3593,10 +3662,11 @@ class MoonMindAgentRun:
                         )
                         self.completion_event.clear()
                         self.final_result = None
-                        if not workflow.patched(
-                            PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID
-                        ):
-                            request.execution_profile_ref = requested_execution_profile_ref
+                        self._assigned_profile_id = None
+                        request.execution_profile_ref = requested_execution_profile_ref
+                        self._skip_default_profile_pin_once = (
+                            requested_execution_profile_ref is None
+                        )
                         continue  # Retries loop
 
                 # Not a 429 or external agent

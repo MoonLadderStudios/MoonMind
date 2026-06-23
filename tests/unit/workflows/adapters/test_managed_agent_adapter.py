@@ -1097,6 +1097,88 @@ async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
         assert len(profiles) == 1
         assert profiles[0]["profile_id"] == "c1"
 
+async def test_provider_profile_list_filters_to_launch_ready_profiles(
+    tmp_path: Path,
+):
+    """MM-877: manager sync must exclude setup stubs and not-ready profiles."""
+    async with _in_memory_db(tmp_path) as session_factory:
+        async with session_factory() as session:
+            session.add_all(
+                [
+                    ManagedAgentProviderProfile(
+                        profile_id="ready-secret",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.SECRET_REF,
+                        runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
+                        secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=True,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
+                    ),
+                    ManagedAgentProviderProfile(
+                        profile_id="disabled-setup-stub",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.NONE,
+                        runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=False,
+                        auth_state=ProviderProfileAuthState.NOT_CONFIGURED,
+                    ),
+                    ManagedAgentProviderProfile(
+                        profile_id="connected-secret-without-binding",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.SECRET_REF,
+                        runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=True,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
+                    ),
+                    ManagedAgentProviderProfile(
+                        profile_id="connected-oauth-without-volume",
+                        runtime_id="codex_cli",
+                        credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                        runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                        volume_mount_path="/mnt/auth",
+                        max_parallel_runs=1,
+                        cooldown_after_429_seconds=300,
+                        rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
+                        enabled=True,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        service = TemporalArtifactService(
+            TemporalArtifactRepository(session),
+            store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+        )
+        activities = TemporalArtifactActivities(service)
+
+        import api_service.db.base as _db_base_mod
+
+        orig = _db_base_mod.get_async_session_context
+        _db_base_mod.get_async_session_context = lambda: _patched_session_context(
+            session_factory
+        )
+        try:
+            result = await activities.provider_profile_list(runtime_id="codex_cli")
+        finally:
+            _db_base_mod.get_async_session_context = orig
+
+        assert [profile["profile_id"] for profile in result["profiles"]] == [
+            "ready-secret"
+        ]
+
 async def test_provider_profile_list_preserves_secret_ref_materialization_fields(
     tmp_path: Path,
 ):
