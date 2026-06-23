@@ -92,7 +92,10 @@ class TestCreateSchedule:
             definition_id=_TEST_UUID,
             cron_expression="0 0 * * *",
             workflow_type="MoonMind.UserWorkflow",
-            search_attributes={"mm_owner_id": "user-1"},
+            search_attributes={
+                "mm_owner_type": "user",
+                "mm_owner_id": "owner-123",
+            },
         )
 
         schedule_arg = mock_client.create_schedule.call_args[0][1]
@@ -100,7 +103,11 @@ class TestCreateSchedule:
         assert typed_search_attributes is not None
         assert (
             typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_owner_id"))
-            == "user-1"
+            == "owner-123"
+        )
+        assert (
+            typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_owner_type"))
+            == "user"
         )
         assert (
             typed_search_attributes.get(
