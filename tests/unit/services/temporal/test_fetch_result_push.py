@@ -332,6 +332,29 @@ class TestPushWorkspaceBranch:
             == ["../../../shared-objects"]
         )
 
+    def test_recover_orphan_object_stores_registers_git_agent_objects(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        workspace = tmp_path / "mm:run-1" / "repo"
+        (workspace / ".git" / "objects" / "info").mkdir(parents=True)
+        agent_objects = workspace / ".git" / "agent-objects"
+        (agent_objects / "a5").mkdir(parents=True)
+        (agent_objects / "a5" / "894cc4848aec211f7257dad36030019d13596f").write_bytes(
+            b"x"
+        )
+
+        TemporalAgentRuntimeActivities._recover_orphan_workspace_object_stores(
+            str(workspace)
+        )
+
+        alternates_path = workspace / ".git" / "objects" / "info" / "alternates"
+        assert alternates_path.is_file()
+        assert (
+            alternates_path.read_text(encoding="utf-8").splitlines()
+            == ["../agent-objects"]
+        )
+
     @pytest.mark.asyncio
     async def test_push_recovers_orphan_object_store_before_branch_detection(
         self,
@@ -390,6 +413,71 @@ class TestPushWorkspaceBranch:
             result = await activities._push_workspace_branch("run-1")
 
         assert result["push_status"] == "protected_branch"
+
+    @pytest.mark.asyncio
+    async def test_commit_fetches_current_branch_after_missing_head_object(self):
+        activities = TemporalAgentRuntimeActivities(run_store=None)
+        workspace = "/work/agent_jobs/mm:run-1/repo"
+        calls: list[tuple[object, ...]] = []
+        envs: list[dict[str, str]] = []
+        call_count = 0
+
+        async def _mock_exec(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            calls.append(args)
+            envs.append(dict(kwargs.get("env") or {}))
+            proc = AsyncMock()
+            if call_count == 1:  # initial status --porcelain
+                proc.communicate = AsyncMock(
+                    return_value=(b"", b"fatal: bad object HEAD")
+                )
+                proc.returncode = 128
+            elif call_count == 2:  # fetch current branch to recover the object
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 3:  # verify HEAD is now present
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            elif call_count == 4:  # retry status after repair
+                proc.communicate = AsyncMock(return_value=(b"", b""))
+                proc.returncode = 0
+            else:
+                raise AssertionError(f"Unexpected subprocess call #{call_count}: {args!r}")
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=_mock_exec):
+            result = await activities._commit_workspace_changes_if_needed(
+                workspace,
+                run_id="mm:run-1",
+                env={"GIT_CONFIG_GLOBAL": "workspace-gitconfig"},
+                auth_env={
+                    "GIT_CONFIG_GLOBAL": "workspace-gitconfig",
+                    "GITHUB_TOKEN": "fake-token",
+                },
+                head_branch="feature/missing-head-object",
+            )
+
+        assert result == {}
+        assert list(calls[0][-4:]) == [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ]
+        assert list(calls[1][-3:]) == [
+            "fetch",
+            "origin",
+            "refs/heads/feature/missing-head-object",
+        ]
+        assert envs[1]["GITHUB_TOKEN"] == "fake-token"
+        assert list(calls[2][-3:]) == ["cat-file", "-e", "HEAD^{commit}"]
+        assert list(calls[3][-4:]) == [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ]
 
     @pytest.mark.asyncio
     async def test_push_protected_branch_main(self):

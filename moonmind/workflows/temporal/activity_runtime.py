@@ -9286,17 +9286,17 @@ class TemporalAgentRuntimeActivities:
 
     @staticmethod
     def _recover_orphan_workspace_object_stores(workspace: str) -> None:
-        """Register sibling object-stores as Git alternates before commit.
+        """Register orphan object-stores as Git alternates before commit.
 
         Some managed-runtime images stage loose objects in a directory that
-        sits *next to* the workspace ``.git`` directory (for example
-        ``<workspace_parent>/git-objects``) without writing a corresponding
-        ``.git/objects/info/alternates`` entry. When that happens, ``git
-        commit`` later fails with ``error: invalid object ... Error building
-        trees`` because the index references blobs the object database cannot
-        resolve.
+        sits outside ``.git/objects`` without writing a corresponding
+        ``.git/objects/info/alternates`` entry. Known shapes include sibling
+        directories such as ``<workspace_parent>/git-objects`` and in-git
+        directories such as ``<workspace>/.git/agent-objects``. When that
+        happens, later plain Git commands can fail with missing object errors
+        because refs or the index point at objects Git cannot resolve.
 
-        This helper finds such sibling directories, verifies they look like
+        This helper finds such orphan directories, verifies they look like
         git object stores, and appends them to ``info/alternates`` using a
         path relative to ``.git/objects`` (so that ``:`` characters in
         managed run ids do not break alternate parsing).
@@ -9344,36 +9344,49 @@ class TemporalAgentRuntimeActivities:
             except OSError:
                 continue
 
-        additions: list[str] = []
+        candidate_dirs: list[Path] = []
         try:
-            siblings = workspace_parent.iterdir()
-            for sibling in siblings:
-                try:
-                    sibling_resolved = sibling.resolve()
-                except OSError:
-                    continue
-                if sibling_resolved == workspace_resolved:
-                    continue
-                if sibling_resolved == objects_dir_resolved:
-                    continue
-                if sibling_resolved in registered:
-                    continue
-                if (
-                    not TemporalAgentRuntimeActivities
-                    ._looks_like_git_loose_objects_dir(sibling)
-                ):
-                    continue
-                try:
-                    relative = os.path.relpath(
-                        sibling_resolved,
-                        objects_dir_resolved,
-                    )
-                except ValueError:
-                    relative = str(sibling_resolved)
-                additions.append(relative)
-                registered.add(sibling_resolved)
-        except OSError:
-            return
+            candidate_dirs.extend(workspace_parent.iterdir())
+        except OSError as exc:
+            logger.debug(
+                "Could not scan workspace sibling object-store candidates for %s: %s",
+                workspace,
+                exc,
+            )
+        try:
+            candidate_dirs.extend(git_dir.iterdir())
+        except OSError as exc:
+            logger.debug(
+                "Could not scan in-git object-store candidates for %s: %s",
+                workspace,
+                exc,
+            )
+
+        additions: list[str] = []
+        for candidate_dir in candidate_dirs:
+            try:
+                candidate_resolved = candidate_dir.resolve()
+            except OSError:
+                continue
+            if candidate_resolved == workspace_resolved:
+                continue
+            if candidate_resolved == objects_dir_resolved:
+                continue
+            if candidate_resolved in registered:
+                continue
+            if not TemporalAgentRuntimeActivities._looks_like_git_loose_objects_dir(
+                candidate_dir
+            ):
+                continue
+            try:
+                relative = os.path.relpath(
+                    candidate_resolved,
+                    objects_dir_resolved,
+                )
+            except ValueError:
+                relative = str(candidate_resolved)
+            additions.append(relative)
+            registered.add(candidate_resolved)
 
         if not additions:
             return
@@ -9524,26 +9537,52 @@ class TemporalAgentRuntimeActivities:
         run_id: str,
         commit_message: str | None = None,
         env: Mapping[str, str] | None = None,
+        auth_env: Mapping[str, str] | None = None,
+        head_branch: str | None = None,
     ) -> dict[str, Any]:
         """Create one deterministic commit when the workspace is dirty."""
         command_env = dict(env) if env is not None else self._workspace_command_env(workspace)
 
-        status_proc = await asyncio.create_subprocess_exec(
-            *self._workspace_git_command(
-                workspace,
-                "status",
-                "--porcelain=v1",
-                "-z",
-                "--untracked-files=all",
-            ),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=command_env,
-        )
-        status_stdout, status_stderr = await asyncio.wait_for(
-            status_proc.communicate(), timeout=15,
-        )
-        if status_proc.returncode != 0:
+        async def _read_status() -> tuple[int, bytes, bytes]:
+            status_proc = await asyncio.create_subprocess_exec(
+                *self._workspace_git_command(
+                    workspace,
+                    "status",
+                    "--porcelain=v1",
+                    "-z",
+                    "--untracked-files=all",
+                ),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=command_env,
+            )
+            status_stdout, status_stderr = await asyncio.wait_for(
+                status_proc.communicate(), timeout=15,
+            )
+            return status_proc.returncode, status_stdout, status_stderr
+
+        status_returncode, status_stdout, status_stderr = await _read_status()
+        if status_returncode != 0:
+            detail = status_stderr.decode("utf-8", errors="replace").strip() or (
+                status_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
+            )
+            if (
+                self._is_missing_head_object_error(detail)
+                and isinstance(head_branch, str)
+                and head_branch.strip()
+            ):
+                repaired = await self._fetch_workspace_branch_for_missing_head(
+                    workspace=workspace,
+                    branch=head_branch,
+                    run_id=run_id,
+                    env=dict(auth_env) if auth_env is not None else command_env,
+                )
+                if repaired:
+                    status_returncode, status_stdout, status_stderr = (
+                        await _read_status()
+                    )
+
+        if status_returncode != 0:
             detail = status_stderr.decode("utf-8", errors="replace").strip() or (
                 status_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
             )
@@ -9669,6 +9708,85 @@ class TemporalAgentRuntimeActivities:
             run_id,
         )
         return {"push_commit_message": normalized_message}
+
+    @staticmethod
+    def _is_missing_head_object_error(detail: str) -> bool:
+        normalized = str(detail or "").strip().lower()
+        if not normalized:
+            return False
+        return "bad object head" in normalized or (
+            "head" in normalized and "missing object" in normalized
+        )
+
+    async def _fetch_workspace_branch_for_missing_head(
+        self,
+        *,
+        workspace: str,
+        branch: str,
+        run_id: str,
+        env: Mapping[str, str],
+    ) -> bool:
+        branch_name = str(branch or "").strip()
+        if not branch_name or branch_name == "HEAD" or branch_name.startswith("-"):
+            return False
+
+        fetch_proc = await asyncio.create_subprocess_exec(
+            *self._workspace_git_command(
+                workspace,
+                "fetch",
+                "origin",
+                f"refs/heads/{branch_name}",
+            ),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=dict(env),
+        )
+        fetch_stdout, fetch_stderr = await asyncio.wait_for(
+            fetch_proc.communicate(), timeout=60,
+        )
+        if fetch_proc.returncode != 0:
+            detail = fetch_stderr.decode("utf-8", errors="replace").strip() or (
+                fetch_stdout.decode("utf-8", errors="replace").strip() or "(no stderr)"
+            )
+            logger.warning(
+                "Could not repair missing workspace HEAD for run %s "
+                "(branch=%s): %s",
+                run_id,
+                branch_name,
+                detail,
+            )
+            return False
+
+        verify_proc = await asyncio.create_subprocess_exec(
+            *self._workspace_git_command(
+                workspace,
+                "cat-file",
+                "-e",
+                "HEAD^{commit}",
+            ),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=dict(env),
+        )
+        _, verify_stderr = await asyncio.wait_for(
+            verify_proc.communicate(), timeout=10,
+        )
+        if verify_proc.returncode == 0:
+            logger.info(
+                "Repaired missing workspace HEAD object for run %s by fetching %s.",
+                run_id,
+                branch_name,
+            )
+            return True
+
+        logger.warning(
+            "Workspace HEAD still invalid after fetching %s for run %s: %s",
+            branch_name,
+            run_id,
+            verify_stderr.decode("utf-8", errors="replace").strip()
+            or f"git cat-file exited with {verify_proc.returncode}",
+        )
+        return False
 
     @staticmethod
     def _report_matches_record(path: Path, record: ManagedRunRecord) -> bool:
@@ -9826,6 +9944,8 @@ class TemporalAgentRuntimeActivities:
                 run_id=run_id,
                 commit_message=commit_message,
                 env=command_env,
+                auth_env=auth_command_env,
+                head_branch=current_branch,
             )
             if commit_info.get("push_status") == "failed":
                 commit_info.setdefault("push_branch", current_branch)
