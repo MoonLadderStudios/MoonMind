@@ -279,7 +279,7 @@ class TestProviderProfileActivationMigrationBackfill:
 
         monkeypatch.setattr(migration, "op", FakeOp)
 
-        migration._backfill_activation_state()
+        migration._backfill_activation_state(has_validation_status_column=True)
 
         assert len(statements) >= 4
         assert "WHERE disabled_reason = 'policy_disabled'" in statements[0]
@@ -296,6 +296,31 @@ class TestProviderProfileActivationMigrationBackfill:
         ]
         assert connected_statement_indexes
         assert min(connected_statement_indexes) > 1
+
+    def test_sql_backfill_skips_legacy_validation_column_when_absent(
+        self, migration, monkeypatch
+    ):
+        statements: list[str] = []
+
+        class FakeOp:
+            @staticmethod
+            def execute(statement):
+                statements.append(str(statement))
+
+        monkeypatch.setattr(migration, "op", FakeOp)
+
+        migration._backfill_activation_state(has_validation_status_column=False)
+
+        assert len(statements) >= 3
+        assert "WHERE disabled_reason = 'policy_disabled'" in statements[0]
+        assert all("validation_status" not in statement for statement in statements)
+        connected_statement_indexes = [
+            index
+            for index, statement in enumerate(statements)
+            if "auth_state = 'connected'" in statement
+        ]
+        assert connected_statement_indexes
+        assert min(connected_statement_indexes) > 0
 
 # ---------------------------------------------------------------------------
 # 2. Data migration mapping logic
@@ -549,6 +574,17 @@ def _parse_migration_graph():
     return revisions, down_revisions
 
 import pytest
+
+def test_migration_revision_ids_fit_alembic_version_column():
+    revisions, _ = _parse_migration_graph()
+
+    overlong_revisions = {
+        revision: filename
+        for revision, filename in revisions.items()
+        if len(revision) > 32
+    }
+
+    assert overlong_revisions == {}
 
 @pytest.mark.xfail(reason="Migrations land in Phase 2 (tracking: migration graph validation)", strict=False)
 class TestMigrationGraph:

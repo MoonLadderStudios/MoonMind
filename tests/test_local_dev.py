@@ -104,6 +104,8 @@ def test_init_db_repairs_known_orphaned_revision_stamps():
     assert "312_source_mapping_cutover" in entrypoint
     assert "313_finish_summary_projection_fields" in entrypoint
     assert "313_finish_summary_fields" in entrypoint
+    assert "316_provider_profile_activation_state" in entrypoint
+    assert "316_provider_profile_auth_state" in entrypoint
 
 
 def test_docker_compose_has_temporal_worker_auto_start_configured():
