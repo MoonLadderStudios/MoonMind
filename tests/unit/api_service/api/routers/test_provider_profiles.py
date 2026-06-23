@@ -159,10 +159,15 @@ async def test_provider_profile_write_actions_require_write_permission(
             json={"enabled": False},
         )
         delete_response = await client.delete(f"/api/v1/provider-profiles/{profile_id}")
+        api_key_response = await client.post(
+            "/api/v1/provider-profiles/missing-api-key-profile/credentials/api-key",
+            json={"api_key": "sk-mm875-read-only-token"},
+        )
 
     assert create_response.status_code == 403
     assert update_response.status_code == 403
     assert delete_response.status_code == 403
+    assert api_key_response.status_code == 403
     assert create_response.json()["detail"] == (
         "Missing required provider profile permission: provider_profiles.write."
     )
@@ -1457,8 +1462,11 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     profile_id = "mm-875-openai-invalid-api-key"
+    fallback_profile_id = "mm-875-openai-invalid-api-key-fallback"
+    runtime_id = "codex_cli"
     raw_key = "sk-mm875-invalid-token"
     validated: list[tuple[str, str]] = []
+    synced_runtimes: list[str] = []
 
     async def _fake_validate(provider: str, key: str) -> None:
         validated.append((provider, key))
@@ -1467,12 +1475,133 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
             detail="API key validation failed.",
         )
 
+    async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
+        synced_runtimes.append(runtime_id)
+
     monkeypatch.setattr(
         "api_service.api.routers.provider_profiles.validate_provider_api_key",
         _fake_validate,
     )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        _fake_sync,
+    )
 
     async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == runtime_id
+            )
+        )
+        for row in result.scalars():
+            row.is_default = False
+        await session.flush()
+        existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        if existing is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id=runtime_id,
+                    provider_id="openai",
+                    provider_label="OpenAI",
+                    credential_source=ProviderCredentialSource.NONE,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    enabled=True,
+                    is_default=True,
+                    priority=10_100,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                )
+            )
+        fallback = await session.get(ManagedAgentProviderProfile, fallback_profile_id)
+        if fallback is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=fallback_profile_id,
+                    runtime_id=runtime_id,
+                    provider_id="openai",
+                    provider_label="OpenAI",
+                    credential_source=ProviderCredentialSource.NONE,
+                    runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                    enabled=True,
+                    is_default=False,
+                    priority=10_000,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/credentials/api-key",
+            json={"api_key": raw_key},
+        )
+        profile_response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
+        fallback_response = await client.get(
+            f"/api/v1/provider-profiles/{fallback_profile_id}"
+        )
+
+    assert response.status_code == 401
+    assert raw_key not in response.text
+    assert response.json()["detail"] == "API key validation failed."
+    profile_payload = profile_response.json()
+    assert raw_key not in profile_response.text
+    assert profile_payload["enabled"] is False
+    assert profile_payload["is_default"] is False
+    assert profile_payload["auth_state"] == "validation_failed"
+    assert profile_payload["disabled_reason"] == "auth_invalid"
+    assert profile_payload["secret_refs"] == {}
+    assert profile_payload["env_template"] == {}
+    assert profile_payload["command_behavior"]["auth_readiness"]["failure_reason"] == (
+        "API key validation failed."
+    )
+    assert fallback_response.json()["is_default"] is True
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(select(ManagedSecret))
+        secrets = result.scalars().all()
+
+    assert all(secret.ciphertext != raw_key for secret in secrets)
+    assert validated == [("openai", raw_key)]
+    assert synced_runtimes == [runtime_id]
+
+@pytest.mark.asyncio
+async def test_provider_api_key_setup_transient_validation_error_preserves_profile(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile_id = "mm-875-openai-transient-api-key"
+    raw_key = "sk-mm875-transient-token"
+    synced_runtimes: list[str] = []
+
+    async def _fake_validate(provider: str, key: str) -> None:
+        assert (provider, key) == ("openai", raw_key)
+        raise provider_profiles_router.HTTPException(
+            status_code=502,
+            detail="Provider validation temporarily unavailable.",
+        )
+
+    async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
+        synced_runtimes.append(runtime_id)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.validate_provider_api_key",
+        _fake_validate,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        _fake_sync,
+    )
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == "codex_cli"
+            )
+        )
+        for row in result.scalars():
+            row.is_default = False
+        await session.flush()
         existing = await session.get(ManagedAgentProviderProfile, profile_id)
         if existing is None:
             session.add(
@@ -1484,6 +1613,8 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
                     credential_source=ProviderCredentialSource.NONE,
                     runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
                     enabled=True,
+                    is_default=True,
+                    priority=10_200,
                     auth_state=ProviderProfileAuthState.CONNECTED,
                 )
             )
@@ -1496,26 +1627,16 @@ async def test_provider_api_key_setup_failed_validation_updates_state_without_se
         )
         profile_response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
 
-    assert response.status_code == 401
+    assert response.status_code == 502
     assert raw_key not in response.text
-    assert response.json()["detail"] == "API key validation failed."
     profile_payload = profile_response.json()
-    assert raw_key not in profile_response.text
-    assert profile_payload["enabled"] is False
-    assert profile_payload["auth_state"] == "validation_failed"
-    assert profile_payload["disabled_reason"] == "auth_invalid"
+    assert profile_payload["enabled"] is True
+    assert profile_payload["is_default"] is True
+    assert profile_payload["auth_state"] == "connected"
+    assert profile_payload["disabled_reason"] is None
     assert profile_payload["secret_refs"] == {}
     assert profile_payload["env_template"] == {}
-    assert profile_payload["command_behavior"]["auth_readiness"]["failure_reason"] == (
-        "API key validation failed."
-    )
-
-    async with db_base.async_session_maker() as session:
-        result = await session.execute(select(ManagedSecret))
-        secrets = result.scalars().all()
-
-    assert all(secret.ciphertext != raw_key for secret in secrets)
-    assert validated == [("openai", raw_key)]
+    assert synced_runtimes == []
 
 @pytest.mark.asyncio
 async def test_provider_api_key_setup_can_validate_without_enabling(

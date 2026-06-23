@@ -541,10 +541,10 @@ async def setup_provider_api_key(
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    _require_provider_profile_permission(current_user, "provider_profiles.write")
     _require_profile_management(profile, current_user)
     mapping = _api_key_mapping_for_profile(profile)
 
@@ -560,11 +560,12 @@ async def setup_provider_api_key(
     try:
         await validate_provider_api_key(profile.provider_id, api_key)
     except HTTPException as exc:
-        await _mark_api_key_validation_failed(
-            session=session,
-            profile=profile,
-            reason="API key validation failed.",
-        )
+        if exc.status_code in {401, 403, 422}:
+            await _mark_api_key_validation_failed(
+                session=session,
+                profile=profile,
+                reason="API key validation failed.",
+            )
         raise exc
 
     validated_at = datetime.now(UTC)
@@ -721,7 +722,10 @@ async def commit_claude_manual_auth(
     profile.command_behavior = behavior
 
     await session.flush()
-    await normalize_runtime_default_profile(session=session, runtime_id=profile.runtime_id)
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=profile.runtime_id,
+    )
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
@@ -1142,8 +1146,10 @@ async def _mark_api_key_validation_failed(
         }
     )
     profile.command_behavior = behavior
+    await normalize_runtime_default_profile(session=session, runtime_id=profile.runtime_id)
     await session.commit()
     await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
 
 async def _upsert_managed_secret(
     *,
