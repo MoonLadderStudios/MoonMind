@@ -570,6 +570,39 @@ class TestProviderProfileManagerHelpers:
             )
             assert wf._find_available_profile() is None
 
+    def test_find_available_profile_allows_explicit_default_fallback_retry(self):
+        wf = self._make_workflow()
+        wf._profiles["fallback"] = ProfileSlotState(
+            profile_id="fallback",
+            max_parallel_runs=3,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=False,
+            priority=200,
+        )
+        wf._profiles["default"] = ProfileSlotState(
+            profile_id="default",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            is_default=True,
+            current_leases=["wf1"],
+            priority=100,
+        )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.provider_profile_manager.workflow"
+        ) as mock_wf:
+            mock_wf.patched.side_effect = (
+                lambda patch_id: patch_id == DEFAULT_PROFILE_EXCLUSIVE_SELECTION_PATCH
+            )
+            best = wf._find_available_profile({"allowDefaultFallback": True})
+
+        assert best is not None
+        assert best.profile_id == "fallback"
+
     def test_find_available_profile_preserves_unpatched_default_fallback(self):
         wf = self._make_workflow()
         wf._profiles["fallback"] = ProfileSlotState(

@@ -2572,6 +2572,14 @@ class MoonMindAgentRun:
                         by_alias=True,
                         exclude_none=True,
                     )
+                    if (
+                        self._skip_default_profile_pin_once
+                        and not request.execution_profile_ref
+                        and not self._profile_selector_has_constraints(
+                            request.profile_selector
+                        )
+                    ):
+                        selector_payload["allowDefaultFallback"] = True
                     if workflow.patched(SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID):
                         manager_handle = await self._ensure_manager_started(
                             manager_id,
@@ -2666,6 +2674,9 @@ class MoonMindAgentRun:
                                         manager_id=manager_id,
                                         runtime_id=runtime_id,
                                     )
+                                    requested_execution_profile_ref = (
+                                        request.execution_profile_ref
+                                    )
                                     continue
                                 slot_wait_timeout_seconds = (
                                     self._slot_wait_timeout_override_seconds
@@ -2685,6 +2696,9 @@ class MoonMindAgentRun:
                                         request=request,
                                         manager_id=manager_id,
                                         runtime_id=runtime_id,
+                                    )
+                                    requested_execution_profile_ref = (
+                                        request.execution_profile_ref
                                     )
                                     continue
                             except TimeoutError:

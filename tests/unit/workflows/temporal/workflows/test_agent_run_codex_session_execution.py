@@ -1154,6 +1154,7 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
 ) -> None:
     run = MoonMindAgentRun()
     ensure_profile_refs: list[str | None] = []
+    ensure_profile_selectors: list[dict[str, Any]] = []
     manager_signals: list[tuple[str, dict[str, Any]]] = []
     fetch_results = [
         AgentRunResult(
@@ -1206,6 +1207,7 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
     ) -> _FakeManagerHandle:
         if request_slot:
             ensure_profile_refs.append(execution_profile_ref)
+            ensure_profile_selectors.append(dict(profile_selector))
             run.slot_assigned_event.set()
             run._assigned_profile_id = execution_profile_ref or "codex-default"
         return _FakeManagerHandle()
@@ -1262,6 +1264,10 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
 
     assert result.summary == "Recovered on pinned profile."
     assert ensure_profile_refs == ["codex-default", None]
+    assert ensure_profile_selectors == [
+        {"tagsAny": [], "tagsAll": []},
+        {"tagsAny": [], "tagsAll": [], "allowDefaultFallback": True},
+    ]
     assert manager_signals[:2] == [
         (
             "report_cooldown",
@@ -1277,6 +1283,120 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
                 "profile_id": "codex-default",
             },
         ),
+    ]
+
+async def test_agent_run_preserves_operator_profile_selection_after_cooldown_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = MoonMindAgentRun()
+    ensure_profile_refs: list[str | None] = []
+    fetch_results = [
+        AgentRunResult(
+            failureClass="execution_error",
+            providerErrorCode="provider_capacity",
+            retryRecommendation="retry_after_cooldown",
+            summary="provider capacity",
+        ),
+        AgentRunResult(summary="Recovered on operator-selected profile."),
+    ]
+
+    _configure_workflow_runtime(monkeypatch)
+
+    class _FakeCodexSessionAdapter:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
+            return AgentRunHandle(
+                runId=f"managed-session-run-{len(ensure_profile_refs)}",
+                agentKind="managed",
+                agentId=request.agent_id,
+                status="completed",
+                startedAt=agent_run_module.workflow.now(),
+            )
+
+    class _FakeManagerHandle:
+        async def signal(self, signal_name: str, payload: dict[str, Any]) -> None:
+            return None
+
+    class _FakeSessionWorkflowHandle:
+        async def signal(self, signal_name: str, payload: Any) -> None:
+            return None
+
+    async def fake_ensure_manager_and_signal(
+        manager_id: str,
+        runtime_id: str,
+        *,
+        request_slot: bool,
+        execution_profile_ref: str | None,
+        profile_selector: dict[str, Any],
+        request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
+    ) -> _FakeManagerHandle:
+        if request_slot:
+            ensure_profile_refs.append(execution_profile_ref)
+            run.slot_assigned_event.set()
+            run._assigned_profile_id = (
+                execution_profile_ref or "codex_openrouter_qwen36_plus"
+            )
+            if len(ensure_profile_refs) == 1:
+                run.update_runtime_selection(
+                    {"executionProfileRef": "codex_openrouter_qwen36_plus"}
+                )
+        return _FakeManagerHandle()
+
+    async def fake_sync_manager_profiles(
+        *,
+        manager_id: str,
+        manager_handle: object,
+        runtime_id: str,
+    ) -> int:
+        run._profile_snapshots = {
+            "codex_openrouter_qwen36_plus": {
+                "cooldown_after_429_seconds": 0,
+                "enabled": True,
+                "is_default": False,
+            },
+            "codex-default": {
+                "cooldown_after_429_seconds": 0,
+                "enabled": True,
+                "is_default": True,
+            },
+        }
+        return 2
+
+    async def fake_fetch_managed_result(**_kwargs: Any) -> AgentRunResult:
+        return fetch_results.pop(0)
+
+    async def fake_execute_routed_activity(
+        activity_name: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_name == "agent_runtime.publish_artifacts":
+            return payload
+        raise AssertionError(f"Unexpected routed activity: {activity_name}")
+
+    monkeypatch.setattr(agent_run_module, "CodexSessionAdapter", _FakeCodexSessionAdapter)
+    monkeypatch.setattr(run, "_ensure_manager_and_signal", fake_ensure_manager_and_signal)
+    monkeypatch.setattr(run, "_sync_manager_profiles", fake_sync_manager_profiles)
+    monkeypatch.setattr(run, "_fetch_managed_result", fake_fetch_managed_result)
+    monkeypatch.setattr(run, "_execute_routed_activity", fake_execute_routed_activity)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "get_external_workflow_handle",
+        lambda *_args, **_kwargs: _FakeSessionWorkflowHandle(),
+    )
+
+    result = await run.run(
+        _managed_session_request().model_copy(update={"execution_profile_ref": None})
+    )
+
+    assert result.summary == "Recovered on operator-selected profile."
+    assert ensure_profile_refs == [
+        "codex-default",
+        "codex_openrouter_qwen36_plus",
+        "codex_openrouter_qwen36_plus",
     ]
 
 async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(
