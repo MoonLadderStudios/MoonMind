@@ -1644,6 +1644,7 @@ async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan(
 async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", "/custom/agent_jobs")
     artifact_service = _FakePentestArtifactService(
         {"art_scope_valid": _scope_artifact_bytes()}
     )
@@ -1669,6 +1670,7 @@ async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
         {
             "registry_snapshot_ref": "art_registry",
             "principal": "user-security",
+            "pentest_enabled": True,
             "invocation_payload": {
                 "id": "step-pentest",
                 "tool": {
@@ -1677,7 +1679,7 @@ async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
                     "version": "1.0.0",
                 },
                 "inputs": {
-                    "pentest_enabled": True,
+                    "pentest_enabled": False,
                     "target": "https://lab.example.test",
                     "operation_mode": "validate_hypothesis",
                     "scope_artifact_ref": "art_scope_valid",
@@ -1714,9 +1716,10 @@ async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
     assert request.agent_run_id == "mm:workflow-123"
     assert request.step_id == "step-pentest"
     assert request.attempt == 1
+    assert request.principal_id == "user-security"
     assert (
         request.artifacts_dir
-        == "/work/agent_jobs/mm:workflow-123/artifacts/step-pentest"
+        == "/custom/agent_jobs/mm:workflow-123/artifacts/step-pentest"
     )
 
 @pytest.mark.parametrize(
