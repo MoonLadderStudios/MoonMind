@@ -47,7 +47,7 @@ npm install lucide-react
 Import icons directly by name inside the route, page, or component that renders them:
 
 ```tsx
-import { KeyRound, Settings, ShieldCheck, UserRound, Workflow } from 'lucide-react';
+import { KeyRound } from 'lucide-react';
 
 export function ProviderProfileIconRow() {
   return (
