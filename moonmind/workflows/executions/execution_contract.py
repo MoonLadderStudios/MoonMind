@@ -61,6 +61,7 @@ _SELF_MANAGED_PUBLISH_SKILLS = frozenset(
         "pr-resolver",
         "batch-pr-resolver",
         "batch-dependabot-resolver",
+        "batch-workflows",
         "fix-comments",
         "fix-ci",
         "fix-merge-conflicts",

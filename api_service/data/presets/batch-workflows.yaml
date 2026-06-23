@@ -1,0 +1,382 @@
+slug: batch-workflows
+title: Batch Workflows
+description: Resolve a set of Jira board-column or GitHub repository issue targets,
+  then queue one child MoonMind workflow per target using a selected child preset,
+  inherited runtime/provider/model settings, and a shared publish policy. The parent
+  records a summary artifact that links every queued child workflow.
+scope: global
+version: 1.0.0
+tags:
+- batch
+- orchestration
+- jira
+- github
+requiredCapabilities:
+- git
+- jira
+- gh
+annotations:
+  sourceSkill: batch-workflows
+  output: child-workflows
+  runtimeInheritance: caller
+  orchestration:
+    kind: batch-workflows
+    runtimeInheritance: caller
+    summaryArtifact: artifacts/batch-workflows-result.json
+    targetListArtifact: artifacts/batch-workflows-targets.json
+  bindings:
+    jira-implement:
+      jira_issue: '{{ target.jiraIssue }}'
+      jira_issue_key: '{{ target.jiraIssue.key }}'
+      constraints: '{{ shared.constraints }}'
+    github-issue-implement:
+      github_issue: '{{ target.githubIssue }}'
+      github_issue_ref: '{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}'
+      constraints: '{{ shared.constraints }}'
+  inputSchema:
+    type: object
+    required:
+    - source_kind
+    - target_preset_slug
+    - target_preset_version
+    - publish_mode
+    properties:
+      source_kind:
+        type: string
+        title: Batch source
+        description: Top-level discriminator that selects what the batch iterates over.
+        enum:
+        - jira_board_column
+        - github_repo_issues
+      jira_board_id:
+        type: string
+        title: Jira board
+      jira_column:
+        type: string
+        title: Column
+      jira_label_filter:
+        type: string
+        title: Tag / label filter
+      jira_issue_type_filter:
+        type: string
+        title: Issue type filter
+      jira_assignee_filter:
+        type: string
+        title: Assignee filter
+      repository:
+        type: string
+        title: Repository
+        description: Target repository for implementation child workflows. Defaults
+          to the parent workflow repository when available.
+      github_repository:
+        type: string
+        title: GitHub repository
+      github_issue_state:
+        type: string
+        title: Issue state
+        enum:
+        - open
+        - closed
+        - all
+      github_label_filter:
+        type: string
+        title: Label filter
+      github_assignee_filter:
+        type: string
+        title: Assignee filter
+      github_milestone_filter:
+        type: string
+        title: Milestone filter
+      github_search_query:
+        type: string
+        title: Search query
+      target_preset_slug:
+        type: string
+        title: Run this preset for each item
+      target_preset_version:
+        type: string
+        title: Target preset version
+      target_preset_scope:
+        type: string
+        title: Target preset scope
+        enum:
+        - global
+        - personal
+      target_preset_scope_ref:
+        type: string
+        title: Target preset scope reference
+      constraints:
+        type: string
+        title: Constraints
+      publish_mode:
+        type: string
+        title: Publish mode
+        enum:
+        - none
+        - branch
+        - pr
+      max_workflows:
+        type: string
+        title: Max workflows
+      sort:
+        type: string
+        title: Sort
+        enum:
+        - rank
+        - updated_desc
+        - priority_desc
+  uiSchema:
+    source_kind:
+      widget: discriminator
+      discriminates:
+        jira_board_column:
+        - jira_board_id
+        - jira_column
+        - jira_label_filter
+        - jira_issue_type_filter
+        - jira_assignee_filter
+        - repository
+        github_repo_issues:
+        - github_repository
+        - github_issue_state
+        - github_label_filter
+        - github_assignee_filter
+        - github_milestone_filter
+        - github_search_query
+    jira_board_id:
+      widget: jira.board-picker
+    jira_column:
+      widget: jira.board-column-picker
+      dependsOn: jira_board_id
+      allowManualEntryOnApiFailure: true
+    repository:
+      widget: github.repo-picker
+    github_repository:
+      widget: github.repo-picker
+    target_preset_slug:
+      widget: preset.selector
+      highlightCompatible:
+      - jira-implement
+      - github-issue-implement
+    publish_mode:
+      widget: publish.mode-picker
+  defaults:
+    source_kind: jira_board_column
+    github_issue_state: open
+    target_preset_slug: jira-implement
+    target_preset_version: 1.1.0
+    target_preset_scope: global
+    publish_mode: pr
+    max_workflows: '25'
+    sort: rank
+inputs:
+- name: source_kind
+  label: Batch source
+  type: enum
+  required: true
+  default: jira_board_column
+  options:
+  - jira_board_column
+  - github_repo_issues
+- name: jira_board_id
+  label: Jira Board
+  type: jira_board
+  required: false
+  default: ''
+- name: jira_column
+  label: Column
+  type: text
+  required: false
+  default: ''
+- name: jira_label_filter
+  label: Tag / Label Filter
+  type: text
+  required: false
+  default: ''
+- name: jira_issue_type_filter
+  label: Issue Type Filter
+  type: text
+  required: false
+  default: ''
+- name: jira_assignee_filter
+  label: Assignee Filter
+  type: text
+  required: false
+  default: ''
+- name: repository
+  label: Repository
+  type: text
+  required: false
+  default: ''
+- name: github_repository
+  label: GitHub Repository
+  type: text
+  required: false
+  default: ''
+- name: github_issue_state
+  label: GitHub Issue State
+  type: enum
+  required: false
+  default: open
+  options:
+  - open
+  - closed
+  - all
+- name: github_label_filter
+  label: GitHub Label Filter
+  type: text
+  required: false
+  default: ''
+- name: github_assignee_filter
+  label: GitHub Assignee Filter
+  type: text
+  required: false
+  default: ''
+- name: github_milestone_filter
+  label: GitHub Milestone Filter
+  type: text
+  required: false
+  default: ''
+- name: github_search_query
+  label: GitHub Search Query
+  type: text
+  required: false
+  default: ''
+- name: target_preset_slug
+  label: Run This Preset For Each Item
+  type: text
+  required: true
+  default: jira-implement
+- name: target_preset_version
+  label: Target Preset Version
+  type: text
+  required: true
+  default: 1.1.0
+- name: target_preset_scope
+  label: Target Preset Scope
+  type: enum
+  required: false
+  default: global
+  options:
+  - global
+  - personal
+- name: target_preset_scope_ref
+  label: Target Preset Scope Reference
+  type: text
+  required: false
+  default: ''
+- name: constraints
+  label: Constraints
+  type: textarea
+  required: false
+  default: ''
+- name: publish_mode
+  label: Publish Mode
+  type: enum
+  required: true
+  default: pr
+  options:
+  - none
+  - branch
+  - pr
+- name: max_workflows
+  label: Max Workflows
+  type: text
+  required: false
+  default: '25'
+- name: sort
+  label: Sort
+  type: enum
+  required: false
+  default: rank
+  options:
+  - rank
+  - updated_desc
+  - priority_desc
+steps:
+- title: Resolve targets and queue child workflows
+  annotations:
+    batchWorkflowsRole: resolve-and-queue
+  instructions: |-
+    Resolve a set of issue-like targets and queue one child MoonMind workflow per
+    target. Do not re-select provider/model/effort: every child inherits the parent
+    runtime via runtimeInheritance="caller".
+
+    Step 1 — Resolve targets into the canonical resolved-target shape.
+    If source_kind is "jira_board_column", use the deterministic trusted Jira tool
+    surface to list the issues in column "{{ inputs.jira_column }}" of board
+    "{{ inputs.jira_board_id }}". Apply the optional label, issue-type, and assignee
+    filters. Resolve each issue to:
+    {"provider": "jira", "ref": "<KEY>", "jiraIssue": {"key", "summary", "description",
+    "url", "status", "assignee"}, "repository": "<owner/repo>"}.
+    If source_kind is "github_repo_issues", use the trusted GitHub tool surface
+    (gh issue list) on repository "{{ inputs.github_repository }}" with state
+    "{{ inputs.github_issue_state }}" and the optional label, assignee, milestone,
+    and search-query filters. Resolve each issue to:
+    {"provider": "github", "ref": "<owner/repo>#<number>", "githubIssue": {"repository",
+    "number", "title", "body", "url", "state", "labels"}, "repository": "<owner/repo>"}.
+    Apply the requested sort and cap the resolved list at {{ inputs.max_workflows }}
+    targets. Write the resolved target list to artifacts/batch-workflows-targets.json
+    and present it as a preview before queueing anything. Do not use raw Jira/GitHub
+    credentials, web scraping, or guessed issue content to build targets.
+
+    Step 2 — Queue one child workflow per resolved target running preset
+    "{{ inputs.target_preset_slug }}" version "{{ inputs.target_preset_version }}".
+    Auto-bind the resolved issue target into the child preset's issue input
+    (jira_issue/jira_issue_key for jira-implement, github_issue/github_issue_ref for
+    github-issue-implement) and copy the shared constraints into every child. Apply
+    publish mode "{{ inputs.publish_mode }}" once to every child. Run the helper:
+    python3 .agents/skills/batch-workflows/bin/batch_workflows.py
+    --targets artifacts/batch-workflows-targets.json
+    --target-preset-slug {{ inputs.target_preset_slug }}
+    --target-preset-version {{ inputs.target_preset_version }}
+    --target-preset-scope {{ inputs.target_preset_scope }}
+    --publish-mode {{ inputs.publish_mode }}
+    --max-workflows {{ inputs.max_workflows }}
+    The helper stamps runtimeInheritance="caller" plus a fallback copy of the parent
+    runtime on each child and assigns a stable idempotency key so reruns do not
+    duplicate child workflows.
+
+    Step 3 — Record the summary. The helper writes artifacts/batch-workflows-result.json
+    linking every queued child workflow id together with the resolved targets, skips,
+    and errors. Report the queued/skipped/error counts honestly and link the child
+    workflows in the run summary.
+  batchOrchestration:
+    source:
+      kind: '{{ inputs.source_kind }}'
+      jiraBoardColumn:
+        boardId: '{{ inputs.jira_board_id }}'
+        column: '{{ inputs.jira_column }}'
+        labelFilter: '{{ inputs.jira_label_filter }}'
+        issueTypeFilter: '{{ inputs.jira_issue_type_filter }}'
+        assigneeFilter: '{{ inputs.jira_assignee_filter }}'
+        repository: '{{ inputs.repository }}'
+      githubRepoIssues:
+        repository: '{{ inputs.github_repository }}'
+        state: '{{ inputs.github_issue_state }}'
+        labelFilter: '{{ inputs.github_label_filter }}'
+        assigneeFilter: '{{ inputs.github_assignee_filter }}'
+        milestoneFilter: '{{ inputs.github_milestone_filter }}'
+        searchQuery: '{{ inputs.github_search_query }}'
+    targetPreset:
+      slug: '{{ inputs.target_preset_slug }}'
+      version: '{{ inputs.target_preset_version }}'
+      scope: '{{ inputs.target_preset_scope }}'
+      scopeRef: '{{ inputs.target_preset_scope_ref }}'
+    sharedInputs:
+      constraints: '{{ inputs.constraints }}'
+    publish:
+      mode: '{{ inputs.publish_mode }}'
+    runtime:
+      inherit: caller
+    maxWorkflows: '{{ inputs.max_workflows }}'
+    sort: '{{ inputs.sort }}'
+    summaryArtifact: artifacts/batch-workflows-result.json
+    targetListArtifact: artifacts/batch-workflows-targets.json
+  skill:
+    id: batch-workflows
+    requiredCapabilities:
+    - git
+    - jira
+    - gh
+    args: {}
