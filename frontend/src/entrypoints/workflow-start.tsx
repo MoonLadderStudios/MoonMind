@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { SkillCombobox } from "../components/SkillCombobox";
@@ -4791,6 +4791,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       return (await response.json()) as ProviderProfile[];
     },
     enabled: Boolean(runtime),
+    // Keep the previously loaded profiles visible while a runtime switch
+    // refetches. Without this, the query key change empties `data`, which
+    // collapses the Runtime/Provider-profile row from `grid-2` to `stack`
+    // (full width) until the fetch resolves and it snaps back to half width.
+    placeholderData: keepPreviousData,
   });
 
   useEffect(() => {
@@ -8788,9 +8793,14 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       isMergeAutomationPublishMode(publishMode) &&
       effectivePublishMode === "pr" &&
       !isSelfManagedPublishSkill(effectivePublishSkillId);
-    const selectedProviderProfile = (providerProfilesQuery.data || []).find(
-      (profile) => profile.profile_id === providerProfile,
-    );
+    // Never resolve a provider profile from placeholder data: during a runtime
+    // switch refetch `data` still holds the previous runtime's profiles, which
+    // must not be submitted under the newly selected runtime.
+    const selectedProviderProfile = providerProfilesQuery.isPlaceholderData
+      ? undefined
+      : (providerProfilesQuery.data || []).find(
+          (profile) => profile.profile_id === providerProfile,
+        );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
 
     const taskPayload: Record<string, unknown> = {
@@ -10866,14 +10876,24 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                   name="providerProfile"
                   value={providerProfile}
                   onChange={(event) => setProviderProfile(event.target.value)}
+                  // While a runtime switch refetch is in flight, `keepPreviousData`
+                  // keeps the previous runtime's profiles in `data` only so the row
+                  // layout stays stable. Those profiles do not belong to the newly
+                  // selected runtime, so the control is disabled and the stale
+                  // options are withheld to prevent selecting/submitting them.
+                  disabled={providerProfilesQuery.isPlaceholderData}
                 >
-                  {providerOptions.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.isDefault
-                        ? `${option.label} (Default)`
-                        : option.label}
-                    </option>
-                  ))}
+                  {providerProfilesQuery.isPlaceholderData ? (
+                    <option value="">Loading profiles…</option>
+                  ) : (
+                    providerOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.isDefault
+                          ? `${option.label} (Default)`
+                          : option.label}
+                      </option>
+                    ))
+                  )}
                 </select>
               </label>
               {providerProfilesQuery.isError ? (
