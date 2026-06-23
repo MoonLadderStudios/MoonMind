@@ -450,6 +450,7 @@ interface JiraImportProvenance {
 interface ProviderProfile {
   profile_id: string;
   account_label?: string | null;
+  provider_label?: string | null;
   default_model?: string | null;
   is_default?: boolean;
   enabled?: boolean;
@@ -2267,6 +2268,32 @@ function attachmentFilePickerLabel(
 
 function attachmentLimitMessage(policy: AttachmentPolicy): string {
   return `Up to ${policy.maxCount} files across all steps, ${formatAttachmentBytes(policy.maxBytes)} each, ${formatAttachmentBytes(policy.totalBytes)} total.`;
+}
+
+// Human-friendly display names for agent runtimes. Raw runtime ids such as
+// `claude_code` should never surface to operators in the UI.
+const RUNTIME_DISPLAY_LABELS: Record<string, string> = {
+  claude_code: "Claude Code",
+  codex_cli: "Codex CLI",
+  codex_cloud: "Codex Cloud",
+  gemini_cli: "Gemini CLI",
+};
+
+function formatRuntimeLabel(runtimeId: string): string {
+  const known = RUNTIME_DISPLAY_LABELS[runtimeId];
+  if (known) {
+    return known;
+  }
+  const formatted = runtimeId
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((word) =>
+      word.toLowerCase() === "cli"
+        ? "CLI"
+        : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join(" ");
+  return formatted || runtimeId;
 }
 
 function validateAttachmentFiles(
@@ -5907,10 +5934,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       return;
     }
     if (selectedDependencies.includes(normalizedId)) {
+      setSelectedDependencyWorkflowId("");
       setDependencyMessage("That prerequisite is already selected.");
       return;
     }
     if (selectedDependencies.length >= DEPENDENCY_LIMIT) {
+      setSelectedDependencyWorkflowId("");
       setDependencyMessage(
         `You can add at most ${DEPENDENCY_LIMIT} direct dependencies.`,
       );
@@ -6047,7 +6076,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     })
     .map((profile) => ({
       id: profile.profile_id,
-      label: profile.account_label || profile.profile_id,
+      // Default profiles read better as the provider name (e.g. "Anthropic",
+      // "OpenAI", "Google") than as their auto-seeded account label. The
+      // " (Default)" suffix is appended at render time.
+      label:
+        profile.is_default && profile.provider_label
+          ? profile.provider_label
+          : profile.account_label || profile.profile_id,
       isDefault: Boolean(profile.is_default),
     }));
 
@@ -10294,7 +10329,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           <option value="">Inherit agent runtime</option>
                           {supportedAgentRuntimes.map((runtimeOption) => (
                             <option key={runtimeOption} value={runtimeOption}>
-                              {runtimeOption}
+                              {formatRuntimeLabel(runtimeOption)}
                             </option>
                           ))}
                         </select>
@@ -10397,7 +10432,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                       <div className="queue-step-attachments">
                         <div className="queue-step-attachment-control">
                           <span className="queue-step-attachment-label">
-                            {`Step ${index + 1} ${attachmentLabel} (optional)`}
+                            {`${attachmentLabel} (optional)`}
                           </span>
                           <button
                             type="button"
@@ -10780,45 +10815,47 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Execution context"
           aria-label="Execution context"
         >
-        <label>
-          Runtime
-          <select
-            name="runtime"
-            value={runtime}
-            onChange={(event) => setRuntime(event.target.value)}
-          >
-            {supportedAgentRuntimes.map((runtimeOption) => (
-              <option key={runtimeOption} value={runtimeOption}>
-                {runtimeOption}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div
-          id="queue-provider-profile-wrap"
-          className={providerOptions.length > 0 ? "" : "hidden"}
-          hidden={providerOptions.length === 0}
-        >
+        <div className={providerOptions.length > 0 ? "grid-2" : "stack"}>
           <label>
-            Provider profile
+            Runtime
             <select
-              name="providerProfile"
-              value={providerProfile}
-              onChange={(event) => setProviderProfile(event.target.value)}
+              name="runtime"
+              value={runtime}
+              onChange={(event) => setRuntime(event.target.value)}
             >
-              {providerOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.isDefault ? `${option.label} (Default)` : option.label}
+              {supportedAgentRuntimes.map((runtimeOption) => (
+                <option key={runtimeOption} value={runtimeOption}>
+                  {formatRuntimeLabel(runtimeOption)}
                 </option>
               ))}
             </select>
           </label>
-          <p className="small" id="queue-auth-profile-hint">
-            {providerProfilesQuery.isError
-              ? "Failed to load provider profiles."
-              : ""}
-          </p>
+
+          {providerOptions.length > 0 ? (
+            <div id="queue-provider-profile-wrap">
+              <label>
+                Provider profile
+                <select
+                  name="providerProfile"
+                  value={providerProfile}
+                  onChange={(event) => setProviderProfile(event.target.value)}
+                >
+                  {providerOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.isDefault
+                        ? `${option.label} (Default)`
+                        : option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {providerProfilesQuery.isError ? (
+                <p className="small" id="queue-auth-profile-hint">
+                  Failed to load provider profiles.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="grid-2">
@@ -11049,35 +11086,122 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
         <section
           className="stack"
+          data-canonical-create-section="Dependencies"
+          aria-label="Dependencies"
+        >
+          <div className="queue-dependencies-heading">
+            <strong>Dependencies</strong>
+            <button
+              type="button"
+              className="queue-step-icon-button queue-info-toggle queue-dependencies-info-toggle"
+              aria-label="Dependencies info"
+              aria-expanded={dependencyInfoOpen}
+              aria-controls="queue-dependencies-info-panel"
+              title="About dependencies"
+              onClick={() => setDependencyInfoOpen((open) => !open)}
+            >
+              <InfoIcon />
+            </button>
+          </div>
+          {dependencyInfoOpen ? (
+            <div
+              id="queue-dependencies-info-panel"
+              className="notice queue-dependencies-info-panel"
+              role="note"
+            >
+              <p className="small">
+                Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
+                prerequisites. The new run stays blocked until each
+                prerequisite finishes in <code>completed</code> state.
+              </p>
+              <p className="small">
+                Direct dependencies only. The new run stays blocked while a
+                prerequisite is running, failed, canceled, terminated, timed
+                out, or unresolvable, and unblocks once the prerequisite
+                completes successfully. Cancel this run or bypass the
+                dependency to proceed without that prerequisite.
+              </p>
+              <p className="small">
+                {dependencyOptionsQuery.isLoading
+                  ? "Loading recent runs..."
+                  : dependencyOptionsQuery.isError
+                    ? "Failed to load recent runs. You can still create the task without dependencies, or try refreshing."
+                    : `${availableDependencyOptions.length} recent runs available.`}
+              </p>
+            </div>
+          ) : null}
+          <label>
+            Existing run
+            <select
+              id="queue-dependency-picker"
+              value={selectedDependencyWorkflowId}
+              onChange={(event) => {
+                const workflowId = event.target.value;
+                if (workflowId) {
+                  addDependency(workflowId);
+                } else {
+                  setSelectedDependencyWorkflowId("");
+                  setDependencyMessage(null);
+                }
+              }}
+            >
+              <option value="">Select prerequisite to add...</option>
+              {availableDependencyOptions.map((item) => (
+                <option key={dependencyWorkflowId(item)} value={dependencyWorkflowId(item)}>
+                  {`${item.title} (${dependencyWorkflowId(item)})`}
+                </option>
+              ))}
+            </select>
+          </label>
+          {selectedDependencies.length > 0 ? (
+            <ul className="list" id="queue-dependency-list">
+              {selectedDependencies.map((workflowId) => {
+                const match = (dependencyOptionsQuery.data || []).find(
+                  (item) => dependencyWorkflowId(item) === workflowId,
+                );
+                return (
+                  <li key={workflowId}>
+                    <span>
+                      <strong>{match?.title || workflowId}</strong>{" "}
+                      <code>{workflowId}</code>
+                    </span>
+                    <button
+                      type="button"
+                      className="secondary small"
+                      title={`Remove dependency ${workflowId}`}
+                      onClick={() => removeDependency(workflowId)}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
+          {dependencyMessage ? (
+            <p className="notice error">{dependencyMessage}</p>
+          ) : null}
+        </section>
+
+        <section
+          className="stack"
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
-        <p
-          id="queue-submit-message"
-          role={
-            submitMessage
-              ? submitMessageTone === "error"
-                ? "alert"
-                : "status"
-              : undefined
-          }
-          aria-live={
-            submitMessage
-              ? submitMessageTone === "error"
-                ? "assertive"
-                : "polite"
-              : undefined
-          }
-          className={
-            submitMessage
-              ? submitMessageTone === "pending"
+        {submitMessage ? (
+          <p
+            id="queue-submit-message"
+            role={submitMessageTone === "error" ? "alert" : "status"}
+            aria-live={submitMessageTone === "error" ? "assertive" : "polite"}
+            className={
+              submitMessageTone === "pending"
                 ? "queue-submit-message notice pending"
                 : "queue-submit-message notice error"
-              : "queue-submit-message small"
-          }
-        >
-          {submitMessage || ""}
-        </p>
+            }
+          >
+            {submitMessage}
+          </p>
+        ) : null}
         <div
           className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
           role="group"
@@ -11240,112 +11364,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               : null}
           </div>
         </div>
-        </section>
-
-        <section
-          className="stack queue-dependencies-bottom"
-          data-canonical-create-section="Dependencies"
-          aria-label="Dependencies"
-        >
-          <div className="queue-dependencies-heading">
-            <strong>Dependencies</strong>
-            <button
-              type="button"
-              className="queue-step-icon-button queue-info-toggle queue-dependencies-info-toggle"
-              aria-label="Dependencies info"
-              aria-expanded={dependencyInfoOpen}
-              aria-controls="queue-dependencies-info-panel"
-              title="About dependencies"
-              onClick={() => setDependencyInfoOpen((open) => !open)}
-            >
-              <InfoIcon />
-            </button>
-          </div>
-          {dependencyInfoOpen ? (
-            <div
-              id="queue-dependencies-info-panel"
-              className="notice queue-dependencies-info-panel"
-              role="note"
-            >
-              <p className="small">
-                Add up to {DEPENDENCY_LIMIT} existing <code>MoonMind.UserWorkflow</code>{" "}
-                prerequisites. The new run stays blocked until each
-                prerequisite finishes in <code>completed</code> state.
-              </p>
-              <p className="small">
-                Direct dependencies only. The new run stays blocked while a
-                prerequisite is running, failed, canceled, terminated, timed
-                out, or unresolvable, and unblocks once the prerequisite
-                completes successfully. Cancel this run or bypass the
-                dependency to proceed without that prerequisite.
-              </p>
-              <p className="small">
-                {dependencyOptionsQuery.isLoading
-                  ? "Loading recent runs..."
-                  : dependencyOptionsQuery.isError
-                    ? "Failed to load recent runs. You can still create the task without dependencies, or try refreshing."
-                    : `${availableDependencyOptions.length} recent runs available.`}
-              </p>
-            </div>
-          ) : null}
-          <div className="grid-2">
-            <label>
-              Existing run
-              <select
-                id="queue-dependency-picker"
-                value={selectedDependencyWorkflowId}
-                onChange={(event) => {
-                  setSelectedDependencyWorkflowId(event.target.value);
-                  setDependencyMessage(null);
-                }}
-              >
-                <option value="">Select prerequisite...</option>
-                {availableDependencyOptions.map((item) => (
-                  <option key={dependencyWorkflowId(item)} value={dependencyWorkflowId(item)}>
-                    {`${item.title} (${dependencyWorkflowId(item)})`}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <div className="actions" style={{ alignItems: "flex-end" }}>
-              <button
-                type="button"
-                id="queue-dependency-add"
-                title="Add the selected prerequisite run"
-                onClick={() => addDependency(selectedDependencyWorkflowId)}
-              >
-                Add dependency
-              </button>
-            </div>
-          </div>
-          {selectedDependencies.length > 0 ? (
-            <ul className="list" id="queue-dependency-list">
-              {selectedDependencies.map((workflowId) => {
-                const match = (dependencyOptionsQuery.data || []).find(
-                  (item) => dependencyWorkflowId(item) === workflowId,
-                );
-                return (
-                  <li key={workflowId}>
-                    <span>
-                      <strong>{match?.title || workflowId}</strong>{" "}
-                      <code>{workflowId}</code>
-                    </span>
-                    <button
-                      type="button"
-                      className="secondary small"
-                      title={`Remove dependency ${workflowId}`}
-                      onClick={() => removeDependency(workflowId)}
-                    >
-                      Remove
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : null}
-          {dependencyMessage ? (
-            <p className="notice error">{dependencyMessage}</p>
-          ) : null}
         </section>
         </fieldset>
       </form>

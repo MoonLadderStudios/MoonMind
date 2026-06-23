@@ -5814,7 +5814,7 @@ describe.skip("Task Create Entrypoint", () => {
       <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
     );
 
-    expect(await screen.findByText("Step 1 Images (optional)")).toBeTruthy();
+    expect(await screen.findByText("Images (optional)")).toBeTruthy();
     expect(
       await screen.findByText(
         "Instructions Images",
@@ -6432,7 +6432,6 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Existing run"), {
       target: { value: "mm:dep-1" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
 
     await waitFor(() => {
       expect(screen.getByText(/Build shared schema/)).toBeTruthy();
@@ -8096,10 +8095,10 @@ describe.skip("Task Create Entrypoint", () => {
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
-      "Dependencies",
       "Execution context",
       "Execution controls",
       "Schedule",
+      "Dependencies",
       "Submit",
     ]);
   });
@@ -8111,9 +8110,9 @@ describe.skip("Task Create Entrypoint", () => {
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
-      "Dependencies",
       "Execution context",
       "Execution controls",
+      "Dependencies",
       "Submit",
     ]);
     unmount();
@@ -8129,9 +8128,9 @@ describe.skip("Task Create Entrypoint", () => {
     expect(canonicalCreateSections()).toEqual([
       "Header",
       "Steps",
-      "Dependencies",
       "Execution context",
       "Execution controls",
+      "Dependencies",
       "Submit",
     ]);
   });
@@ -10622,11 +10621,10 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Dependent stage." },
     });
 
-    // Add mm:dep-1 first time.
+    // Add mm:dep-1 first time (selecting the option adds it directly).
     fireEvent.change(screen.getByLabelText("Existing run"), {
       target: { value: "mm:dep-1" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
 
     await waitFor(() => {
       expect(screen.getByText(/Build shared schema/)).toBeTruthy();
@@ -10647,7 +10645,6 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Existing run"), {
       target: { value: "mm:dep-2" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
 
     await waitFor(() => {
       expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(2);
@@ -10661,14 +10658,11 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Dependent stage." },
     });
 
-    // Add 10 dependencies.
+    // Add 10 dependencies (each selection adds the chosen prerequisite).
     for (let i = 1; i <= 10; i += 1) {
       fireEvent.change(screen.getByLabelText("Existing run"), {
         target: { value: `mm:dep-${i}` },
       });
-      fireEvent.click(
-        screen.getByRole("button", { name: "Add dependency" }),
-      );
     }
 
     // Wait for all 10 to appear.
@@ -10682,7 +10676,6 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Existing run"), {
       target: { value: "mm:dep-11" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
 
     // Still 10 items.
     const list = document.getElementById("queue-dependency-list");
@@ -10748,21 +10741,19 @@ describe.skip("Task Create Entrypoint", () => {
     expect(task).not.toHaveProperty("dependsOn");
   });
 
-  it("shows validation message when adding dependency without selection", async () => {
+  it("does not add a dependency when the placeholder option stays selected", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Dependent stage." },
     });
 
-    // Click Add without selecting a run.
-    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
-
-    await waitFor(() => {
-      expect(
-        screen.getByText(/Choose a prerequisite run before adding/),
-      ).toBeTruthy();
+    // Re-selecting the placeholder option is a no-op: nothing is added.
+    fireEvent.change(screen.getByLabelText("Existing run"), {
+      target: { value: "" },
     });
+
+    expect(document.getElementById("queue-dependency-list")).toBeNull();
   });
 
   it("hides Jira browser controls when the runtime config does not enable Jira", async () => {
@@ -13562,10 +13553,11 @@ describe("Task Create MM-641 authoring validation", () => {
       target: { value: "feature/mm-641-create-page" },
     });
     fireEvent.change(publishModeSelect, { target: { value: "branch" } });
+    // Selecting a prerequisite from the dropdown adds it directly; there is no
+    // separate "Add dependency" button.
     fireEvent.change(screen.getByLabelText("Existing run"), {
       target: { value: "mm:dep-641" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add dependency" }));
     await waitFor(() => {
       expect(screen.getByText(/Prepare MM-641 source brief/)).toBeTruthy();
     });
