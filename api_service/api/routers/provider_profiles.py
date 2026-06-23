@@ -263,6 +263,12 @@ class ClaudeManualAuthCommitRequest(BaseModel):
     token: str = Field(..., min_length=1, max_length=8192)
     account_label: Optional[str] = None
 
+class ProviderApiKeySetupRequest(BaseModel):
+    api_key: str = Field(..., min_length=1, max_length=8192)
+    account_label: Optional[str] = None
+    make_default: bool = False
+    enable_after_validation: bool = True
+
 class ClaudeManualAuthReadiness(BaseModel):
     connected: bool
     last_validated_at: str
@@ -271,6 +277,13 @@ class ClaudeManualAuthReadiness(BaseModel):
     failure_reason: Optional[str] = None
 
 class ClaudeManualAuthCommitResponse(BaseModel):
+    status: str
+    status_label: str
+    readiness: ClaudeManualAuthReadiness
+    profile_id: str
+    secret_ref: str
+
+class ProviderApiKeySetupResponse(BaseModel):
     status: str
     status_label: str
     readiness: ClaudeManualAuthReadiness
@@ -519,6 +532,108 @@ async def update_profile(
     )
 
 @router.post(
+    "/{profile_id}/credentials/api-key",
+    response_model=ProviderApiKeySetupResponse,
+)
+async def setup_provider_api_key(
+    profile_id: str,
+    body: ProviderApiKeySetupRequest,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_profile_management(profile, current_user)
+    mapping = _api_key_mapping_for_profile(profile)
+
+    api_key = body.api_key.strip()
+    if not _looks_like_provider_api_key(mapping, api_key):
+        await _mark_api_key_validation_failed(
+            session=session,
+            profile=profile,
+            reason="API key validation failed.",
+        )
+        raise HTTPException(status_code=422, detail="API key validation failed.")
+
+    try:
+        await validate_provider_api_key(profile.provider_id, api_key)
+    except HTTPException as exc:
+        if exc.status_code in {401, 403, 422}:
+            await _mark_api_key_validation_failed(
+                session=session,
+                profile=profile,
+                reason="API key validation failed.",
+            )
+        raise exc
+
+    validated_at = datetime.now(UTC)
+    secret_slug = _provider_api_key_secret_slug(
+        profile.profile_id,
+        mapping.secret_role,
+    )
+    secret_ref = f"db://{secret_slug}"
+    await _upsert_managed_secret(
+        session=session,
+        slug=secret_slug,
+        plaintext=api_key,
+        details={
+            "provider_profile_id": profile.profile_id,
+            "runtime_id": profile.runtime_id,
+            "provider_id": profile.provider_id,
+            "auth_strategy": mapping.auth_strategy,
+            "secret_role": mapping.secret_role,
+            "last_validated_at": validated_at.isoformat(),
+        },
+    )
+
+    _apply_api_key_setup_to_profile(
+        profile,
+        mapping=mapping,
+        secret_ref=secret_ref,
+        account_label=body.account_label,
+        validated_at=validated_at,
+        enabled=body.enable_after_validation,
+    )
+
+    await session.flush()
+    secret_ref_results = _secret_ref_results_for_rows([profile])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [profile],
+        secret_ref_results=secret_ref_results,
+    )
+    if profile.enabled:
+        _require_enabled_profile_launchable(
+            profile,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(profile.profile_id, {}),
+        )
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=profile.runtime_id,
+        preferred_profile_id=profile.profile_id if body.make_default else None,
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+
+    return {
+        "status": "ready",
+        "status_label": mapping.ready_label,
+        "profile_id": profile.profile_id,
+        "secret_ref": secret_ref,
+        "readiness": {
+            "connected": True,
+            "last_validated_at": validated_at.isoformat(),
+            "backing_secret_exists": True,
+            "launch_ready": True,
+            "failure_reason": None,
+        },
+    }
+
+@router.post(
     "/{profile_id}/manual-auth/commit",
     response_model=ClaudeManualAuthCommitResponse,
 )
@@ -607,7 +722,10 @@ async def commit_claude_manual_auth(
     profile.command_behavior = behavior
 
     await session.flush()
-    await normalize_runtime_default_profile(session=session, runtime_id=profile.runtime_id)
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=profile.runtime_id,
+    )
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
@@ -842,6 +960,58 @@ def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
             detail="Manual Claude auth is only supported for claude_code Anthropic profiles.",
         )
 
+@dataclass(frozen=True, slots=True)
+class _ApiKeyMapping:
+    runtime_id: str
+    provider_id: str
+    secret_role: str
+    env_key: str
+    clear_env_keys: tuple[str, ...]
+    auth_strategy: str
+    ready_label: str
+
+_API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
+    ("claude_code", "anthropic"): _ApiKeyMapping(
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        secret_role="anthropic_api_key",
+        env_key="ANTHROPIC_API_KEY",
+        clear_env_keys=("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
+        auth_strategy="api_key_env",
+        ready_label="Anthropic API key ready",
+    ),
+    ("codex_cli", "openai"): _ApiKeyMapping(
+        runtime_id="codex_cli",
+        provider_id="openai",
+        secret_role="openai_api_key",
+        env_key="OPENAI_API_KEY",
+        clear_env_keys=("MINIMAX_API_KEY",),
+        auth_strategy="api_key_env",
+        ready_label="OpenAI API key ready",
+    ),
+    ("gemini_cli", "google"): _ApiKeyMapping(
+        runtime_id="gemini_cli",
+        provider_id="google",
+        secret_role="google_api_key",
+        env_key="GEMINI_API_KEY",
+        clear_env_keys=("GOOGLE_APPLICATION_CREDENTIALS",),
+        auth_strategy="api_key_env",
+        ready_label="Google API key ready",
+    ),
+}
+
+def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMapping:
+    mapping = _API_KEY_MAPPINGS.get((row.runtime_id, row.provider_id))
+    if mapping is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "API-key setup is only supported for first-party Anthropic, "
+                "OpenAI, and Google profiles."
+            ),
+        )
+    return mapping
+
 def _claude_auth_actions_for_profile(row: ManagedAgentProviderProfile) -> list[str]:
     actions = ["use_api_key"]
     if row.volume_ref or row.volume_mount_path:
@@ -877,6 +1047,109 @@ def _claude_manual_secret_slug(profile_id: str) -> str:
         normalized = "claude-anthropic"
     digest = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:16]
     return f"{normalized}-{digest}-token"
+
+def _provider_api_key_secret_slug(profile_id: str, secret_role: str) -> str:
+    normalized_profile = re.sub(r"[^a-z0-9]+", "-", profile_id.lower()).strip("-")
+    normalized_role = re.sub(r"[^a-z0-9]+", "-", secret_role.lower()).strip("-")
+    if not normalized_profile:
+        normalized_profile = "provider-profile"
+    digest = hashlib.sha256(
+        f"{profile_id}:{secret_role}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{normalized_profile}-{normalized_role}-{digest}"
+
+def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
+    if not api_key:
+        return False
+    if mapping.provider_id == "anthropic":
+        return api_key.startswith("sk-ant-") and len(api_key) >= 12
+    if mapping.provider_id == "openai":
+        return api_key.startswith("sk-") and len(api_key) >= 12
+    if mapping.provider_id == "google":
+        return len(api_key) >= 12
+    return False
+
+def _apply_api_key_setup_to_profile(
+    row: ManagedAgentProviderProfile,
+    *,
+    mapping: _ApiKeyMapping,
+    secret_ref: str,
+    account_label: str | None,
+    validated_at: datetime,
+    enabled: bool,
+) -> None:
+    row.credential_source = ProviderCredentialSource.SECRET_REF
+    row.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
+    row.secret_refs = {
+        **(row.secret_refs or {}),
+        mapping.secret_role: secret_ref,
+    }
+    clear_env_keys = list(row.clear_env_keys or [])
+    for env_key in mapping.clear_env_keys:
+        if env_key not in clear_env_keys:
+            clear_env_keys.append(env_key)
+    row.clear_env_keys = clear_env_keys
+    row.env_template = {
+        **(row.env_template or {}),
+        mapping.env_key: {"from_secret_ref": mapping.secret_role},
+    }
+    row.account_label = account_label or row.account_label or row.provider_label
+    row.enabled = enabled
+    row.auth_state = ProviderProfileAuthState.CONNECTED
+    row.disabled_reason = (
+        None if enabled else ProviderProfileDisabledReason.USER_DISABLED
+    )
+    if row.first_authenticated_at is None:
+        row.first_authenticated_at = validated_at
+    row.last_validated_at = validated_at
+    row.last_auth_method = ProviderProfileAuthMethod.SECRET_REF
+    behavior = dict(row.command_behavior or {})
+    behavior.update(
+        {
+            "auth_strategy": mapping.auth_strategy,
+            "auth_state": "connected",
+            "auth_actions": ["use_api_key"],
+            "auth_status_label": mapping.ready_label,
+            "auth_readiness": {
+                "connected": True,
+                "last_validated_at": validated_at.isoformat(),
+                "backing_secret_exists": True,
+                "launch_ready": True,
+            },
+        }
+    )
+    row.command_behavior = behavior
+
+async def _mark_api_key_validation_failed(
+    *,
+    session: AsyncSession,
+    profile: ManagedAgentProviderProfile,
+    reason: str,
+) -> None:
+    failed_at = datetime.now(UTC)
+    profile.enabled = False
+    profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+    profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+    profile.last_validated_at = failed_at
+    behavior = dict(profile.command_behavior or {})
+    behavior.update(
+        {
+            "auth_state": "validation_failed",
+            "auth_status_label": "API key validation failed",
+            "auth_readiness": {
+                "connected": False,
+                "last_validated_at": failed_at.isoformat(),
+                "backing_secret_exists": False,
+                "launch_ready": False,
+                "failure_reason": redact_sensitive_payload(reason),
+            },
+        }
+    )
+    profile.command_behavior = behavior
+    await normalize_runtime_default_profile(session=session, runtime_id=profile.runtime_id)
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
 
 async def _upsert_managed_secret(
     *,
@@ -930,6 +1203,50 @@ async def validate_claude_manual_token(token: str) -> None:
             status_code=502,
             detail="Claude token validation failed.",
         )
+
+async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
+    provider_id = provider_id.strip().lower()
+    if provider_id == "anthropic":
+        await validate_claude_manual_token(api_key)
+        return
+    if provider_id == "openai":
+        await _validate_openai_api_key(api_key)
+        return
+    if provider_id == "google":
+        await _validate_google_api_key(api_key)
+        return
+    raise HTTPException(
+        status_code=422,
+        detail="Unsupported provider API-key setup.",
+    )
+
+async def _validate_openai_api_key(api_key: str) -> None:
+    try:
+        response = await _get_claude_manual_validation_client().get(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("openai_api_key_validation_failed")
+        raise HTTPException(status_code=502, detail="API key validation failed.") from exc
+    if response.status_code in {401, 403}:
+        raise HTTPException(status_code=401, detail="API key validation failed.")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="API key validation failed.")
+
+async def _validate_google_api_key(api_key: str) -> None:
+    try:
+        response = await _get_claude_manual_validation_client().get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": api_key},
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("google_api_key_validation_failed")
+        raise HTTPException(status_code=502, detail="API key validation failed.") from exc
+    if response.status_code in {400, 401, 403}:
+        raise HTTPException(status_code=401, detail="API key validation failed.")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="API key validation failed.")
 
 def _get_claude_manual_validation_client() -> httpx.AsyncClient:
     global _claude_manual_validation_client

@@ -744,6 +744,23 @@ export interface paths {
         patch: operations["update_profile_api_v1_provider_profiles__profile_id__patch"];
         trace?: never;
     };
+    "/api/v1/provider-profiles/{profile_id}/credentials/api-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Setup Provider Api Key */
+        post: operations["setup_provider_api_key_api_v1_provider_profiles__profile_id__credentials_api_key_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-profiles/{profile_id}/manual-auth/commit": {
         parameters: {
             query?: never;
@@ -6546,6 +6563,35 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** ProviderApiKeySetupRequest */
+        ProviderApiKeySetupRequest: {
+            /** Api Key */
+            api_key: string;
+            /** Account Label */
+            account_label?: string | null;
+            /**
+             * Make Default
+             * @default false
+             */
+            make_default: boolean;
+            /**
+             * Enable After Validation
+             * @default true
+             */
+            enable_after_validation: boolean;
+        };
+        /** ProviderApiKeySetupResponse */
+        ProviderApiKeySetupResponse: {
+            /** Status */
+            status: string;
+            /** Status Label */
+            status_label: string;
+            readiness: components["schemas"]["ClaudeManualAuthReadiness"];
+            /** Profile Id */
+            profile_id: string;
+            /** Secret Ref */
+            secret_ref: string;
+        };
         /** ProviderProfileCreate */
         ProviderProfileCreate: {
             /** Profile Id */
@@ -10428,6 +10474,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProfileResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    setup_provider_api_key_api_v1_provider_profiles__profile_id__credentials_api_key_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderApiKeySetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderApiKeySetupResponse"];
                 };
             };
             /** @description Validation Error */
