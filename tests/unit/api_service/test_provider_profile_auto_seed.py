@@ -95,8 +95,23 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert claude_profile.volume_mount_path is None
     assert claude_profile.clear_env_keys == [
         "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
         "CLAUDE_API_KEY",
         "OPENAI_API_KEY",
+    ]
+    first_party_clear_keys = {p.profile_id: p.clear_env_keys for p in profiles}
+    assert first_party_clear_keys["gemini_default"] == [
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ]
+    assert first_party_clear_keys["codex_default"] == [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT",
+        "MINIMAX_API_KEY",
     ]
 
 @pytest.mark.asyncio
@@ -135,33 +150,43 @@ async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
-    """When MINIMAX_API_KEY is set, a 4th 'claude_minimax' profile should be seeded."""
+    """When MINIMAX_API_KEY is set, MiniMax Claude and Codex profiles are seeded."""
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     seeded = await _auto_seed_provider_profiles()
-    assert "claude_code" in seeded  # seeded twice (default + minimax)
+    assert "claude_code" in seeded
+    assert "codex_cli" in seeded
 
     async with db_base.async_session_maker() as session:
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
 
-    assert len(profiles) == 4
+    assert len(profiles) == 5
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
+    assert "codex_minimax_m27" in profile_ids
 
     # Verify MiniMax profile details.
     mm_profile = next(p for p in profiles if p.profile_id == "claude_minimax")
     assert mm_profile.runtime_id == "claude_code"
     assert mm_profile.secret_refs is not None
-    assert mm_profile.secret_refs.get("ANTHROPIC_AUTH_TOKEN") == "env://MINIMAX_API_KEY"
+    assert mm_profile.secret_refs.get("provider_api_key") == "env://MINIMAX_API_KEY"
     assert mm_profile.env_template is not None
     assert mm_profile.env_template["ANTHROPIC_BASE_URL"] == "https://api.minimax.io/anthropic"
+    assert mm_profile.env_template["ANTHROPIC_AUTH_TOKEN"] == {
+        "from_secret_ref": "provider_api_key"
+    }
     assert mm_profile.env_template["ANTHROPIC_MODEL"] == "MiniMax-M2.7"
     assert mm_profile.env_template["API_TIMEOUT_MS"] == "3000000"
+    assert mm_profile.clear_env_keys == [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+    ]
     assert mm_profile.default_model == "MiniMax-M2.7"
     assert mm_profile.volume_ref is None
     assert mm_profile.volume_mount_path is None
@@ -172,6 +197,27 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
 
     anthropic_profile = next(p for p in profiles if p.profile_id == "claude_anthropic")
     assert anthropic_profile.is_default is False
+
+    codex_mm_profile = next(p for p in profiles if p.profile_id == "codex_minimax_m27")
+    assert codex_mm_profile.runtime_id == "codex_cli"
+    assert (
+        codex_mm_profile.runtime_materialization_mode
+        == RuntimeMaterializationMode.COMPOSITE
+    )
+    assert codex_mm_profile.secret_refs == {"provider_api_key": "env://MINIMAX_API_KEY"}
+    assert codex_mm_profile.env_template == {
+        "MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}
+    }
+    assert codex_mm_profile.clear_env_keys == [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT",
+    ]
+    assert codex_mm_profile.file_templates[0]["merge_strategy"] == "deep_merge"
+    assert codex_mm_profile.file_templates[0]["permissions"] == "0600"
+    assert codex_mm_profile.file_templates[0]["content_template"]["profile"] == "m27"
+    assert codex_mm_profile.model_overrides == {"codex_profile_name": "m27"}
 
 @pytest.mark.asyncio
 async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch):
@@ -193,10 +239,11 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
 
-    assert len(profiles) == 4
+    assert len(profiles) == 5
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
+    assert "codex_minimax_m27" in profile_ids
 
 @pytest.mark.asyncio
 async def test_auto_seed_reconcile_does_not_overwrite_user_default_model(_module_db, monkeypatch):
@@ -304,8 +351,51 @@ async def test_auto_seed_backfills_claude_api_key_clear_env_for_existing_profile
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
             "CUSTOM_ENV",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
             "CLAUDE_API_KEY",
         ]
+
+@pytest.mark.asyncio
+async def test_auto_seed_backfills_first_party_clear_env_for_existing_profiles(
+    _module_db, monkeypatch
+):
+    from api_service.main import _auto_seed_provider_profiles
+
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    await _auto_seed_provider_profiles()
+
+    async with db_base.async_session_maker() as session:
+        codex_profile = await session.get(ManagedAgentProviderProfile, "codex_default")
+        gemini_profile = await session.get(ManagedAgentProviderProfile, "gemini_default")
+        assert codex_profile is not None
+        assert gemini_profile is not None
+        codex_profile.clear_env_keys = ["OPENAI_API_KEY", "CUSTOM_CODEX_ENV"]
+        gemini_profile.clear_env_keys = ["GEMINI_API_KEY", "CUSTOM_GEMINI_ENV"]
+        await session.commit()
+
+    seeded = await _auto_seed_provider_profiles()
+    assert seeded == []
+
+    async with db_base.async_session_maker() as session:
+        codex_profile = await session.get(ManagedAgentProviderProfile, "codex_default")
+        gemini_profile = await session.get(ManagedAgentProviderProfile, "gemini_default")
+
+    assert codex_profile.clear_env_keys == [
+        "OPENAI_API_KEY",
+        "CUSTOM_CODEX_ENV",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT",
+        "MINIMAX_API_KEY",
+    ]
+    assert gemini_profile.clear_env_keys == [
+        "GEMINI_API_KEY",
+        "CUSTOM_GEMINI_ENV",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+    ]
 
 @pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
@@ -324,6 +414,7 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
 
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_minimax" not in profile_ids
+    assert "codex_minimax_m27" not in profile_ids
     assert "claude_anthropic" in profile_ids
     assert len(profiles) == 3
 

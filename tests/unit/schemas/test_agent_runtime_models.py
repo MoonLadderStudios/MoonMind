@@ -693,6 +693,30 @@ def test_managed_runtime_profile_roundtrips_file_templates() -> None:
         "model": "qwen/qwen3.6-plus",
     }
 
+def test_managed_runtime_profile_accepts_documented_file_merge_strategies() -> None:
+    profile = ManagedRuntimeProfile(
+        runtimeId="codex_cli",
+        fileTemplates=[
+            {
+                "path": "config.toml",
+                "format": "toml",
+                "mergeStrategy": "deep_merge",
+                "contentTemplate": {},
+            },
+            {
+                "path": "runtime.env",
+                "format": "text",
+                "mergeStrategy": "append",
+                "contentTemplate": "",
+            },
+        ],
+    )
+
+    assert [item.merge_strategy for item in profile.file_templates] == [
+        "deep_merge",
+        "append",
+    ]
+
 
 def test_extract_durable_retrieval_metadata_only_allows_boolean_contract_fields() -> None:
     metadata = extract_durable_retrieval_metadata(

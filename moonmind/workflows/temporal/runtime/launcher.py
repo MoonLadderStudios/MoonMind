@@ -965,6 +965,47 @@ class ManagedRuntimeLauncher:
         ):
             request.instruction_ref = result.rendered_instruction
 
+    @staticmethod
+    def _assert_profile_launch_ready(profile: ManagedRuntimeProfile) -> None:
+        """Re-check compact Provider Profile readiness at the launch boundary."""
+
+        profile_ref = str(profile.profile_id or profile.runtime_id or "profile").strip()
+        if profile.enabled is False:
+            raise RuntimeError(
+                f"Provider profile {profile_ref!r} is not launch-ready: disabled"
+            )
+        auth_state = profile.auth_state
+        if auth_state is not None:
+            auth_state_value = getattr(auth_state, "value", auth_state)
+            auth_state_normalized = str(auth_state_value).strip().lower()
+        else:
+            auth_state_normalized = None
+        if auth_state_normalized is not None and auth_state_normalized != "connected":
+            raise RuntimeError(
+                f"Provider profile {profile_ref!r} is not launch-ready: "
+                f"auth_state={profile.auth_state!r}"
+            )
+        if profile.disabled_reason is not None:
+            raise RuntimeError(
+                f"Provider profile {profile_ref!r} is not launch-ready: "
+                f"disabled_reason={profile.disabled_reason!r}"
+            )
+        if profile.launch_ready is False:
+            raise RuntimeError(
+                f"Provider profile {profile_ref!r} is not launch-ready: "
+                "launch_ready=False"
+            )
+        readiness = profile.command_behavior.get("auth_readiness")
+        if isinstance(readiness, Mapping):
+            launch_ready = readiness.get("launch_ready")
+            if launch_ready is None:
+                launch_ready = readiness.get("launchReady")
+            if launch_ready is False:
+                raise RuntimeError(
+                    f"Provider profile {profile_ref!r} is not launch-ready: "
+                    "command_behavior.auth_readiness.launch_ready=False"
+                )
+
     async def _project_run_skill_snapshot(
         self,
         *,
@@ -1107,6 +1148,7 @@ class ManagedRuntimeLauncher:
             assert_managed_secret_refs_active_for_launch,
             resolve_managed_api_key_reference,
         )
+        self._assert_profile_launch_ready(profile)
         profile_secret_refs = getattr(profile, "secret_refs", None) or {}
         # Refuse to materialize the runtime when any managed SecretRef is
         # disabled, revoked, or missing. Plaintext is never read or surfaced.

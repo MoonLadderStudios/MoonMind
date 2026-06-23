@@ -1511,9 +1511,9 @@ class RuntimeFileTemplate(BaseModel):
         self.format = normalized_format
 
         normalized_merge = str(self.merge_strategy or "replace").strip().lower()
-        if normalized_merge != "replace":
+        if normalized_merge not in {"replace", "deep_merge", "append"}:
             raise ValueError(
-                "fileTemplates[].mergeStrategy must be 'replace'"
+                "fileTemplates[].mergeStrategy must be one of: replace, deep_merge, append"
             )
         self.merge_strategy = normalized_merge
         return self
@@ -1530,6 +1530,12 @@ class ManagedRuntimeProfile(BaseModel):
     auth_mode: str | None = Field(None, alias="authMode")
     credential_source: str | None = Field(None, alias="credentialSource")
     runtime_materialization_mode: str | None = Field(None, alias="runtimeMaterializationMode")
+    enabled: bool | None = Field(None, alias="enabled")
+    auth_state: ProviderProfileAuthState | None = Field(None, alias="authState")
+    disabled_reason: ProviderProfileDisabledReason | None = Field(
+        None, alias="disabledReason"
+    )
+    launch_ready: bool | None = Field(None, alias="launchReady")
     command_behavior: dict[str, Any] = Field(default_factory=dict, alias="commandBehavior")
     command_template: list[str] = Field(default_factory=list, alias="commandTemplate")
     default_model: str | None = Field(None, alias="defaultModel")
