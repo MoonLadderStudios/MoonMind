@@ -1444,3 +1444,16 @@ def test_pr_resolver_skill_requires_orchestrated_merge_completion() -> None:
     assert skill_text.index(repeated_blocker_step) < skill_text.index(
         skill_execution_step
     )
+
+
+def test_fix_comments_skill_requires_fresh_comments_and_remote_verification() -> None:
+    skill_text = (
+        REPO_ROOT / ".agents" / "skills" / "fix-comments" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert ".agents/skills/fix-comments/tools/get_branch_pr_comments.py" in skill_text
+    assert "do not use a stale `var/pr_comments/current-branch-comments.json`" in skill_text
+    assert "comments_helper_missing" in skill_text
+    assert "verify the exact local `HEAD` SHA is visible" in skill_text
+    assert "remote PR branch head SHA equals local `HEAD`" in skill_text
+    assert "reason `publish_unavailable`" in skill_text

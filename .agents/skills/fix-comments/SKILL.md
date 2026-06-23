@@ -21,8 +21,12 @@ If no constraints are provided, default to addressing all applicable feedback.
 ## Workflow
 
 1. Resolve PR and collect all comments.
-- Run `python3 tools/get_branch_pr_comments.py --output var/pr_comments/current-branch-comments.json`.
-- If PR resolution fails, stop and ask the user for a PR number/URL.
+- Resolve the comments helper before reading any existing comments artifact:
+  - Prefer `.agents/skills/fix-comments/tools/get_branch_pr_comments.py`.
+  - Fall back to `tools/get_branch_pr_comments.py` only for repositories that intentionally mirror skill helper tools into the repo root.
+  - If neither helper exists, stop as blocked with reason `comments_helper_missing`; do not use a stale `var/pr_comments/current-branch-comments.json`.
+- Run the resolved helper with `python3 <helper> --output var/pr_comments/current-branch-comments.json`.
+- If PR resolution or comment retrieval fails, stop and ask the user for a PR number/URL or GitHub credential fix. Do not continue from pre-fetched or stale comments unless the helper successfully refreshed `var/pr_comments/current-branch-comments.json` in this run.
 - Load `var/pr_comments/current-branch-comments.json` and treat every entry in `comments` as input feedback.
 
 2. Build a feedback ledger before editing code.
@@ -65,8 +69,10 @@ If no constraints are provided, default to addressing all applicable feedback.
 7. Finalize and push.
 - Ensure every comment is classified in the ledger (`addressed`, `not-applicable`, or `deferred-with-reason`).
 - Run a final `git status` review.
-- Commit with a clear message (default: `Address PR feedback for #<number>`).
-- Push the current branch.
+- If tracked or untracked code/documentation changes exist outside ignored artifacts, commit with a clear message (default: `Address PR feedback for #<number>`).
+- Push the current branch after committing.
+- If there was nothing to commit, still prove the current branch is published: verify the exact local `HEAD` SHA is visible on the remote PR branch using `gh pr view`, `git ls-remote`, or an equivalent GitHub connector path.
+- After any push or no-op verification, re-check that the remote PR branch head SHA equals local `HEAD`. If push or remote verification is unavailable, stop as blocked with reason `publish_unavailable`; do not report success.
 
 ## Output
 
@@ -76,7 +82,7 @@ Provide a concise report with:
 - Per-comment disposition (comment URL + decision + short rationale).
 - Files changed.
 - Compile/test commands run and their final status.
-- Commit hash and pushed branch.
+- Commit hash or verified no-op `HEAD` hash, plus pushed/verified branch.
 
 ## Notes
 
