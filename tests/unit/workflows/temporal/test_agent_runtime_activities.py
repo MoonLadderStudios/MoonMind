@@ -5217,6 +5217,10 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
                 reaped_containers=2,
                 skipped_active=1,
                 skipped_recent=1,
+                scanned_volumes=5,
+                reaped_volumes=3,
+                skipped_active_volumes=1,
+                skipped_recent_volumes=1,
             )
 
     activities = TemporalAgentRuntimeActivities(session_controller=_Controller())
@@ -5235,6 +5239,10 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
         "orphanContainersReaped": 2,
         "orphanSessionIdsReaped": ["sess-orphaned-container"],
         "orphanReapSkippedRecent": 1,
+        "orphanVolumesScanned": 5,
+        "orphanVolumesReaped": 3,
+        "orphanVolumeReapSkippedActive": 1,
+        "orphanVolumeReapSkippedRecent": 1,
     }
 
 
@@ -5255,6 +5263,8 @@ async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> N
     assert result["orphanContainersReaped"] == 0
     assert result["orphanSessionIdsReaped"] == []
     assert result["orphanReapSkippedRecent"] == 0
+    assert result["orphanVolumesScanned"] == 0
+    assert result["orphanVolumesReaped"] == 0
 
 @pytest.mark.asyncio
 async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(

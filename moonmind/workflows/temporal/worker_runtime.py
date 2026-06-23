@@ -2156,6 +2156,25 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                     "Reconciled %d managed session records during startup",
                     len(session_reconciled),
                 )
+            try:
+                reap_result = await session_controller.reap_orphan_session_containers()
+            except Exception:
+                logger.warning(
+                    "Managed session orphan sweep failed during agent_runtime startup",
+                    exc_info=True,
+                )
+            else:
+                reaped_containers = int(
+                    getattr(reap_result, "reaped_containers", 0) or 0
+                )
+                reaped_volumes = int(getattr(reap_result, "reaped_volumes", 0) or 0)
+                if reaped_containers or reaped_volumes:
+                    logger.info(
+                        "Reaped managed session orphans during startup: "
+                        "%d container(s), %d volume(s)",
+                        reaped_containers,
+                        reaped_volumes,
+                    )
             agent_runtime_activities = TemporalAgentRuntimeActivities(
                 artifact_service=artifact_service,
                 run_store=run_store,

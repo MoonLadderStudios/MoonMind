@@ -3560,6 +3560,9 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     run_launcher = MagicMock()
     session_controller = MagicMock()
     session_controller.reconcile = AsyncMock(return_value=[])
+    session_controller.reap_orphan_session_containers = AsyncMock(
+        return_value=MagicMock()
+    )
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
     mock_build_deps.return_value = (
@@ -3609,6 +3612,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     mock_build_deps.assert_not_called()
     run_supervisor.reconcile.assert_not_awaited()
     session_controller.reconcile.assert_not_awaited()
+    session_controller.reap_orphan_session_containers.assert_not_awaited()
     mock_dispatcher_cls.assert_called_once_with()
     deployment_handler_calls = [
         call
@@ -3702,6 +3706,9 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     run_launcher = MagicMock()
     session_controller = MagicMock()
     session_controller.reconcile = AsyncMock(return_value=[])
+    session_controller.reap_orphan_session_containers = AsyncMock(
+        return_value=MagicMock()
+    )
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
     mock_build_deps.return_value = (
@@ -3744,6 +3751,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     mock_build_deps.assert_called_once_with(artifact_service=ANY)
     run_supervisor.reconcile.assert_awaited_once()
     session_controller.reconcile.assert_awaited_once()
+    session_controller.reap_orphan_session_containers.assert_awaited_once()
     deployment_handler_calls = [
         call
         for call in mock_dispatcher_cls.return_value.register_skill.call_args_list
