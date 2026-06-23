@@ -16753,4 +16753,56 @@ describe("Task Create runtime switch layout stability", () => {
     });
     expect(screen.getByLabelText("Provider profile")).toBeTruthy();
   });
+
+  it("withholds the previous runtime's profiles while a runtime switch refetches", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    // The initial runtime exposes its (Codex) profiles as selectable options.
+    await screen.findByLabelText("Provider profile");
+    expect(
+      (screen.getByLabelText("Provider profile") as HTMLSelectElement).disabled,
+    ).toBe(false);
+    expect(screen.getByRole("option", { name: /Codex Default/ })).toBeTruthy();
+
+    // Switch to a runtime whose provider profiles are still in-flight.
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("Runtime"), {
+        target: { value: "claude_code" },
+      });
+    });
+
+    // Regression (codex r3463139233): keepPreviousData keeps the previous
+    // runtime's profiles in `data` only to stabilize layout. The control must
+    // not expose those stale profiles as selectable/submittable while the new
+    // runtime's profiles are still loading.
+    const switchingSelect = screen.getByLabelText(
+      "Provider profile",
+    ) as HTMLSelectElement;
+    expect(switchingSelect.disabled).toBe(true);
+    expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
+    expect(
+      screen.queryByRole("option", { name: /Codex Secondary/ }),
+    ).toBeNull();
+
+    // Once the new runtime's profiles arrive, the control re-enables with its
+    // own options.
+    await act(async () => {
+      resolveClaudeProfiles?.([
+        {
+          profile_id: "profile:claude-default",
+          account_label: "Claude Default",
+          is_default: true,
+        },
+      ]);
+    });
+
+    await waitFor(() => {
+      expect(
+        (screen.getByLabelText("Provider profile") as HTMLSelectElement)
+          .disabled,
+      ).toBe(false);
+    });
+    expect(screen.getByRole("option", { name: /Claude Default/ })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
+  });
 });
