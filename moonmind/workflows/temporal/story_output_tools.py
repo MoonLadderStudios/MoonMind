@@ -1101,9 +1101,13 @@ def _jira_issue_input_from_mapping(
         mapping.get("browseUrl"),
         nested_issue.get("url"),
         nested_issue.get("browseUrl"),
-        _issue_url({**dict(mapping), "key": resolved_key}),
-        _issue_url({**dict(nested_issue), "key": resolved_key}),
     )
+    if not url:
+        url = (
+            _issue_url({**dict(mapping), "key": resolved_key})
+            or _issue_url({**dict(nested_issue), "key": resolved_key})
+            or ""
+        )
     if url:
         issue["url"] = url
 
@@ -1200,7 +1204,6 @@ def _downstream_task_payload(
         "instructions": instructions,
         "inputs": {
             "jira_issue": jira_issue_input,
-            "jira_issue_key": issue_key,
             "source_design_path": source_design_path,
             "constraints": (
                 f"Preserve source issue {source_issue_key} traceability."
