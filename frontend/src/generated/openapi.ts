@@ -5645,7 +5645,7 @@ export interface components {
         };
         /**
          * ManagedAgentRateLimitPolicy
-         * @description Rate limit handling policy for a managed agent auth profile.
+         * @description Rate limit handling policy for a managed agent provider profile.
          * @enum {string}
          */
         ManagedAgentRateLimitPolicy: "backoff" | "queue" | "fail_fast";

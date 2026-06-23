@@ -55,7 +55,7 @@ Recent main-branch changes since the prior roadmap snapshot:
 - Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`).
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`).
 - Codex CLI workflow-scoped managed sessions with per-session sidecar Docker daemon.
-- Auth profile management UI in Mission Control; auto-seeding of default auth profiles on startup.
+- Provider profile management UI in Mission Control; auto-seeding of default provider profiles on startup.
 - Worker health checks and readiness probes; per-worker shard health view (MM-775).
 - Graceful worker pause/unpause API and Settings Operations surface.
 - MoonMind-native xterm.js OAuth terminal for provider login (spec 306), superseding the older Tmate-based design.

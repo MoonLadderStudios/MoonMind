@@ -647,6 +647,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
     # Well-known runtime defaults matching docker-compose.yaml conventions.
     _DEFAULT_PROFILES = [
         {
+            "profile_id": "gemini_google_default",
+            "runtime_id": "gemini_cli",
+            "is_default": False,
+            "provider_id": "google",
+            "provider_label": "Google",
+            "default_model": None,  # inherits runtime default: gemini-3.1-pro
+            "credential_source": ProviderCredentialSource.NONE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Gemini CLI (setup required)",
+            "enabled": False,
+            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            "tags": ["setup-required", "first-party"],
+        },
+        {
             "profile_id": "gemini_default",
             "runtime_id": "gemini_cli",
             "is_default": False,
@@ -664,6 +681,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "tags": ["setup-required", "first-party"],
         },
         {
+            "profile_id": "codex_openai_default",
+            "runtime_id": "codex_cli",
+            "is_default": False,
+            "provider_id": "openai",
+            "provider_label": "OpenAI",
+            "default_model": None,  # inherits runtime default: gpt-5.5
+            "credential_source": ProviderCredentialSource.NONE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Codex CLI (setup required)",
+            "enabled": False,
+            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            "tags": ["setup-required", "first-party"],
+        },
+        {
             "profile_id": "codex_default",
             "runtime_id": "codex_cli",
             "is_default": False,
@@ -675,6 +709,28 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_ref": None,
             "volume_mount_path": None,
             "account_label": "Codex CLI (auto-seeded)",
+            "enabled": False,
+            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            "tags": ["setup-required", "first-party"],
+        },
+        {
+            "profile_id": "claude_anthropic_default",
+            "runtime_id": "claude_code",
+            "is_default": False,
+            "provider_id": "anthropic",
+            "provider_label": "Anthropic",
+            "default_model": None,  # inherits runtime default: claude-opus-4-8
+            "credential_source": ProviderCredentialSource.NONE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "clear_env_keys": [
+                "ANTHROPIC_API_KEY",
+                "CLAUDE_API_KEY",
+                "OPENAI_API_KEY",
+            ],
+            "account_label": "Claude Code (setup required)",
             "enabled": False,
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
@@ -883,7 +939,13 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         await session.execute(stmt)
                         needs_commit = True
                     desired_clear_env_keys = profile_def.get("clear_env_keys")
-                    if profile_id == "claude_anthropic" and desired_clear_env_keys:
+                    if (
+                        profile_id in {
+                            "claude_anthropic",
+                            "claude_anthropic_default",
+                        }
+                        and desired_clear_env_keys
+                    ):
                         current_clear_env_keys = list(
                             existing_by_id[profile_id]["clear_env_keys"] or []
                         )

@@ -1947,7 +1947,7 @@ class RuntimeMaterializationMode(str, enum.Enum):
     COMPOSITE = "composite"
 
 class ManagedAgentRateLimitPolicy(str, enum.Enum):
-    """Rate limit handling policy for a managed agent auth profile."""
+    """Rate limit handling policy for a managed agent provider profile."""
 
     BACKOFF = "backoff"
     QUEUE = "queue"

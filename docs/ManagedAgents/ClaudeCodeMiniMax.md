@@ -31,14 +31,14 @@ The simplest path: add one line to your `.env` and `docker compose up`.
 
    Both the `api` and worker services (`temporal-worker-sandbox`, `temporal-worker-agent-runtime`) include `env_file: .env` in `docker-compose.yaml`, so the key is automatically available in every container that needs it.
 
-2. Run `docker compose up` (or restart if already running). On startup, the API service calls `_auto_seed_auth_profiles()` which checks for `MINIMAX_API_KEY` in the environment. If present, it seeds a `claude_minimax` profile alongside the default profiles:
+2. Run `docker compose up` (or restart if already running). On startup, the API service calls `_auto_seed_provider_profiles()` which checks for `MINIMAX_API_KEY` in the environment. If present, it seeds a `claude_minimax` profile alongside the default profiles:
 
    ```
    profile_id:           claude_minimax
    runtime_id:           claude_code
-   auth_mode:            api_key
-   api_key_ref:          MINIMAX_API_KEY
-   api_key_env_var:      ANTHROPIC_AUTH_TOKEN
+   credential_source:    secret_ref
+   secret_refs:
+     ANTHROPIC_AUTH_TOKEN: env://MINIMAX_API_KEY
    ```
 
 3. The auto-seeded profile also injects these runtime environment overrides into every Claude Code subprocess:
@@ -67,13 +67,12 @@ If auto-seeding has already run, create the profile through Mission Control or t
 
 ### Dashboard
 
-1. Open Mission Control and navigate to **Settings → Auth Profiles → Create Profile**.
+1. Open Mission Control and navigate to **Settings → Provider Profiles → Create Profile**.
 2. Fill in:
    - **Profile ID**: `claude_minimax`
    - **Runtime**: `claude_code`
-   - **Auth Mode**: `api_key`
-   - **API Key Ref**: `MINIMAX_API_KEY` — name of the worker env var holding your key
-   - **API Key Env Var (target)**: `ANTHROPIC_AUTH_TOKEN`
+   - **Credential Source**: `secret_ref`
+   - **Secret Ref**: map `ANTHROPIC_AUTH_TOKEN` to `env://MINIMAX_API_KEY`
    - **Runtime Env Overrides** (JSON):
      ```json
      {
@@ -87,15 +86,19 @@ If auto-seeding has already run, create the profile through Mission Control or t
 ### REST API
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth-profiles \
+curl -X POST http://localhost:8000/api/v1/provider-profiles \
   -H 'Content-Type: application/json' \
   -d '{
     "profile_id": "claude_minimax",
     "runtime_id": "claude_code",
-    "auth_mode": "api_key",
-    "api_key_ref": "MINIMAX_API_KEY",
-    "api_key_env_var": "ANTHROPIC_AUTH_TOKEN",
-    "runtime_env_overrides": {
+    "provider_id": "minimax",
+    "provider_label": "MiniMax",
+    "credential_source": "secret_ref",
+    "runtime_materialization_mode": "env_bundle",
+    "secret_refs": {
+      "ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"
+    },
+    "env_template": {
       "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
       "ANTHROPIC_MODEL": "MiniMax-M2.7",
       "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
@@ -106,6 +109,8 @@ curl -X POST http://localhost:8000/api/v1/auth-profiles \
       "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
     },
     "max_parallel_runs": 1,
+    "auth_state": "connected",
+    "last_auth_method": "secret_ref",
     "enabled": true
   }'
 ```
@@ -118,15 +123,15 @@ curl -X POST http://localhost:8000/api/v1/auth-profiles \
 
 When the `ManagedAgentAdapter` launches a Claude Code subprocess using the `claude_minimax` profile:
 
-1. **`api_key_ref`** (`MINIMAX_API_KEY`) is resolved to the actual key value via `resolve_managed_api_key_reference()`. This looks up the worker-side env var `MINIMAX_API_KEY` (or a `vault://` reference).
-2. The resolved key is injected into the subprocess as `ANTHROPIC_AUTH_TOKEN` (the **`api_key_env_var`** target).
-3. All `runtime_env_overrides` are merged into the subprocess environment, pointing the Claude CLI at the MiniMax endpoint.
+1. The `secret_refs` entry `env://MINIMAX_API_KEY` is resolved to the actual key value at the provider-profile materialization boundary.
+2. The resolved key is injected into the subprocess as `ANTHROPIC_AUTH_TOKEN`.
+3. All configured environment template values are merged into the subprocess environment, pointing the Claude CLI at the MiniMax endpoint.
 
 ### Why `ANTHROPIC_AUTH_TOKEN` instead of `ANTHROPIC_API_KEY`?
 
 Claude Code treats `ANTHROPIC_AUTH_TOKEN` as a bearer-style credential for third-party API providers — it is accepted by the CLI for non-Anthropic endpoints. Using this variable avoids conflicting with a real `ANTHROPIC_API_KEY` that may be set elsewhere on the worker for the default `claude_default` profile.
 
-### Auth Profile Manager
+### ProviderProfileManager
 
 The `ProviderProfileManager` Temporal workflow for `claude_code` automatically manages concurrency slots across both the default Claude profile and the MiniMax profile. When a workflow execution requests `claude_code`, the manager selects an available profile based on slot availability and cooldown state.
 
