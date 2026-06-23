@@ -8204,6 +8204,10 @@ class TemporalAgentRuntimeActivities:
         # fail the reconcile activity, whose reattach/degrade work is primary.
         orphan_containers_reaped = 0
         orphan_reap_skipped_recent = 0
+        orphan_volumes_scanned = 0
+        orphan_volumes_reaped = 0
+        orphan_volume_reap_skipped_active = 0
+        orphan_volume_reap_skipped_recent = 0
         orphan_session_ids_reaped: list[str] = []
         try:
             reap_result = await _await_with_activity_heartbeats(
@@ -8224,6 +8228,18 @@ class TemporalAgentRuntimeActivities:
             orphan_reap_skipped_recent = int(
                 getattr(reap_result, "skipped_recent", 0) or 0
             )
+            orphan_volumes_scanned = int(
+                getattr(reap_result, "scanned_volumes", 0) or 0
+            )
+            orphan_volumes_reaped = int(
+                getattr(reap_result, "reaped_volumes", 0) or 0
+            )
+            orphan_volume_reap_skipped_active = int(
+                getattr(reap_result, "skipped_active_volumes", 0) or 0
+            )
+            orphan_volume_reap_skipped_recent = int(
+                getattr(reap_result, "skipped_recent_volumes", 0) or 0
+            )
             orphan_session_ids_reaped = list(
                 getattr(reap_result, "reaped_session_ids", ()) or ()
             )[:session_id_limit]
@@ -8236,6 +8252,10 @@ class TemporalAgentRuntimeActivities:
             "orphanContainersReaped": orphan_containers_reaped,
             "orphanSessionIdsReaped": orphan_session_ids_reaped,
             "orphanReapSkippedRecent": orphan_reap_skipped_recent,
+            "orphanVolumesScanned": orphan_volumes_scanned,
+            "orphanVolumesReaped": orphan_volumes_reaped,
+            "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
+            "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
 
     @staticmethod

@@ -89,6 +89,10 @@ _SESSION_DOCKER_MODE_DISABLED_VALUES = {"no-docker", "disabled", "none", "off"}
 # (mid-launch) or that is being relaunched.
 _DEFAULT_SESSION_REAP_GRACE_SECONDS = 900.0
 _MANAGED_SESSION_LABEL_KEY = "moonmind.session_id"
+_MANAGED_SESSION_SIDECAR_VOLUME_KIND = "session-docker-sidecar-volume"
+_MANAGED_SESSION_SIDECAR_VOLUME_NAME = re.compile(
+    r"^moonmind-session-.+-docker-(graph|socket)$"
+)
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off", ""}
 logger = logging.getLogger(__name__)
 
@@ -104,6 +108,17 @@ class _ManagedSessionContainer:
 
 
 @dataclass(frozen=True)
+class _ManagedSessionSidecarVolume:
+    """A docker volume created for a managed-session docker sidecar."""
+
+    name: str
+    session_id: str
+    role: str
+    kind: str
+    created_at: datetime | None
+
+
+@dataclass(frozen=True)
 class ManagedSessionReapResult:
     """Outcome of one orphaned managed-session container sweep."""
 
@@ -112,6 +127,10 @@ class ManagedSessionReapResult:
     reaped_containers: int = 0
     skipped_active: int = 0
     skipped_recent: int = 0
+    scanned_volumes: int = 0
+    reaped_volumes: int = 0
+    skipped_active_volumes: int = 0
+    skipped_recent_volumes: int = 0
     disabled: bool = False
 
 
@@ -509,15 +528,42 @@ class DockerCodexManagedSessionController:
         tag = last_segment.rsplit(":", 1)[-1].strip().lower()
         return bool(tag) and tag != "latest"
 
-    async def _create_volume(self, volume_name: str) -> None:
-        await self._run((self._docker_binary, "volume", "create", volume_name))
+    @staticmethod
+    def _sidecar_volume_labels(
+        *,
+        session_id: str,
+        role: str,
+        agent_run_id: str,
+        session_epoch: int,
+    ) -> dict[str, str]:
+        return {
+            "moonmind.session_id": session_id,
+            "moonmind.kind": _MANAGED_SESSION_SIDECAR_VOLUME_KIND,
+            "moonmind.volume_role": role,
+            "moonmind.agent_run_id": agent_run_id,
+            "moonmind.session_epoch": str(session_epoch),
+        }
 
-    async def _remove_volume(self, volume_name: str, *, ignore_failure: bool) -> None:
+    async def _create_volume(
+        self,
+        volume_name: str,
+        *,
+        labels: Mapping[str, str] | None = None,
+    ) -> None:
+        command: list[str] = [self._docker_binary, "volume", "create"]
+        for key, value in (labels or {}).items():
+            command.extend(["--label", f"{key}={value}"])
+        command.append(volume_name)
+        await self._run(tuple(command))
+
+    async def _remove_volume(self, volume_name: str, *, ignore_failure: bool) -> bool:
         try:
             await self._run((self._docker_binary, "volume", "rm", "-f", volume_name))
+            return True
         except RuntimeError:
             if not ignore_failure:
                 raise
+            return False
 
     async def _cleanup_docker_sidecar_resources(
         self,
@@ -558,8 +604,24 @@ class DockerCodexManagedSessionController:
         sidecar_name = self._sidecar_container_name(session_id)
         socket_volume = self._sidecar_socket_volume_name(session_id)
         graph_volume = self._sidecar_graph_volume_name(session_id)
-        await self._create_volume(socket_volume)
-        await self._create_volume(graph_volume)
+        await self._create_volume(
+            socket_volume,
+            labels=self._sidecar_volume_labels(
+                session_id=session_id,
+                role="docker-socket",
+                agent_run_id=agent_run_id,
+                session_epoch=session_epoch,
+            ),
+        )
+        await self._create_volume(
+            graph_volume,
+            labels=self._sidecar_volume_labels(
+                session_id=session_id,
+                role="docker-graph",
+                agent_run_id=agent_run_id,
+                session_epoch=session_epoch,
+            ),
+        )
         command = [
             self._docker_binary,
             "run",
@@ -604,8 +666,19 @@ class DockerCodexManagedSessionController:
         await self._wait_docker_sidecar_ready(sidecar_id)
         return sidecar_id
 
-    async def _prepare_docker_sidecar_socket_volume(self, session_id: str) -> None:
-        await self._create_volume(self._sidecar_socket_volume_name(session_id))
+    async def _prepare_docker_sidecar_socket_volume(
+        self,
+        request: LaunchCodexManagedSessionRequest,
+    ) -> None:
+        await self._create_volume(
+            self._sidecar_socket_volume_name(request.session_id),
+            labels=self._sidecar_volume_labels(
+                session_id=request.session_id,
+                role="docker-socket",
+                agent_run_id=request.agent_run_id,
+                session_epoch=request.session_epoch,
+            ),
+        )
 
     def _session_docker_config_path(
         self,
@@ -2595,7 +2668,7 @@ class DockerCodexManagedSessionController:
                 request.session_id,
                 ignore_failure=True,
             )
-            await self._prepare_docker_sidecar_socket_volume(request.session_id)
+            await self._prepare_docker_sidecar_socket_volume(request)
         run_command = [
             self._docker_binary,
             "run",
@@ -3508,6 +3581,188 @@ class DockerCodexManagedSessionController:
             )
         return containers
 
+    @staticmethod
+    def _is_managed_session_sidecar_volume_name(volume_name: str) -> bool:
+        return bool(_MANAGED_SESSION_SIDECAR_VOLUME_NAME.match(volume_name))
+
+    @staticmethod
+    def _sidecar_volume_role_from_name(volume_name: str) -> str:
+        if volume_name.endswith("-docker-graph"):
+            return "docker-graph"
+        if volume_name.endswith("-docker-socket"):
+            return "docker-socket"
+        return ""
+
+    @staticmethod
+    def _docker_template_empty(value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized in {"<no value>", "<nil>", "nil", "None"}:
+            return ""
+        return normalized
+
+    async def _list_managed_session_sidecar_volumes(
+        self,
+    ) -> list[_ManagedSessionSidecarVolume]:
+        returncode, stdout, stderr = await self._command_runner(
+            (
+                self._docker_binary,
+                "volume",
+                "ls",
+                "--format",
+                "{{.Name}}",
+            ),
+            env=self._docker_env(),
+        )
+        if returncode != 0:
+            details = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+            raise RuntimeError(
+                f"failed to list managed session sidecar volumes: {details}"
+            )
+        volume_names = [
+            line.strip()
+            for line in stdout.splitlines()
+            if self._is_managed_session_sidecar_volume_name(line.strip())
+        ]
+        if not volume_names:
+            return []
+        template = (
+            '{{printf "%s|%s|%s|%s|%s" .Name '
+            '(index .Labels "moonmind.session_id") '
+            '(index .Labels "moonmind.volume_role") '
+            '(index .Labels "moonmind.kind") '
+            ".CreatedAt}}"
+        )
+        # Tolerate partial inspect failures. Legacy deterministic-name volumes
+        # remain discoverable from the volume ls output even if labels are absent.
+        _inspect_rc, inspect_out, _inspect_err = await self._command_runner(
+            (
+                self._docker_binary,
+                "volume",
+                "inspect",
+                "--format",
+                template,
+                *volume_names,
+            ),
+            env=self._docker_env(),
+        )
+        inspected: dict[str, _ManagedSessionSidecarVolume] = {}
+        for line in inspect_out.splitlines():
+            parts = line.split("|")
+            if len(parts) != 5:
+                continue
+            name, session_id, role, kind, created_raw = (
+                self._docker_template_empty(part) for part in parts
+            )
+            if not name or name not in volume_names:
+                continue
+            inspected[name] = _ManagedSessionSidecarVolume(
+                name=name,
+                session_id=session_id,
+                role=role or self._sidecar_volume_role_from_name(name),
+                kind=kind,
+                created_at=_parse_docker_timestamp(created_raw),
+            )
+
+        volumes: list[_ManagedSessionSidecarVolume] = []
+        for name in volume_names:
+            volumes.append(
+                inspected.get(
+                    name,
+                    _ManagedSessionSidecarVolume(
+                        name=name,
+                        session_id="",
+                        role=self._sidecar_volume_role_from_name(name),
+                        kind="",
+                        created_at=None,
+                    ),
+                )
+            )
+        return volumes
+
+    async def _list_active_docker_volume_mounts(self) -> set[str]:
+        returncode, stdout, stderr = await self._command_runner(
+            (self._docker_binary, "ps", "-q"),
+            env=self._docker_env(),
+        )
+        if returncode != 0:
+            details = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+            raise RuntimeError(f"failed to list active docker containers: {details}")
+        container_ids = [line.strip() for line in stdout.splitlines() if line.strip()]
+        if not container_ids:
+            return set()
+        template = (
+            '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}'
+        )
+        _inspect_rc, inspect_out, _inspect_err = await self._command_runner(
+            (
+                self._docker_binary,
+                "inspect",
+                "--format",
+                template,
+                *container_ids,
+            ),
+            env=self._docker_env(),
+        )
+        return {line.strip() for line in inspect_out.splitlines() if line.strip()}
+
+    def _active_sidecar_volume_names(self, active_session_ids: set[str]) -> set[str]:
+        names: set[str] = set()
+        for session_id in active_session_ids:
+            names.add(self._sidecar_graph_volume_name(session_id))
+            names.add(self._sidecar_socket_volume_name(session_id))
+        return names
+
+    async def _reap_orphan_sidecar_volumes(
+        self,
+        *,
+        active_session_ids: set[str],
+        grace_seconds: float,
+        now: datetime,
+    ) -> tuple[int, int, int, int]:
+        volumes = await self._list_managed_session_sidecar_volumes()
+        if not volumes:
+            return (0, 0, 0, 0)
+        active_mounts = await self._list_active_docker_volume_mounts()
+        active_volume_names = self._active_sidecar_volume_names(active_session_ids)
+
+        reaped_volumes = 0
+        skipped_active = 0
+        skipped_recent = 0
+        for volume in volumes:
+            if (
+                volume.name in active_mounts
+                or volume.name in active_volume_names
+                or (
+                    volume.session_id
+                    and volume.session_id in active_session_ids
+                )
+            ):
+                skipped_active += 1
+                continue
+            if (
+                volume.created_at is not None
+                and (now - volume.created_at).total_seconds() < grace_seconds
+            ):
+                skipped_recent += 1
+                continue
+            try:
+                removed = await self._remove_volume(volume.name, ignore_failure=True)
+            except Exception:
+                logger.warning(
+                    "Failed to reap orphaned managed session sidecar volume %s",
+                    volume.name,
+                    exc_info=True,
+                )
+                continue
+            if not removed:
+                continue
+            reaped_volumes += 1
+            logger.info(
+                "Reaped orphaned managed session sidecar volume %s",
+                volume.name,
+            )
+        return (len(volumes), reaped_volumes, skipped_active, skipped_recent)
+
     async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
         """Remove managed-session containers that no longer back a live session.
 
@@ -3527,16 +3782,13 @@ class DockerCodexManagedSessionController:
             # so refuse to remove anything rather than guess.
             return ManagedSessionReapResult(disabled=True)
 
-        containers = await self._list_managed_session_containers()
-        if not containers:
-            return ManagedSessionReapResult()
-
         active_session_ids = {
             record.session_id for record in self._session_store.list_active()
         }
         grace_seconds = self._reap_grace_seconds()
         now = datetime.now(tz=UTC)
 
+        containers = await self._list_managed_session_containers()
         by_session: dict[str, list[_ManagedSessionContainer]] = {}
         for container in containers:
             by_session.setdefault(container.session_id, []).append(container)
@@ -3581,10 +3833,25 @@ class DockerCodexManagedSessionController:
                     session_id,
                 )
 
+        (
+            scanned_volumes,
+            reaped_volumes,
+            skipped_active_volumes,
+            skipped_recent_volumes,
+        ) = await self._reap_orphan_sidecar_volumes(
+            active_session_ids=active_session_ids,
+            grace_seconds=grace_seconds,
+            now=now,
+        )
+
         return ManagedSessionReapResult(
             scanned_containers=len(containers),
             reaped_session_ids=tuple(reaped_session_ids),
             reaped_containers=reaped_containers,
             skipped_active=skipped_active,
             skipped_recent=skipped_recent,
+            scanned_volumes=scanned_volumes,
+            reaped_volumes=reaped_volumes,
+            skipped_active_volumes=skipped_active_volumes,
+            skipped_recent_volumes=skipped_recent_volumes,
         )

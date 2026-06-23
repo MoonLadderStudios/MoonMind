@@ -1018,6 +1018,27 @@ async def ensure_provider_profile_managers_started():
     except Exception as e:
         logger.error(f"Error ensuring ProviderProfileManager workflows: {e}", exc_info=True)
 
+async def ensure_managed_session_reconcile_schedule_started() -> None:
+    """Best-effort startup install for the managed-session reconcile schedule."""
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    try:
+        schedule_id = (
+            await TemporalClientAdapter().ensure_managed_session_reconcile_schedule(
+                enabled=True
+            )
+        )
+    except Exception:
+        logger.warning(
+            "Failed to ensure managed session reconcile schedule during API startup",
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "Ensured managed session reconcile schedule during API startup: %s",
+        schedule_id,
+    )
+
 def _register_settings_change_subscribers() -> None:
     """Wire the default SettingsChangePublisher subscribers once per process.
 
@@ -1185,6 +1206,7 @@ async def startup_event():
 
     # Wait for the Temporal client to be available and initialize provider profile managers
     await ensure_provider_profile_managers_started()
+    await ensure_managed_session_reconcile_schedule_started()
     logger.info("Application startup events completed.")
 
 def teardown_providers():

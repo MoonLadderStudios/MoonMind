@@ -448,7 +448,7 @@ async def test_mm866_docker_enabled_session_launches_agent_with_sidecar(
         if command[:4] == ("docker", "volume", "rm", "-f"):
             return 0, "", ""
         if command[:3] == ("docker", "volume", "create"):
-            return 0, command[3] + "\n", ""
+            return 0, command[-1] + "\n", ""
         if command[:2] == ("docker", "run"):
             name = command[command.index("--name") + 1]
             if name.endswith("-docker"):
@@ -485,18 +485,29 @@ async def test_mm866_docker_enabled_session_launches_agent_with_sidecar(
     handle = await controller.launch_session(request)
 
     assert handle.session_state.container_id == "agent-ctr"
-    assert (
-        "docker",
-        "volume",
-        "create",
+    volume_create_commands = [
+        command for command in commands if command[:3] == ("docker", "volume", "create")
+    ]
+    assert {command[-1] for command in volume_create_commands} == {
         "moonmind-session-sess-1-docker-socket",
-    ) in commands
-    assert (
-        "docker",
-        "volume",
-        "create",
         "moonmind-session-sess-1-docker-graph",
-    ) in commands
+    }
+    for command in volume_create_commands:
+        labels = {
+            command[index + 1]
+            for index, value in enumerate(command)
+            if value == "--label"
+        }
+        role = (
+            "docker-socket"
+            if command[-1].endswith("-docker-socket")
+            else "docker-graph"
+        )
+        assert "moonmind.session_id=sess-1" in labels
+        assert "moonmind.kind=session-docker-sidecar-volume" in labels
+        assert f"moonmind.volume_role={role}" in labels
+        assert "moonmind.agent_run_id=task-1" in labels
+        assert "moonmind.session_epoch=1" in labels
     assert any(
         command[:2] == ("docker", "run")
         and "moonmind-session-sess-1-docker" in command
@@ -800,7 +811,7 @@ async def test_mm866_ensure_docker_sidecar_starts_sidecar_on_demand(
             if target == "moonmind-session-sess-1-docker":
                 return 1, "", "No such container"
         if command[:3] == ("docker", "volume", "create"):
-            return 0, command[3] + "\n", ""
+            return 0, command[-1] + "\n", ""
         if command[:2] == ("docker", "run"):
             return 0, "sidecar-ctr\n", ""
         if command[:3] == ("docker", "exec", "-e"):
@@ -1215,7 +1226,7 @@ async def test_mm784_request_unrestricted_mode_uses_sidecar_policy(
         if command[:3] == ("docker", "volume", "rm"):
             return 1, "", "No such volume"
         if command[:3] == ("docker", "volume", "create"):
-            return 0, command[3] + "\n", ""
+            return 0, command[-1] + "\n", ""
         if command[:2] == ("docker", "run"):
             name = command[command.index("--name") + 1]
             if name.endswith("-docker"):
@@ -1300,7 +1311,7 @@ async def test_mm784_env_unrestricted_mode_uses_sidecar_policy(
         if command[:3] == ("docker", "volume", "rm"):
             return 1, "", "No such volume"
         if command[:3] == ("docker", "volume", "create"):
-            return 0, command[3] + "\n", ""
+            return 0, command[-1] + "\n", ""
         if command[:2] == ("docker", "run"):
             name = command[command.index("--name") + 1]
             if name.endswith("-docker"):
@@ -4772,6 +4783,8 @@ async def test_controller_reaps_orphan_session_containers_and_skips_active(
             return 0, "", ""
         if command[:4] == ("docker", "volume", "rm", "-f"):
             return 0, "", ""
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "", ""
         raise AssertionError(f"unexpected command: {command}")
 
     controller = DockerCodexManagedSessionController(
@@ -4825,6 +4838,8 @@ async def test_controller_reap_skips_orphans_within_grace_window(
             return 0, "c-new\n", ""
         if command[:3] == ("docker", "inspect", "--format"):
             return 0, f"c-new|sess-new|managed-session|{recent}\n", ""
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "", ""
         raise AssertionError(f"unexpected command: {command}")
 
     controller = DockerCodexManagedSessionController(
@@ -4841,6 +4856,91 @@ async def test_controller_reap_skips_orphans_within_grace_window(
     assert result.reaped_containers == 0
     assert result.reaped_session_ids == ()
     assert not any(cmd[:3] == ("docker", "rm", "-f") for cmd in commands)
+
+
+@pytest.mark.asyncio
+async def test_mm870_controller_reaps_orphan_sidecar_volumes_and_skips_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(_reap_active_record("sess-active"))
+    recent = datetime.now(tz=UTC).isoformat()
+    volume_names = [
+        "moonmind-session-sess-active-docker-graph",
+        "moonmind-session-sess-mounted-docker-socket",
+        "moonmind-session-sess-orphan-docker-graph",
+        "moonmind-session-legacy-orphan-docker-socket",
+        "moonmind-session-sess-recent-docker-graph",
+    ]
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:4] == (
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+        ):
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "\n".join([*volume_names, "unrelated-volume"]) + "\n", ""
+        if command[:4] == ("docker", "volume", "inspect", "--format"):
+            return (
+                0,
+                "moonmind-session-sess-active-docker-graph|sess-active|"
+                "docker-graph|session-docker-sidecar-volume|"
+                "2020-01-01T00:00:00Z\n"
+                "moonmind-session-sess-mounted-docker-socket|sess-mounted|"
+                "docker-socket|session-docker-sidecar-volume|"
+                "2020-01-01T00:00:00Z\n"
+                "moonmind-session-sess-orphan-docker-graph|sess-orphan|"
+                "docker-graph|session-docker-sidecar-volume|"
+                "2020-01-01T00:00:00Z\n"
+                "moonmind-session-legacy-orphan-docker-socket|<no value>|"
+                "<no value>|<no value>|2020-01-01T00:00:00Z\n"
+                f"moonmind-session-sess-recent-docker-graph|sess-recent|"
+                f"docker-graph|session-docker-sidecar-volume|{recent}\n",
+                "",
+            )
+        if command == ("docker", "ps", "-q"):
+            return 0, "running-1\n", ""
+        if command[:3] == ("docker", "inspect", "--format"):
+            return 0, "moonmind-session-sess-mounted-docker-socket\n", ""
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.scanned_containers == 0
+    assert result.scanned_volumes == 5
+    assert result.reaped_volumes == 2
+    assert result.skipped_active_volumes == 2
+    assert result.skipped_recent_volumes == 1
+    removed = {
+        cmd[-1] for cmd in commands if cmd[:4] == ("docker", "volume", "rm", "-f")
+    }
+    assert removed == {
+        "moonmind-session-sess-orphan-docker-graph",
+        "moonmind-session-legacy-orphan-docker-socket",
+    }
 
 
 @pytest.mark.asyncio

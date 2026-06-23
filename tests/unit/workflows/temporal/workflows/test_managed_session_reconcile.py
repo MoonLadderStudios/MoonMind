@@ -88,6 +88,10 @@ async def test_managed_session_reconcile_passes_orphan_reap_summary_through(
             "orphanContainersReaped": 4,
             "orphanSessionIdsReaped": ["sess-orphan-a", "sess-orphan-b"],
             "orphanReapSkippedRecent": 1,
+            "orphanVolumesScanned": 6,
+            "orphanVolumesReaped": 2,
+            "orphanVolumeReapSkippedActive": 3,
+            "orphanVolumeReapSkippedRecent": 1,
         }
 
     monkeypatch.setattr(
@@ -108,6 +112,10 @@ async def test_managed_session_reconcile_passes_orphan_reap_summary_through(
     assert result["orphanContainersReaped"] == 4
     assert result["orphanSessionIdsReaped"] == ["sess-orphan-a", "sess-orphan-b"]
     assert result["orphanReapSkippedRecent"] == 1
+    assert result["orphanVolumesScanned"] == 6
+    assert result["orphanVolumesReaped"] == 2
+    assert result["orphanVolumeReapSkippedActive"] == 3
+    assert result["orphanVolumeReapSkippedRecent"] == 1
     # Reaping orphans does not by itself mark the run degraded.
     assert search_attributes[-1] == {
         "SessionStatus": ["completed"],
