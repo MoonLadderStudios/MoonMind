@@ -154,6 +154,7 @@ class ProfileSlotState:
     cooldown_after_429_seconds: int
     rate_limit_policy: str
     enabled: bool
+    launch_ready: bool = True
     is_default: bool = False
     max_lease_duration_seconds: int = _MAX_LEASE_DURATION_SECONDS
     current_leases: list[str] = field(default_factory=list)
@@ -169,12 +170,12 @@ class ProfileSlotState:
 
     @property
     def available_slots(self) -> int:
-        if not self.enabled:
+        if not self.enabled or not self.launch_ready:
             return 0
         return max(0, self.max_parallel_runs - len(self.current_leases))
 
     def is_available(self) -> bool:
-        if not self.enabled or self.available_slots <= 0:
+        if not self.enabled or not self.launch_ready or self.available_slots <= 0:
             return False
         if self.cooldown_until is not None:
             return False
@@ -225,6 +226,7 @@ class ProfileSlotState:
             "cooldown_after_429_seconds": self.cooldown_after_429_seconds,
             "rate_limit_policy": self.rate_limit_policy,
             "enabled": self.enabled,
+            "launch_ready": self.launch_ready,
             "is_default": self.is_default,
             "max_lease_duration_seconds": self.max_lease_duration_seconds,
             "current_leases": list(self.current_leases),
@@ -710,6 +712,7 @@ class MoonMindProviderProfileManagerWorkflow:
                 cooldown_after_429_seconds=p.get("cooldown_after_429_seconds", 900),
                 rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                 enabled=p.get("enabled", True),
+                launch_ready=p.get("launch_ready", p.get("launchReady", True)),
                 is_default=p.get("is_default", False),
                 max_lease_duration_seconds=p.get(
                     "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
@@ -746,6 +749,10 @@ class MoonMindProviderProfileManagerWorkflow:
                     "rate_limit_policy", existing.rate_limit_policy
                 )
                 existing.enabled = p.get("enabled", existing.enabled)
+                existing.launch_ready = p.get(
+                    "launch_ready",
+                    p.get("launchReady", existing.launch_ready),
+                )
                 existing.is_default = p.get("is_default", existing.is_default)
                 existing.max_lease_duration_seconds = p.get(
                     "max_lease_duration_seconds", existing.max_lease_duration_seconds
@@ -767,6 +774,7 @@ class MoonMindProviderProfileManagerWorkflow:
                     ),
                     rate_limit_policy=p.get("rate_limit_policy", "backoff"),
                     enabled=p.get("enabled", True),
+                    launch_ready=p.get("launch_ready", p.get("launchReady", True)),
                     is_default=p.get("is_default", False),
                     max_lease_duration_seconds=p.get(
                         "max_lease_duration_seconds", _MAX_LEASE_DURATION_SECONDS
@@ -1220,7 +1228,7 @@ class MoonMindProviderProfileManagerWorkflow:
             configured_default_profiles = [
                 profile
                 for profile in self._profiles.values()
-                if profile.is_default and profile.enabled
+                if profile.is_default and profile.enabled and profile.launch_ready
             ]
             default_profiles = [
                 profile for profile in eligible_profiles if profile.is_default
@@ -1269,9 +1277,6 @@ class MoonMindProviderProfileManagerWorkflow:
             return False
 
     def _sort_profiles_for_selection(self, profiles: list[ProfileSlotState]) -> None:
-        if self._workflow_patch_enabled(BILLING_AWARE_PROFILE_SELECTION_PATCH):
-            profiles.sort(key=self._billing_sort_key)
-            return
         profiles.sort(key=lambda p: (p.priority, p.available_slots), reverse=True)
 
     async def _signal_slot_assigned(

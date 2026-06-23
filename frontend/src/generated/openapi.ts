@@ -6785,6 +6785,8 @@ export interface components {
             last_validated_at: string | null;
             /** Last Auth Method */
             last_auth_method: string | null;
+            /** Launch Ready */
+            launch_ready: boolean;
             readiness: components["schemas"]["ProviderProfileReadiness"];
             /** Created At */
             created_at: string | null;

@@ -241,6 +241,7 @@ class ProviderProfileResponse(BaseModel):
     first_authenticated_at: Optional[str]
     last_validated_at: Optional[str]
     last_auth_method: Optional[str]
+    launch_ready: bool
     readiness: "ProviderProfileReadiness"
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -1284,10 +1285,18 @@ def _secret_ref_results_for_rows(
     results: dict[str, dict[str, _SecretRefParseResult]] = {}
     for row in rows:
         row_results: dict[str, _SecretRefParseResult] = {}
-        for role, ref in (row.secret_refs or {}).items():
+        if not isinstance(row.secret_refs, dict):
+            results[row.profile_id] = row_results
+            continue
+        for role, ref in row.secret_refs.items():
+            if not isinstance(ref, str) or not ref:
+                row_results[str(role)] = _SecretRefParseResult(
+                    error="SecretRef must be a non-empty string"
+                )
+                continue
             try:
                 row_results[str(role)] = _SecretRefParseResult(
-                    parsed=parse_secret_ref(str(ref))
+                    parsed=parse_secret_ref(ref)
                 )
             except SecretReferenceError as exc:
                 row_results[str(role)] = _SecretRefParseResult(error=str(exc))
@@ -1606,6 +1615,11 @@ def _row_to_dict(
     managed_secret_statuses: dict[str, str] | None = None,
     secret_ref_results: dict[str, _SecretRefParseResult] | None = None,
 ) -> dict[str, Any]:
+    readiness = _provider_profile_readiness(
+        row,
+        managed_secret_statuses=managed_secret_statuses,
+        secret_ref_results=secret_ref_results,
+    )
     payload = {
         "profile_id": row.profile_id,
         "runtime_id": row.runtime_id,
@@ -1649,11 +1663,8 @@ def _row_to_dict(
         "last_auth_method": (
             row.last_auth_method.value if row.last_auth_method else None
         ),
-        "readiness": _provider_profile_readiness(
-            row,
-            managed_secret_statuses=managed_secret_statuses,
-            secret_ref_results=secret_ref_results,
-        ),
+        "launch_ready": readiness["launch_ready"],
+        "readiness": readiness,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

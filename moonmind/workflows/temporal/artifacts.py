@@ -2801,27 +2801,37 @@ class TemporalArtifactActivities:
 
         from api_service.db.models import (
             ManagedAgentProviderProfile,
-            ProviderProfileAuthState,
         )
         from api_service.db.base import get_async_session_context
+        from api_service.services.provider_profile_readiness import (
+            provider_profile_launch_ready,
+        )
+        from api_service.services.provider_profile_service import (
+            _managed_secret_statuses_for_profiles,
+        )
 
         async with get_async_session_context() as session:
             stmt = select(ManagedAgentProviderProfile).where(
                 ManagedAgentProviderProfile.runtime_id == runtime_id,
                 ManagedAgentProviderProfile.enabled.is_(True),
-                ManagedAgentProviderProfile.auth_state
-                == ProviderProfileAuthState.CONNECTED,
             ).order_by(
                 ManagedAgentProviderProfile.is_default.desc(),
                 ManagedAgentProviderProfile.priority.desc(),
                 ManagedAgentProviderProfile.profile_id.asc(),
             )
             result = await session.execute(stmt)
-            rows = result.scalars().all()
+            rows = list(result.scalars().all())
+            managed_secret_statuses = await _managed_secret_statuses_for_profiles(
+                session=session,
+                rows=rows,
+            )
 
         profiles = []
         for row in rows:
-            if not self._provider_profile_launch_ready(row):
+            if not provider_profile_launch_ready(
+                row,
+                managed_secret_statuses=managed_secret_statuses,
+            ):
                 continue
             command_behavior = row.command_behavior or {}
             billing_metadata = (
@@ -2862,6 +2872,7 @@ class TemporalArtifactActivities:
                     "rate_limit_policy": row.rate_limit_policy.value,
                     "max_lease_duration_seconds": row.max_lease_duration_seconds,
                     "enabled": row.enabled,
+                    "launch_ready": True,
                     "auth_state": row.auth_state.value if row.auth_state else None,
                     "disabled_reason": (
                         row.disabled_reason.value if row.disabled_reason else None
@@ -2883,52 +2894,6 @@ class TemporalArtifactActivities:
             )
 
         return {"profiles": profiles}
-
-    @staticmethod
-    def _provider_profile_launch_ready(row: Any) -> bool:
-        """Return whether a persisted provider profile is launchable.
-
-        The manager sync consumes only launch-ready rows. SQL filters cover
-        operator intent and connected auth state; this predicate covers the
-        credential/materialization bindings that make setup stubs non-runnable.
-        """
-
-        if not bool(getattr(row, "enabled", False)):
-            return False
-
-        auth_state = getattr(row, "auth_state", None)
-        auth_value = getattr(auth_state, "value", auth_state)
-        if auth_value != "connected":
-            return False
-
-        credential_source = getattr(row, "credential_source", None)
-        credential_value = getattr(credential_source, "value", credential_source)
-        materialization = getattr(row, "runtime_materialization_mode", None)
-        materialization_value = getattr(materialization, "value", materialization)
-
-        if credential_value == "oauth_volume":
-            return bool(
-                str(getattr(row, "volume_ref", "") or "").strip()
-                and str(getattr(row, "volume_mount_path", "") or "").strip()
-            )
-
-        if credential_value == "secret_ref":
-            secret_refs = getattr(row, "secret_refs", None)
-            if not isinstance(secret_refs, dict) or not secret_refs:
-                return False
-            if materialization_value in {
-                "api_key_env",
-                "env_bundle",
-                "config_bundle",
-                "composite",
-            }:
-                return True
-            return False
-
-        if credential_value == "none":
-            return materialization_value in {"config_bundle", "composite"}
-
-        return False
 
     async def provider_profile_ensure_manager(
         self,
