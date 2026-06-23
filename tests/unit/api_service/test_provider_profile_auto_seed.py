@@ -17,6 +17,15 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 
+FIRST_PARTY_SETUP_PROFILE_IDS = {
+    "gemini_google_default",
+    "gemini_default",
+    "codex_openai_default",
+    "codex_default",
+    "claude_anthropic_default",
+    "claude_anthropic",
+}
+
 @pytest.fixture()
 def _module_db(tmp_path):
     """Create a single in-memory SQLite engine and schema for the test."""
@@ -45,7 +54,7 @@ def _module_db(tmp_path):
 
 @pytest.mark.asyncio
 async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
-    """When the table is empty, auto-seeding should create 3 default profiles."""
+    """When the table is empty, auto-seeding should create setup stubs."""
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
@@ -59,27 +68,35 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
 
-    assert len(profiles) == 3
+    assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
     profile_ids = {p.profile_id for p in profiles}
-    assert profile_ids == {"gemini_default", "codex_default", "claude_anthropic"}
+    assert profile_ids == FIRST_PARTY_SETUP_PROFILE_IDS
     # Standard profiles are seeded with default_model=None so they inherit
     # the runtime default (codex_cli→gpt-5.5, gemini_cli→gemini-3.1-pro,
     # claude_code→claude-opus-4-8) rather than storing a duplicate value.
     defaults = {p.profile_id: p.default_model for p in profiles}
-    assert defaults["gemini_default"] is None
-    assert defaults["codex_default"] is None
-    assert defaults["claude_anthropic"] is None
+    assert all(
+        defaults[profile_id] is None
+        for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS
+    )
     runtime_defaults = {p.profile_id: p.is_default for p in profiles}
-    assert runtime_defaults["gemini_default"] is False
-    assert runtime_defaults["codex_default"] is False
-    assert runtime_defaults["claude_anthropic"] is False
+    assert all(
+        runtime_defaults[profile_id] is False
+        for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS
+    )
     provider_ids = {p.profile_id: p.provider_id for p in profiles}
+    assert provider_ids["codex_openai_default"] == "openai"
     assert provider_ids["codex_default"] == "openai"
+    assert provider_ids["claude_anthropic_default"] == "anthropic"
     assert provider_ids["claude_anthropic"] == "anthropic"
     provider_labels = {p.profile_id: p.provider_label for p in profiles}
+    assert provider_labels["codex_openai_default"] == "OpenAI"
     assert provider_labels["codex_default"] == "OpenAI"
+    assert provider_labels["claude_anthropic_default"] == "Anthropic"
     assert provider_labels["claude_anthropic"] == "Anthropic"
-    claude_profile = next(p for p in profiles if p.profile_id == "claude_anthropic")
+    claude_profile = next(
+        p for p in profiles if p.profile_id == "claude_anthropic_default"
+    )
     assert claude_profile.enabled is False
     assert claude_profile.auth_state == ProviderProfileAuthState.NOT_CONFIGURED
     assert (
@@ -95,12 +112,17 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert claude_profile.volume_mount_path is None
     assert claude_profile.clear_env_keys == [
         "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY",
+        "OPENAI_API_KEY",
+    ]
+    first_party_clear_keys = {p.profile_id: p.clear_env_keys for p in profiles}
+    assert first_party_clear_keys["claude_anthropic"] == [
+        "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
         "CLAUDE_API_KEY",
         "OPENAI_API_KEY",
     ]
-    first_party_clear_keys = {p.profile_id: p.clear_env_keys for p in profiles}
     assert first_party_clear_keys["gemini_default"] == [
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
@@ -123,7 +145,7 @@ async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     first = await _auto_seed_provider_profiles()
-    assert len(first) == 3
+    assert len(first) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
 
     second = await _auto_seed_provider_profiles()
     assert second == []
@@ -132,7 +154,7 @@ async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
     async with db_base.async_session_maker() as session:
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
-    assert len(profiles) == 3
+    assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
 
 @pytest.mark.asyncio
 async def test_auto_seed_skipped_when_env_set(_module_db, monkeypatch):
@@ -164,7 +186,7 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
 
-    assert len(profiles) == 5
+    assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS) + 2
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
@@ -228,7 +250,7 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     first = await _auto_seed_provider_profiles()
-    assert len(first) == 3
+    assert len(first) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
 
     # Now the key becomes available.
     monkeypatch.setenv("MINIMAX_API_KEY", "test-minimax-key")
@@ -239,7 +261,7 @@ async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
 
-    assert len(profiles) == 5
+    assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS) + 2
     profile_ids = {p.profile_id for p in profiles}
     assert "claude_anthropic" in profile_ids
     assert "claude_minimax" in profile_ids
@@ -399,7 +421,7 @@ async def test_auto_seed_backfills_first_party_clear_env_for_existing_profiles(
 
 @pytest.mark.asyncio
 async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch):
-    """When MINIMAX_API_KEY is absent, only the 3 default profiles are seeded."""
+    """When MINIMAX_API_KEY is absent, only first-party setup stubs are seeded."""
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
@@ -416,7 +438,7 @@ async def test_auto_seed_excludes_minimax_when_env_unset(_module_db, monkeypatch
     assert "claude_minimax" not in profile_ids
     assert "codex_minimax_m27" not in profile_ids
     assert "claude_anthropic" in profile_ids
-    assert len(profiles) == 3
+    assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS)
 
 @pytest.mark.asyncio
 async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
@@ -435,7 +457,7 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
         result = await session.execute(select(ManagedAgentProviderProfile))
         profiles = result.scalars().all()
 
-    assert len(profiles) == 4
+    assert len(profiles) == len(FIRST_PARTY_SETUP_PROFILE_IDS) + 1
     profile_ids = {p.profile_id for p in profiles}
     assert "codex_openrouter_qwen36_plus" in profile_ids
 

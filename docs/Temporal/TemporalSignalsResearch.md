@@ -6,7 +6,7 @@ MoonMind’s Temporal implementation is **Python-first**, with `temporalio` pinn
 
 On **Temporal Signals specifically**, MoonMind shows a **mixed level of maturity**:
 
-A substantial, working signal pattern exists around **auth-profile slot allocation**, where `AgentRun` signals an `AuthProfileManager` workflow (`request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`), and the manager signals back (`slot_assigned`). citeturn50view0turn33view0turn49view0 The **OAuth session** workflow also uses simple `finalize`/`cancel` signals in an idiomatic “set flag + `wait_condition`” pattern. citeturn35view0turn35view2
+A substantial, working signal pattern exists around **provider-profile slot allocation**, where `AgentRun` signals an `ProviderProfileManager` workflow (`request_slot`, `release_slot`, `report_cooldown`, `sync_profiles`), and the manager signals back (`slot_assigned`). citeturn50view0turn33view0turn49view0 The **OAuth session** workflow also uses simple `finalize`/`cancel` signals in an idiomatic “set flag + `wait_condition`” pattern. citeturn35view0turn35view2
 
 However, the central **Run** workflow (which appears to be the main “execution orchestration” workflow) uses a mix of update and signal handlers for execution control. It defines **update handlers** for `Pause`, `Resume`, `Approve`, and `Cancel`, and **signal handlers** for asynchronous ingress via `ExternalEvent` and `reschedule`. Meanwhile, some higher layers still attempt to send signals like `"Pause"`, `"Resume"`, `"Approve"`, and `"ExternalEvent"` via `signal_execution`, and the client adapter uses batch `"pause"`/`"resume"`. This highlights a naming and pattern mismatch: the workflow defines acknowledged updates, but external clients sometimes try to trigger them as signals.
 
@@ -16,7 +16,7 @@ There is also a high-impact interaction with `start_delay`: MoonMind’s client 
 
 MoonMind’s Temporal code is concentrated under `moonmind/workflows/temporal/` (client adapter, service layer, worker wiring) and `moonmind/workflows/temporal/workflows/` (workflow implementations). citeturn29view0turn3view0 The orchestration surface includes:
 
-- **Workflow implementations**: `agent_run.py`, `auth_profile_manager.py`, `oauth_session.py`, `run.py`, plus smaller workflow(s). citeturn3view0turn30view0turn30view1turn31view0turn31view1  
+- **Workflow implementations**: `agent_run.py`, `provider_profile_manager.py`, `oauth_session.py`, `run.py`, plus smaller workflow(s). citeturn3view0turn30view0turn30view1turn31view0turn31view1
 - **Client adapter**: `moonmind/workflows/temporal/client.py` provides `start_workflow`, `signal_workflow`, `send_reschedule_signal`, `execute_update`, and batch pause/resume. citeturn39view3turn39view0turn39view1  
 - **Execution service**: `moonmind/workflows/temporal/service.py` implements `signal_execution(...)` and validates signal names against an allowed set, then forwards signals through the adapter. citeturn41view0turn42view0  
 
@@ -34,11 +34,11 @@ The table below inventories **explicit signal handlers** (decorated methods). If
 |---|---|---|---|---|---|---|
 | `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | `completion_signal` | `dict` representing `AgentRunResult(**result_dict)` | Yes citeturn32view0 | No citeturn32view1 | Yes (signals other workflows) citeturn50view0turn32view2 |
 | `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | `slot_assigned` | `dict` with `profile_id` | Yes citeturn32view0 | No citeturn32view1 | Yes citeturn50view0turn32view2 |
-| `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | AuthProfileManager workflow | `request_slot` | `dict[str, Any]` (documented TypedDicts exist) | Yes citeturn33view0turn49view1 | No citeturn33view1 | Yes (signals requesters) citeturn49view0 |
-| `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | AuthProfileManager workflow | `release_slot` | `dict[str, Any]` (async handler) | Yes citeturn33view0turn49view1 | No citeturn33view1 | Yes citeturn49view0 |
-| `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | AuthProfileManager workflow | `report_cooldown` | `dict[str, Any]` (`cooldown_seconds` defaulted) | Yes citeturn33view0turn49view1 | No citeturn33view1 | Yes citeturn49view0 |
-| `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | AuthProfileManager workflow | `sync_profiles` | `dict[str, Any]` with `profiles: list[dict]` | Yes citeturn33view0 | No citeturn33view1 | Yes citeturn49view0 |
-| `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | AuthProfileManager workflow | `shutdown` | no payload | Yes citeturn33view0 | No citeturn33view1 | Indirectly (loop termination) citeturn33view3 |
+| `moonmind/workflows/temporal/workflows/provider_profile_manager.py` | ProviderProfileManager workflow | `request_slot` | `dict[str, Any]` (documented TypedDicts exist) | Yes citeturn33view0turn49view1 | No citeturn33view1 | Yes (signals requesters) citeturn49view0 |
+| `moonmind/workflows/temporal/workflows/provider_profile_manager.py` | ProviderProfileManager workflow | `release_slot` | `dict[str, Any]` (async handler) | Yes citeturn33view0turn49view1 | No citeturn33view1 | Yes citeturn49view0 |
+| `moonmind/workflows/temporal/workflows/provider_profile_manager.py` | ProviderProfileManager workflow | `report_cooldown` | `dict[str, Any]` (`cooldown_seconds` defaulted) | Yes citeturn33view0turn49view1 | No citeturn33view1 | Yes citeturn49view0 |
+| `moonmind/workflows/temporal/workflows/provider_profile_manager.py` | ProviderProfileManager workflow | `sync_profiles` | `dict[str, Any]` with `profiles: list[dict]` | Yes citeturn33view0 | No citeturn33view1 | Yes citeturn49view0 |
+| `moonmind/workflows/temporal/workflows/provider_profile_manager.py` | ProviderProfileManager workflow | `shutdown` | no payload | Yes citeturn33view0 | No citeturn33view1 | Indirectly (loop termination) citeturn33view3 |
 | `moonmind/workflows/temporal/workflows/oauth_session.py` | OAuthSession workflow | `finalize` | no payload | Yes citeturn35view0 | No citeturn35view1 | No |
 | `moonmind/workflows/temporal/workflows/oauth_session.py` | OAuthSession workflow | `cancel` | no payload | Yes citeturn35view0 | No citeturn35view1 | No |
 | `moonmind/workflows/temporal/workflows/run.py` | Run workflow | `Pause`, `Resume`, `Approve`, `Cancel` | — | **No** | **Yes** (`@workflow.update`) | No |
@@ -53,11 +53,11 @@ This table inventories where code **sends** signals (internal workflow-to-workfl
 
 | File path | Sender component | Target (intended) | Signal name | Payload shape | External handle used? |
 |---|---|---|---|---|---|
-| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | AuthProfileManager | `request_slot` | `{"requester_workflow_id", "runtime_id", "profile_selector"?}` citeturn50view0 | Yes (`workflow.get_external_workflow_handle`) citeturn50view0 |
-| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | AuthProfileManager | `release_slot` | `{"requester_workflow_id", "profile_id"}` citeturn50view2 | Yes citeturn50view2 |
-| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | AuthProfileManager | `report_cooldown` | `{"profile_id", "cooldown_seconds"}` citeturn50view3 | Yes citeturn50view3 |
-| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | AuthProfileManager | `sync_profiles` | `{"profiles": [...]}` citeturn32view0 | Yes citeturn32view0 |
-| `moonmind/workflows/temporal/workflows/auth_profile_manager.py` | AuthProfileManager workflow | AgentRun workflow | `slot_assigned` | `{"profile_id": ...}` citeturn49view0 | Yes citeturn49view0 |
+| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | ProviderProfileManager | `request_slot` | `{"requester_workflow_id", "runtime_id", "profile_selector"?}` citeturn50view0 | Yes (`workflow.get_external_workflow_handle`) citeturn50view0 |
+| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | ProviderProfileManager | `release_slot` | `{"requester_workflow_id", "profile_id"}` citeturn50view2 | Yes citeturn50view2 |
+| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | ProviderProfileManager | `report_cooldown` | `{"profile_id", "cooldown_seconds"}` citeturn50view3 | Yes citeturn50view3 |
+| `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | ProviderProfileManager | `sync_profiles` | `{"profiles": [...]}` citeturn32view0 | Yes citeturn32view0 |
+| `moonmind/workflows/temporal/workflows/provider_profile_manager.py` | ProviderProfileManager workflow | AgentRun workflow | `slot_assigned` | `{"profile_id": ...}` citeturn49view0 | Yes citeturn49view0 |
 | `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | Parent workflow (caller of AgentRun) | `child_state_changed` | `args=[state, message]` citeturn32view2turn50view0 | Yes citeturn32view2 |
 | `moonmind/workflows/temporal/workflows/agent_run.py` | AgentRun workflow | Parent workflow | `profile_assigned` | `{"profile_id", "child_workflow_id", "runtime_id"}` citeturn32view2 | Yes citeturn32view2 |
 | `moonmind/workflows/temporal/service.py` | `TemporalExecutionService.signal_execution` | Execution workflow (likely Run) | `"ExternalEvent"` | wrapper `{"payload": <dict>, "payload_artifact_ref": <str?>}` citeturn41view0turn42view3 | External via client adapter citeturn41view0 |
@@ -72,7 +72,7 @@ This table inventories where code **sends** signals (internal workflow-to-workfl
 MoonMind frequently uses the canonical **“signal flips state; workflow waits on condition”** model, which is explicitly shown in Temporal Python SDK examples. citeturn54search2 Observed call sites include:
 
 - `AgentRun`: waits for `slot_assigned_event` and `completion_event`. citeturn32view2turn32view0  
-- `AuthProfileManager`: waits for `_has_new_events` or shutdown with a periodic wake-up. citeturn33view3  
+- `ProviderProfileManager`: waits for `_has_new_events` or shutdown with a periodic wake-up. citeturn33view3
 - `OAuthSession`: waits for `_finalize_requested` or `_cancel_requested` with a TTL timeout. citeturn35view2  
 - `Run`: waits on `_reschedule_requested/_cancel_requested`, and later on `not self._paused`, relying on explicit `@workflow.update` and `@workflow.signal` handlers to flip those flags.
 
@@ -80,13 +80,13 @@ MoonMind frequently uses the canonical **“signal flips state; workflow waits o
 
 ### What MoonMind is already doing well
 
-MoonMind’s `AuthProfileManager` and `OAuthSession` show recognizable idioms:
+MoonMind’s `ProviderProfileManager` and `OAuthSession` show recognizable idioms:
 
 The **flag + `wait_condition`** approach is a standard and recommended pattern for signals in Temporal’s Python SDK examples. citeturn35view2turn33view3turn54search2 The handlers are mostly lightweight and deterministic (set state, append requests, set booleans), which is generally good practice for signal handlers.
 
 The code also uses **external workflow handles** (`workflow.get_external_workflow_handle(...)`) to coordinate between workflows. citeturn50view0turn49view0 This matches the SDK’s external handle support (the Python SDK exposes `get_external_workflow_handle` and `get_external_workflow_handle_for`). citeturn54search0
 
-Finally, the workflows actively use **versioning markers** (`workflow.patched(...)`) in long-running coordination paths (e.g., AgentRun slot wait behavior; AuthProfileManager lease persistence / verification), which is the right mechanism for evolving workflow behavior without breaking determinism. citeturn32view2turn33view3
+Finally, the workflows actively use **versioning markers** (`workflow.patched(...)`) in long-running coordination paths (e.g., AgentRun slot wait behavior; ProviderProfileManager lease persistence / verification), which is the right mechanism for evolving workflow behavior without breaking determinism. citeturn32view2turn33view3
 
 ### Key gaps and anti-patterns
 
@@ -102,10 +102,10 @@ Start Delay and signals can silently conflict without Signal-With-Start
 The client adapter can start workflows with `start_delay`. citeturn39view3 Temporal’s Start Delay feature explicitly documents that **during the delay, non–Signal-With-Start signals are ignored**. citeturn55search2 MoonMind does not appear to use Signal-With-Start in the adapter. citeturn39view2turn39view3 As a result, even if Run eventually had pause/reschedule handlers, a pause/reschedule sent “immediately after start” could be dropped if the workflow start is delayed.
 
 Signal payloads are mostly dynamically typed dicts; schema evolution risk is high  
-Temporal’s Python SDK docs strongly encourage a **single dataclass/Pydantic argument** for signals and updates, specifically to enable non-breaking addition of defaulted fields over time. citeturn53search2 MoonMind does document some payload shapes as `TypedDict` (e.g., in `auth_profile_manager.py`), but the live handler signatures still accept `dict[str, Any]`, and other flows use raw `dict`. citeturn49view1turn33view0turn32view0 This makes it harder to validate incoming messages, apply authorization consistently, and manage compatibility across clients over time.
+Temporal’s Python SDK docs strongly encourage a **single dataclass/Pydantic argument** for signals and updates, specifically to enable non-breaking addition of defaulted fields over time. citeturn53search2 MoonMind does document some payload shapes as `TypedDict` (e.g., in `provider_profile_manager.py`), but the live handler signatures still accept `dict[str, Any]`, and other flows use raw `dict`. citeturn49view1turn33view0turn32view0 This makes it harder to validate incoming messages, apply authorization consistently, and manage compatibility across clients over time.
 
 Signal concurrency and shared-state mutation is not explicitly guarded  
-Temporal’s Python SDK states that each signal/update handler executes in its own asyncio task, concurrently with other handlers and the main workflow task; it explicitly calls out using `asyncio.Lock`/`Semaphore` when needed. citeturn54search2 In MoonMind, `AuthProfileManager.release_slot` is `async` (yields), but other handlers like `request_slot` mutate shared structures (`_pending_requests`, `_profiles`) without an explicit lock. citeturn33view0 This may be fine if handlers are effectively single-threaded by design, but the SDK’s concurrency model means you should treat handler code as potentially concurrent and protect shared invariants if signals can arrive quickly.
+Temporal’s Python SDK states that each signal/update handler executes in its own asyncio task, concurrently with other handlers and the main workflow task; it explicitly calls out using `asyncio.Lock`/`Semaphore` when needed. citeturn54search2 In MoonMind, `ProviderProfileManager.release_slot` is `async` (yields), but other handlers like `request_slot` mutate shared structures (`_pending_requests`, `_profiles`) without an explicit lock. citeturn33view0 This may be fine if handlers are effectively single-threaded by design, but the SDK’s concurrency model means you should treat handler code as potentially concurrent and protect shared invariants if signals can arrive quickly.
 
 Idempotency/deduplication rules are not explicit  
 Temporal’s API includes a `request_id` field “used to de-dupe sent signals.” citeturn55search5 MoonMind’s signal payloads (and service wrappers) don’t clearly carry a signal command ID/idempotency key, and the manager does not obviously dedupe repeated `request_slot` calls (it appends to `_pending_requests`). citeturn33view0turn33view3 This can lead to duplicated work under client retries, replay of external systems, or repeated UI actions.
@@ -154,7 +154,7 @@ This aligns with Temporal’s explicit support for signal dedupe at the API leve
 
 Below are recommended canonical contracts. Where MoonMind already has a shape, it is preserved and formalized.
 
-**AuthProfileManager**
+**ProviderProfileManager**
 
 ```python
 class SlotRequest(SignalEnvelope):
@@ -323,7 +323,7 @@ Add explicit idempotency keys to signal payloads and enforce dedupe in handlers
 Temporal can dedupe signals when a stable `request_id` is supplied. citeturn55search5 Even if MoonMind doesn’t expose `request_id` directly at the adapter level, the application should carry a `command_id` and treat duplicates as no-ops. This is especially important for `request_slot` where duplicates can create multiple pending requests. citeturn33view0turn50view0
 
 Harden concurrency in workflows that mutate shared state from signals  
-Because signal handlers run as concurrent asyncio tasks, Temporal explicitly recommends locks/semaphores where needed. citeturn54search2 Add a workflow-level `asyncio.Lock` (deterministic) to `AuthProfileManager` around mutations of `_pending_requests` and `_profiles` to prevent interleavings between `release_slot` (async) and other signals.
+Because signal handlers run as concurrent asyncio tasks, Temporal explicitly recommends locks/semaphores where needed. citeturn54search2 Add a workflow-level `asyncio.Lock` (deterministic) to `ProviderProfileManager` around mutations of `_pending_requests` and `_profiles` to prevent interleavings between `release_slot` (async) and other signals.
 
 ### Potentially breaking changes
 
@@ -338,7 +338,7 @@ Temporal Python guidance recommends single dataclass/Pydantic parameters for for
 MoonMind has a docker-compose test harness that runs `pytest` for unit and “integration/orchestrator” suites. citeturn58view0 For Temporal signals, add a dedicated checklist:
 
 1) Unit tests with time-skipping environment  
-Temporal’s Python SDK provides examples of testing signals and timeouts with `WorkflowEnvironment.start_time_skipping()` and `handle.signal(...)`. citeturn54search2 Mirror that approach to test `Run.pause/resume/reschedule`, `OAuthSession.finalize/cancel`, and `AuthProfileManager` slot allocation.
+Temporal’s Python SDK provides examples of testing signals and timeouts with `WorkflowEnvironment.start_time_skipping()` and `handle.signal(...)`. citeturn54search2 Mirror that approach to test `Run.pause/resume/reschedule`, `OAuthSession.finalize/cancel`, and `ProviderProfileManager` slot allocation.
 
 2) Race tests  
 Send bursts of signals (`pause` then `resume`, concurrent `request_slot`, repeated `release_slot`) using `asyncio.gather` to validate idempotency and lock correctness. This directly targets the SDK’s concurrent handler execution model. citeturn54search2
@@ -383,7 +383,7 @@ This diagram reflects the current architecture (service → adapter → workflow
 
 ```mermaid
 flowchart TD
-  AR[AgentRun Workflow] -->|signal: request_slot| APM[AuthProfileManager Workflow]
+  AR[AgentRun Workflow] -->|signal: request_slot| APM[ProviderProfileManager Workflow]
   APM -->|signal: slot_assigned| AR
   AR -->|signal: release_slot| APM
   AR -->|signal: report_cooldown| APM

@@ -9,6 +9,7 @@ These tests verify:
 
 import enum
 import glob
+import importlib
 import os
 import re
 import asyncio
@@ -114,6 +115,187 @@ class TestProviderProfileActivationEnums:
     def test_last_auth_method_values_match_contract(self):
         expected = {"oauth_volume", "secret_ref", "manual"}
         assert {m.value for m in ProviderProfileAuthMethod} == expected
+
+class TestProviderProfileActivationMigrationBackfill:
+    """MM-879 activation backfill must not make unverified profiles launchable."""
+
+    @pytest.fixture()
+    def migration(self):
+        return importlib.import_module(
+            "api_service.migrations.versions.316_provider_profile_activation_state"
+        )
+
+    def test_enabled_oauth_volume_with_volume_binding_becomes_connected(
+        self, migration
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": True,
+                "credential_source": "oauth_volume",
+                "volume_ref": "claude-oauth",
+                "volume_mount_path": "/home/claude/.claude",
+            }
+        )
+
+        assert result == {
+            "enabled": True,
+            "auth_state": "connected",
+            "disabled_reason": None,
+            "last_auth_method": "oauth_volume",
+            "stamp_validated": True,
+        }
+
+    def test_enabled_secret_ref_with_secret_binding_becomes_connected(
+        self, migration
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": True,
+                "credential_source": "secret_ref",
+                "secret_refs": {"OPENAI_API_KEY": "db://openai"},
+            }
+        )
+
+        assert result == {
+            "enabled": True,
+            "auth_state": "connected",
+            "disabled_reason": None,
+            "last_auth_method": "secret_ref",
+            "stamp_validated": True,
+        }
+
+    def test_enabled_profile_without_credentials_is_disabled_missing_credentials(
+        self, migration
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": True,
+                "credential_source": "none",
+                "secret_refs": None,
+            }
+        )
+
+        assert result == {
+            "enabled": False,
+            "auth_state": "not_configured",
+            "disabled_reason": "missing_credentials",
+            "last_auth_method": None,
+            "stamp_validated": False,
+        }
+
+    def test_existing_disabled_profile_preserves_user_disabled_reason(
+        self, migration
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": False,
+                "credential_source": "secret_ref",
+                "secret_refs": {"OPENAI_API_KEY": "db://openai"},
+            }
+        )
+
+        assert result == {
+            "enabled": False,
+            "auth_state": "not_configured",
+            "disabled_reason": "user_disabled",
+            "last_auth_method": None,
+            "stamp_validated": False,
+        }
+
+    @pytest.mark.parametrize(
+        "validation_status",
+        ["invalid", "failed", "validation_failed"],
+    )
+    def test_enabled_profile_with_invalid_validation_is_disabled_auth_invalid(
+        self, migration, validation_status
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": True,
+                "credential_source": "secret_ref",
+                "secret_refs": {"OPENAI_API_KEY": "db://openai"},
+                "validation_status": validation_status,
+            }
+        )
+
+        assert result == {
+            "enabled": False,
+            "auth_state": "validation_failed",
+            "disabled_reason": "auth_invalid",
+            "last_auth_method": None,
+            "stamp_validated": False,
+        }
+
+    def test_enabled_oauth_profile_with_invalid_validation_is_not_connected(
+        self, migration
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": True,
+                "credential_source": "oauth_volume",
+                "volume_ref": "claude-oauth",
+                "volume_mount_path": "/home/claude/.claude",
+                "validation_status": "invalid",
+            }
+        )
+
+        assert result == {
+            "enabled": False,
+            "auth_state": "validation_failed",
+            "disabled_reason": "auth_invalid",
+            "last_auth_method": None,
+            "stamp_validated": False,
+        }
+
+    def test_policy_disabled_profile_is_not_backfilled_launchable(
+        self, migration
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": True,
+                "credential_source": "secret_ref",
+                "secret_refs": {"OPENAI_API_KEY": "db://openai"},
+                "disabled_reason": "policy_disabled",
+            }
+        )
+
+        assert result == {
+            "enabled": False,
+            "auth_state": "not_configured",
+            "disabled_reason": "policy_disabled",
+            "last_auth_method": None,
+            "stamp_validated": False,
+        }
+
+    def test_sql_backfill_handles_policy_and_validation_before_connecting(
+        self, migration, monkeypatch
+    ):
+        statements: list[str] = []
+
+        class FakeOp:
+            @staticmethod
+            def execute(statement):
+                statements.append(str(statement))
+
+        monkeypatch.setattr(migration, "op", FakeOp)
+
+        migration._backfill_activation_state()
+
+        assert len(statements) >= 4
+        assert "WHERE disabled_reason = 'policy_disabled'" in statements[0]
+        assert "disabled_reason = 'policy_disabled'" in statements[0]
+        assert (
+            "validation_status IN ('invalid', 'failed', 'validation_failed')"
+            in statements[1]
+        )
+        assert "auth_state = 'validation_failed'" in statements[1]
+        connected_statement_indexes = [
+            index
+            for index, statement in enumerate(statements)
+            if "auth_state = 'connected'" in statement
+        ]
+        assert connected_statement_indexes
+        assert min(connected_statement_indexes) > 1
 
 # ---------------------------------------------------------------------------
 # 2. Data migration mapping logic
