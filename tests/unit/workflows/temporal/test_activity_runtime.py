@@ -1641,6 +1641,84 @@ async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan(
     assert result["status"] == "completed"
     assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
 
+async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    artifact_service = _FakePentestArtifactService(
+        {"art_scope_valid": _scope_artifact_bytes()}
+    )
+    launcher = _FakePentestLauncher()
+    materialized_requests: list[object] = []
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=artifact_service,
+        workload_launcher=launcher,
+        workload_registry=_RecordingPentestRegistry(),
+    )
+
+    def _record_materialization(**kwargs):
+        materialized_requests.append(kwargs["request"])
+        return {}
+
+    monkeypatch.setattr(
+        activities._pentest_activities,
+        "_materialize_pentest_input_files",
+        _record_materialization,
+    )
+
+    result = await activities.security_pentest_execute(
+        {
+            "registry_snapshot_ref": "art_registry",
+            "principal": "user-security",
+            "invocation_payload": {
+                "id": "step-pentest",
+                "tool": {
+                    "type": "skill",
+                    "name": "security.pentest.run",
+                    "version": "1.0.0",
+                },
+                "inputs": {
+                    "pentest_enabled": True,
+                    "target": "https://lab.example.test",
+                    "operation_mode": "validate_hypothesis",
+                    "scope_artifact_ref": "art_scope_valid",
+                    "runner_profile_id": "pentestgpt-safe",
+                    "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                    "time_budget_minutes": 60,
+                    "evidence_level": "standard",
+                    "agent_run_id": "caller-supplied-run",
+                    "step_id": "caller-supplied-step",
+                    "attempt": 99,
+                    "principal_id": "caller-supplied-principal",
+                    "artifacts_dir": "/tmp/caller-supplied-artifacts",
+                },
+                "options": {},
+            },
+            "context": {
+                "namespace": "default",
+                "workflow_id": "mm:workflow-123",
+                "run_id": "run-123",
+                "node_id": "step-pentest",
+            },
+            "idempotency_key": (
+                "mm:workflow-123:run-123:step-pentest:execution:1:execute"
+            ),
+        }
+    )
+
+    assert artifact_service.reads == [("art_scope_valid", "user-security")]
+    assert result["status"] == "completed"
+    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+    assert len(launcher.requests) == 1
+    assert len(materialized_requests) == 1
+    request = materialized_requests[0]
+    assert request.agent_run_id == "mm:workflow-123"
+    assert request.step_id == "step-pentest"
+    assert request.attempt == 1
+    assert (
+        request.artifacts_dir
+        == "/work/agent_jobs/mm:workflow-123/artifacts/step-pentest"
+    )
+
 @pytest.mark.parametrize(
     ("artifact_id", "artifact_payload", "message"),
     [
