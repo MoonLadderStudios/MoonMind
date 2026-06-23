@@ -450,10 +450,15 @@ interface JiraImportProvenance {
 interface ProviderProfile {
   profile_id: string;
   account_label?: string | null;
+  provider_id?: string | null;
   provider_label?: string | null;
   default_model?: string | null;
   is_default?: boolean;
   enabled?: boolean;
+  launch_ready?: boolean;
+  launchReady?: boolean;
+  priority?: number | null;
+  tags?: string[] | null;
 }
 
 interface BranchOption {
@@ -476,24 +481,39 @@ export function resolveDefaultProviderProfileId(
   profiles: ProviderProfile[],
   configuredDefaultRef?: string | null,
 ): string {
+  const launchableProfiles = profiles.filter(
+    (profile) =>
+      profile.enabled !== false &&
+      profile.launch_ready !== false &&
+      profile.launchReady !== false,
+  );
   const trimmedRef = configuredDefaultRef?.trim?.() || "";
   if (trimmedRef) {
-    const configured = profiles.find(
-      (profile) => profile.profile_id === trimmedRef && profile.enabled !== false,
+    const configured = launchableProfiles.find(
+      (profile) => profile.profile_id === trimmedRef,
     );
     if (configured) {
       return configured.profile_id;
     }
   }
-  const explicitDefault = profiles.find((profile) => profile.is_default);
+  const explicitDefault = launchableProfiles.find((profile) => profile.is_default);
   if (explicitDefault) {
     return explicitDefault.profile_id;
   }
-  const onlyProfile = profiles[0];
-  if (profiles.length === 1 && onlyProfile) {
+  const onlyProfile = launchableProfiles[0];
+  if (launchableProfiles.length === 1 && onlyProfile) {
     return onlyProfile.profile_id;
   }
-  return profiles[0]?.profile_id || "";
+  return (
+    [...launchableProfiles].sort((left, right) => {
+      const leftPriority = Number(left.priority ?? 100);
+      const rightPriority = Number(right.priority ?? 100);
+      if (leftPriority !== rightPriority) {
+        return rightPriority - leftPriority;
+      }
+      return left.profile_id.localeCompare(right.profile_id);
+    })[0]?.profile_id || ""
+  );
 }
 
 interface SkillsResponse {
@@ -8768,6 +8788,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       isMergeAutomationPublishMode(publishMode) &&
       effectivePublishMode === "pr" &&
       !isSelfManagedPublishSkill(effectivePublishSkillId);
+    const selectedProviderProfile = (providerProfilesQuery.data || []).find(
+      (profile) => profile.profile_id === providerProfile,
+    );
+    const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
@@ -8787,6 +8811,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         ...(model.trim() ? { model: model.trim() } : {}),
         ...(effort.trim() ? { effort: effort.trim() } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
+        ...(selectedProviderId
+          ? { profileSelector: { providerId: selectedProviderId } }
+          : {}),
       },
       publish: {
         mode: effectivePublishMode,

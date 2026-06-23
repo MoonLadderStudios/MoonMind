@@ -1,6 +1,7 @@
 """Unit/Integration tests for ManagedAgentProviderProfile CRUD API."""
 
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -26,9 +27,11 @@ from api_service.db.models import (
 )
 from api_service.main import app
 from api_service.services.provider_profile_service import (
+    _managed_secret_statuses_for_profiles,
     _manager_profile_payload,
     normalize_runtime_default_profile,
 )
+from api_service.services.provider_profile_readiness import provider_profile_launch_ready
 
 @pytest.fixture(scope="module")
 def _module_db(tmp_path_factory):
@@ -184,11 +187,31 @@ class _TrackedProfile:
         is_default: bool,
         events: list[tuple[object, ...]],
         auth_state: ProviderProfileAuthState = ProviderProfileAuthState.CONNECTED,
+        disabled_reason: ProviderProfileDisabledReason | None = None,
+        credential_source: ProviderCredentialSource = ProviderCredentialSource.NONE,
+        runtime_materialization_mode: RuntimeMaterializationMode = (
+            RuntimeMaterializationMode.COMPOSITE
+        ),
+        max_parallel_runs: int = 1,
+        cooldown_after_429_seconds: int = 900,
+        secret_refs: Any = None,
+        volume_ref: str | None = None,
+        volume_mount_path: str | None = None,
+        command_behavior: dict | None = None,
     ) -> None:
         self.profile_id = profile_id
         self.runtime_id = runtime_id
         self.enabled = enabled
         self.auth_state = auth_state
+        self.disabled_reason = disabled_reason
+        self.credential_source = credential_source
+        self.runtime_materialization_mode = runtime_materialization_mode
+        self.max_parallel_runs = max_parallel_runs
+        self.cooldown_after_429_seconds = cooldown_after_429_seconds
+        self.secret_refs = secret_refs or {}
+        self.volume_ref = volume_ref
+        self.volume_mount_path = volume_mount_path
+        self.command_behavior = command_behavior or {}
         self.priority = priority
         self._is_default = is_default
         self._events = events
@@ -278,6 +301,96 @@ async def test_runtime_default_switch_flushes_old_default_first():
             {"claude_minimax": False, "claude_anthropic": True},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_default_normalization_skips_not_launch_ready_profiles():
+    events: list[tuple[object, ...]] = []
+    blocked_default = _TrackedProfile(
+        profile_id="claude_blocked",
+        runtime_id="claude_code",
+        enabled=True,
+        priority=500,
+        is_default=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        command_behavior={"auth_readiness": {"launch_ready": False}},
+        events=events,
+    )
+    ready_fallback = _TrackedProfile(
+        profile_id="claude_ready",
+        runtime_id="claude_code",
+        enabled=True,
+        priority=100,
+        is_default=False,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        command_behavior={"auth_readiness": {"launch_ready": True}},
+        events=events,
+    )
+    session = _TrackedDefaultSession([blocked_default, ready_fallback], events)
+
+    selected = await normalize_runtime_default_profile(
+        session=session,
+        runtime_id="claude_code",
+    )
+
+    assert selected == "claude_ready"
+    assert blocked_default.is_default is False
+    assert ready_fallback.is_default is True
+
+
+def test_launch_ready_rejects_malformed_secret_refs() -> None:
+    profile = _TrackedProfile(
+        profile_id="malformed_secret_refs",
+        runtime_id="codex_cli",
+        enabled=True,
+        priority=100,
+        is_default=False,
+        events=[],
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        credential_source=ProviderCredentialSource.SECRET_REF,
+        secret_refs=["db://not-a-dict"],
+    )
+
+    assert provider_profile_launch_ready(profile) is False
+
+    profile.secret_refs = {"provider_api_key": 123}
+
+    assert provider_profile_launch_ready(profile) is False
+
+
+@pytest.mark.asyncio
+async def test_managed_secret_statuses_ignores_malformed_secret_refs() -> None:
+    class _EmptySecretSession:
+        async def execute(self, _stmt):
+            raise AssertionError("malformed secret_refs should not query secrets")
+
+    rows = [
+        _TrackedProfile(
+            profile_id="malformed_secret_refs",
+            runtime_id="codex_cli",
+            enabled=True,
+            priority=100,
+            is_default=False,
+            events=[],
+            secret_refs=["db://not-a-dict"],
+        ),
+        _TrackedProfile(
+            profile_id="non_string_secret_ref",
+            runtime_id="codex_cli",
+            enabled=True,
+            priority=100,
+            is_default=False,
+            events=[],
+            secret_refs={"provider_api_key": 123},
+        ),
+    ]
+
+    statuses = await _managed_secret_statuses_for_profiles(
+        session=_EmptySecretSession(),
+        rows=rows,
+    )
+
+    assert statuses == {}
 
 async def get_or_create_sample_profile() -> ManagedAgentProviderProfile:
     """Helper to create a baseline profile in the test DB."""
@@ -975,7 +1088,9 @@ async def test_provider_profile_readiness_reports_managed_secret_status(
         response = await client.get(f"/api/v1/provider-profiles/{profile_id}")
 
     assert response.status_code == 200
-    readiness = response.json()["readiness"]
+    payload = response.json()
+    assert payload["launch_ready"] is False
+    readiness = payload["readiness"]
     assert readiness["status"] == "blocked"
     checks = {check["id"]: check for check in readiness["checks"]}
     assert checks["secret_refs"]["status"] == "error"
