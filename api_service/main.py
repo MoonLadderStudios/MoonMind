@@ -563,6 +563,37 @@ def _codex_openrouter_qwen36_plus_file_templates(
         }
     ]
 
+def _codex_minimax_m27_file_templates() -> list[dict[str, object]]:
+    return [
+        {
+            "path": "{{runtime_support_dir}}/codex-home/config.toml",
+            "format": "toml",
+            "merge_strategy": "deep_merge",
+            "content_template": {
+                "profile": "m27",
+                "model_providers": {
+                    "minimax": {
+                        "name": "MiniMax Chat Completions API",
+                        "base_url": "https://api.minimax.io/v1",
+                        "env_key": "MINIMAX_API_KEY",
+                        "wire_api": "chat",
+                        "requires_openai_auth": False,
+                        "request_max_retries": 4,
+                        "stream_max_retries": 10,
+                        "stream_idle_timeout_ms": 300000,
+                    },
+                },
+                "profiles": {
+                    "m27": {
+                        "model": "codex-MiniMax-M2.7",
+                        "model_provider": "minimax",
+                    }
+                },
+            },
+            "permissions": "0600",
+        }
+    ]
+
 def _legacy_codex_openrouter_qwen36_plus_file_templates() -> list[dict[str, object]]:
     return [
         {
@@ -674,6 +705,11 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
             "volume_ref": None,
             "volume_mount_path": None,
+            "clear_env_keys": [
+                "GEMINI_API_KEY",
+                "GOOGLE_API_KEY",
+                "GOOGLE_APPLICATION_CREDENTIALS",
+            ],
             "account_label": "Gemini CLI (auto-seeded)",
             "enabled": False,
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
@@ -708,6 +744,13 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
             "volume_ref": None,
             "volume_mount_path": None,
+            "clear_env_keys": [
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+                "MINIMAX_API_KEY",
+            ],
             "account_label": "Codex CLI (auto-seeded)",
             "enabled": False,
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
@@ -749,6 +792,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_mount_path": None,
             "clear_env_keys": [
                 "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_BASE_URL",
                 "CLAUDE_API_KEY",
                 "OPENAI_API_KEY",
             ],
@@ -773,14 +818,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "credential_source": ProviderCredentialSource.SECRET_REF,
             "runtime_materialization_mode": RuntimeMaterializationMode.ENV_BUNDLE,
             "secret_refs": {
-                "ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"
+                "provider_api_key": "env://MINIMAX_API_KEY"
             },
             "clear_env_keys": [
                 "ANTHROPIC_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
                 "OPENAI_API_KEY",
             ],
             "env_template": {
                 "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
+                "ANTHROPIC_AUTH_TOKEN": {
+                    "from_secret_ref": "provider_api_key",
+                },
                 "ANTHROPIC_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_SMALL_FAST_MODEL": "MiniMax-M2.7",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": "MiniMax-M2.7",
@@ -792,6 +841,51 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_ref": None,
             "volume_mount_path": None,
             "account_label": "Claude Code via MiniMax (auto-seeded)",
+            "enabled": True,
+            "auth_state": ProviderProfileAuthState.CONNECTED,
+            "disabled_reason": None,
+            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
+        })
+        _DEFAULT_PROFILES.append({
+            "profile_id": "codex_minimax_m27",
+            "runtime_id": "codex_cli",
+            "is_default": False,
+            "provider_id": "minimax",
+            "provider_label": "MiniMax",
+            "default_model": "codex-MiniMax-M2.7",
+            "model_overrides": {
+                "codex_profile_name": "m27",
+            },
+            "credential_source": ProviderCredentialSource.SECRET_REF,
+            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+            "secret_refs": {
+                "provider_api_key": "env://MINIMAX_API_KEY",
+            },
+            "clear_env_keys": [
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "OPENAI_ORG_ID",
+                "OPENAI_PROJECT",
+            ],
+            "env_template": {
+                "MINIMAX_API_KEY": {
+                    "from_secret_ref": "provider_api_key",
+                },
+            },
+            "file_templates": _codex_minimax_m27_file_templates(),
+            "home_path_overrides": {
+                "CODEX_HOME": "{{runtime_support_dir}}/codex-home",
+            },
+            "command_behavior": {
+                "suppress_default_model_flag": True,
+            },
+            "max_parallel_runs": 4,
+            "cooldown_after_429_seconds": 600,
+            "rate_limit_policy": ManagedAgentRateLimitPolicy.BACKOFF,
+            "max_lease_duration_seconds": 7200,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "account_label": "Codex CLI via MiniMax (auto-seeded)",
             "enabled": True,
             "auth_state": ProviderProfileAuthState.CONNECTED,
             "disabled_reason": None,
@@ -939,13 +1033,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         await session.execute(stmt)
                         needs_commit = True
                     desired_clear_env_keys = profile_def.get("clear_env_keys")
-                    if (
-                        profile_id in {
-                            "claude_anthropic",
-                            "claude_anthropic_default",
-                        }
-                        and desired_clear_env_keys
-                    ):
+                    if desired_clear_env_keys:
                         current_clear_env_keys = list(
                             existing_by_id[profile_id]["clear_env_keys"] or []
                         )
@@ -996,6 +1084,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     provider_id=profile_def["provider_id"],
                     provider_label=profile_def.get("provider_label"),
                     default_model=profile_def.get("default_model"),
+                    model_overrides=profile_def.get("model_overrides"),
                     credential_source=profile_def["credential_source"],
                     runtime_materialization_mode=profile_def["runtime_materialization_mode"],
                     volume_ref=profile_def.get("volume_ref"),

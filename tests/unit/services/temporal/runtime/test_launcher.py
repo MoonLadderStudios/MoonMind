@@ -165,6 +165,17 @@ def test_apply_runtime_command_rendering_redacts_diagnostics(monkeypatch):
     assert render_metadata["diagnostics"]["message"] == "saw ***"
     assert "render-secret-value" not in str(render_metadata)
 
+def test_assert_profile_launch_ready_accepts_connected_enum_auth_state():
+    from api_service.db.models import ProviderProfileAuthState
+
+    profile = _make_profile(
+        enabled=True,
+        authState=ProviderProfileAuthState.CONNECTED,
+        disabledReason=None,
+    )
+
+    ManagedRuntimeLauncher._assert_profile_launch_ready(profile)
+
 def test_build_command_per_runtime():
     store = ManagedRunStore("/tmp/test-store")
     launcher = ManagedRuntimeLauncher(store)
@@ -1921,6 +1932,74 @@ async def test_launch_claude_anthropic_missing_secret_ref_fails_before_process(
     assert "missing" in message
     assert "resolved-claude-anthropic-key" not in message
     assert "ambient-anthropic-key" not in message
+
+@pytest.mark.asyncio
+async def test_launch_rechecks_profile_readiness_before_secret_resolution(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+    store = ManagedRunStore(tmp_path)
+    launcher = ManagedRuntimeLauncher(store)
+    profile = _make_profile(
+        profile_id="claude_anthropic",
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        credential_source="secret_ref",
+        runtime_materialization_mode="api_key_env",
+        enabled=True,
+        auth_state="connected",
+        disabled_reason=None,
+        launch_ready=False,
+        command_template=["claude", "-p", "hello"],
+        clear_env_keys=["ANTHROPIC_API_KEY"],
+        secret_refs={"anthropic_api_key": "db://claude-token"},
+        env_template={"ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"}},
+        passthrough_env_keys=[],
+    )
+    request = _make_request(execution_profile_ref="claude_anthropic")
+
+    class _FakeGitProcess:
+        def __init__(self) -> None:
+            self.pid = 1007
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    async def _fake_create_subprocess_exec(*args, **_kwargs):
+        if args and args[0] == "git":
+            return _FakeGitProcess()
+        raise AssertionError("runtime process should not start")
+
+    async def _fake_assert_active(_secret_refs):
+        raise AssertionError("secret readiness check should not run")
+
+    async def _fake_resolve(_secret_name: str) -> str:
+        raise AssertionError("secret resolution should not run")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.assert_managed_secret_refs_active_for_launch",
+        _fake_assert_active,
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.managed_api_key_resolve.resolve_managed_api_key_reference",
+        _fake_resolve,
+    )
+
+    with pytest.raises(RuntimeError, match="launch_ready=False"):
+        await launcher.launch(
+            run_id="run-profile-readiness-recheck",
+            request=request,
+            profile=profile,
+        )
 
 @pytest.mark.asyncio
 async def test_launch_resolves_github_token_from_secret_ref_setting(

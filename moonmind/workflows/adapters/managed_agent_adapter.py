@@ -671,6 +671,10 @@ class ManagedAgentAdapter:
                 runtime_materialization_mode=profile.get(
                     "runtime_materialization_mode"
                 ),
+                enabled=profile.get("enabled"),
+                auth_state=profile.get("auth_state"),
+                disabled_reason=profile.get("disabled_reason"),
+                launch_ready=profile.get("launch_ready"),
                 # Use delta_env_overrides (profile-specific additions only), NOT
                 # shaped_env (which contains the full base environment).  The
                 # launcher already starts from os.environ and overlays

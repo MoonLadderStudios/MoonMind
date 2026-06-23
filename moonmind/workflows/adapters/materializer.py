@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -245,13 +246,88 @@ class ProviderProfileMaterializer:
         file_path.parent.mkdir(parents=True, exist_ok=True)
 
         rendered_content = self._render_value(file_template.content_template, context)
-        content = self._serialize_file_content(
-            rendered_content,
-            file_format=file_template.format,
-        )
+        content = self._render_file_content(file_template, file_path, rendered_content)
         file_path.write_text(content, encoding="utf-8")
         os.chmod(file_path, self._parse_permissions(file_template.permissions))
         self.generated_files.append(str(file_path))
+
+    def _render_file_content(
+        self,
+        file_template: RuntimeFileTemplate,
+        file_path: Path,
+        rendered_content: Any,
+    ) -> str:
+        merge_strategy = str(file_template.merge_strategy or "replace").strip().lower()
+        if merge_strategy == "replace" or not file_path.exists():
+            return self._serialize_file_content(
+                rendered_content,
+                file_format=file_template.format,
+            )
+        if merge_strategy == "deep_merge":
+            return self._render_deep_merged_file_content(
+                file_path=file_path,
+                rendered_content=rendered_content,
+                file_format=file_template.format,
+            )
+        if merge_strategy == "append":
+            existing = file_path.read_text(encoding="utf-8")
+            addition = self._serialize_file_content(
+                rendered_content,
+                file_format=file_template.format,
+            )
+            separator = "" if not existing or existing.endswith("\n") else "\n"
+            return f"{existing}{separator}{addition}"
+        raise ValueError(
+            "fileTemplates[].mergeStrategy must be one of: replace, deep_merge, append"
+        )
+
+    def _render_deep_merged_file_content(
+        self,
+        *,
+        file_path: Path,
+        rendered_content: Any,
+        file_format: str,
+    ) -> str:
+        if not isinstance(rendered_content, dict):
+            raise ValueError("deep_merge fileTemplates require object content_template")
+
+        existing = self._parse_existing_structured_file(file_path, file_format=file_format)
+        merged = self._deep_merge_dicts(existing, rendered_content)
+        return self._serialize_file_content(merged, file_format=file_format)
+
+    def _parse_existing_structured_file(
+        self,
+        file_path: Path,
+        *,
+        file_format: str,
+    ) -> dict[str, Any]:
+        raw = file_path.read_text(encoding="utf-8")
+        if not raw.strip():
+            return {}
+        normalized_format = str(file_format).strip().lower()
+        if normalized_format == "json":
+            parsed = json.loads(raw)
+        elif normalized_format == "toml":
+            parsed = tomllib.loads(raw)
+        else:
+            raise ValueError("deep_merge is supported only for json and toml fileTemplates")
+        if not isinstance(parsed, dict):
+            raise ValueError("deep_merge existing file content must be an object")
+        return parsed
+
+    def _deep_merge_dicts(
+        self,
+        base: dict[str, Any],
+        overlay: dict[str, Any],
+    ) -> dict[str, Any]:
+        merged = dict(base)
+        for key, value in overlay.items():
+            existing = merged.get(key)
+            if isinstance(existing, dict) and isinstance(value, dict):
+                merged[key] = self._deep_merge_dicts(existing, value)
+            else:
+                merged[key] = value
+        return merged
 
     @staticmethod
     def _parse_permissions(value: str | int | None) -> int:
