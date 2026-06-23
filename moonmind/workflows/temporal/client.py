@@ -691,7 +691,7 @@ class TemporalClientAdapter:
 
         definition_uuid = _UUID(str(definition_id))
         handle, _desc = await self._get_schedule_handle(definition_id)
-        task_queue = self._get_task_queue()
+        task_queue = self._get_task_queue(workflow_type)
 
         formatted_sa = {
             k: v if isinstance(v, list) else [v]

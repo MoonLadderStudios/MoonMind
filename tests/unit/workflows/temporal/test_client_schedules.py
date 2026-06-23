@@ -430,6 +430,23 @@ class TestUpdateSchedule:
             "owner-123"
         )
 
+    @pytest.mark.asyncio
+    async def test_update_resolves_task_queue_for_workflow_type(self) -> None:
+        handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        adapter = _make_adapter(mock_client)
+        adapter._get_task_queue = MagicMock(return_value="mm.workflow.user.v2")
+
+        await adapter.update_schedule(
+            definition_id=_TEST_UUID,
+            workflow_type="MoonMind.UserWorkflow.v2",
+            workflow_input={"workflow_type": "MoonMind.UserWorkflow.v2"},
+        )
+
+        adapter._get_task_queue.assert_called_once_with("MoonMind.UserWorkflow.v2")
+
 class TestDescribeSchedule:
     """DOC-REQ-002: describe schedule."""
 

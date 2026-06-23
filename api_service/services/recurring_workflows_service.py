@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -334,7 +335,13 @@ def _last_temporal_action(info: object) -> object | None:
     def _sort_key(action: object) -> datetime:
         return (
             _coerce_optional_utc_datetime(
+                _object_value(action, "started_at", "startedAt")
+            )
+            or _coerce_optional_utc_datetime(
                 _object_value(action, "actual_time", "actualTime")
+            )
+            or _coerce_optional_utc_datetime(
+                _object_value(action, "scheduled_at", "scheduledAt")
             )
             or _coerce_optional_utc_datetime(
                 _object_value(action, "schedule_time", "scheduleTime")
@@ -347,6 +354,8 @@ def _last_temporal_action(info: object) -> object | None:
 def _dispatch_status_from_temporal_action(action: object | None) -> str | None:
     if action is None:
         return None
+    if _object_value(action, "action") is not None:
+        return RecurringWorkflowRunOutcome.ENQUEUED.value
     result = _object_value(action, "start_workflow_result", "startWorkflowResult")
     if result is not None:
         return RecurringWorkflowRunOutcome.ENQUEUED.value
@@ -843,24 +852,39 @@ class RecurringWorkflowsService:
                 workflow_type, workflow_input = self._workflow_bundle_for_definition(
                     dfn
                 )
-                note = (dfn.name or "") if mismatch else None
-                await self._adapter.update_schedule(
-                    definition_id=dfn.id,
-                    cron_expression=dfn.cron if mismatch else None,
-                    timezone=dfn.timezone if mismatch else None,
-                    overlap_mode=policy_obj.overlap_mode if mismatch else None,
-                    catchup_mode=policy_obj.catchup_mode if mismatch else None,
-                    jitter_seconds=policy_obj.jitter_seconds if mismatch else None,
-                    enabled=bool(dfn.enabled) if mismatch else None,
-                    note=note,
-                    workflow_type=workflow_type,
-                    workflow_input=workflow_input,
-                    memo={"definitionId": str(dfn.id)},
-                    search_attributes=self._owner_search_attributes(
-                        dfn.owner_user_id
-                    ),
+                action = getattr(sched, "action", None)
+                temporal_workflow_type = _object_value(action, "workflow")
+                temporal_args = _object_value(action, "args") or []
+                temporal_input = temporal_args[0] if temporal_args else None
+                action_mismatch = (
+                    temporal_workflow_type != workflow_type
+                    or temporal_input != workflow_input
                 )
-                reconciled += 1
+
+                if mismatch or action_mismatch:
+                    logger.info("Reconcile updating schedule for %s", dfn.id)
+                    note = (dfn.name or "") if mismatch else None
+                    await self._adapter.update_schedule(
+                        definition_id=dfn.id,
+                        cron_expression=dfn.cron if mismatch else None,
+                        timezone=dfn.timezone if mismatch else None,
+                        overlap_mode=policy_obj.overlap_mode if mismatch else None,
+                        catchup_mode=policy_obj.catchup_mode if mismatch else None,
+                        jitter_seconds=policy_obj.jitter_seconds if mismatch else None,
+                        enabled=bool(dfn.enabled) if mismatch else None,
+                        note=note,
+                        workflow_type=workflow_type if action_mismatch else None,
+                        workflow_input=workflow_input if action_mismatch else None,
+                        memo={"definitionId": str(dfn.id)}
+                        if action_mismatch
+                        else None,
+                        search_attributes=self._owner_search_attributes(
+                            dfn.owner_user_id
+                        )
+                        if action_mismatch
+                        else None,
+                    )
+                    reconciled += 1
 
             except ScheduleAdapterError as exc:
                 logger.warning("Reconciliation adapter error for %s: %s", dfn.id, exc)
@@ -935,12 +959,20 @@ class RecurringWorkflowsService:
         info = _object_value(description, "info")
         next_run_at = None if paused else _first_temporal_datetime(
             info,
+            "next_action_times",
+            "nextActionTimes",
             "future_action_times",
             "futureActionTimes",
         )
         last_action = _last_temporal_action(info)
         last_scheduled_for = _coerce_optional_utc_datetime(
-            _object_value(last_action, "schedule_time", "scheduleTime")
+            _object_value(
+                last_action,
+                "scheduled_at",
+                "scheduledAt",
+                "schedule_time",
+                "scheduleTime",
+            )
         )
         dispatch_status = _dispatch_status_from_temporal_action(last_action)
         dispatch_error = _dispatch_error_from_temporal_action(last_action)
@@ -958,12 +990,14 @@ class RecurringWorkflowsService:
         self,
         definitions: Iterable[RecurringWorkflowDefinition],
     ) -> dict[UUID, RecurringScheduleRuntimeSummary]:
-        summaries: dict[UUID, RecurringScheduleRuntimeSummary] = {}
-        for definition in definitions:
-            summaries[definition.id] = await self.runtime_summary_for_definition(
-                definition
+        definition_list = list(definitions)
+        results = await asyncio.gather(
+            *(
+                self.runtime_summary_for_definition(definition)
+                for definition in definition_list
             )
-        return summaries
+        )
+        return dict(zip((definition.id for definition in definition_list), results))
 
 __all__ = [
     "RecurringScheduleRuntimeSummary",
