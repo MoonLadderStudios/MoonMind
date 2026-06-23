@@ -114,6 +114,7 @@ async def _create_monitored_execution(
         json={
             "workflowType": "MoonMind.UserWorkflow",
             "title": "Integration callback test",
+            "planArtifactRef": f"execution-integrations-plan-{execution_suffix}",
             "idempotencyKey": f"execution-integrations-create-{execution_suffix}",
         },
     )
