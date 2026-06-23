@@ -1,0 +1,583 @@
+{
+  "source": {
+    "title": "inline user request",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "declarative-text",
+    "originalDesignText": "# MoonMind resilience report\n\nThis inline declarative design assesses MoonMind resilience as an operational envelope for long-running AI agent work. It identifies Temporal durability, managed runtime supervision, provider-profile slot/cooldown controls, step ledgers, artifacts, checkpoint primitives, sandbox boundaries, and outbound safety gates as the right architectural shape. The strongest current primitives are Temporal-centered orchestration, explicit provider throttling, managed-process supervision, step-execution identity/idempotency, and secret/outbound-scan foundations. The largest gaps are that checkpoint-backed recovery is not yet the default failed-run path, resilience is not uniform across runtimes, and defense-in-depth is partially opt-in or boundary-specific.\n\nRecommended P-priority changes:\n\nP0: Make resilience policy explicit and persisted. Create a versioned ResiliencePolicy envelope attached to every workflow run and step execution. It should capture step attempt budgets, wall-clock and idle timeouts, no-progress thresholds, provider cooldown and slot policy, retryable and non-retryable failure classes, side-effect idempotency requirements, checkpoint requirements, outbound scan mode, and observability and cost-attribution settings. The operator outcome is forensic clarity after a failure.\n\nP0: Make checkpoint-backed recovery the default failed-run path. Every failed run should end with a recovery manifest that says last accepted step, failed logical step and execution ordinal, available checkpoint refs, checkpoint validation result, side effects already accepted/discarded/blocked/needing compensation, whether resume is allowed, and the exact reason if resume is blocked. Recovery should fail closed if checkpoint evidence is missing, corrupted, unauthorized, or incompatible with workspace policy.\n\nP1: Move provider failure handling from string matching to structured events. Keep marker matching as fallback, but have each runtime adapter emit canonical provider events: provider_error_code, provider_error_class, retry_after_seconds, reset_at, quota_scope, credential_scope, provider_request_id, raw_error_ref, and sanitized_summary. The operator outcome is more accurate cooldowns, fewer false positives, and scope-aware responses.\n\nP1: Build cross-runtime managed-session conformance. Codex, Claude, Gemini, and future runtimes should all pass the same conformance suite for launch, send turn, interrupt, clear/reset with epoch handling, resume, terminate, rate-limit detection, no-progress handling, checkpoint evidence, outbound scan enforcement, and trace/log/artifact correlation.\n\nP1: Turn observability into incident reconstruction. For every run, MoonMind should make it easy to answer what policy applied, what provider/profile/credential source was used, what exact step failed, whether progress was observed, what the agent changed, which side effects happened or were blocked, what checkpoint can be restored, what it cost, and which trace spans/logs correspond to the failure. This requires consistent trace IDs from API to workflow to activity to provider call, trace refs in step manifests, and Mission Control deep links.\n\nOut of scope for this P-priority breakdown: production HA guidance, deeper readiness checks, developer guardrails, RAG context integration, Mission Control recovery UX beyond evidence links, and Responses API parity."
+  },
+  "extractedAt": "2026-06-23T12:01:11.120100Z",
+  "outputMode": "jira",
+  "designSummary": "MoonMind resilience is defined as an operational envelope for long-running AI agent work, built around Temporal durability, managed runtime supervision, provider capacity policy, step ledgers, checkpoint evidence, sandboxing, artifacts, and outbound safety gates. The P-priority issues convert the strongest primitives into enforced, inspectable operator outcomes: explicit persisted policy, default checkpoint-backed recovery, structured provider failure events, cross-runtime managed-session conformance, and incident reconstruction observability.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Temporal durability remains the orchestration backbone",
+      "type": "constraint",
+      "source_section": "Executive assessment / Durable orchestration",
+      "explanation": "Resilience stories must preserve Temporal as the durable execution substrate with compact workflow metadata, routed activities, and replay-safe boundaries."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Managed runtime supervision handles stuck CLI processes",
+      "type": "requirement",
+      "source_section": "Managed runtime supervision",
+      "explanation": "Runtime behavior must account for heartbeat, timeout, output-progress, rate-limit, and stalled-progress signals rather than treating CLI agents like ordinary API calls."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Self-heal behavior uses explicit budgets and failure classes",
+      "type": "state-model",
+      "source_section": "Self-heal primitives",
+      "explanation": "Recovery behavior must keep attempt budgets, idle/wall-clock limits, no-progress thresholds, and failure classification observable and enforceable."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Provider resilience uses slots, cooldowns, and scoped classification",
+      "type": "integration",
+      "source_section": "Provider resilience",
+      "explanation": "Provider-profile managers own capacity, leases, cooldowns, assignment, and failure classification rather than relying on blind retry."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Step execution separates retries, semantic re-execution, checkpoints, and side effects",
+      "type": "state-model",
+      "source_section": "Step execution, checkpointing, and idempotency",
+      "explanation": "Step ledgers, immutable manifests, checkpoint refs, idempotency keys, and side-effect disposition are central recovery primitives."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Recovery must fail closed instead of silently rerunning",
+      "type": "constraint",
+      "source_section": "P0 checkpoint-backed recovery",
+      "explanation": "Checkpoint validation or restoration failures must block resume with evidence, not degrade to a full rerun."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Safety governance and outbound scanning require broad enforcement",
+      "type": "security",
+      "source_section": "Defense in depth / P-priority recommendations",
+      "explanation": "Sandboxing, file allowlists, provider profiles, secret redaction, side-effect gates, and outbound scanning must be enforced at high-risk boundaries."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Resilience policy must be visible per run and step",
+      "type": "artifact",
+      "source_section": "P0 resilience policy",
+      "explanation": "Operators need a versioned ResiliencePolicy envelope attached to workflow runs and step executions."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Failed runs must produce recovery manifests",
+      "type": "artifact",
+      "source_section": "P0 checkpoint-backed recovery",
+      "explanation": "Failed runs should leave a manifest with last accepted step, failed step, ordinal, checkpoint refs, validation result, side-effect dispositions, resume allowance, and blocked reason."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Provider errors should use structured runtime-adapter events",
+      "type": "integration",
+      "source_section": "P1 provider structured events",
+      "explanation": "Adapters should emit canonical provider event fields, with text matching retained as fallback only."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Managed-session resilience should be uniform across runtimes",
+      "type": "requirement",
+      "source_section": "P1 cross-runtime conformance",
+      "explanation": "Codex, Claude, Gemini, and future runtimes should pass one shared managed-session conformance suite before being surfaced as session-capable."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Observability should reconstruct incidents end to end",
+      "type": "observability",
+      "source_section": "P1 incident reconstruction",
+      "explanation": "Operators should answer policy, provider, credential, failed step, progress, changes, side effects, checkpoints, cost, trace, and log questions from correlated evidence."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Mission Control and artifacts remain the evidence surface",
+      "type": "observability",
+      "source_section": "Bottom line / Observability",
+      "explanation": "Durable artifacts, trace refs, logs, and Mission Control deep links should expose what happened without making raw worker internals the source of truth."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Only explicit P-priority resilience issues become Jira stories here",
+      "type": "non-goal",
+      "source_section": "What remains to be implemented / Out of scope",
+      "explanation": "Lower-priority findings such as HA guidance, readiness, developer guardrails, RAG integration, and Responses API parity are acknowledged but not converted into this P0/P1 story set."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Persist per-run resilience policy envelopes",
+      "shortName": "policy-envelope",
+      "priority": "P0",
+      "description": "As a MoonMind operator, I need every workflow run and step execution to carry the exact versioned resilience policy that governed it, so failure review does not require reconstructing behavior from scattered constants, environment variables, provider profiles, and workflow defaults.",
+      "sourceReference": {
+        "path": null,
+        "title": "inline user request",
+        "sections": [
+          "P0: Make resilience policy explicit and persisted",
+          "What is not working well enough / Resilience policy is spread across too many places"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "independentTest": "Submit or construct a workflow run with known resilience configuration and verify run-level and step-level records expose the exact policy version and values used by workflow/activity boundaries without storing raw secrets or large payloads in workflow history.",
+      "acceptanceCriteria": [
+        "Every new workflow run records a versioned ResiliencePolicy reference or compact envelope before step execution begins.",
+        "Every step execution can be traced to the policy values governing attempts, timeouts, no-progress handling, provider cooldowns, checkpoint requirements, side-effect idempotency, outbound scanning, observability, and cost attribution.",
+        "Policy values are deterministic for the run and do not require inference from environment variables, hard-coded constants, or provider-manager state after the fact.",
+        "The policy contract preserves Temporal payload discipline: large details are artifact-backed and secrets are references only.",
+        "Boundary-level tests cover the real worker/activity invocation shape and fail-fast handling for unsupported or missing policy values."
+      ],
+      "requirements": [
+        "Define a typed, versioned resilience policy contract.",
+        "Attach the policy to workflow run and step execution records or artifacts.",
+        "Preserve Temporal determinism and compact metadata rules.",
+        "Make the applied policy inspectable for forensic review."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "STORY-001 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing execution records or artifact refs can carry the policy envelope without a new persistent table unless current storage proves insufficient."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Default failed runs to checkpoint-backed recovery manifests",
+      "shortName": "recovery-manifest",
+      "priority": "P0",
+      "description": "As a MoonMind operator, I need failed runs to end with a recovery manifest backed by checkpoint evidence, so I can resume from the last valid point or understand exactly why resume is blocked without risking a silent full rerun.",
+      "sourceReference": {
+        "path": null,
+        "title": "inline user request",
+        "sections": [
+          "P0: Make checkpoint-backed recovery the default failed-run path",
+          "Step execution, checkpointing, and idempotency"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "independentTest": "Run or simulate a failed multi-step execution with one valid checkpoint and one invalid checkpoint case, then verify the failed execution produces a manifest that allows resume only for the valid case and blocks resume with an exact reason for the invalid case.",
+      "acceptanceCriteria": [
+        "Every failed run produces a recovery manifest artifact or compact reference before terminal failure is reported.",
+        "The manifest names the last accepted step, failed logical step, execution ordinal, checkpoint refs, validation result, side-effect dispositions, resume allowance, and blocked reason when applicable.",
+        "Resume does not silently degrade to a full rerun when checkpoint validation or restoration fails.",
+        "Side effects are classified as accepted, discarded, blocked, or needing compensation before resume is allowed.",
+        "Tests cover missing, corrupted, unauthorized, and workspace-policy-incompatible checkpoint evidence."
+      ],
+      "requirements": [
+        "Make checkpoint-backed recovery the default failed-run path.",
+        "Validate checkpoint evidence before allowing resume.",
+        "Represent side-effect disposition in the recovery contract.",
+        "Expose recovery evidence through durable artifacts and execution-linked metadata."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-002 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "STORY-002 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "STORY-002 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "STORY-002 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "STORY-002 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "STORY-002 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "STORY-002 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing checkpoint and artifact services can represent the recovery manifest without embedding large state in workflow history."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Emit structured provider failure events from runtime adapters",
+      "shortName": "provider-events",
+      "priority": "P1",
+      "description": "As a MoonMind operator, I need runtime adapters to emit canonical structured provider failure events, so cooldowns, retry decisions, and operator guidance do not depend primarily on brittle provider or CLI wording.",
+      "sourceReference": {
+        "path": null,
+        "title": "inline user request",
+        "sections": [
+          "P1: Move provider failure handling from string matching to structured events",
+          "Provider resilience is modeled as slots, cooldowns, and classification"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "independentTest": "Inject representative structured provider errors and legacy text-only errors for at least two runtimes and verify cooldown, auth, capacity, and retry recommendations are derived from structured fields first and fallback markers second.",
+      "acceptanceCriteria": [
+        "Runtime adapter contracts include canonical provider failure event fields.",
+        "Provider-profile cooldown decisions prefer retry_after_seconds/reset_at/quota_scope over string markers when present.",
+        "Auth, rate-limit, capacity, and credential-scope failures produce distinct sanitized operator summaries.",
+        "Raw provider details are stored by reference or sanitized artifact, not leaked into ordinary logs or workflow payloads.",
+        "Tests cover structured events, fallback text markers, unknown provider_error_class, and missing retry metadata."
+      ],
+      "requirements": [
+        "Define structured provider failure event contract.",
+        "Update adapter and provider-manager boundaries to consume canonical event data.",
+        "Retain text matching as fallback only.",
+        "Preserve sanitized diagnostics and secret-safety behavior."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "STORY-003 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "STORY-003 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "STORY-003 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "STORY-003 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "STORY-003 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Some providers will not expose every canonical field; absent fields should be explicit and should not trigger hidden semantic fallback beyond documented marker fallback."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Add cross-runtime managed-session conformance suite",
+      "shortName": "runtime-conformance",
+      "priority": "P1",
+      "description": "As a MoonMind maintainer, I need Codex, Claude, Gemini, and future managed-session runtimes to pass one shared conformance suite, so runtime resilience capabilities are truthful, uniform, and regression-tested before Mission Control exposes them as session-capable.",
+      "sourceReference": {
+        "path": null,
+        "title": "inline user request",
+        "sections": [
+          "P1: Build cross-runtime managed-session conformance",
+          "Runtime resilience is not yet uniform"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "independentTest": "Run the conformance suite against a mock compliant adapter and a deliberately incomplete adapter; verify the compliant adapter passes and the incomplete adapter reports precise missing capabilities without being surfaced as session-capable.",
+      "acceptanceCriteria": [
+        "A shared managed-session conformance suite covers launch, turn control, interrupt, reset/epoch, resume, terminate, rate-limit, no-progress, checkpoint, scan, and correlation behavior.",
+        "Runtime adapters expose enough metadata for the suite to determine session-capability truthfully.",
+        "Non-conforming runtimes fail with actionable capability gaps rather than being treated as partially session-capable.",
+        "The suite includes boundary-level tests for adapter invocation shapes and trace/artifact correlation.",
+        "Existing Codex managed-session behavior remains covered by the suite."
+      ],
+      "requirements": [
+        "Define cross-runtime managed-session conformance expectations.",
+        "Run conformance at adapter boundaries.",
+        "Prevent unsupported runtimes from being surfaced as session-capable.",
+        "Cover checkpoint, outbound scan, and observability behavior uniformly."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "STORY-004 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Runtimes that are only managed-run or external/delegated agents remain explicitly outside the managed-session conformance claim."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Correlate run evidence for incident reconstruction",
+      "shortName": "incident-reconstruction",
+      "priority": "P1",
+      "description": "As a MoonMind operator investigating a failed run, I need policy, provider, credential, step, progress, change, side-effect, checkpoint, cost, trace, log, and artifact evidence correlated in one incident reconstruction path, so I can answer what happened without reading raw worker internals.",
+      "sourceReference": {
+        "path": null,
+        "title": "inline user request",
+        "sections": [
+          "P1: Turn observability into incident reconstruction",
+          "Observability is not yet deep enough for hard incidents"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "independentTest": "Create or simulate a failed execution with provider failure, step output, blocked side effect, checkpoint, and cost metadata, then verify the incident view/projection links all evidence with stable correlation IDs and no raw secrets.",
+      "acceptanceCriteria": [
+        "A failed run exposes correlated evidence for policy, provider/profile/credential source, failed step, progress signals, workspace changes, accepted/blocked side effects, checkpoint restore candidate, cost, trace spans, logs, and artifacts.",
+        "Trace IDs or equivalent correlation IDs propagate through API, workflow, activity, provider, side-effect, log, artifact, and step-manifest boundaries.",
+        "Mission Control or report projections link to durable artifacts rather than duplicating large evidence in workflow history.",
+        "Secret-bearing values and raw provider payloads are redacted, referenced, or artifact-gated according to policy.",
+        "Tests cover a hard incident with both accepted and blocked side effects plus a provider failure event."
+      ],
+      "requirements": [
+        "Propagate stable correlation identifiers end to end.",
+        "Add trace refs to step manifests and incident projections.",
+        "Include cost-attribution settings and observed cost where available.",
+        "Link Mission Control/report surfaces to durable evidence."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "STORY-005 explicitly owns this point through its scope, requirements, and acceptance criteria."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Existing observability and artifact infrastructure can carry the first reconstruction projection incrementally."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-001",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-002",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ]
+  },
+  "outOfScope": [
+    {
+      "item": "Production HA guidance, deeper readiness checks, developer guardrails, RAG integration, Mission Control recovery UX beyond evidence links, and Responses API parity",
+      "rationale": "These are mentioned in the design but are not explicit P0/P1 recommended Jira issues for this breakdown."
+    }
+  ]
+}
