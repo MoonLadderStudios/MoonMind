@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -982,12 +983,9 @@ class MoonMindRunWorkflow:
     ) -> dict[str, Any]:
         retry_policy = self._retry_policy_for_route(route)
         if max_attempts_override is not None:
-            retry_policy = RetryPolicy(
-                initial_interval=timedelta(seconds=5),
-                backoff_coefficient=2.0,
-                maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
+            retry_policy = dataclasses.replace(
+                retry_policy,
                 maximum_attempts=max_attempts_override,
-                non_retryable_error_types=list(route.retries.non_retryable_error_codes),
             )
         kwargs: dict[str, Any] = {
             "task_queue": route.task_queue,

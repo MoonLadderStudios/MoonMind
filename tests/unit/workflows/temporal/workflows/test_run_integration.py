@@ -24,6 +24,11 @@ from moonmind.workflows.temporal.workflows.run import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityRetries,
+    TemporalActivityRoute,
+    TemporalActivityTimeouts,
+)
 from moonmind.workloads.tool_bridge import build_dood_tool_definition_payload
 
 def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
@@ -434,6 +439,36 @@ async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy
     retry_policy = tool_calls[0][2]["retry_policy"]
     assert retry_policy.maximum_attempts == 3
     assert tool_calls[0][1]["invocation_payload"]["inputs"]["maxAttempts"] == 3
+
+
+def test_execute_kwargs_retry_override_preserves_route_retry_policy() -> None:
+    workflow = MoonMindRunWorkflow()
+    route = TemporalActivityRoute(
+        activity_type="mm.tool.execute",
+        task_queue="mm.activity.integrations",
+        fleet="integrations",
+        capability_class="tools",
+        timeouts=TemporalActivityTimeouts(
+            start_to_close_seconds=30,
+            schedule_to_close_seconds=90,
+            heartbeat_timeout_seconds=10,
+        ),
+        retries=TemporalActivityRetries(
+            max_attempts=2,
+            max_interval_seconds=45,
+            non_retryable_error_codes=("invalid_input",),
+        ),
+    )
+
+    kwargs = workflow._execute_kwargs_for_route(route, max_attempts_override=4)
+
+    retry_policy = kwargs["retry_policy"]
+    assert retry_policy.maximum_attempts == 4
+    assert retry_policy.initial_interval == timedelta(seconds=5)
+    assert retry_policy.backoff_coefficient == 2.0
+    assert retry_policy.maximum_interval == timedelta(seconds=45)
+    assert retry_policy.non_retryable_error_types == ["invalid_input"]
+    assert kwargs["heartbeat_timeout"] == timedelta(seconds=10)
 
 
 @pytest.mark.asyncio
