@@ -19,6 +19,7 @@ from api_service.db.models import (
     ManagedSecret,
     ProviderCredentialSource,
     RuntimeMaterializationMode,
+    SecretStatus,
 )
 from api_service.main import app
 from api_service.services.provider_profile_service import (
@@ -576,6 +577,52 @@ async def test_patch_enabled_requires_connected_activation_state(
 
     assert response.status_code == 422
     assert "auth_state must be connected" in response.text
+
+
+@pytest.mark.asyncio
+async def test_patch_enabled_accepts_active_database_secret_ref(
+    client_app: AsyncClient,
+    _module_db,
+):
+    suffix = uuid4().hex
+    profile_id = f"db_secret_patch_enable_{suffix}"
+    secret_slug = f"db-secret-patch-enable-{suffix}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedSecret(
+                slug=secret_slug,
+                ciphertext="encrypted-test-value",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                secret_refs={"OPENAI_API_KEY": f"db://{secret_slug}"},
+                enabled=False,
+                auth_state="connected",
+                disabled_reason=None,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": True},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["disabled_reason"] is None
+    checks = {check["id"]: check for check in data["readiness"]["checks"]}
+    assert checks["secret_refs"]["status"] == "pass"
 
 
 @pytest.mark.asyncio

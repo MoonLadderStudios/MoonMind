@@ -373,11 +373,17 @@ async def create_profile(
         is_default=False,
         max_lease_duration_seconds=body.max_lease_duration_seconds,
     )
-    _validate_codex_oauth_profile_row(profile)
-    if profile.enabled:
-        _require_may_enable(profile)
     session.add(profile)
     await session.flush()
+    if profile.enabled:
+        secret_ref_results = _secret_ref_results_for_rows([profile])
+        secret_statuses = await _managed_secret_statuses_for_rows(
+            session,
+            [profile],
+            secret_ref_results=secret_ref_results,
+        )
+        _require_may_enable(profile, managed_secret_statuses=secret_statuses)
+    _validate_codex_oauth_profile_row(profile)
     await normalize_runtime_default_profile(
         session=session,
         runtime_id=body.runtime_id,
@@ -436,7 +442,13 @@ async def update_profile(
             profile.auth_state = AUTH_STATE_NOT_CONFIGURED
             profile.disabled_reason = DISABLED_REASON_MISSING_CREDENTIALS
     elif requested_enabled is True:
-        _require_may_enable(profile)
+        secret_ref_results = _secret_ref_results_for_rows([profile])
+        secret_statuses = await _managed_secret_statuses_for_rows(
+            session,
+            [profile],
+            secret_ref_results=secret_ref_results,
+        )
+        _require_may_enable(profile, managed_secret_statuses=secret_statuses)
         profile.disabled_reason = None
 
     if requested_is_default is False:
@@ -773,7 +785,11 @@ def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-def _activation_blockers(row: ManagedAgentProviderProfile) -> list[str]:
+def _activation_blockers(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str] | None = None,
+) -> list[str]:
     blockers: list[str] = []
     auth_state = row.auth_state or AUTH_STATE_NOT_CONFIGURED
     disabled_reason = row.disabled_reason
@@ -796,7 +812,7 @@ def _activation_blockers(row: ManagedAgentProviderProfile) -> list[str]:
     secret_check = _secret_refs_check(
         row,
         credential_source=credential_source,
-        managed_secret_statuses={},
+        managed_secret_statuses=managed_secret_statuses or {},
         secret_ref_results=_secret_ref_results_for_rows([row]).get(row.profile_id, {}),
     )
     if secret_check["status"] == "error":
@@ -813,8 +829,15 @@ def _activation_blockers(row: ManagedAgentProviderProfile) -> list[str]:
         blockers.append(provider_check["message"])
     return blockers
 
-def _require_may_enable(row: ManagedAgentProviderProfile) -> None:
-    blockers = _activation_blockers(row)
+def _require_may_enable(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str] | None = None,
+) -> None:
+    blockers = _activation_blockers(
+        row,
+        managed_secret_statuses=managed_secret_statuses,
+    )
     if blockers:
         raise HTTPException(
             status_code=422,
