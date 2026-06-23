@@ -23,6 +23,9 @@ from api_service.db.models import (
     ManagedAgentOAuthSession,
     ManagedAgentProviderProfile,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
 )
 
@@ -83,6 +86,34 @@ class TestRuntimeMaterializationModeEnum:
         expected = {"oauth_home", "api_key_env", "env_bundle", "config_bundle", "composite"}
         actual = {m.value for m in RuntimeMaterializationMode}
         assert actual == expected
+
+class TestProviderProfileActivationEnums:
+    """Provider-profile activation enums must match the DB contract."""
+
+    def test_auth_state_values_match_contract(self):
+        expected = {
+            "not_configured",
+            "oauth_pending",
+            "api_key_pending",
+            "connected",
+            "validation_failed",
+            "disconnected",
+        }
+        assert {m.value for m in ProviderProfileAuthState} == expected
+
+    def test_disabled_reason_values_match_contract(self):
+        expected = {
+            "missing_credentials",
+            "auth_invalid",
+            "user_disabled",
+            "policy_disabled",
+            "disconnected",
+        }
+        assert {m.value for m in ProviderProfileDisabledReason} == expected
+
+    def test_last_auth_method_values_match_contract(self):
+        expected = {"oauth_volume", "secret_ref", "manual"}
+        assert {m.value for m in ProviderProfileAuthMethod} == expected
 
 # ---------------------------------------------------------------------------
 # 2. Data migration mapping logic
@@ -248,7 +279,7 @@ async def test_provider_profile_stores_credential_source_and_materialization_mod
 
 @pytest.mark.asyncio
 async def test_provider_profile_composite_mode_is_default(_sqlite_db):
-    """credential_source defaults to NONE and runtime_materialization_mode defaults to COMPOSITE."""
+    """Provider-profile defaults are safe for unconfigured setup stubs."""
     async with _sqlite_db() as session:
         profile = ManagedAgentProviderProfile(
             profile_id="test-defaults",
@@ -267,6 +298,42 @@ async def test_provider_profile_composite_mode_is_default(_sqlite_db):
         row = result.scalar_one()
         assert row.credential_source == ProviderCredentialSource.NONE
         assert row.runtime_materialization_mode == RuntimeMaterializationMode.COMPOSITE
+        assert row.enabled is False
+        assert row.auth_state == ProviderProfileAuthState.NOT_CONFIGURED
+        assert row.disabled_reason is None
+        assert row.first_authenticated_at is None
+        assert row.last_validated_at is None
+        assert row.last_auth_method is None
+
+@pytest.mark.asyncio
+async def test_provider_profile_roundtrips_activation_fields(_sqlite_db):
+    """ManagedAgentProviderProfile must persist canonical activation metadata."""
+    async with _sqlite_db() as session:
+        profile = ManagedAgentProviderProfile(
+            profile_id="test-activation-fields",
+            runtime_id="claude_code",
+            provider_id="anthropic",
+            credential_source=ProviderCredentialSource.SECRET_REF,
+            runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
+        )
+        session.add(profile)
+        await session.commit()
+
+    async with _sqlite_db() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.profile_id == "test-activation-fields"
+            )
+        )
+        row = result.scalar_one()
+        assert row.enabled is True
+        assert row.auth_state == ProviderProfileAuthState.CONNECTED
+        assert row.disabled_reason is None
+        assert row.last_auth_method == ProviderProfileAuthMethod.SECRET_REF
 
 # ---------------------------------------------------------------------------
 # 4. Migration graph: exactly one head

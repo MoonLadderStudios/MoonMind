@@ -17,11 +17,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
 from api_service.db.models import (
-    ProviderCredentialSource,
-    RuntimeMaterializationMode,
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
     ManagedSecret,
+    ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
+    RuntimeMaterializationMode,
     SecretStatus,
     User,
 )
@@ -93,9 +96,23 @@ class ProviderProfileCreate(BaseModel):
     max_parallel_runs: int = Field(default=1, ge=1)
     cooldown_after_429_seconds: int = Field(default=900, ge=0)
     rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
-    enabled: bool = True
+    enabled: bool = False
     is_default: bool = False
     max_lease_duration_seconds: int = Field(default=7200, ge=60)
+    auth_state: str = Field(
+        default="not_configured",
+        pattern="^(not_configured|oauth_pending|api_key_pending|connected|validation_failed|disconnected)$",
+    )
+    disabled_reason: Optional[str] = Field(
+        default="missing_credentials",
+        pattern="^(missing_credentials|auth_invalid|user_disabled|policy_disabled|disconnected)$",
+    )
+    first_authenticated_at: Optional[datetime] = None
+    last_validated_at: Optional[datetime] = None
+    last_auth_method: Optional[str] = Field(
+        default=None,
+        pattern="^(oauth_volume|secret_ref|manual)$",
+    )
 
     @field_validator("env_template", mode="before")
     @classmethod
@@ -115,6 +132,10 @@ class ProviderProfileCreate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
+        if self.enabled and self.auth_state != ProviderProfileAuthState.CONNECTED.value:
+            raise ValueError("enabled profiles require auth_state=connected")
+        if self.enabled and self.disabled_reason is not None:
+            raise ValueError("enabled profiles must not set disabled_reason")
         validate_codex_oauth_profile_refs(
             runtime_id=self.runtime_id,
             credential_source=self.credential_source,
@@ -165,6 +186,20 @@ class ProviderProfileUpdate(BaseModel):
     enabled: Optional[bool] = None
     is_default: Optional[bool] = None
     max_lease_duration_seconds: Optional[int] = Field(default=None, ge=60)
+    auth_state: Optional[str] = Field(
+        default=None,
+        pattern="^(not_configured|oauth_pending|api_key_pending|connected|validation_failed|disconnected)$",
+    )
+    disabled_reason: Optional[str] = Field(
+        default=None,
+        pattern="^(missing_credentials|auth_invalid|user_disabled|policy_disabled|disconnected)$",
+    )
+    first_authenticated_at: Optional[datetime] = None
+    last_validated_at: Optional[datetime] = None
+    last_auth_method: Optional[str] = Field(
+        default=None,
+        pattern="^(oauth_volume|secret_ref|manual)$",
+    )
 
     @field_validator("secret_refs", mode="after")
     @classmethod
@@ -201,6 +236,11 @@ class ProviderProfileResponse(BaseModel):
     enabled: bool
     is_default: bool
     max_lease_duration_seconds: int
+    auth_state: str
+    disabled_reason: Optional[str]
+    first_authenticated_at: Optional[str]
+    last_validated_at: Optional[str]
+    last_auth_method: Optional[str]
     readiness: "ProviderProfileReadiness"
     created_at: Optional[str]
     updated_at: Optional[str]
@@ -353,6 +393,19 @@ async def create_profile(
         enabled=body.enabled,
         is_default=False,
         max_lease_duration_seconds=body.max_lease_duration_seconds,
+        auth_state=ProviderProfileAuthState(body.auth_state),
+        disabled_reason=(
+            ProviderProfileDisabledReason(body.disabled_reason)
+            if body.disabled_reason is not None
+            else None
+        ),
+        first_authenticated_at=body.first_authenticated_at,
+        last_validated_at=body.last_validated_at,
+        last_auth_method=(
+            ProviderProfileAuthMethod(body.last_auth_method)
+            if body.last_auth_method is not None
+            else None
+        ),
     )
     _validate_codex_oauth_profile_row(profile)
     session.add(profile)
@@ -401,6 +454,12 @@ async def update_profile(
             value = ProviderCredentialSource(value)
         elif key == "runtime_materialization_mode" and value is not None:
             value = RuntimeMaterializationMode(value)
+        elif key == "auth_state" and value is not None:
+            value = ProviderProfileAuthState(value)
+        elif key == "disabled_reason" and value is not None:
+            value = ProviderProfileDisabledReason(value)
+        elif key == "last_auth_method" and value is not None:
+            value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
 
     if requested_is_default is False:
@@ -492,6 +551,13 @@ async def commit_claude_manual_auth(
     profile.account_label = (
         body.account_label or profile.account_label or "Claude Anthropic"
     )
+    profile.enabled = True
+    profile.auth_state = ProviderProfileAuthState.CONNECTED
+    profile.disabled_reason = None
+    if profile.first_authenticated_at is None:
+        profile.first_authenticated_at = validated_at
+    profile.last_validated_at = validated_at
+    profile.last_auth_method = ProviderProfileAuthMethod.SECRET_REF
     behavior = dict(profile.command_behavior or {})
     behavior.update(
         {
@@ -564,6 +630,11 @@ async def validate_claude_oauth_profile(
         ) from exc
 
     if not verification.get("verified", False):
+        failed_at = datetime.now(UTC)
+        profile.enabled = False
+        profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+        profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+        profile.last_validated_at = failed_at
         reason = redact_sensitive_payload(str(verification.get("reason") or "unknown"))
         _update_claude_auth_behavior(
             profile,
@@ -571,7 +642,7 @@ async def validate_claude_oauth_profile(
             status_label="Claude OAuth validation failed",
             readiness={
                 "connected": False,
-                "last_validated_at": datetime.now(UTC).isoformat(),
+                "last_validated_at": failed_at.isoformat(),
                 "backing_secret_exists": False,
                 "launch_ready": False,
                 "failure_reason": reason,
@@ -585,6 +656,13 @@ async def validate_claude_oauth_profile(
         )
 
     validated_at = datetime.now(UTC)
+    profile.enabled = True
+    profile.auth_state = ProviderProfileAuthState.CONNECTED
+    profile.disabled_reason = None
+    if profile.first_authenticated_at is None:
+        profile.first_authenticated_at = validated_at
+    profile.last_validated_at = validated_at
+    profile.last_auth_method = ProviderProfileAuthMethod.OAUTH_VOLUME
     _update_claude_auth_behavior(
         profile,
         auth_state="connected",
@@ -626,13 +704,18 @@ async def disconnect_claude_oauth_profile(
         profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
     profile.volume_ref = None
     profile.volume_mount_path = None
+    disconnected_at = datetime.now(UTC)
+    profile.enabled = False
+    profile.auth_state = ProviderProfileAuthState.DISCONNECTED
+    profile.disabled_reason = ProviderProfileDisabledReason.DISCONNECTED
+    profile.last_validated_at = disconnected_at
     _update_claude_auth_behavior(
         profile,
-        auth_state="not_connected",
+        auth_state="disconnected",
         status_label="Claude OAuth disconnected",
         readiness={
             "connected": False,
-            "last_validated_at": datetime.now(UTC).isoformat(),
+            "last_validated_at": disconnected_at.isoformat(),
             "backing_secret_exists": False,
             "launch_ready": False,
         },
@@ -900,6 +983,7 @@ def _provider_profile_readiness(
     checks = [
         _required_fields_check(row),
         _enabled_check(row),
+        _auth_state_check(row),
         _secret_refs_check(
             row,
             credential_source=credential_source,
@@ -967,6 +1051,30 @@ def _enabled_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
         "Enabled state",
         "pass" if row.enabled else "error",
         "Profile is enabled." if row.enabled else "Profile is disabled.",
+    )
+
+
+def _auth_state_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    auth_state = row.auth_state.value if row.auth_state else None
+    disabled_reason = row.disabled_reason.value if row.disabled_reason else None
+    connected = auth_state == ProviderProfileAuthState.CONNECTED.value
+    consistent = not row.enabled or disabled_reason is None
+    if connected and consistent:
+        message = "Profile credentials are connected."
+    elif connected:
+        message = f"Profile is enabled but still has disabled reason {disabled_reason}."
+    elif disabled_reason:
+        message = (
+            f"Profile credentials are {auth_state or 'unknown'} "
+            f"({disabled_reason})."
+        )
+    else:
+        message = f"Profile credentials are {auth_state or 'unknown'}."
+    return _readiness_check(
+        "auth_state",
+        "Activation state",
+        "pass" if connected and consistent else "error",
+        message,
     )
 
 
@@ -1152,6 +1260,21 @@ def _row_to_dict(
         "enabled": row.enabled,
         "is_default": row.is_default,
         "max_lease_duration_seconds": row.max_lease_duration_seconds,
+        "auth_state": row.auth_state.value if row.auth_state else None,
+        "disabled_reason": (
+            row.disabled_reason.value if row.disabled_reason else None
+        ),
+        "first_authenticated_at": (
+            row.first_authenticated_at.isoformat()
+            if row.first_authenticated_at
+            else None
+        ),
+        "last_validated_at": (
+            row.last_validated_at.isoformat() if row.last_validated_at else None
+        ),
+        "last_auth_method": (
+            row.last_auth_method.value if row.last_auth_method else None
+        ),
         "readiness": _provider_profile_readiness(
             row,
             managed_secret_statuses=managed_secret_statuses,

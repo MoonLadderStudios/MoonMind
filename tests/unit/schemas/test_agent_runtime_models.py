@@ -289,6 +289,8 @@ def test_managed_agent_provider_profile_accepts_valid_per_profile_limits() -> No
         maxParallelRuns=2,
         cooldownAfter429Seconds=120,
         enabled=True,
+        authState="connected",
+        disabledReason=None,
         rateLimitPolicy={"strategy": "provider_backoff"},
     )
     assert profile.max_parallel_runs == 2
@@ -551,6 +553,10 @@ def test_managed_agent_provider_profile_accepts_full_provider_contract() -> None
         maxLeaseDurationSeconds=3600,
         ownerUserId="user-123",
         maxParallelRuns=4,
+        enabled=True,
+        authState="connected",
+        disabledReason=None,
+        lastAuthMethod="secret_ref",
     )
     # No ValidationError — assert all fields round-trip.
     dump = profile.model_dump(by_alias=True)
@@ -574,6 +580,24 @@ def test_managed_agent_provider_profile_accepts_full_provider_contract() -> None
     assert dump["maxLeaseDurationSeconds"] == 3600
     assert dump["ownerUserId"] == "user-123"
     assert dump["maxParallelRuns"] == 4
+    assert dump["authState"] == "connected"
+    assert dump["disabledReason"] is None
+    assert dump["lastAuthMethod"] == "secret_ref"
+
+def test_managed_agent_provider_profile_rejects_enabled_unconfigured_profile() -> None:
+    """enabled is launch intent; authState must prove credentials are connected."""
+    with pytest.raises(
+        ValidationError,
+        match="enabled provider profiles must have authState='connected'",
+    ):
+        ManagedAgentProviderProfile(
+            profileId="unconfigured-enabled",
+            runtimeId="codex_cli",
+            credentialSource="none",
+            runtimeMaterializationMode="composite",
+            enabled=True,
+            authState="not_configured",
+        )
 
 def test_managed_agent_provider_profile_rejects_invalid_credential_source() -> None:
     """Invalid credentialSource raises ValidationError with allowed values."""
