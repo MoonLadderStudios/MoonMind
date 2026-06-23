@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -20,6 +21,7 @@ from api_service.db.models import (
     RecurringWorkflowRunOutcome,
 )
 from api_service.services.recurring_workflows_service import (
+    RecurringScheduleRuntimeSummary,
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
@@ -53,6 +55,7 @@ def mock_temporal_adapter():
     adapter.unpause_schedule = AsyncMock()
     adapter.trigger_schedule = AsyncMock()
     adapter.delete_schedule = AsyncMock()
+    adapter.describe_schedule = AsyncMock()
     return adapter
 
 async def test_create_definition_creates_temporal_schedule(
@@ -100,11 +103,14 @@ async def test_create_definition_creates_temporal_schedule(
             assert call_kwargs["cron_expression"] == "0 6 * * *"
             assert call_kwargs["timezone"] == "UTC"
             assert call_kwargs["workflow_type"] == "MoonMind.UserWorkflow"
-            assert call_kwargs["workflow_input"]["workflowType"] == "MoonMind.UserWorkflow"
-            assert call_kwargs["workflow_input"]["initialParameters"]["task"][
+            assert call_kwargs["workflow_input"]["workflow_type"] == (
+                "MoonMind.UserWorkflow"
+            )
+            assert "workflowType" not in call_kwargs["workflow_input"]
+            assert call_kwargs["workflow_input"]["initial_parameters"]["task"][
                 "instructions"
             ] == "Queue job"
-            assert call_kwargs["workflow_input"]["initialParameters"]["system"][
+            assert call_kwargs["workflow_input"]["initial_parameters"]["system"][
                 "recurrence"
             ]["definitionId"] == str(definition.id)
             assert call_kwargs["search_attributes"] == {
@@ -155,13 +161,13 @@ async def test_create_definition_normalizes_snake_case_target_aliases(
             assert "initial_parameters" not in definition.target
             assert "input_artifact_ref" not in definition.target
             call_kwargs = mock_temporal_adapter.create_schedule.call_args.kwargs
-            assert call_kwargs["workflow_input"]["inputArtifactRef"] == (
+            assert call_kwargs["workflow_input"]["input_artifact_ref"] == (
                 "artifact://input/1"
             )
-            assert call_kwargs["workflow_input"]["planArtifactRef"] == (
+            assert call_kwargs["workflow_input"]["plan_artifact_ref"] == (
                 "artifact://plan/1"
             )
-            assert call_kwargs["workflow_input"]["failurePolicy"] == "fail_fast"
+            assert call_kwargs["workflow_input"]["failure_policy"] == "fail_fast"
 
 async def test_create_definition_manifest_reads_action_options_from_initial_parameters(
     tmp_path: Path, mock_temporal_adapter
@@ -309,6 +315,13 @@ async def test_update_definition_updates_temporal_schedule(
             assert call_kwargs["definition_id"] == definition.id
             assert call_kwargs["cron_expression"] == "0 12 * * *"
             assert call_kwargs["enabled"] is False
+            assert call_kwargs["workflow_type"] == "MoonMind.UserWorkflow"
+            assert call_kwargs["workflow_input"]["workflow_type"] == (
+                "MoonMind.UserWorkflow"
+            )
+            assert call_kwargs["workflow_input"]["initial_parameters"]["task"][
+                "instructions"
+            ] == "Queue job"
 
 async def test_create_manual_run_triggers_temporal_schedule(
     tmp_path: Path, mock_temporal_adapter
@@ -344,3 +357,117 @@ async def test_create_manual_run_triggers_temporal_schedule(
             mock_temporal_adapter.trigger_schedule.assert_called_once_with(definition_id=definition.id)
             assert run.outcome == RecurringWorkflowRunOutcome.ENQUEUED
             assert run.message == "Triggered via Temporal Schedule"
+
+async def test_runtime_summary_uses_temporal_future_and_recent_actions(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Daily Demo",
+                description="Nightly schedule",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "task": {
+                            "instructions": "Queue job",
+                        },
+                    },
+                },
+                policy={},
+            )
+            next_run = datetime(2026, 6, 24, 13, tzinfo=UTC)
+            scheduled_for = datetime(2026, 6, 23, 13, tzinfo=UTC)
+            mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+                schedule=SimpleNamespace(state=SimpleNamespace(paused=False)),
+                info=SimpleNamespace(
+                    future_action_times=[next_run],
+                    recent_actions=[
+                        SimpleNamespace(
+                            schedule_time=scheduled_for,
+                            actual_time=scheduled_for,
+                            start_workflow_result=SimpleNamespace(
+                                workflow_id="mm:schedule:run",
+                                run_id="run-id",
+                            ),
+                        )
+                    ],
+                ),
+            )
+
+            summary = await service.runtime_summary_for_definition(definition)
+
+            assert summary == RecurringScheduleRuntimeSummary(
+                next_run_at=next_run,
+                last_scheduled_for=scheduled_for,
+                last_dispatch_status=RecurringWorkflowRunOutcome.ENQUEUED.value,
+                last_dispatch_error=None,
+            )
+
+async def test_reconcile_repairs_existing_schedule_action_payload(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Daily Demo",
+                description="Nightly schedule",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "task": {
+                            "instructions": "Queue job",
+                        },
+                    },
+                },
+                policy={},
+            )
+            mock_temporal_adapter.create_schedule.reset_mock()
+            mock_temporal_adapter.update_schedule.reset_mock()
+            mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+                schedule=SimpleNamespace(
+                    spec=SimpleNamespace(
+                        cron_expressions=["0 6 * * *"],
+                        time_zone_name="UTC",
+                        jitter=timedelta(seconds=0),
+                    ),
+                    policy=SimpleNamespace(
+                        overlap=SimpleNamespace(name="SKIP"),
+                        catchup_window=timedelta(minutes=15),
+                    ),
+                    state=SimpleNamespace(paused=False, note="Daily Demo"),
+                )
+            )
+
+            reconciled = await service.reconcile_schedules()
+
+            assert reconciled == 1
+            mock_temporal_adapter.update_schedule.assert_called_once()
+            call_kwargs = mock_temporal_adapter.update_schedule.call_args.kwargs
+            assert call_kwargs["definition_id"] == definition.id
+            assert call_kwargs["cron_expression"] is None
+            assert call_kwargs["workflow_type"] == "MoonMind.UserWorkflow"
+            assert call_kwargs["workflow_input"]["workflow_type"] == (
+                "MoonMind.UserWorkflow"
+            )
+            assert "workflowType" not in call_kwargs["workflow_input"]

@@ -17,7 +17,10 @@ from api_service.db.models import (
     RecurringWorkflowScheduleType,
     RecurringWorkflowScopeType,
 )
-from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
+from api_service.services.recurring_workflows_service import (
+    RecurringScheduleRuntimeSummary,
+    RecurringWorkflowValidationError,
+)
 
 def _definition(**overrides):
     now = datetime.now(UTC)
@@ -97,6 +100,36 @@ async def test_list_recurring_workflows_global_requires_operator() -> None:
         )
 
     assert exc.value.status_code == 403
+
+@pytest.mark.asyncio
+async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
+    service = AsyncMock()
+    stale_next_run = datetime(2026, 6, 23, 13, tzinfo=UTC)
+    live_next_run = datetime(2026, 6, 24, 13, tzinfo=UTC)
+    last_scheduled_for = datetime(2026, 6, 23, 13, tzinfo=UTC)
+    definition = _definition(next_run_at=stale_next_run)
+    service.list_definitions.return_value = [definition]
+    service.runtime_summaries_for_definitions.return_value = {
+        definition.id: RecurringScheduleRuntimeSummary(
+            next_run_at=live_next_run,
+            last_scheduled_for=last_scheduled_for,
+            last_dispatch_status="enqueued",
+            last_dispatch_error=None,
+        )
+    }
+    user = SimpleNamespace(id=definition.owner_user_id, is_superuser=False)
+
+    response = await recurring_router.list_recurring_workflows(
+        scope="personal",
+        limit=50,
+        service=service,
+        user=user,
+    )
+
+    assert response.items[0].next_run_at == live_next_run
+    assert response.items[0].last_scheduled_for == last_scheduled_for
+    assert response.items[0].last_dispatch_status == "enqueued"
+    service.runtime_summaries_for_definitions.assert_awaited_once_with([definition])
 
 @pytest.mark.asyncio
 async def test_create_recurring_workflow_returns_serialized_definition() -> None:
