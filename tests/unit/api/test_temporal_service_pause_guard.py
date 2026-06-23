@@ -72,7 +72,9 @@ async def test_create_execution_blocked_when_paused(mock_session, mock_client_ad
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters=None,
+                initial_parameters={
+                    "workflow": {"instructions": "Test workflow fixture."}
+                },
                 idempotency_key=None,
             )
 
@@ -90,7 +92,9 @@ async def test_create_execution_allowed_when_not_paused(mock_session, mock_clien
                 plan_artifact_ref=None,
                 manifest_artifact_ref=None,
                 failure_policy=None,
-                initial_parameters=None,
+                initial_parameters={
+                    "workflow": {"instructions": "Test workflow fixture."}
+                },
                 idempotency_key=None,
             )
         except TemporalExecutionValidationError as exc:

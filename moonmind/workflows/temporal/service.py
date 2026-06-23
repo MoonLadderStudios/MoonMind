@@ -47,12 +47,14 @@ from moonmind.schemas.temporal_models import (
     SUPPORTED_FAILURE_POLICIES,
     SUPPORTED_SIGNAL_NAMES,
     SUPPORTED_UPDATE_NAMES,
+    USER_WORKFLOW_PLAN_SOURCE_ERROR,
     DependencyResolvedSignalPayload,
     AGENT_RUN_ID_MEMO_KEYS,
     AGENT_RUN_ID_PARAM_KEYS,
     AGENT_RUN_ID_SEARCH_ATTR_KEYS,
     RecoveryCheckpointModel,
     RecoverySourceModel,
+    has_user_workflow_plan_source,
 )
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -969,6 +971,15 @@ class TemporalExecutionService:
             if not manifest_artifact_ref:
                 raise TemporalExecutionValidationError(
                     "manifestArtifactRef is required for MoonMind.ManifestIngest"
+                )
+        if workflow_type_enum is TemporalWorkflowType.USER_WORKFLOW:
+            if not has_user_workflow_plan_source(
+                initial_parameters=initial_parameters,
+                input_artifact_ref=input_artifact_ref,
+                plan_artifact_ref=plan_artifact_ref,
+            ):
+                raise TemporalExecutionValidationError(
+                    USER_WORKFLOW_PLAN_SOURCE_ERROR
                 )
 
         await self._validate_readable_temporal_artifact_ref(

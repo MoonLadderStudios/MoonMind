@@ -4,7 +4,7 @@
 **Doc type:** API contract 
 **Status:** Draft 
 **Owner:** MoonMind Platform 
-**Last updated:** 2026-04-04 (UTC) 
+**Last updated:** 2026-06-23 (UTC) 
 **Audience:** backend, dashboard, integrations
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
@@ -331,6 +331,9 @@ Current implementation always returns `countMode = "exact"`.
 
 - `workflowType` must be one of the supported values.
 - `manifestArtifactRef` is required for `MoonMind.ManifestIngest`.
+- `MoonMind.UserWorkflow` create requests must include at least one planning
+  source before an execution is persisted or started: non-empty instructions,
+  a selected skill, `inputArtifactRef`, or `planArtifactRef`.
 - `initialParameters` should remain small and JSON-serializable.
 - Artifact refs are references, not embedded blobs.
 
