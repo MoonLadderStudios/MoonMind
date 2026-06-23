@@ -4893,22 +4893,53 @@ async def test_mm870_controller_reaps_orphan_sidecar_volumes_and_skips_boundarie
             return 0, "", ""
         if command[:4] == ("docker", "volume", "ls", "--format"):
             return 0, "\n".join([*volume_names, "unrelated-volume"]) + "\n", ""
-        if command[:4] == ("docker", "volume", "inspect", "--format"):
+        if command[:3] == ("docker", "volume", "inspect"):
             return (
                 0,
-                "moonmind-session-sess-active-docker-graph|sess-active|"
-                "docker-graph|session-docker-sidecar-volume|"
-                "2020-01-01T00:00:00Z\n"
-                "moonmind-session-sess-mounted-docker-socket|sess-mounted|"
-                "docker-socket|session-docker-sidecar-volume|"
-                "2020-01-01T00:00:00Z\n"
-                "moonmind-session-sess-orphan-docker-graph|sess-orphan|"
-                "docker-graph|session-docker-sidecar-volume|"
-                "2020-01-01T00:00:00Z\n"
-                "moonmind-session-legacy-orphan-docker-socket|<no value>|"
-                "<no value>|<no value>|2020-01-01T00:00:00Z\n"
-                f"moonmind-session-sess-recent-docker-graph|sess-recent|"
-                f"docker-graph|session-docker-sidecar-volume|{recent}\n",
+                json.dumps(
+                    [
+                        {
+                            "Name": "moonmind-session-sess-active-docker-graph",
+                            "CreatedAt": "2020-01-01T00:00:00Z",
+                            "Labels": {
+                                "moonmind.session_id": "sess-active",
+                                "moonmind.volume_role": "docker-graph",
+                                "moonmind.kind": "session-docker-sidecar-volume",
+                            },
+                        },
+                        {
+                            "Name": "moonmind-session-sess-mounted-docker-socket",
+                            "CreatedAt": "2020-01-01T00:00:00Z",
+                            "Labels": {
+                                "moonmind.session_id": "sess-mounted",
+                                "moonmind.volume_role": "docker-socket",
+                                "moonmind.kind": "session-docker-sidecar-volume",
+                            },
+                        },
+                        {
+                            "Name": "moonmind-session-sess-orphan-docker-graph",
+                            "CreatedAt": "2020-01-01T00:00:00Z",
+                            "Labels": {
+                                "moonmind.session_id": "sess-orphan",
+                                "moonmind.volume_role": "docker-graph",
+                                "moonmind.kind": "session-docker-sidecar-volume",
+                            },
+                        },
+                        {
+                            "Name": "moonmind-session-legacy-orphan-docker-socket",
+                            "CreatedAt": "2020-01-01T00:00:00Z",
+                        },
+                        {
+                            "Name": "moonmind-session-sess-recent-docker-graph",
+                            "CreatedAt": recent,
+                            "Labels": {
+                                "moonmind.session_id": "sess-recent",
+                                "moonmind.volume_role": "docker-graph",
+                                "moonmind.kind": "session-docker-sidecar-volume",
+                            },
+                        },
+                    ]
+                ),
                 "",
             )
         if command == ("docker", "ps", "-q"):

@@ -3625,42 +3625,55 @@ class DockerCodexManagedSessionController:
         ]
         if not volume_names:
             return []
-        template = (
-            '{{printf "%s|%s|%s|%s|%s" .Name '
-            '(index .Labels "moonmind.session_id") '
-            '(index .Labels "moonmind.volume_role") '
-            '(index .Labels "moonmind.kind") '
-            ".CreatedAt}}"
-        )
-        # Tolerate partial inspect failures. Legacy deterministic-name volumes
-        # remain discoverable from the volume ls output even if labels are absent.
-        _inspect_rc, inspect_out, _inspect_err = await self._command_runner(
+        inspect_rc, inspect_out, inspect_err = await self._command_runner(
             (
                 self._docker_binary,
                 "volume",
                 "inspect",
-                "--format",
-                template,
                 *volume_names,
             ),
             env=self._docker_env(),
         )
-        inspected: dict[str, _ManagedSessionSidecarVolume] = {}
-        for line in inspect_out.splitlines():
-            parts = line.split("|")
-            if len(parts) != 5:
-                continue
-            name, session_id, role, kind, created_raw = (
-                self._docker_template_empty(part) for part in parts
+        if inspect_rc != 0:
+            details = (
+                inspect_err.strip()
+                or inspect_out.strip()
+                or f"exit code {inspect_rc}"
             )
+            raise RuntimeError(
+                f"failed to inspect managed session sidecar volumes: {details}"
+            )
+
+        inspected: dict[str, _ManagedSessionSidecarVolume] = {}
+        try:
+            volume_inspect_items = json.loads(inspect_out) if inspect_out.strip() else []
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "failed to parse managed session sidecar volume inspect output"
+            ) from exc
+        if not isinstance(volume_inspect_items, list):
+            raise RuntimeError(
+                "failed to inspect managed session sidecar volumes: expected JSON list"
+            )
+
+        for item in volume_inspect_items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("Name")
             if not name or name not in volume_names:
                 continue
+            labels = item.get("Labels") or {}
+            if not isinstance(labels, dict):
+                labels = {}
             inspected[name] = _ManagedSessionSidecarVolume(
                 name=name,
-                session_id=session_id,
-                role=role or self._sidecar_volume_role_from_name(name),
-                kind=kind,
-                created_at=_parse_docker_timestamp(created_raw),
+                session_id=str(labels.get("moonmind.session_id") or ""),
+                role=str(
+                    labels.get("moonmind.volume_role")
+                    or self._sidecar_volume_role_from_name(name)
+                ),
+                kind=str(labels.get("moonmind.kind") or ""),
+                created_at=_parse_docker_timestamp(str(item.get("CreatedAt") or "")),
             )
 
         volumes: list[_ManagedSessionSidecarVolume] = []
@@ -3693,7 +3706,7 @@ class DockerCodexManagedSessionController:
         template = (
             '{{range .Mounts}}{{if eq .Type "volume"}}{{println .Name}}{{end}}{{end}}'
         )
-        _inspect_rc, inspect_out, _inspect_err = await self._command_runner(
+        inspect_rc, inspect_out, inspect_err = await self._command_runner(
             (
                 self._docker_binary,
                 "inspect",
@@ -3703,6 +3716,13 @@ class DockerCodexManagedSessionController:
             ),
             env=self._docker_env(),
         )
+        if inspect_rc != 0:
+            details = (
+                inspect_err.strip()
+                or inspect_out.strip()
+                or f"exit code {inspect_rc}"
+            )
+            raise RuntimeError(f"failed to inspect active docker containers: {details}")
         return {line.strip() for line in inspect_out.splitlines() if line.strip()}
 
     def _active_sidecar_volume_names(self, active_session_ids: set[str]) -> set[str]:
@@ -3739,10 +3759,10 @@ class DockerCodexManagedSessionController:
             ):
                 skipped_active += 1
                 continue
-            if (
-                volume.created_at is not None
-                and (now - volume.created_at).total_seconds() < grace_seconds
-            ):
+            if volume.created_at is None:
+                skipped_recent += 1
+                continue
+            if (now - volume.created_at).total_seconds() < grace_seconds:
                 skipped_recent += 1
                 continue
             try:
