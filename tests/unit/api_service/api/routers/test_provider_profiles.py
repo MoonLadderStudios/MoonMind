@@ -657,7 +657,7 @@ async def test_disabled_created_profiles_do_not_become_runtime_default(
     assert profiles["runtime_default_second"]["is_default"] is False
 
 @pytest.mark.asyncio
-async def test_update_profile_can_become_runtime_default(
+async def test_update_disabled_profile_does_not_become_runtime_default(
     client_app: AsyncClient,
     _module_db,
 ):
@@ -692,7 +692,7 @@ async def test_update_profile_can_become_runtime_default(
     assert first_response.status_code == 201
     assert second_response.status_code == 201
     assert update_response.status_code == 200
-    assert update_response.json()["is_default"] is True
+    assert update_response.json()["is_default"] is False
     assert listed.status_code == 200
 
     profiles = {profile["profile_id"]: profile for profile in listed.json()}
