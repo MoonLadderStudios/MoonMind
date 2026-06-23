@@ -202,15 +202,40 @@ class TestProviderProfileActivationMigrationBackfill:
             "stamp_validated": False,
         }
 
+    @pytest.mark.parametrize(
+        "validation_status",
+        ["invalid", "failed", "validation_failed"],
+    )
     def test_enabled_profile_with_invalid_validation_is_disabled_auth_invalid(
-        self, migration
+        self, migration, validation_status
     ):
         result = migration.activation_backfill_for_row(
             {
                 "enabled": True,
                 "credential_source": "secret_ref",
-                "secret_refs": None,
-                "validation_status": "validation_failed",
+                "secret_refs": {"OPENAI_API_KEY": "db://openai"},
+                "validation_status": validation_status,
+            }
+        )
+
+        assert result == {
+            "enabled": False,
+            "auth_state": "validation_failed",
+            "disabled_reason": "auth_invalid",
+            "last_auth_method": None,
+            "stamp_validated": False,
+        }
+
+    def test_enabled_oauth_profile_with_invalid_validation_is_not_connected(
+        self, migration
+    ):
+        result = migration.activation_backfill_for_row(
+            {
+                "enabled": True,
+                "credential_source": "oauth_volume",
+                "volume_ref": "claude-oauth",
+                "volume_mount_path": "/home/claude/.claude",
+                "validation_status": "invalid",
             }
         )
 
@@ -241,6 +266,36 @@ class TestProviderProfileActivationMigrationBackfill:
             "last_auth_method": None,
             "stamp_validated": False,
         }
+
+    def test_sql_backfill_handles_policy_and_validation_before_connecting(
+        self, migration, monkeypatch
+    ):
+        statements: list[str] = []
+
+        class FakeOp:
+            @staticmethod
+            def execute(statement):
+                statements.append(str(statement))
+
+        monkeypatch.setattr(migration, "op", FakeOp)
+
+        migration._backfill_activation_state()
+
+        assert len(statements) >= 4
+        assert "WHERE disabled_reason = 'policy_disabled'" in statements[0]
+        assert "disabled_reason = 'policy_disabled'" in statements[0]
+        assert (
+            "validation_status IN ('invalid', 'failed', 'validation_failed')"
+            in statements[1]
+        )
+        assert "auth_state = 'validation_failed'" in statements[1]
+        connected_statement_indexes = [
+            index
+            for index, statement in enumerate(statements)
+            if "auth_state = 'connected'" in statement
+        ]
+        assert connected_statement_indexes
+        assert min(connected_statement_indexes) > 1
 
 # ---------------------------------------------------------------------------
 # 2. Data migration mapping logic

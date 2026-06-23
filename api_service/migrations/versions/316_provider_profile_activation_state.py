@@ -106,6 +106,18 @@ def activation_backfill_for_row(row: dict[str, object]) -> dict[str, object]:
             "last_auth_method": None,
             "stamp_validated": False,
         }
+    if str(row.get("validation_status") or "").strip() in {
+        "invalid",
+        "failed",
+        "validation_failed",
+    }:
+        return {
+            "enabled": False,
+            "auth_state": "validation_failed",
+            "disabled_reason": "auth_invalid",
+            "last_auth_method": None,
+            "stamp_validated": False,
+        }
     if credential_source == "oauth_volume" and volume_ref and volume_mount_path:
         return {
             "enabled": True,
@@ -121,18 +133,6 @@ def activation_backfill_for_row(row: dict[str, object]) -> dict[str, object]:
             "disabled_reason": None,
             "last_auth_method": "secret_ref",
             "stamp_validated": True,
-        }
-    if str(row.get("validation_status") or "").strip() in {
-        "invalid",
-        "failed",
-        "validation_failed",
-    }:
-        return {
-            "enabled": False,
-            "auth_state": "validation_failed",
-            "disabled_reason": "auth_invalid",
-            "last_auth_method": None,
-            "stamp_validated": False,
         }
     return {
         "enabled": False,
@@ -202,6 +202,29 @@ def _insert_first_party_setup_stubs() -> None:
 
 
 def _backfill_activation_state() -> None:
+    op.execute(
+        """
+        UPDATE managed_agent_provider_profiles
+        SET
+            enabled = false,
+            auth_state = 'not_configured',
+            disabled_reason = 'policy_disabled',
+            last_auth_method = NULL
+        WHERE disabled_reason = 'policy_disabled'
+        """
+    )
+    op.execute(
+        """
+        UPDATE managed_agent_provider_profiles
+        SET
+            enabled = false,
+            auth_state = 'validation_failed',
+            disabled_reason = 'auth_invalid',
+            last_auth_method = NULL
+        WHERE enabled = true
+          AND validation_status IN ('invalid', 'failed', 'validation_failed')
+        """
+    )
     op.execute(
         """
         UPDATE managed_agent_provider_profiles
