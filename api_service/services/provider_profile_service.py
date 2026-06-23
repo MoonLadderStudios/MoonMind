@@ -5,7 +5,7 @@ from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from api_service.db.models import ManagedAgentProviderProfile
+from api_service.db.models import ManagedAgentProviderProfile, ProviderProfileAuthState
 from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
 
 logger = logging.getLogger(__name__)
@@ -37,14 +37,19 @@ async def normalize_runtime_default_profile(
     if not rows:
         return None
 
-    candidates = [row for row in rows if row.enabled]
-    if not candidates:
+    launchable_rows = [
+        row
+        for row in rows
+        if row.enabled and row.auth_state == ProviderProfileAuthState.CONNECTED
+    ]
+    if not launchable_rows:
         rows_to_clear = [row for row in rows if row.is_default]
         for row in rows_to_clear:
             row.is_default = False
         if rows_to_clear:
             await session.flush()
         return None
+    candidates = launchable_rows
 
     selected = None
     if preferred_profile_id:
@@ -101,8 +106,11 @@ def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]
             row.rate_limit_policy.value if row.rate_limit_policy else None
         ),
         "enabled": row.enabled,
-        "auth_state": row.auth_state,
-        "disabled_reason": row.disabled_reason,
+        "max_lease_duration_seconds": row.max_lease_duration_seconds,
+        "auth_state": row.auth_state.value if row.auth_state else None,
+        "disabled_reason": (
+            row.disabled_reason.value if row.disabled_reason else None
+        ),
         "first_authenticated_at": (
             row.first_authenticated_at.isoformat()
             if row.first_authenticated_at
@@ -111,8 +119,9 @@ def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]
         "last_validated_at": (
             row.last_validated_at.isoformat() if row.last_validated_at else None
         ),
-        "last_auth_method": row.last_auth_method,
-        "max_lease_duration_seconds": row.max_lease_duration_seconds,
+        "last_auth_method": (
+            row.last_auth_method.value if row.last_auth_method else None
+        ),
     }
 
 async def sync_provider_profile_manager(
@@ -126,6 +135,7 @@ async def sync_provider_profile_manager(
         .where(
             ManagedAgentProviderProfile.runtime_id == runtime_id,
             ManagedAgentProviderProfile.enabled.is_(True),
+            ManagedAgentProviderProfile.auth_state == ProviderProfileAuthState.CONNECTED,
         )
         .order_by(
             ManagedAgentProviderProfile.is_default.desc(),

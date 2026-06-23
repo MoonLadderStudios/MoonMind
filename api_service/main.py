@@ -627,6 +627,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
     from api_service.db.models import (
         ManagedAgentProviderProfile,
         ProviderCredentialSource,
+        ProviderProfileAuthMethod,
+        ProviderProfileAuthState,
+        ProviderProfileDisabledReason,
         RuntimeMaterializationMode,
         ManagedAgentRateLimitPolicy,
     )
@@ -650,25 +653,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "provider_id": "google",
             "provider_label": "Google",
             "default_model": None,  # inherits runtime default: gemini-3.1-pro
-            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
-            "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
-            "volume_ref": get_provider_default("gemini_cli", "volume_ref"),
-            "volume_mount_path": get_provider_default(
-                "gemini_cli", "volume_mount_path"
-            ),
+            "credential_source": ProviderCredentialSource.NONE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+            "volume_ref": None,
+            "volume_mount_path": None,
             "account_label": "Gemini CLI (auto-seeded)",
             "enabled": False,
-            "auth_state": "not_configured",
-            "disabled_reason": "missing_credentials",
-            "command_behavior": {
-                "auth_actions": ["connect_oauth"],
-                "auth_status_label": "Setup required",
-                "auth_readiness": {
-                    "connected": False,
-                    "launch_ready": False,
-                    "failure_reason": "missing_credentials",
-                },
-            },
+            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            "tags": ["setup-required", "first-party"],
         },
         {
             "profile_id": "codex_default",
@@ -677,23 +670,15 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "provider_id": "openai",
             "provider_label": "OpenAI",
             "default_model": None,  # inherits runtime default: gpt-5.5
-            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
-            "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
-            "volume_ref": get_provider_default("codex_cli", "volume_ref"),
-            "volume_mount_path": get_provider_default("codex_cli", "volume_mount_path"),
+            "credential_source": ProviderCredentialSource.NONE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+            "volume_ref": None,
+            "volume_mount_path": None,
             "account_label": "Codex CLI (auto-seeded)",
             "enabled": False,
-            "auth_state": "not_configured",
-            "disabled_reason": "missing_credentials",
-            "command_behavior": {
-                "auth_actions": ["connect_oauth"],
-                "auth_status_label": "Setup required",
-                "auth_readiness": {
-                    "connected": False,
-                    "launch_ready": False,
-                    "failure_reason": "missing_credentials",
-                },
-            },
+            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            "tags": ["setup-required", "first-party"],
         },
         {
             "profile_id": "claude_anthropic",
@@ -702,12 +687,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
             "default_model": None,  # inherits runtime default: claude-opus-4-8
-            "credential_source": ProviderCredentialSource.OAUTH_VOLUME,
-            "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
-            "volume_ref": get_provider_default("claude_code", "volume_ref"),
-            "volume_mount_path": get_provider_default(
-                "claude_code", "volume_mount_path"
-            ),
+            "credential_source": ProviderCredentialSource.NONE,
+            "runtime_materialization_mode": RuntimeMaterializationMode.API_KEY_ENV,
+            "volume_ref": None,
+            "volume_mount_path": None,
             "clear_env_keys": [
                 "ANTHROPIC_API_KEY",
                 "CLAUDE_API_KEY",
@@ -715,19 +698,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
             ],
             "account_label": "Claude Code (auto-seeded)",
             "enabled": False,
-            "auth_state": "not_configured",
-            "disabled_reason": "missing_credentials",
-            "command_behavior": {
-                "auth_strategy": "claude_credential_methods",
-                "auth_state": "not_configured",
-                "auth_actions": ["connect_oauth", "use_api_key"],
-                "auth_status_label": "Setup required",
-                "auth_readiness": {
-                    "connected": False,
-                    "launch_ready": False,
-                    "failure_reason": "missing_credentials",
-                },
-            },
+            "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
+            "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+            "tags": ["setup-required", "first-party"],
         },
 
     ]
@@ -764,9 +737,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_mount_path": None,
             "account_label": "Claude Code via MiniMax (auto-seeded)",
             "enabled": True,
-            "auth_state": "connected",
+            "auth_state": ProviderProfileAuthState.CONNECTED,
             "disabled_reason": None,
-            "last_auth_method": "secret_ref",
+            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
         })
 
     if os.environ.get("OPENROUTER_API_KEY"):
@@ -811,9 +784,9 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_mount_path": None,
             "account_label": "Codex CLI via OpenRouter (auto-seeded)",
             "enabled": True,
-            "auth_state": "connected",
+            "auth_state": ProviderProfileAuthState.CONNECTED,
             "disabled_reason": None,
-            "last_auth_method": "secret_ref",
+            "last_auth_method": ProviderProfileAuthMethod.SECRET_REF,
         })
 
     seeded: list[str] = []
@@ -980,14 +953,21 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         "rate_limit_policy",
                         ManagedAgentRateLimitPolicy.BACKOFF,
                     ),
-                    enabled=bool(profile_def.get("enabled", True)),
-                    auth_state=profile_def.get("auth_state", "connected"),
-                    disabled_reason=profile_def.get("disabled_reason"),
-                    last_auth_method=profile_def.get("last_auth_method"),
+                    enabled=bool(profile_def.get("enabled", False)),
                     is_default=bool(profile_def.get("is_default", False)),
                     max_lease_duration_seconds=profile_def.get(
                         "max_lease_duration_seconds", 7200
                     ),
+                    auth_state=profile_def.get(
+                        "auth_state", ProviderProfileAuthState.NOT_CONFIGURED
+                    ),
+                    disabled_reason=profile_def.get(
+                        "disabled_reason",
+                        ProviderProfileDisabledReason.MISSING_CREDENTIALS,
+                    ),
+                    first_authenticated_at=profile_def.get("first_authenticated_at"),
+                    last_validated_at=profile_def.get("last_validated_at"),
+                    last_auth_method=profile_def.get("last_auth_method"),
                 )
                 session.add(profile)
                 runtime_id = profile_def["runtime_id"]

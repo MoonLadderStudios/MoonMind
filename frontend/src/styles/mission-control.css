@@ -4974,32 +4974,43 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-right: auto;
 }
 
-.queue-dependencies-bottom {
-  margin-top: 1rem;
-}
-
 .queue-dependencies-heading {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
+/* Render the info affordance as a plain icon (no surrounding button chrome),
+   so it reads as a normal icon rather than a circle inside a circle. */
 .queue-info-toggle {
-  width: 2rem;
-  height: 2rem;
-  border-radius: 999px;
+  width: 1.5rem;
+  height: 1.5rem;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  background-image: none;
+  box-shadow: none;
   flex-shrink: 0;
   color: rgb(var(--mm-accent));
-  border-color: rgb(var(--mm-accent) / 0.55);
 }
 
 .queue-info-toggle svg {
-  width: 1.15rem;
-  height: 1.15rem;
+  width: 1.25rem;
+  height: 1.25rem;
   stroke-width: 2;
 }
 
-.queue-info-toggle:hover {
+.queue-info-toggle:hover,
+.queue-info-toggle:active,
+.queue-info-toggle.is-clicked {
+  border: none;
+  background: none;
+  background-image: none;
+  box-shadow: none;
+  transform: none;
+  filter: none;
   color: rgb(var(--mm-ink));
 }
 

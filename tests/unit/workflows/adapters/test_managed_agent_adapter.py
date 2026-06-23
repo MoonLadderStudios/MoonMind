@@ -23,10 +23,12 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    ManagedAgentRateLimitPolicy,
     ManagedAgentProviderProfile,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
-    ManagedAgentRateLimitPolicy,
 )
 from moonmind.auth.env_shaping import (
     OAUTH_CLEARED_VARS,
@@ -925,6 +927,8 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
                     enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
                 )
             )
             session.add(
@@ -962,6 +966,7 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
         assert profiles[0]["profile_id"] == "gprofile-1"
         assert profiles[0]["credential_source"] == "oauth_volume"
         assert profiles[0]["enabled"] is True
+        assert profiles[0]["auth_state"] == "connected"
         assert profiles[0]["max_parallel_runs"] == 2
 
 async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
@@ -997,6 +1002,8 @@ async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
                         cooldown_after_429_seconds=300,
                         rate_limit_policy=ManagedAgentRateLimitPolicy.QUEUE,
                         enabled=True,
+                        auth_state=ProviderProfileAuthState.CONNECTED,
+                        last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
                     )
                 )
             await session.commit()
@@ -1041,6 +1048,8 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
                     enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
                 )
             )
             await session.commit()
@@ -1121,6 +1130,8 @@ async def test_provider_profile_list_preserves_path_aware_codex_materialization_
                     cooldown_after_429_seconds=300,
                     rate_limit_policy=ManagedAgentRateLimitPolicy.BACKOFF,
                     enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
                 )
             )
             await session.commit()

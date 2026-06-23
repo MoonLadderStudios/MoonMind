@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import asyncio
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -342,6 +342,8 @@ async def oauth_session_register_profile(
             ManagedAgentProviderProfile,
             ManagedAgentRateLimitPolicy,
             ProviderCredentialSource,
+            ProviderProfileAuthMethod,
+            ProviderProfileAuthState,
             RuntimeMaterializationMode,
         )
         from api_service.services.provider_profile_service import sync_provider_profile_manager
@@ -377,6 +379,7 @@ async def oauth_session_register_profile(
         except ValueError:
             policy_enum = ManagedAgentRateLimitPolicy.BACKOFF
 
+        connected_at = datetime.now(timezone.utc)
         profile_data = {
             "runtime_id": session_obj.runtime_id,
             "provider_id": metadata.get("provider_id")
@@ -393,10 +396,13 @@ async def oauth_session_register_profile(
             "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
             "rate_limit_policy": policy_enum,
             "enabled": True,
-            "auth_state": "connected",
+            "auth_state": ProviderProfileAuthState.CONNECTED,
             "disabled_reason": None,
-            "last_validated_at": datetime.now(UTC),
-            "last_auth_method": ProviderCredentialSource.OAUTH_VOLUME.value,
+            "first_authenticated_at": existing_profile.first_authenticated_at
+            if existing_profile and existing_profile.first_authenticated_at
+            else connected_at,
+            "last_validated_at": connected_at,
+            "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
         }
         validate_codex_oauth_profile_refs(
             runtime_id=session_obj.runtime_id,
@@ -409,10 +415,6 @@ async def oauth_session_register_profile(
         )
 
         if existing_profile:
-            if existing_profile.first_authenticated_at is None:
-                profile_data["first_authenticated_at"] = profile_data[
-                    "last_validated_at"
-                ]
             for key, value in profile_data.items():
                 setattr(existing_profile, key, value)
         else:
@@ -423,7 +425,6 @@ async def oauth_session_register_profile(
             new_profile = ManagedAgentProviderProfile(
                 profile_id=session_obj.profile_id,
                 owner_user_id=owner_id,
-                first_authenticated_at=profile_data["last_validated_at"],
                 **profile_data
             )
             db.add(new_profile)

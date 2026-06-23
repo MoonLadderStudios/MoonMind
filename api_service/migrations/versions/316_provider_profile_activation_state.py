@@ -1,4 +1,4 @@
-"""provider profile activation state
+"""add provider profile activation state
 
 Revision ID: 316_provider_profile_activation_state
 Revises: 315_workflow_type_enum_cutover
@@ -10,37 +10,61 @@ from typing import Union
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.sql import column, table
 
 revision: str = "316_provider_profile_activation_state"
 down_revision: Union[str, None] = "315_workflow_type_enum_cutover"
 
 __all__ = ["revision", "down_revision", "upgrade", "downgrade"]
 
-profiles_table = table(
-    "managed_agent_provider_profiles",
-    column("enabled", sa.Boolean),
-    column("auth_state", sa.String),
-    column("disabled_reason", sa.String),
-    column("first_authenticated_at", sa.DateTime(timezone=True)),
-    column("last_validated_at", sa.DateTime(timezone=True)),
-    column("last_auth_method", sa.String),
+
+AUTH_STATES = (
+    "not_configured",
+    "oauth_pending",
+    "api_key_pending",
+    "connected",
+    "validation_failed",
+    "disconnected",
 )
+DISABLED_REASONS = (
+    "missing_credentials",
+    "auth_invalid",
+    "user_disabled",
+    "policy_disabled",
+    "disconnected",
+)
+AUTH_METHODS = ("oauth_volume", "secret_ref", "manual")
 
 
 def upgrade() -> None:
+    auth_state_enum = sa.Enum(*AUTH_STATES, name="providerprofileauthstate")
+    disabled_reason_enum = sa.Enum(
+        *DISABLED_REASONS, name="providerprofiledisabledreason"
+    )
+    auth_method_enum = sa.Enum(*AUTH_METHODS, name="providerprofileauthmethod")
+    bind = op.get_bind()
+    auth_state_enum.create(bind, checkfirst=True)
+    disabled_reason_enum.create(bind, checkfirst=True)
+    auth_method_enum.create(bind, checkfirst=True)
+
+    op.alter_column(
+        "managed_agent_provider_profiles",
+        "enabled",
+        server_default=sa.text("false"),
+        existing_type=sa.Boolean(),
+        existing_nullable=False,
+    )
     op.add_column(
         "managed_agent_provider_profiles",
         sa.Column(
             "auth_state",
-            sa.String(length=32),
+            auth_state_enum,
             nullable=False,
-            server_default=sa.text("'not_configured'"),
+            server_default="not_configured",
         ),
     )
     op.add_column(
         "managed_agent_provider_profiles",
-        sa.Column("disabled_reason", sa.String(length=32), nullable=True),
+        sa.Column("disabled_reason", disabled_reason_enum, nullable=True),
     )
     op.add_column(
         "managed_agent_provider_profiles",
@@ -52,19 +76,43 @@ def upgrade() -> None:
     )
     op.add_column(
         "managed_agent_provider_profiles",
-        sa.Column("last_auth_method", sa.String(length=32), nullable=True),
+        sa.Column("last_auth_method", auth_method_enum, nullable=True),
+    )
+    op.execute(
+        "UPDATE managed_agent_provider_profiles "
+        "SET auth_state = 'connected', disabled_reason = NULL "
+        "WHERE enabled = true"
     )
 
-    bind = op.get_bind()
-    bind.execute(
-        profiles_table.update()
-        .where(profiles_table.c.enabled.is_(True))
-        .values(auth_state="connected", disabled_reason=None)
+    op.create_check_constraint(
+        "ck_provider_profiles_auth_state",
+        "managed_agent_provider_profiles",
+        "auth_state IN ("
+        "'not_configured', 'oauth_pending', 'api_key_pending', "
+        "'connected', 'validation_failed', 'disconnected'"
+        ")",
     )
-    bind.execute(
-        profiles_table.update()
-        .where(profiles_table.c.enabled.is_(False))
-        .values(auth_state="connected", disabled_reason="user_disabled")
+    op.create_check_constraint(
+        "ck_provider_profiles_disabled_reason",
+        "managed_agent_provider_profiles",
+        "disabled_reason IS NULL OR disabled_reason IN ("
+        "'missing_credentials', 'auth_invalid', 'user_disabled', "
+        "'policy_disabled', 'disconnected'"
+        ")",
+    )
+    op.create_check_constraint(
+        "ck_provider_profiles_last_auth_method",
+        "managed_agent_provider_profiles",
+        "last_auth_method IS NULL OR last_auth_method IN ("
+        "'oauth_volume', 'secret_ref', 'manual'"
+        ")",
+    )
+
+    op.create_index(
+        "ix_provider_profiles_runtime_provider",
+        "managed_agent_provider_profiles",
+        ["runtime_id", "provider_id"],
+        unique=False,
     )
     op.create_index(
         "ix_provider_profiles_auth_state",
@@ -72,15 +120,13 @@ def upgrade() -> None:
         ["auth_state"],
         unique=False,
     )
+    op.create_index(
+        "ix_provider_profiles_readiness",
+        "managed_agent_provider_profiles",
+        ["runtime_id", "provider_id", "enabled", "auth_state"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_provider_profiles_auth_state",
-        table_name="managed_agent_provider_profiles",
-    )
-    op.drop_column("managed_agent_provider_profiles", "last_auth_method")
-    op.drop_column("managed_agent_provider_profiles", "last_validated_at")
-    op.drop_column("managed_agent_provider_profiles", "first_authenticated_at")
-    op.drop_column("managed_agent_provider_profiles", "disabled_reason")
-    op.drop_column("managed_agent_provider_profiles", "auth_state")
+    raise NotImplementedError("One-way migration: MM-872 provider profile activation state")

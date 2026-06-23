@@ -1953,6 +1953,32 @@ class ManagedAgentRateLimitPolicy(str, enum.Enum):
     QUEUE = "queue"
     FAIL_FAST = "fail_fast"
 
+class ProviderProfileAuthState(str, enum.Enum):
+    """Persisted provider-profile credential activation state."""
+
+    NOT_CONFIGURED = "not_configured"
+    OAUTH_PENDING = "oauth_pending"
+    API_KEY_PENDING = "api_key_pending"
+    CONNECTED = "connected"
+    VALIDATION_FAILED = "validation_failed"
+    DISCONNECTED = "disconnected"
+
+class ProviderProfileDisabledReason(str, enum.Enum):
+    """Persisted reason a provider profile is disabled."""
+
+    MISSING_CREDENTIALS = "missing_credentials"
+    AUTH_INVALID = "auth_invalid"
+    USER_DISABLED = "user_disabled"
+    POLICY_DISABLED = "policy_disabled"
+    DISCONNECTED = "disconnected"
+
+class ProviderProfileAuthMethod(str, enum.Enum):
+    """Last verified auth method for provider-profile activation."""
+
+    OAUTH_VOLUME = "oauth_volume"
+    SECRET_REF = "secret_ref"
+    MANUAL = "manual"
+
 class ManagedAgentProviderProfile(Base):
     """Named provider configuration and execution policy for a managed agent runtime."""
 
@@ -1960,8 +1986,36 @@ class ManagedAgentProviderProfile(Base):
     __table_args__ = (
         Index("ix_provider_profiles_runtime", "runtime_id"),
         Index("ix_provider_profiles_provider", "provider_id"),
+        Index("ix_provider_profiles_runtime_provider", "runtime_id", "provider_id"),
         Index("ix_provider_profiles_enabled", "enabled"),
         Index("ix_provider_profiles_auth_state", "auth_state"),
+        Index(
+            "ix_provider_profiles_readiness",
+            "runtime_id",
+            "provider_id",
+            "enabled",
+            "auth_state",
+        ),
+        CheckConstraint(
+            "auth_state IN ("
+            "'not_configured', 'oauth_pending', 'api_key_pending', "
+            "'connected', 'validation_failed', 'disconnected'"
+            ")",
+            name="ck_provider_profiles_auth_state",
+        ),
+        CheckConstraint(
+            "disabled_reason IS NULL OR disabled_reason IN ("
+            "'missing_credentials', 'auth_invalid', 'user_disabled', "
+            "'policy_disabled', 'disconnected'"
+            ")",
+            name="ck_provider_profiles_disabled_reason",
+        ),
+        CheckConstraint(
+            "last_auth_method IS NULL OR last_auth_method IN ("
+            "'oauth_volume', 'secret_ref', 'manual'"
+            ")",
+            name="ck_provider_profiles_last_auth_method",
+        ),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",
@@ -2005,28 +2059,53 @@ class ManagedAgentProviderProfile(Base):
 
     account_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default=text("true")
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
-    auth_state: Mapped[str] = mapped_column(
-        String(32),
+
+    tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
+
+    auth_state: Mapped[ProviderProfileAuthState] = mapped_column(
+        Enum(
+            ProviderProfileAuthState,
+            name="providerprofileauthstate",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
         nullable=False,
-        default="not_configured",
-        server_default=text("'not_configured'"),
+        default=ProviderProfileAuthState.NOT_CONFIGURED,
+        server_default=ProviderProfileAuthState.NOT_CONFIGURED.value,
     )
-    disabled_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    disabled_reason: Mapped[Optional[ProviderProfileDisabledReason]] = mapped_column(
+        Enum(
+            ProviderProfileDisabledReason,
+            name="providerprofiledisabledreason",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
+    )
     first_authenticated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     last_validated_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    last_auth_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
-
-    tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
+    last_auth_method: Mapped[Optional[ProviderProfileAuthMethod]] = mapped_column(
+        Enum(
+            ProviderProfileAuthMethod,
+            name="providerprofileauthmethod",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
+    )
 
     volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     volume_mount_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
