@@ -1652,6 +1652,11 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
         "mode": "pr",
         "mergeAutomation": {"enabled": True},
     }
+    assert first_parameters["workflow"]["inputs"]["jira_issue"] == {
+        "key": "MM-501",
+        "summary": "First",
+    }
+    assert first_parameters["workflow"]["inputs"]["jira_issue_key"] == "MM-501"
     assert "merge_automation" not in first_parameters["workflow"]["publish"]
     assert "MM-404" in first_parameters["workflow"]["instructions"]
 
@@ -1931,6 +1936,7 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
                         "storyIndex": 1,
                         "summary": "First",
                         "issueKey": "MM-501",
+                        "issueUrl": "https://jira.example/browse/MM-501",
                     },
                     {
                         "storyId": "STORY-002",
@@ -1980,6 +1986,11 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
         "Use the existing Jira Implement workflow"
         in first_task["instructions"]
     )
+    assert first_task["inputs"]["jira_issue"] == {
+        "key": "MM-501",
+        "summary": "First",
+        "url": "https://jira.example/browse/MM-501",
+    }
     assert first_task["inputs"]["jira_issue_key"] == "MM-501"
     assert first_task["inputs"]["constraints"] == (
         "Preserve source issue MM-404 traceability."
