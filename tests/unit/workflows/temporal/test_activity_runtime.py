@@ -92,6 +92,11 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workloads.registry import RunnerProfileRegistry
 
+PENTEST_RUNNER_IMAGE = (
+    "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0@"
+    "sha256:a9e35914533968d4f6e394ea8b08f3c5b885eb136ecfacf4990bfeb04d3a11f6"
+)
+
 pytestmark = [pytest.mark.asyncio]
 
 
@@ -2795,7 +2800,7 @@ async def test_pentest_workload_profile_registry_includes_safe_runner():
 
     profile = registry.get("pentestgpt-safe")
     assert profile is not None
-    assert profile.image == "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
+    assert profile.image == PENTEST_RUNNER_IMAGE
     assert profile.network_policy == "bridge"
     assert "ANTHROPIC_API_KEY" in profile.env_allowlist
 
@@ -2882,7 +2887,7 @@ async def test_security_pentest_execute_rejects_registered_runner_image_drift(
     monkeypatch.setattr(
         settings.pentest,
         "runner_image",
-        "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0",
+        PENTEST_RUNNER_IMAGE,
     )
     monkeypatch.setattr(
         settings.pentest, "allowed_runner_profiles", ("pentestgpt-safe",)
@@ -2906,6 +2911,7 @@ async def test_security_pentest_execute_validates_safe_profile_against_registry(
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
         workspace_root=tmp_path,
+        profile_image_overrides={"pentestgpt-safe": PENTEST_RUNNER_IMAGE},
     )
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
@@ -2914,7 +2920,7 @@ async def test_security_pentest_execute_validates_safe_profile_against_registry(
     monkeypatch.setattr(
         settings.pentest,
         "runner_image",
-        "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0",
+        PENTEST_RUNNER_IMAGE,
     )
     monkeypatch.setattr(settings.pentest, "safe_profile_id", "pentestgpt-safe")
     monkeypatch.setattr(settings.pentest, "default_runner_profile", "pentestgpt-safe")

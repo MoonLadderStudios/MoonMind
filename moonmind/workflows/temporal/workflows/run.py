@@ -82,6 +82,9 @@ with workflow.unsafe.imports_passed_through():
         StepExecutionCheckpointBoundary,
         build_step_checkpoint_id,
     )
+    from moonmind.workflows.temporal.managed_session_errors import (
+        is_managed_session_locator_mismatch_error,
+    )
 
 from moonmind.workflows.skills.skill_plan_contracts import parse_plan_definition
 from moonmind.workflows.skills.tool_registry import ToolRegistrySnapshot, parse_tool_registry
@@ -130,6 +133,7 @@ from moonmind.workflows.temporal.completion_summary import (
     is_generic_completion_summary,
 )
 from moonmind.workflows.temporal.title_search import tokenize_title
+from moonmind.workflows.temporal.scheduled_start import temporal_scheduled_start_time
 from moonmind.workflows.temporal.activity_catalog import (
     INTEGRATIONS_TASK_QUEUE,
     WORKFLOW_TASK_QUEUE,
@@ -373,6 +377,7 @@ RUN_CONDITIONAL_REGISTRY_READ_PATCH = "run-conditional-registry-read-v1"
 RUN_PROVIDER_PROFILE_MANAGER_ID_PATCH = "provider-profile-manager-id-v1"
 RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = "run-workflow-child-task-queue-v2"
 RUN_RUNTIME_PROFILE_CLEAR_FORWARDING_PATCH = "run-runtime-profile-clear-forwarding-v1"
+RUN_RECURRING_SCHEDULED_START_PATCH = "run-recurring-scheduled-start-v1"
 DEPENDENCY_GATE_PATCH = "dependency-gate-v1"
 # Replay-stable patch id for unified wait-through-rerun dependency behavior.
 # Under this patch, a non-success prerequisite terminal outcome (failed,
@@ -417,6 +422,9 @@ RUN_WORKFLOW_SCOPED_SESSION_CLEAR_PER_EXECUTION_PATCH = (
 )
 RUN_WORKFLOW_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-clear-activity-signal-v1"
+)
+RUN_WORKFLOW_SCOPED_SESSION_CLEAR_UPDATE_AUTHORITATIVE_PATCH = (
+    "run-task-scoped-session-clear-update-authoritative-v1"
 )
 RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-termination-v4"
@@ -5378,6 +5386,14 @@ class MoonMindRunWorkflow:
             "scheduledFor",
             "scheduled_for",
         )
+        if (
+            not scheduled_for
+            and self._has_recurrence_metadata(parameters)
+            and workflow.patched(RUN_RECURRING_SCHEDULED_START_PATCH)
+        ):
+            temporal_scheduled_for = temporal_scheduled_start_time(workflow.info())
+            if temporal_scheduled_for is not None:
+                scheduled_for = temporal_scheduled_for.isoformat()
 
         if input_ref:
             self._input_ref = input_ref
@@ -5387,6 +5403,13 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _has_recurrence_metadata(self, parameters: Mapping[str, Any]) -> bool:
+        system_payload = parameters.get("system")
+        if not isinstance(system_payload, Mapping):
+            return False
+        recurrence_payload = system_payload.get("recurrence")
+        return isinstance(recurrence_payload, Mapping) and bool(recurrence_payload)
 
     def _record_bounded_story_loop_context(
         self,
@@ -5910,6 +5933,7 @@ class MoonMindRunWorkflow:
                                 resolved_skillset_ref=resolved_skillset_ref,
                                 workflow_parameters=parameters,
                                 step_execution=current_step_execution,
+                                queue_order=index,
                                 attempt_reason=attempt_reason,
                             )
                             if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
@@ -7529,6 +7553,7 @@ class MoonMindRunWorkflow:
                 resolved_skillset_ref=resolved_skillset_ref,
                 workflow_parameters=workflow_parameters,
                 step_execution=self._step_execution_for(node_id) or 1,
+                queue_order=self._step_execution_for(node_id) or 1,
                 attempt_reason="policy_revalidation",
             )
             child_workflow_id = (
@@ -7962,7 +7987,30 @@ class MoonMindRunWorkflow:
             execution_ordinal=execution_ordinal,
             operation="clear_session",
         )
-        if workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH):
+        if workflow.patched(
+            RUN_WORKFLOW_SCOPED_SESSION_CLEAR_UPDATE_AUTHORITATIVE_PATCH
+        ):
+            try:
+                await self._clear_workflow_scoped_session_via_update(
+                    session_handle=session_handle,
+                    binding=binding,
+                    reason=reason,
+                    request_id=request_id,
+                )
+            except AttributeError as exc:
+                self._get_logger().warning(
+                    "Workflow-scoped managed-session clear update unsupported for %s; "
+                    "falling back to activity and signal: %s",
+                    binding.session_id,
+                    exc,
+                )
+                await self._clear_workflow_scoped_session_via_activity_then_signal(
+                    session_handle=session_handle,
+                    binding=binding,
+                    reason=reason,
+                    request_id=request_id,
+                )
+        elif workflow.patched(RUN_WORKFLOW_SCOPED_SESSION_CLEAR_ACTIVITY_SIGNAL_PATCH):
             await self._clear_workflow_scoped_session_via_activity_then_signal(
                 session_handle=session_handle,
                 binding=binding,
@@ -8009,6 +8057,36 @@ class MoonMindRunWorkflow:
                     request_id=request_id,
                 )
         self._codex_session_cleared_before_step_attempts.add(clear_key)
+
+    async def _clear_workflow_scoped_session_via_update(
+        self,
+        *,
+        session_handle: workflow.ExternalWorkflowHandle,
+        binding: CodexManagedSessionBinding,
+        reason: str,
+        request_id: str,
+    ) -> None:
+        execute_update = getattr(session_handle, "execute_update", None)
+        if execute_update is None:
+            raise AttributeError(
+                "'ExternalWorkflowHandle' object has no attribute 'execute_update'"
+            )
+        result = await execute_update(
+            "ClearSession",
+            {
+                "reason": reason,
+                "requestId": request_id,
+            },
+        )
+        session_state = self._get_from_result(
+            result, "sessionState"
+        ) or self._get_from_result(result, "session_state")
+        if isinstance(session_state, Mapping):
+            session_epoch = self._get_from_result(session_state, "sessionEpoch")
+            if isinstance(session_epoch, int) and session_epoch >= 1:
+                self._codex_session_binding = binding.model_copy(
+                    update={"session_epoch": session_epoch}
+                )
 
     async def _terminate_workflow_scoped_sessions(self, *, reason: str) -> None:
         binding = self._codex_session_binding
@@ -8098,6 +8176,7 @@ class MoonMindRunWorkflow:
         clear_handle = await self._clear_workflow_scoped_session_via_activity(
             binding=binding,
             reason=reason,
+            request_id=request_id,
         )
         session_state = clear_handle.session_state
         self._codex_session_binding = binding.model_copy(
@@ -8119,26 +8198,74 @@ class MoonMindRunWorkflow:
         *,
         binding: CodexManagedSessionBinding,
         reason: str,
+        request_id: str | None = None,
     ) -> CodexManagedSessionHandle:
         snapshot_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
             "agent_runtime.load_session_snapshot"
         )
+        snapshot = await self._load_workflow_scoped_session_snapshot_for_clear(
+            binding=binding,
+            snapshot_route=snapshot_route,
+        )
+        if not snapshot.container_id or not snapshot.thread_id:
+            raise ValueError("Workflow-scoped managed session cannot be cleared before launch")
+        clear_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "agent_runtime.clear_session"
+        )
+        try:
+            clear_payload = await self._execute_workflow_scoped_session_clear_activity(
+                snapshot=snapshot,
+                clear_route=clear_route,
+                reason=reason,
+                request_id=request_id,
+            )
+        except Exception as exc:
+            if not is_managed_session_locator_mismatch_error(exc):
+                raise
+            refreshed_snapshot = (
+                await self._load_workflow_scoped_session_snapshot_for_clear(
+                    binding=binding,
+                    snapshot_route=snapshot_route,
+                )
+            )
+            if not refreshed_snapshot.container_id or not refreshed_snapshot.thread_id:
+                raise ValueError(
+                    "Workflow-scoped managed session cannot be cleared before launch"
+                ) from exc
+            clear_payload = await self._execute_workflow_scoped_session_clear_activity(
+                snapshot=refreshed_snapshot,
+                clear_route=clear_route,
+                reason=reason,
+                request_id=request_id,
+            )
+        return CodexManagedSessionHandle.model_validate(clear_payload)
+
+    async def _load_workflow_scoped_session_snapshot_for_clear(
+        self,
+        *,
+        binding: CodexManagedSessionBinding,
+        snapshot_route: Any,
+    ) -> CodexManagedSessionSnapshot:
         snapshot_payload = await workflow.execute_activity(
             snapshot_route.activity_type,
             binding.model_dump(mode="json", by_alias=True),
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(snapshot_route),
         )
-        snapshot = CodexManagedSessionSnapshot.model_validate(snapshot_payload)
-        if not snapshot.container_id or not snapshot.thread_id:
-            raise ValueError("Workflow-scoped managed session cannot be cleared before launch")
-        clear_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
-            "agent_runtime.clear_session"
-        )
+        return CodexManagedSessionSnapshot.model_validate(snapshot_payload)
+
+    async def _execute_workflow_scoped_session_clear_activity(
+        self,
+        *,
+        snapshot: CodexManagedSessionSnapshot,
+        clear_route: Any,
+        reason: str,
+        request_id: str | None,
+    ) -> Any:
         next_thread_id = (
             f"thread:{snapshot.binding.session_id}:{snapshot.binding.session_epoch + 1}"
         )
-        clear_payload = await workflow.execute_activity(
+        return await workflow.execute_activity(
             clear_route.activity_type,
             CodexManagedSessionClearRequest(
                 sessionId=snapshot.binding.session_id,
@@ -8147,11 +8274,11 @@ class MoonMindRunWorkflow:
                 threadId=snapshot.thread_id,
                 newThreadId=next_thread_id,
                 reason=reason,
+                requestId=request_id,
             ).model_dump(mode="json", by_alias=True),
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
             **self._execute_kwargs_for_route(clear_route),
         )
-        return CodexManagedSessionHandle.model_validate(clear_payload)
 
     async def _terminate_workflow_scoped_session_via_activity_then_signal(
         self,
@@ -10379,6 +10506,7 @@ class MoonMindRunWorkflow:
         resolved_skillset_ref: str | None = None,
         workflow_parameters: Mapping[str, Any] | None = None,
         step_execution: int | None = None,
+        queue_order: int | None = None,
         attempt_reason: str = "initial_execution",
     ) -> "AgentExecutionRequest":
         """Build an ``AgentExecutionRequest`` from plan-node inputs and workflow context."""
@@ -10748,6 +10876,11 @@ class MoonMindRunWorkflow:
             self._step_execution_retrieval_manifest_artifacts[
                 (node_id, execution_ordinal)
             ] = dict(retrieval_manifest_artifact)
+        if queue_order is not None:
+            moonmind_payload["queueOrder"] = queue_order
+        workflow_start_time = getattr(wf_info, "start_time", None)
+        if isinstance(workflow_start_time, datetime):
+            moonmind_payload["queuedAt"] = workflow_start_time.isoformat()
         metadata_payload["moonmind"] = moonmind_payload
         parameters["metadata"] = metadata_payload
         projection_context = attempt_context.to_manifest_projection().get("context")

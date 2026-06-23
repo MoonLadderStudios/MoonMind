@@ -350,6 +350,7 @@ async def test_agent_run_uses_codex_session_adapter_for_managed_codex_session(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"
@@ -493,6 +494,7 @@ async def test_agent_run_keeps_managed_adapter_for_non_session_managed_request(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"
@@ -617,6 +619,7 @@ async def test_agent_run_starts_deferred_codex_session_only_after_slot_assignmen
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         if request_slot:
             order.append("request_slot")
@@ -811,6 +814,7 @@ async def test_agent_run_managed_session_passes_publish_branch_context_to_fetch_
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"
@@ -944,6 +948,7 @@ async def test_agent_run_managed_session_start_runtime_error_returns_failed_resu
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"
@@ -1054,6 +1059,7 @@ async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"
@@ -1158,6 +1164,7 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         if request_slot:
             ensure_profile_refs.append(execution_profile_ref)
@@ -1293,6 +1300,7 @@ async def test_agent_run_keeps_legacy_session_fetch_path_when_patch_unset(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"
@@ -1392,6 +1400,7 @@ async def test_agent_run_keeps_legacy_instruction_preparation_for_pre_patch_hist
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"
@@ -1490,6 +1499,7 @@ async def test_agent_run_preserves_pre_launch_instruction_order_for_pre_defer_hi
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "codex-default"

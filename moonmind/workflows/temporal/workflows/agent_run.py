@@ -1555,6 +1555,7 @@ class MoonMindAgentRun:
         execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Signal the ProviderProfileManager for slot requests; auto-start it on first failure.
 
@@ -1576,6 +1577,8 @@ class MoonMindAgentRun:
         }
         if request_priority is not None:
             signal_payload["priority"] = request_priority
+        if request_queue_metadata:
+            signal_payload.update(request_queue_metadata)
         if workflow.patched(SLOT_HANDOFF_PATCH_ID):
             lease_group_id = self._lease_group_id()
             if lease_group_id:
@@ -1621,6 +1624,33 @@ class MoonMindAgentRun:
         except (TypeError, ValueError):
             return 0
 
+    @staticmethod
+    def _request_queue_metadata(request: AgentExecutionRequest) -> dict[str, Any]:
+        parameters = request.parameters
+        if not isinstance(parameters, Mapping):
+            return {}
+        metadata = parameters.get("metadata")
+        metadata_map = metadata if isinstance(metadata, Mapping) else {}
+        moonmind = metadata_map.get("moonmind")
+        moonmind_map = moonmind if isinstance(moonmind, Mapping) else {}
+        payload: dict[str, Any] = {}
+        raw_queue_order = moonmind_map.get(
+            "queueOrder",
+            moonmind_map.get("queue_order"),
+        )
+        if raw_queue_order is not None and not isinstance(raw_queue_order, bool):
+            try:
+                payload["queue_order"] = int(raw_queue_order)
+            except (TypeError, ValueError):
+                # Queue metadata is best-effort; invalid values should not block
+                # otherwise valid slot requests.
+                pass
+        raw_queued_at = moonmind_map.get("queuedAt", moonmind_map.get("queued_at"))
+        queued_at = str(raw_queued_at or "").strip()
+        if queued_at:
+            payload["queued_at"] = queued_at
+        return payload
+
     async def _manager_state_for_slot_wait(
         self,
         *,
@@ -1649,6 +1679,7 @@ class MoonMindAgentRun:
         execution_profile_ref: str | None = None,
         profile_selector: dict | None = None,
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> workflow.ExternalWorkflowHandle:
         """Terminate a stuck manager, start a fresh one, and re-request a slot.
 
@@ -1671,6 +1702,7 @@ class MoonMindAgentRun:
             execution_profile_ref=execution_profile_ref,
             profile_selector=profile_selector,
             request_priority=request_priority,
+            request_queue_metadata=request_queue_metadata,
         )
 
     async def _ensure_manager_started(
@@ -1686,6 +1718,7 @@ class MoonMindAgentRun:
             execution_profile_ref=None,
             profile_selector=None,
             request_priority=None,
+            request_queue_metadata=None,
         )
 
     async def _sync_manager_profiles(
@@ -2233,6 +2266,7 @@ class MoonMindAgentRun:
             execution_profile_ref=request.execution_profile_ref,
             profile_selector=selector_payload,
             request_priority=self._request_priority(request),
+            request_queue_metadata=self._request_queue_metadata(request),
         )
         self._awaiting_slot_reason_override = None
         self._slot_wait_timeout_override_seconds = None
@@ -2512,6 +2546,7 @@ class MoonMindAgentRun:
                             execution_profile_ref=request.execution_profile_ref,
                             profile_selector=selector_payload,
                             request_priority=self._request_priority(request),
+                            request_queue_metadata=self._request_queue_metadata(request),
                         )
                     else:
                         manager_handle = await self._ensure_manager_and_signal(
@@ -2521,6 +2556,7 @@ class MoonMindAgentRun:
                             execution_profile_ref=request.execution_profile_ref,
                             profile_selector=selector_payload,
                             request_priority=self._request_priority(request),
+                            request_queue_metadata=self._request_queue_metadata(request),
                         )
                         profile_count = await self._sync_manager_profiles(
                             manager_id=manager_id,
@@ -2651,6 +2687,7 @@ class MoonMindAgentRun:
                                             execution_profile_ref=request.execution_profile_ref,
                                             profile_selector=selector_payload,
                                             request_priority=self._request_priority(request),
+                                            request_queue_metadata=self._request_queue_metadata(request),
                                         )
                                         await self._sync_manager_profiles(
                                             manager_id=manager_id,
@@ -2665,6 +2702,7 @@ class MoonMindAgentRun:
                                     execution_profile_ref=request.execution_profile_ref,
                                     profile_selector=selector_payload,
                                     request_priority=self._request_priority(request),
+                                    request_queue_metadata=self._request_queue_metadata(request),
                                 )
                                 await self._sync_manager_profiles(
                                     manager_id=manager_id,
@@ -2745,6 +2783,7 @@ class MoonMindAgentRun:
                             "runtime_id": kw.get("runtime_id", runtime_id),
                             "priority": self._request_priority(request),
                         }
+                        payload.update(self._request_queue_metadata(request))
                         if workflow.patched(SLOT_HANDOFF_PATCH_ID):
                             lease_group_id = self._lease_group_id()
                             if lease_group_id:

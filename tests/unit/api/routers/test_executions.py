@@ -9939,6 +9939,39 @@ def test_describe_execution_exposes_dependency_bypass_action(
     assert body["actions"]["canBypassDependencies"] is True
     assert "canBypassDependencies" not in body["actions"]["disabledReasons"]
 
+def test_describe_execution_exposes_lifecycle_resume_for_operator_paused_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.waiting_reason = "operator_paused"
+    record.attention_required = True
+    record.memo = {
+        **record.memo,
+        "waiting_reason": "operator_paused",
+        "attention_required": True,
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "executing"
+    assert body["waitingReason"] == "operator_paused"
+    assert body["attentionRequired"] is True
+    assert body["actions"]["canResume"] is True
+    assert body["actions"]["canPause"] is False
+    assert "canResume" not in body["actions"]["disabledReasons"]
+    assert body["actions"]["disabledReasons"]["canPause"] == "already_paused"
+
 def test_describe_execution_exposes_temporal_workflow_editing_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

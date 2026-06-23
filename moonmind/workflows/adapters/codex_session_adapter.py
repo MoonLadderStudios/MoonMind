@@ -70,6 +70,9 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     EMPTY_ASSISTANT_FAILURE_CAUSE,
 )
+from moonmind.workflows.temporal.managed_session_errors import (
+    is_managed_session_locator_mismatch_error,
+)
 from moonmind.workflow_docker_mode import (
     DEFAULT_WORKFLOW_DOCKER_MODE,
     normalize_workflow_docker_mode,
@@ -265,27 +268,6 @@ def _is_empty_assistant_turn_failure(metadata: Mapping[str, Any] | None) -> bool
         "codex app-server turn/completed produced no assistant output",
     }
 
-
-_SESSION_LOCATOR_MISMATCH_MARKERS = (
-    "sessionid does not match the active managed session",
-    "sessionepoch does not match the active managed session",
-    "containerid does not match the active managed session",
-    "threadid does not match the active managed session",
-)
-
-
-def _is_session_locator_mismatch_error(exc: BaseException) -> bool:
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        message = str(getattr(current, "message", "") or current).strip().lower()
-        if any(marker in message for marker in _SESSION_LOCATOR_MISMATCH_MARKERS):
-            return True
-        current = getattr(current, "cause", None) or getattr(current, "__cause__", None)
-        if not isinstance(current, BaseException):
-            current = None
-    return False
 
 def _reset_thread_id_for_empty_turn(locator: CodexManagedSessionLocator) -> str:
     return f"{locator.thread_id}:empty-output-reset"
@@ -599,6 +581,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         binding=binding,
                         new_thread_id=reset_thread_id,
                         reason="retry_after_empty_assistant_output",
+                        request_id=(
+                            f"{binding.agent_run_id}:empty-assistant-clear:"
+                            f"{previous_locator.session_epoch}:"
+                            f"{previous_locator.thread_id}"
+                        ),
                     )
                     current_locator = self._locator_from_state(
                         session_state=reset_handle.session_state,
@@ -631,6 +618,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         retry_metadata = _turn_failure_metadata_from_activity_error(
                             retry_error
                         )
+                        if _is_empty_assistant_turn_failure(retry_metadata):
+                            retry_metadata["selfHealExhausted"] = True
+                            retry_metadata["selfHealAction"] = "clear_session"
+                            retry_metadata["selfHealAttempts"] = 1
                         retry_metadata["sessionInterventions"] = session_interventions
                         retry_metadata["priorTurnFailure"] = turn_metadata
                         publication = await self._publish_failure_artifacts(
@@ -1055,20 +1046,34 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         binding: CodexManagedSessionBinding,
         new_thread_id: str,
         reason: str | None = None,
+        request_id: str | None = None,
     ) -> CodexManagedSessionHandle:
         locator = await self._current_locator(binding)
-        handle = await self._coerce_handle(
-            self._clear_remote_session(
-                CodexManagedSessionClearRequest(
-                    sessionId=locator.session_id,
-                    sessionEpoch=locator.session_epoch,
-                    containerId=locator.container_id,
-                    threadId=locator.thread_id,
-                    newThreadId=new_thread_id,
-                    reason=reason,
-                )
+        try:
+            handle = await self._clear_session_with_locator(
+                locator=locator,
+                new_thread_id=new_thread_id,
+                reason=reason,
+                request_id=request_id,
             )
-        )
+        except Exception as exc:
+            if not is_managed_session_locator_mismatch_error(exc):
+                raise
+            refreshed_locator = await self._current_locator(binding)
+            if (
+                refreshed_locator.session_epoch > locator.session_epoch
+                and refreshed_locator.thread_id == new_thread_id
+            ):
+                handle = await self._coerce_handle(
+                    self._session_status(refreshed_locator)
+                )
+            else:
+                handle = await self._clear_session_with_locator(
+                    locator=refreshed_locator,
+                    new_thread_id=new_thread_id,
+                    reason=reason,
+                    request_id=request_id,
+                )
         await self._attach_runtime_handles(
             {
                 "sessionEpoch": handle.session_state.session_epoch,
@@ -1086,6 +1091,28 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             active_turn_id=handle.session_state.active_turn_id,
         )
         return handle
+
+    async def _clear_session_with_locator(
+        self,
+        *,
+        locator: CodexManagedSessionLocator,
+        new_thread_id: str,
+        reason: str | None,
+        request_id: str | None,
+    ) -> CodexManagedSessionHandle:
+        return await self._coerce_handle(
+            self._clear_remote_session(
+                CodexManagedSessionClearRequest(
+                    sessionId=locator.session_id,
+                    sessionEpoch=locator.session_epoch,
+                    containerId=locator.container_id,
+                    threadId=locator.thread_id,
+                    newThreadId=new_thread_id,
+                    reason=reason,
+                    requestId=request_id,
+                )
+            )
+        )
 
     async def interrupt_turn(
         self,
@@ -1253,7 +1280,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             try:
                 handle = await self._coerce_handle(self._session_status(locator))
             except Exception as exc:
-                if not _is_session_locator_mismatch_error(exc):
+                if not is_managed_session_locator_mismatch_error(exc):
                     raise
                 refreshed_snapshot = await self._load_snapshot(binding.workflow_id)
                 if not refreshed_snapshot.container_id or not refreshed_snapshot.thread_id:
@@ -1276,7 +1303,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                             self._session_status(refreshed_locator)
                         )
                     except Exception as retry_exc:
-                        if not _is_session_locator_mismatch_error(retry_exc):
+                        if not is_managed_session_locator_mismatch_error(retry_exc):
                             raise
                         logger.warning(
                             "Managed-session resume status still mismatched after "

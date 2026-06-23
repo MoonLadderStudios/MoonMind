@@ -13,6 +13,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
 
 import moonmind.workflows.temporal.manifest_ingest as manifest_ingest_module
 from api_service.db.models import Base, MoonMindWorkflowState, TemporalWorkflowType
@@ -372,6 +377,8 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
 ) -> None:
     activity_calls: list[tuple[str, dict[str, object]]] = []
     child_calls: list[dict[str, object]] = []
+    search_attribute_upserts: list[list[SearchAttributePair]] = []
+    scheduled_start = datetime(2026, 6, 22, 9, 30, tzinfo=UTC)
 
     monkeypatch.setattr(
         manifest_ingest_module.workflow,
@@ -380,7 +387,27 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
             workflow_id="mm:manifest-1",
             run_id="run-1",
             search_attributes={"mm_owner_id": "user-1"},
+            typed_search_attributes=TypedSearchAttributes(
+                [
+                    SearchAttributePair(
+                        SearchAttributeKey.for_datetime(
+                            "TemporalScheduledStartTime"
+                        ),
+                        scheduled_start,
+                    )
+                ]
+            ),
         ),
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "patched",
+        lambda _patch_id: True,
+    )
+    monkeypatch.setattr(
+        manifest_ingest_module.workflow,
+        "upsert_search_attributes",
+        lambda pairs: search_attribute_upserts.append(list(pairs)),
     )
 
     async def fake_execute_activity(name: str, *, args, **_kwargs):
@@ -441,6 +468,9 @@ def test_manifest_workflow_run_uses_owner_principal_and_child_owner_id(
     )
 
     assert result["status"] == "completed"
+    assert search_attribute_upserts
+    assert search_attribute_upserts[0][0].key.name == "mm_scheduled_for"
+    assert search_attribute_upserts[0][0].value == scheduled_start
     assert activity_calls[0] == (
         "manifest_read",
         {"principal": "user-1", "manifest_ref": "art_manifest_1"},

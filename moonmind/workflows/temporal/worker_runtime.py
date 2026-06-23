@@ -1941,6 +1941,13 @@ def _positive_int_env(name: str) -> int | None:
         raise RuntimeError(f"{name} must be a positive integer")
     return value
 
+def _pentest_runner_image_overrides() -> dict[str, str]:
+    pentest = settings.pentest
+    return {
+        pentest.safe_profile_id: pentest.runner_image,
+        pentest.vpn_lab_profile_id: pentest.runner_image,
+    }
+
 def _build_agent_runtime_deps(
     *,
     artifact_service: Any | None = None,
@@ -2049,6 +2056,7 @@ def _build_agent_runtime_deps(
             workload_registry_path,
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries or None,
+            profile_image_overrides=_pentest_runner_image_overrides(),
         )
     else:
         default_workload_registry = (
@@ -2061,6 +2069,7 @@ def _build_agent_runtime_deps(
             default_workload_registry,
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries or None,
+            profile_image_overrides=_pentest_runner_image_overrides(),
         )
     workload_fleet_limit = _positive_int_env("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY")
     workload_launcher = DockerWorkloadLauncher(
