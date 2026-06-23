@@ -2799,13 +2799,18 @@ class TemporalArtifactActivities:
         """
         from sqlalchemy import select
 
-        from api_service.db.models import ManagedAgentProviderProfile
+        from api_service.db.models import (
+            ManagedAgentProviderProfile,
+            ProviderProfileAuthState,
+        )
         from api_service.db.base import get_async_session_context
 
         async with get_async_session_context() as session:
             stmt = select(ManagedAgentProviderProfile).where(
                 ManagedAgentProviderProfile.runtime_id == runtime_id,
                 ManagedAgentProviderProfile.enabled.is_(True),
+                ManagedAgentProviderProfile.auth_state
+                == ProviderProfileAuthState.CONNECTED,
             ).order_by(
                 ManagedAgentProviderProfile.is_default.desc(),
                 ManagedAgentProviderProfile.priority.desc(),
@@ -2855,6 +2860,23 @@ class TemporalArtifactActivities:
                     "rate_limit_policy": row.rate_limit_policy.value,
                     "max_lease_duration_seconds": row.max_lease_duration_seconds,
                     "enabled": row.enabled,
+                    "auth_state": row.auth_state.value if row.auth_state else None,
+                    "disabled_reason": (
+                        row.disabled_reason.value if row.disabled_reason else None
+                    ),
+                    "first_authenticated_at": (
+                        row.first_authenticated_at.isoformat()
+                        if row.first_authenticated_at
+                        else None
+                    ),
+                    "last_validated_at": (
+                        row.last_validated_at.isoformat()
+                        if row.last_validated_at
+                        else None
+                    ),
+                    "last_auth_method": (
+                        row.last_auth_method.value if row.last_auth_method else None
+                    ),
                 }
             )
 

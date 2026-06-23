@@ -6621,7 +6621,7 @@ export interface components {
             rate_limit_policy: string;
             /**
              * Enabled
-             * @default true
+             * @default false
              */
             enabled: boolean;
             /**
@@ -6634,6 +6634,22 @@ export interface components {
              * @default 7200
              */
             max_lease_duration_seconds: number;
+            /**
+             * Auth State
+             * @default not_configured
+             */
+            auth_state: string;
+            /**
+             * Disabled Reason
+             * @default missing_credentials
+             */
+            disabled_reason: string | null;
+            /** First Authenticated At */
+            first_authenticated_at?: string | null;
+            /** Last Validated At */
+            last_validated_at?: string | null;
+            /** Last Auth Method */
+            last_auth_method?: string | null;
         };
         /** ProviderProfileReadiness */
         ProviderProfileReadiness: {
@@ -6713,6 +6729,16 @@ export interface components {
             is_default: boolean;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds: number;
+            /** Auth State */
+            auth_state: string;
+            /** Disabled Reason */
+            disabled_reason: string | null;
+            /** First Authenticated At */
+            first_authenticated_at: string | null;
+            /** Last Validated At */
+            last_validated_at: string | null;
+            /** Last Auth Method */
+            last_auth_method: string | null;
             readiness: components["schemas"]["ProviderProfileReadiness"];
             /** Created At */
             created_at: string | null;
@@ -6802,6 +6828,16 @@ export interface components {
             is_default?: boolean | null;
             /** Max Lease Duration Seconds */
             max_lease_duration_seconds?: number | null;
+            /** Auth State */
+            auth_state?: string | null;
+            /** Disabled Reason */
+            disabled_reason?: string | null;
+            /** First Authenticated At */
+            first_authenticated_at?: string | null;
+            /** Last Validated At */
+            last_validated_at?: string | null;
+            /** Last Auth Method */
+            last_auth_method?: string | null;
         };
         /** ProviderReadinessCheck */
         ProviderReadinessCheck: {

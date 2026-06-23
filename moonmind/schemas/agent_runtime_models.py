@@ -61,6 +61,22 @@ RuntimeContextPolicy = Literal[
     "reuse_session_same_epoch",
     "external_provider_continuation",
 ]
+ProviderProfileAuthState = Literal[
+    "not_configured",
+    "oauth_pending",
+    "api_key_pending",
+    "connected",
+    "validation_failed",
+    "disconnected",
+]
+ProviderProfileDisabledReason = Literal[
+    "missing_credentials",
+    "auth_invalid",
+    "user_disabled",
+    "policy_disabled",
+    "disconnected",
+]
+ProviderProfileAuthMethod = Literal["oauth_volume", "secret_ref", "manual"]
 
 
 class AgentRuntimeStepExecutionLaunch(BaseModel):
@@ -622,7 +638,20 @@ class ManagedAgentProviderProfile(BaseModel):
     rate_limit_policy: dict[str, Any] = Field(
         default_factory=dict, alias="rateLimitPolicy"
     )
-    enabled: bool = Field(True, alias="enabled")
+    enabled: bool = Field(False, alias="enabled")
+    auth_state: ProviderProfileAuthState = Field(
+        "not_configured", alias="authState"
+    )
+    disabled_reason: ProviderProfileDisabledReason | None = Field(
+        "missing_credentials", alias="disabledReason"
+    )
+    first_authenticated_at: datetime | None = Field(
+        None, alias="firstAuthenticatedAt"
+    )
+    last_validated_at: datetime | None = Field(None, alias="lastValidatedAt")
+    last_auth_method: ProviderProfileAuthMethod | None = Field(
+        None, alias="lastAuthMethod"
+    )
 
     # -- Volume & account binding (optional) --
     volume_ref: str | None = Field(None, alias="volumeRef")
@@ -695,6 +724,13 @@ class ManagedAgentProviderProfile(BaseModel):
                 f"runtimeMaterializationMode must be one of: {allowed}; "
                 f"got {self.runtime_materialization_mode!r}"
             )
+
+        if self.enabled and self.auth_state != "connected":
+            raise ValueError(
+                "enabled provider profiles must have authState='connected'"
+            )
+        if self.enabled:
+            self.disabled_reason = None
 
         validate_codex_oauth_profile_refs(
             runtime_id=self.runtime_id,

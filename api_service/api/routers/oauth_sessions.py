@@ -27,6 +27,8 @@ from api_service.db.models import (
     User,
     ManagedAgentProviderProfile,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
     ManagedAgentRateLimitPolicy,
 )
@@ -763,6 +765,7 @@ async def finalize_oauth_session(
             detail="Not authorized to update this profile",
         )
 
+    connected_at = datetime.now(timezone.utc)
     profile_data = {
         "runtime_id": session_obj.runtime_id,
         "provider_id": metadata.get("provider_id")
@@ -779,6 +782,13 @@ async def finalize_oauth_session(
         "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
         "rate_limit_policy": policy_enum,
         "enabled": True,
+        "auth_state": ProviderProfileAuthState.CONNECTED,
+        "disabled_reason": None,
+        "first_authenticated_at": existing_profile.first_authenticated_at
+        if existing_profile and existing_profile.first_authenticated_at
+        else connected_at,
+        "last_validated_at": connected_at,
+        "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
     }
     try:
         validate_codex_oauth_profile_refs(
