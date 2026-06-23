@@ -3512,6 +3512,34 @@ async def test_agent_runtime_build_launch_context_temporal_boundary(
             assert "GITHUB_TOKEN" in result["passthrough_env_keys"]
 
 @pytest.mark.asyncio
+async def test_agent_runtime_build_launch_context_prefers_proxy_for_supported_secret_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION", "1")
+    activities_impl = TemporalAgentRuntimeActivities()
+
+    result = await activities_impl.agent_runtime_build_launch_context(
+        {
+            "profile": {
+                "profile_id": "claude-minimax",
+                "credential_source": "secret_ref",
+                "runtime_materialization_mode": "env_bundle",
+                "provider_id": "minimax",
+                "secret_refs": {"provider_api_key": "db://minimax"},
+            },
+            "runtime_for_profile": "claude_code",
+            "workflow_id": "wf-proxy-default",
+            "default_credential_source": "secret_ref",
+        }
+    )
+
+    env_overrides = result["delta_env_overrides"]
+    assert "MOONMIND_PROXY_TOKEN" in env_overrides
+    assert "ANTHROPIC_BASE_URL" in env_overrides
+    assert "proxy/minimax" in env_overrides["ANTHROPIC_BASE_URL"]
+    assert "db://minimax" not in env_overrides.values()
+
+@pytest.mark.asyncio
 async def test_agent_runtime_fetch_result_temporal_boundary(tmp_path: Path) -> None:
     from unittest.mock import patch
 

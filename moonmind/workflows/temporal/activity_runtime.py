@@ -1985,6 +1985,41 @@ def _coerce_activity_payload_input(
         request = kwargs
     return _coerce_activity_request(request, activity_type=activity_type)
 
+def _provider_profile_prefers_proxy_first(profile: Mapping[str, Any]) -> bool:
+    tags = {str(tag).strip().lower() for tag in profile.get("tags") or []}
+    if "proxy-first" in tags:
+        return True
+    if "direct-credentials-required" in tags:
+        return False
+
+    command_behavior = profile.get("command_behavior")
+    if not isinstance(command_behavior, Mapping):
+        command_behavior = profile.get("commandBehavior")
+    if isinstance(command_behavior, Mapping) and bool(
+        command_behavior.get("requires_direct_credentials")
+        or command_behavior.get("requiresDirectCredentials")
+    ):
+        return False
+
+    provider = (
+        str(profile.get("provider_id") or profile.get("providerId") or "")
+        .strip()
+        .lower()
+    )
+    credential_source = str(
+        profile.get("credential_source") or profile.get("credentialSource") or ""
+    ).strip()
+    materialization_mode = str(
+        profile.get("runtime_materialization_mode")
+        or profile.get("runtimeMaterializationMode")
+        or ""
+    ).strip()
+    return (
+        provider in {"anthropic", "minimax", "openai"}
+        and credential_source == "secret_ref"
+        and materialization_mode in {"api_key_env", "env_bundle"}
+    )
+
 def _redacted_webhook_target(webhook_url: str) -> str:
     if not webhook_url:
         return ""
@@ -6235,8 +6270,7 @@ class TemporalAgentRuntimeActivities:
             default_credential_source=default_credential_source,
         )
         delta_env_overrides = dict(context.delta_env_overrides)
-        tags = profile.get("tags") or []
-        if "proxy-first" in tags:
+        if _provider_profile_prefers_proxy_first(profile):
             from cryptography.fernet import Fernet
 
             from api_service.core.encryption import get_encryption_key

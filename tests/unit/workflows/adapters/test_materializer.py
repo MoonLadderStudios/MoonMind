@@ -261,6 +261,99 @@ async def test_materializer_path_aware_file_templates_written_and_cleanup(tmp_pa
     assert materializer.generated_files == []
 
 @pytest.mark.asyncio
+async def test_materializer_deep_merges_toml_file_templates_without_artifact_linking(tmp_path):
+    materializer = ProviderProfileMaterializer(
+        base_env={"PATH": "/usr/bin"},
+        secret_resolver=StaticSecretResolver({"env://minimax": "resolved-minimax-key"}),
+    )
+    support_dir = tmp_path / ".moonmind"
+    config_path = support_dir / "codex-home" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        '[model_providers.openai]\nname = "OpenAI"\n\n'
+        '[profiles.default]\nmodel = "gpt-5.5"\nmodel_provider = "openai"\n',
+        encoding="utf-8",
+    )
+    profile = ManagedRuntimeProfile(
+        profile_id="codex_minimax_m27",
+        runtime_id="codex_cli",
+        provider_id="minimax",
+        credential_source="secret_ref",
+        runtime_materialization_mode="composite",
+        secret_refs={"provider_api_key": "env://minimax"},
+        env_template={"MINIMAX_API_KEY": {"from_secret_ref": "provider_api_key"}},
+        file_templates=[
+            {
+                "path": "codex-home/config.toml",
+                "format": "toml",
+                "mergeStrategy": "deep_merge",
+                "permissions": "0600",
+                "contentTemplate": {
+                    "model_providers": {
+                        "minimax": {
+                            "name": "MiniMax Chat Completions API",
+                            "base_url": "https://api.minimax.io/v1",
+                            "env_key": "MINIMAX_API_KEY",
+                            "wire_api": "chat",
+                        }
+                    },
+                    "profiles": {
+                        "m27": {
+                            "model": "codex-MiniMax-M2.7",
+                            "model_provider": "minimax",
+                        }
+                    },
+                },
+            }
+        ],
+        command_template=["codex", "exec"],
+    )
+
+    env, _cmd = await materializer.materialize(
+        profile,
+        runtime_support_dir=str(support_dir),
+    )
+
+    content = config_path.read_text(encoding="utf-8")
+    assert env["MINIMAX_API_KEY"] == "resolved-minimax-key"
+    assert "provider_api_key" not in env
+    assert "[model_providers.openai]" in content
+    assert "[model_providers.minimax]" in content
+    assert "[profiles.default]" in content
+    assert "[profiles.m27]" in content
+    assert "resolved-minimax-key" not in content
+    assert oct(config_path.stat().st_mode & 0o777) == "0o600"
+    assert str(config_path) in materializer.generated_files
+
+@pytest.mark.asyncio
+async def test_materializer_appends_text_file_templates(tmp_path):
+    materializer = ProviderProfileMaterializer(
+        base_env={},
+        secret_resolver=MockSecretResolver(),
+    )
+    support_dir = tmp_path / ".moonmind"
+    notes_path = support_dir / "runtime.env"
+    notes_path.parent.mkdir(parents=True)
+    notes_path.write_text("EXISTING=1\n", encoding="utf-8")
+    profile = ManagedRuntimeProfile(
+        profile_id="append_profile",
+        runtime_id="claude_code",
+        file_templates=[
+            {
+                "path": "runtime.env",
+                "format": "text",
+                "mergeStrategy": "append",
+                "contentTemplate": "ADDED=2\n",
+            }
+        ],
+        command_template=["claude"],
+    )
+
+    await materializer.materialize(profile, runtime_support_dir=str(support_dir))
+
+    assert notes_path.read_text(encoding="utf-8") == "EXISTING=1\nADDED=2\n"
+
+@pytest.mark.asyncio
 async def test_materializer_cleanup_removes_generated_support_dir_tree():
     materializer = ProviderProfileMaterializer(
         base_env={},
