@@ -10,6 +10,8 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     ManagedSecret,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
     SecretStatus,
     SettingsAuditEvent,
@@ -1712,6 +1714,9 @@ async def test_provider_profile_override_preserves_resettable_source(
                 runtime_id="codex_cli",
                 provider_id="openai",
                 enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+                last_auth_method=ProviderProfileAuthMethod.MANUAL,
             )
         )
         await settings_session.commit()
@@ -2960,6 +2965,9 @@ async def test_mm655_reference_sources_remain_secret_safe(settings_session_maker
                 runtime_id="codex",
                 provider_id="openai",
                 enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+                last_auth_method=ProviderProfileAuthMethod.MANUAL,
             )
         )
         await settings_session.commit()

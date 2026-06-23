@@ -4057,6 +4057,13 @@ class SettingsCatalogService:
         if missing_required:
             blockers.append("missing required fields: " + ", ".join(missing_required))
 
+        auth_state = row.auth_state or "not_configured"
+        disabled_reason = row.disabled_reason
+        if auth_state != "connected":
+            blockers.append(f"auth_state is {auth_state}")
+        if disabled_reason:
+            blockers.append(f"disabled_reason is {disabled_reason}")
+
         credential_source = (
             row.credential_source.value if row.credential_source else None
         )
@@ -4130,6 +4137,8 @@ class SettingsCatalogService:
                 "launch_blocker": True,
                 "blocks": ["launch", "readiness"],
                 "readiness_blockers": blockers,
+                "auth_state": auth_state,
+                "disabled_reason": disabled_reason,
             },
         )
 

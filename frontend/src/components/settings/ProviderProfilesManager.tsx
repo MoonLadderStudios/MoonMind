@@ -20,6 +20,11 @@ export interface ProviderProfile {
   rate_limit_policy: string;
   enabled: boolean;
   is_default?: boolean;
+  auth_state?: string | null;
+  disabled_reason?: string | null;
+  first_authenticated_at?: string | null;
+  last_validated_at?: string | null;
+  last_auth_method?: string | null;
   command_behavior?: Record<string, unknown> | null;
   tags?: string[] | null;
   priority?: number | null;
@@ -456,9 +461,9 @@ function extractErrorMessage(payload: unknown): string {
   return 'Anthropic API key validation failed.';
 }
 
-function isCodexOAuthProfile(profile: ProviderProfile): boolean {
+function isFirstPartyOAuthProfile(profile: ProviderProfile): boolean {
   return (
-    profile.runtime_id === 'codex_cli' &&
+    (profile.runtime_id === 'codex_cli' || profile.runtime_id === 'gemini_cli') &&
     (profile.credential_source === 'oauth_volume' ||
       profile.runtime_materialization_mode === 'oauth_home' ||
       Boolean(profile.volume_ref || profile.volume_mount_path))
@@ -506,7 +511,7 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
 }
 
 function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
-  if (isCodexOAuthProfile(profile)) {
+  if (isFirstPartyOAuthProfile(profile)) {
     return { kind: 'codex_oauth' };
   }
 
@@ -520,6 +525,28 @@ function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
     actions: claudeCredentialActions(profile),
     readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
   };
+}
+
+function activationStatusLabel(profile: ProviderProfile): string | null {
+  if (!profile.auth_state && !profile.disabled_reason) return null;
+  if (profile.auth_state === 'not_configured' || profile.disabled_reason === 'missing_credentials') {
+    return 'Setup required';
+  }
+  if (profile.disabled_reason === 'user_disabled') return 'Manually disabled';
+  if (profile.disabled_reason === 'policy_disabled') return 'Policy blocked';
+  if (profile.auth_state === 'validation_failed' || profile.disabled_reason === 'auth_invalid') {
+    return 'Validation failed';
+  }
+  if (profile.auth_state === 'disconnected' || profile.disabled_reason === 'disconnected') {
+    return 'Disconnected';
+  }
+  if (profile.auth_state === 'connected') return 'Connected';
+  return formatStatusLabel(profile.auth_state ?? profile.disabled_reason ?? null, '');
+}
+
+function mayEnableFromSettings(profile: ProviderProfile): boolean {
+  if (profile.enabled) return true;
+  return profile.auth_state === 'connected' && profile.disabled_reason !== 'policy_disabled';
 }
 
 function oauthStatusLabel(status: OAuthSessionStatus): string {
@@ -1250,6 +1277,8 @@ export function ProviderProfilesManager({
                 const oauthSession = oauthSessions[profile.profile_id];
                 const authModel = providerAuthModel(profile);
                 const canStartOAuth = authModel.kind === 'codex_oauth';
+                const activationLabel = activationStatusLabel(profile);
+                const enableAllowed = mayEnableFromSettings(profile);
                 return (
                 <tr key={profile.profile_id} role="row">
                   <td
@@ -1374,6 +1403,21 @@ export function ProviderProfilesManager({
                     >
                       {profile.enabled ? 'Enabled' : 'Disabled'}
                     </span>
+                    {activationLabel ? (
+                      <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
+                        {activationLabel}
+                      </div>
+                    ) : null}
+                    {profile.disabled_reason ? (
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Reason: {formatStatusLabel(profile.disabled_reason, profile.disabled_reason)}
+                      </div>
+                    ) : null}
+                    {profile.last_validated_at ? (
+                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                        Last validated: {profile.last_validated_at}
+                      </div>
+                    ) : null}
                     {profile.readiness ? (
                       <div className="mt-2 space-y-1">
                         <span
@@ -1555,6 +1599,12 @@ export function ProviderProfilesManager({
                                 profileId: profile.profile_id,
                                 enabled: !profile.enabled,
                               })
+                            }
+                            disabled={!profile.enabled && !enableAllowed}
+                            title={
+                              !profile.enabled && !enableAllowed
+                                ? 'Complete credential setup before enabling this profile.'
+                                : undefined
                             }
                           >
                             {profile.enabled ? 'Disable' : 'Enable'}

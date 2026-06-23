@@ -318,6 +318,8 @@ describe('ProviderProfilesManager form controls', () => {
     rate_limit_policy: 'backoff',
     enabled: true,
     is_default: true,
+    auth_state: 'connected',
+    disabled_reason: null,
   };
 
   const codexOauthProfile: ProviderProfile = {
@@ -342,6 +344,9 @@ describe('ProviderProfilesManager form controls', () => {
     volume_ref: 'claude_auth_volume',
     volume_mount_path: '/home/app/.claude',
     account_label: 'Claude Anthropic OAuth',
+    enabled: false,
+    auth_state: 'not_configured',
+    disabled_reason: 'missing_credentials',
     command_behavior: {
       auth_strategy: 'claude_credential_methods',
       auth_state: 'not_connected',
@@ -353,6 +358,9 @@ describe('ProviderProfilesManager form controls', () => {
   const connectedClaudeCredentialProfile: ProviderProfile = {
     ...claudeCredentialProfile,
     profile_id: 'claude-anthropic-connected',
+    enabled: true,
+    auth_state: 'connected',
+    disabled_reason: null,
     command_behavior: {
       auth_strategy: 'claude_credential_methods',
       auth_state: 'connected',
@@ -766,7 +774,30 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.getByRole('button', { name: 'OAuth claude-anthropic' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Use Anthropic API key claude-anthropic' })).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'OAuth claude-anthropic' })).toHaveLength(1);
+    expect(screen.getByText('Setup required')).toBeTruthy();
+    expect(screen.getByText(/Reason: Missing credentials/i)).toBeTruthy();
     expect(screen.getByText('Claude credentials not connected')).toBeTruthy();
+  });
+
+  it('shows setup-required OAuth action for Gemini setup stubs', () => {
+    renderProviderProfilesManager([
+      {
+        ...codexOauthProfile,
+        profile_id: 'gemini-default',
+        runtime_id: 'gemini_cli',
+        provider_id: 'google',
+        provider_label: 'Google',
+        volume_ref: 'gemini_auth_volume',
+        volume_mount_path: '/home/app/.gemini',
+        enabled: false,
+        auth_state: 'not_configured',
+        disabled_reason: 'missing_credentials',
+      },
+    ]);
+
+    expect(screen.getByText('Setup required')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'OAuth gemini-default' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Enable' })).toHaveProperty('disabled', true);
   });
 
   it('shows supported Claude OAuth lifecycle actions for connected claude_anthropic rows', () => {

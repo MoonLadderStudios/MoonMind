@@ -410,6 +410,18 @@ async def create_profile(
     _validate_codex_oauth_profile_row(profile)
     session.add(profile)
     await session.flush()
+    if profile.enabled:
+        secret_ref_results = _secret_ref_results_for_rows([profile])
+        secret_statuses = await _managed_secret_statuses_for_rows(
+            session,
+            [profile],
+            secret_ref_results=secret_ref_results,
+        )
+        _require_enabled_profile_launchable(
+            profile,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(profile.profile_id, {}),
+        )
     await normalize_runtime_default_profile(
         session=session,
         runtime_id=body.runtime_id,
@@ -469,6 +481,17 @@ async def update_profile(
                 detail="Enabled profiles require auth_state=connected",
             )
         profile.disabled_reason = None
+        secret_ref_results = _secret_ref_results_for_rows([profile])
+        secret_statuses = await _managed_secret_statuses_for_rows(
+            session,
+            [profile],
+            secret_ref_results=secret_ref_results,
+        )
+        _require_enabled_profile_launchable(
+            profile,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(profile.profile_id, {}),
+        )
 
     if requested_is_default is False:
         profile.is_default = False
@@ -1027,6 +1050,32 @@ def _provider_profile_readiness(
         "summary": summary,
         "checks": checks,
     }
+
+
+def _require_enabled_profile_launchable(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str],
+    secret_ref_results: dict[str, _SecretRefParseResult],
+) -> None:
+    readiness = _provider_profile_readiness(
+        row,
+        managed_secret_statuses=managed_secret_statuses,
+        secret_ref_results=secret_ref_results,
+    )
+    blockers = [
+        check["message"]
+        for check in readiness["checks"]
+        if check["status"] == "error"
+    ]
+    if blockers:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Enabled profiles require connected credentials and launch-ready "
+                "credential bindings: " + "; ".join(blockers)
+            ),
+        )
 
 
 def _required_fields_check(row: ManagedAgentProviderProfile) -> dict[str, str]:

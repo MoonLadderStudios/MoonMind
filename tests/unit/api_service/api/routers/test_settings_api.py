@@ -15,6 +15,8 @@ from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
     ManagedSecret,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     SecretStatus,
     SettingsAuditEvent,
     SettingsOverride,
@@ -741,6 +743,9 @@ async def test_provider_profile_ref_allows_literal_profile_ids_with_sensitive_wo
                 runtime_id="codex",
                 provider_id="openai",
                 enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+                last_auth_method=ProviderProfileAuthMethod.MANUAL,
             )
         )
         await session.commit()
@@ -1267,12 +1272,18 @@ async def test_settings_audit_endpoint_scopes_rows_to_current_workspace_and_user
                     runtime_id="codex",
                     provider_id="openai",
                     enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    disabled_reason=None,
+                    last_auth_method=ProviderProfileAuthMethod.MANUAL,
                 ),
                 ManagedAgentProviderProfile(
                     profile_id="other-profile",
                     runtime_id="codex",
                     provider_id="openai",
                     enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    disabled_reason=None,
+                    last_auth_method=ProviderProfileAuthMethod.MANUAL,
                 ),
             ]
         )

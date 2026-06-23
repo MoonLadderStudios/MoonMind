@@ -22,6 +22,7 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
+    SecretStatus,
 )
 from api_service.main import app
 from api_service.services.provider_profile_service import (
@@ -738,6 +739,74 @@ async def test_update_profile_clears_disabled_reason_when_enabled(
     assert data["enabled"] is True
     assert data["auth_state"] == "connected"
     assert data["disabled_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_profile_enabled_accepts_active_database_secret_ref(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    suffix = uuid4().hex
+    profile_id = f"patch_enabled_db_secret_{suffix}"
+    secret_slug = f"patch-enabled-db-secret-{suffix}"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedSecret(
+                slug=secret_slug,
+                ciphertext="encrypted-test-value",
+                status=SecretStatus.ACTIVE,
+                details={},
+            )
+        )
+        await session.commit()
+
+    payload = {
+        "profile_id": profile_id,
+        "runtime_id": "patch_enabled_db_secret",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"OPENAI_API_KEY": f"db://{secret_slug}"},
+        "auth_state": "connected",
+        "disabled_reason": "missing_credentials",
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": True},
+        )
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 200
+    data = update_response.json()
+    assert data["enabled"] is True
+    checks = {check["id"]: check for check in data["readiness"]["checks"]}
+    assert checks["secret_refs"]["status"] == "pass"
+
+
+@pytest.mark.asyncio
+async def test_create_enabled_profile_rejects_missing_database_secret_ref(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    payload = {
+        "profile_id": f"create_enabled_missing_db_secret_{uuid4().hex}",
+        "runtime_id": "create_enabled_missing_db_secret",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"OPENAI_API_KEY": "db://missing-provider-secret"},
+        "enabled": True,
+        "auth_state": "connected",
+        "disabled_reason": None,
+        "last_auth_method": "secret_ref",
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 422
+    assert "managed secret db://missing-provider-secret was not found" in response.text
 
 
 @pytest.mark.asyncio
