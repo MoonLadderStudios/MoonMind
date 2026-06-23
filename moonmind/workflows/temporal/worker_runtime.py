@@ -1625,45 +1625,56 @@ def _build_runtime_planner():
                 step_id = str(step_entry.get("id") or "").strip() or f"step-{idx + 1}"
                 base_runtime_payload = _coerce_mapping(node_inputs.get("runtime"))
                 step_runtime_payload = _coerce_mapping(step_entry.get("runtime"))
-                step_node_inputs: dict[str, Any] = {
-                    **node_inputs,
-                    **{
-                        k: v
-                        for k, v in step_entry.items()
-                        if k
-                        not in {
-                            "id",
-                            "tool",
-                            "skill",
-                            "instructions",
-                            "runtime",
-                            "dependsOn",
-                            "depends_on",
-                            "dependencies",
-                        }
-                    },
-                    "instructions": step_instructions,
-                }
-                if base_runtime_payload or step_runtime_payload:
-                    step_node_inputs["runtime"] = {
-                        **base_runtime_payload,
-                        **step_runtime_payload,
-                    }
-                base_story_output = _coerce_mapping(node_inputs.get("storyOutput"))
-                step_story_output = _coerce_mapping(
-                    step_entry.get("storyOutput") or step_entry.get("story_output")
-                )
-                if base_story_output or step_story_output:
-                    step_node_inputs["storyOutput"] = {
-                        **base_story_output,
-                        **step_story_output,
-                    }
                 step_tool_inputs = _selected_step_tool_inputs(step_entry)
-                for key, value in step_tool_inputs.items():
-                    step_node_inputs.setdefault(key, value)
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
+                tool_type = _selected_step_tool_type(step_entry)
+                tool_version = _selected_step_tool_version(step_entry)
+                is_agent_runtime_step = tool_type == "agent_runtime"
+                step_extra_inputs = {
+                    k: v
+                    for k, v in step_entry.items()
+                    if k
+                    not in {
+                        "id",
+                        "type",
+                        "tool",
+                        "skill",
+                        "instructions",
+                        "runtime",
+                        "dependsOn",
+                        "depends_on",
+                        "dependencies",
+                    }
+                }
+                if is_agent_runtime_step:
+                    step_node_inputs: dict[str, Any] = {
+                        **node_inputs,
+                        **step_extra_inputs,
+                        "instructions": step_instructions,
+                    }
+                    if base_runtime_payload or step_runtime_payload:
+                        step_node_inputs["runtime"] = {
+                            **base_runtime_payload,
+                            **step_runtime_payload,
+                        }
+                    base_story_output = _coerce_mapping(node_inputs.get("storyOutput"))
+                    step_story_output = _coerce_mapping(
+                        step_entry.get("storyOutput") or step_entry.get("story_output")
+                    )
+                    if base_story_output or step_story_output:
+                        step_node_inputs["storyOutput"] = {
+                            **base_story_output,
+                            **step_story_output,
+                        }
+                    for key, value in step_tool_inputs.items():
+                        step_node_inputs.setdefault(key, value)
+                else:
+                    step_node_inputs = {
+                        **step_extra_inputs,
+                        **dict(step_tool_inputs),
+                    }
                 step_runtime_payload = _coerce_mapping(step_node_inputs.get("runtime"))
                 step_runtime_raw = (
                     step_runtime_payload.get("mode")
@@ -1675,9 +1686,6 @@ def _build_runtime_planner():
                     if step_runtime_raw is not None
                     else None
                 )
-                tool_type = _selected_step_tool_type(step_entry)
-                tool_version = _selected_step_tool_version(step_entry)
-                is_agent_runtime_step = tool_type == "agent_runtime"
                 is_story_output_tool = (
                     step_tool_name.lower() in _STORY_OUTPUT_TASK_TOOLS
                 )
