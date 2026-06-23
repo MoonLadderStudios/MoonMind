@@ -75,10 +75,10 @@ def _credential_bindings_launch_ready(
     if credential_source != ProviderCredentialSource.SECRET_REF:
         return True
 
-    if not row.secret_refs:
+    if not isinstance(row.secret_refs, dict) or not row.secret_refs:
         return False
     for secret_ref in row.secret_refs.values():
-        if not secret_ref:
+        if not isinstance(secret_ref, str) or not secret_ref:
             return False
         try:
             parsed = parse_secret_ref(secret_ref)

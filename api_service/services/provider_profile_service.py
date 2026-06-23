@@ -228,11 +228,14 @@ async def _managed_secret_statuses_for_profiles(
 ) -> dict[str, str]:
     slugs: set[str] = set()
     for row in rows:
-        for secret_ref in (row.secret_refs or {}).values():
-            if isinstance(secret_ref, str) and secret_ref.startswith("db://"):
-                slug = secret_ref.removeprefix("db://").strip()
-                if slug:
-                    slugs.add(slug)
+        if not isinstance(row.secret_refs, dict):
+            continue
+        for secret_ref in row.secret_refs.values():
+            if not isinstance(secret_ref, str) or not secret_ref.startswith("db://"):
+                continue
+            slug = secret_ref.removeprefix("db://").strip()
+            if slug:
+                slugs.add(slug)
     if not slugs:
         return {}
 
