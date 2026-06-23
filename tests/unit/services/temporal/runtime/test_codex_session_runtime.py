@@ -117,8 +117,7 @@ if not os.path.exists(MARKER_PATH):
     with open(MARKER_PATH, "w", encoding="utf-8") as marker:
         marker.write("failed once\\n")
     sys.stderr.write(
-        "Error: failed to initialize sqlite state runtime under /tmp/codex-home: "
-        "failed to initialize state runtime at /tmp/codex-home\\n"
+        "Error: failed to initialize sqlite state runtime under /tmp/codex-home\\n"
     )
     sys.stderr.flush()
     sys.exit(1)

@@ -571,7 +571,7 @@ class CodexManagedSessionRuntime:
     @staticmethod
     def _is_sqlite_state_runtime_initialization_failure(error: BaseException) -> bool:
         message = str(error).lower()
-        return all(
+        return any(
             marker in message for marker in _SQLITE_STATE_RUNTIME_FAILURE_MARKERS
         )
 
@@ -599,6 +599,7 @@ class CodexManagedSessionRuntime:
             try:
                 shm_path.unlink()
             except FileNotFoundError:
+                # Absence is expected when SQLite did not leave shared-memory state.
                 pass
             except OSError as exc:
                 recovery_errors.append(f"{shm_path.name}: {exc}")
