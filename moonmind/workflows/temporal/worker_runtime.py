@@ -1671,10 +1671,9 @@ def _build_runtime_planner():
                     for key, value in step_tool_inputs.items():
                         step_node_inputs.setdefault(key, value)
                 else:
-                    step_node_inputs = {
-                        **step_extra_inputs,
-                        **dict(step_tool_inputs),
-                    }
+                    step_node_inputs = dict(step_tool_inputs)
+                    if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
+                        step_node_inputs.setdefault("instructions", step_instructions)
                 step_runtime_payload = _coerce_mapping(step_node_inputs.get("runtime"))
                 step_runtime_raw = (
                     step_runtime_payload.get("mode")

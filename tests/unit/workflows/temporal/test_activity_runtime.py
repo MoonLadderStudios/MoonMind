@@ -3464,7 +3464,9 @@ async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
                         "steps": [
                             {
                                 "id": "step-1",
+                                "title": "Run approved PentestGPT assessment",
                                 "type": "tool",
+                                "instructions": "Run the curated PentestGPT tool.",
                                 "tool": {
                                     "id": "security.pentest.run",
                                     "inputs": {
