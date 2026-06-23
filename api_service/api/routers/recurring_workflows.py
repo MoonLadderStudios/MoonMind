@@ -20,6 +20,7 @@ from api_service.db.models import (
     User,
 )
 from api_service.services.recurring_workflows_service import (
+    RecurringScheduleRuntimeSummary,
     RecurringWorkflowAuthorizationError,
     RecurringWorkflowNotFoundError,
     RecurringWorkflowsService,
@@ -127,6 +128,7 @@ async def _get_service(
 
 def _serialize_definition(
     definition: RecurringWorkflowDefinition,
+    runtime_summary: RecurringScheduleRuntimeSummary | None = None,
 ) -> RecurringWorkflowDefinitionModel:
     return RecurringWorkflowDefinitionModel(
         id=definition.id,
@@ -136,10 +138,26 @@ def _serialize_definition(
         schedule_type=definition.schedule_type.value,
         cron=definition.cron,
         timezone=definition.timezone,
-        next_run_at=definition.next_run_at,
-        last_scheduled_for=definition.last_scheduled_for,
-        last_dispatch_status=definition.last_dispatch_status,
-        last_dispatch_error=definition.last_dispatch_error,
+        next_run_at=(
+            runtime_summary.next_run_at
+            if runtime_summary is not None
+            else definition.next_run_at
+        ),
+        last_scheduled_for=(
+            runtime_summary.last_scheduled_for
+            if runtime_summary is not None
+            else definition.last_scheduled_for
+        ),
+        last_dispatch_status=(
+            runtime_summary.last_dispatch_status
+            if runtime_summary is not None
+            else definition.last_dispatch_status
+        ),
+        last_dispatch_error=(
+            runtime_summary.last_dispatch_error
+            if runtime_summary is not None
+            else definition.last_dispatch_error
+        ),
         owner_user_id=definition.owner_user_id,
         scope_type=definition.scope_type.value,
         scope_ref=definition.scope_ref,
@@ -264,8 +282,15 @@ async def list_recurring_workflows(
         user_id=user_id if isinstance(user_id, UUID) else None,
         limit=limit,
     )
+    runtime_summaries = await service.runtime_summaries_for_definitions(definitions)
     return RecurringWorkflowDefinitionListResponse(
-        items=[_serialize_definition(item) for item in definitions]
+        items=[
+            _serialize_definition(
+                item,
+                runtime_summary=runtime_summaries.get(item.id),
+            )
+            for item in definitions
+        ]
     )
 
 @router.post(
@@ -343,6 +368,7 @@ async def get_recurring_workflow(
             user_id=user_id if isinstance(user_id, UUID) else None,
             can_manage_global=bool(getattr(user, "is_superuser", False)),
         )
+        runtime_summary = await service.runtime_summary_for_definition(definition)
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(
             action="get_recurring_workflow",
@@ -351,7 +377,7 @@ async def get_recurring_workflow(
             exc=exc,
         )
         raise _map_error(exc) from exc
-    return _serialize_definition(definition)
+    return _serialize_definition(definition, runtime_summary=runtime_summary)
 
 @router.patch("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
 async def update_recurring_workflow(

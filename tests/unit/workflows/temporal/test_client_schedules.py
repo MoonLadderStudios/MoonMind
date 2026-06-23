@@ -384,6 +384,69 @@ class TestUpdateSchedule:
         assert updated_schedule.state.paused is True
         assert updated_schedule.state.note == "Original note"
 
+    @pytest.mark.asyncio
+    async def test_update_rewrites_schedule_action_when_workflow_input_provided(
+        self,
+    ) -> None:
+        handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        mock_update_input = MagicMock()
+        mock_update_input.schedule.spec.cron_expressions = ["0 0 * * *"]
+        mock_update_input.schedule.spec.time_zone_name = "UTC"
+        mock_update_input.schedule.spec.jitter = timedelta(seconds=0)
+        mock_update_input.schedule.policy.overlap.name = "SKIP"
+        mock_update_input.schedule.policy.catchup_window = timedelta(minutes=15)
+        mock_update_input.schedule.state.paused = False
+        mock_update_input.schedule.state.note = "Original note"
+
+        adapter = _make_adapter(mock_client)
+        workflow_input = {
+            "workflow_type": "MoonMind.UserWorkflow",
+            "initial_parameters": {"task": {"instructions": "Queue job"}},
+        }
+        await adapter.update_schedule(
+            definition_id=_TEST_UUID,
+            workflow_type="MoonMind.UserWorkflow",
+            workflow_input=workflow_input,
+            memo={"definitionId": str(_TEST_UUID)},
+            search_attributes={
+                "mm_owner_type": "user",
+                "mm_owner_id": "owner-123",
+            },
+        )
+
+        update_callback = handle.update.call_args[0][0]
+        updated_schedule = await update_callback(mock_update_input)
+
+        assert updated_schedule.action.workflow == "MoonMind.UserWorkflow"
+        assert updated_schedule.action.args == [workflow_input]
+        assert updated_schedule.action.id == f"mm:{_TEST_UUID}:{{{{.ScheduleTime}}}}"
+        assert updated_schedule.action.task_queue == "mm.workflow"
+        assert updated_schedule.action.memo == {"definitionId": str(_TEST_UUID)}
+        typed_search_attributes = updated_schedule.action.typed_search_attributes
+        assert typed_search_attributes.get(SearchAttributeKey.for_keyword("mm_owner_id")) == (
+            "owner-123"
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_resolves_task_queue_for_workflow_type(self) -> None:
+        handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        adapter = _make_adapter(mock_client)
+        adapter._get_task_queue = MagicMock(return_value="mm.workflow.user.v2")
+
+        await adapter.update_schedule(
+            definition_id=_TEST_UUID,
+            workflow_type="MoonMind.UserWorkflow.v2",
+            workflow_input={"workflow_type": "MoonMind.UserWorkflow.v2"},
+        )
+
+        adapter._get_task_queue.assert_called_once_with("MoonMind.UserWorkflow.v2")
+
 class TestDescribeSchedule:
     """DOC-REQ-002: describe schedule."""
 

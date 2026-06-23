@@ -663,6 +663,10 @@ class TemporalClientAdapter:
         jitter_seconds: int | None = None,
         enabled: bool | None = None,
         note: str | None = None,
+        workflow_type: str | None = None,
+        workflow_input: Mapping[str, Any] | None = None,
+        memo: Mapping[str, Any] | None = None,
+        search_attributes: Mapping[str, Any] | None = None,
     ) -> None:
         """Update the spec, policy, or state of an existing schedule.
 
@@ -673,14 +677,27 @@ class TemporalClientAdapter:
             ScheduleNotFoundError: if the schedule does not exist.
             ScheduleOperationError: on unexpected SDK failure.
         """
+        from uuid import UUID as _UUID
+
+        from temporalio.client import ScheduleActionStartWorkflow
+
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
         from moonmind.workflows.temporal.schedule_mapping import (
             build_schedule_policy,
             build_schedule_spec,
             build_schedule_state,
+            make_workflow_id_template,
         )
 
+        definition_uuid = _UUID(str(definition_id))
         handle, _desc = await self._get_schedule_handle(definition_id)
+        task_queue = self._get_task_queue(workflow_type)
+
+        formatted_sa = {
+            k: v if isinstance(v, list) else [v]
+            for k, v in (search_attributes or {}).items()
+        }
+        typed_search_attributes = _build_typed_search_attributes(formatted_sa)
 
         async def _do_update(input: Any) -> Any:  # noqa: A002
             schedule = input.schedule
@@ -731,6 +748,21 @@ class TemporalClientAdapter:
                 schedule.state = build_schedule_state(
                     enabled=not current_paused if enabled is None else enabled,
                     note=note if note is not None else current_note,
+                )
+
+            if workflow_type is not None:
+                args = [workflow_input] if workflow_input is not None else []
+                schedule.action = ScheduleActionStartWorkflow(
+                    workflow_type,
+                    args=args,
+                    id=make_workflow_id_template(definition_uuid),
+                    task_queue=task_queue,
+                    memo=memo,
+                    **(
+                        {"typed_search_attributes": typed_search_attributes}
+                        if typed_search_attributes
+                        else {}
+                    ),
                 )
 
             return schedule

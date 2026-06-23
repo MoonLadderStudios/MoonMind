@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4
 
 from sqlalchemy import Select, select
@@ -57,6 +58,15 @@ class RecurringPolicy:
     max_backfill: int = 3
     misfire_grace_seconds: int = 900
     jitter_seconds: int = 0
+
+@dataclass(frozen=True, slots=True)
+class RecurringScheduleRuntimeSummary:
+    """Read-only Temporal projection for a recurring schedule definition."""
+
+    next_run_at: datetime | None = None
+    last_scheduled_for: datetime | None = None
+    last_dispatch_status: str | None = None
+    last_dispatch_error: str | None = None
 
 def _json_object(value: object, *, field_name: str) -> dict[str, Any]:
     if value is None:
@@ -268,6 +278,108 @@ def _coerce_utc(value: datetime) -> datetime:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
 
+def _object_value(source: object, *keys: str) -> Any:
+    if source is None:
+        return None
+    if isinstance(source, Mapping):
+        for key in keys:
+            if key in source:
+                return source[key]
+        return None
+    for key in keys:
+        value = getattr(source, key, None)
+        if value is not None:
+            return value
+    return None
+
+def _coerce_optional_utc_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _coerce_utc(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            return _coerce_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    return None
+
+def _first_temporal_datetime(source: object, *keys: str) -> datetime | None:
+    values = _object_value(source, *keys)
+    if not values:
+        return None
+    if isinstance(values, (datetime, str)):
+        return _coerce_optional_utc_datetime(values)
+    try:
+        iterator = iter(values)
+    except TypeError:
+        return _coerce_optional_utc_datetime(values)
+    for item in iterator:
+        coerced = _coerce_optional_utc_datetime(item)
+        if coerced is not None:
+            return coerced
+    return None
+
+def _last_temporal_action(info: object) -> object | None:
+    actions = _object_value(info, "recent_actions", "recentActions") or []
+    try:
+        action_list = list(actions)
+    except TypeError:
+        return None
+    if not action_list:
+        return None
+
+    def _sort_key(action: object) -> datetime:
+        return (
+            _coerce_optional_utc_datetime(
+                _object_value(action, "started_at", "startedAt")
+            )
+            or _coerce_optional_utc_datetime(
+                _object_value(action, "actual_time", "actualTime")
+            )
+            or _coerce_optional_utc_datetime(
+                _object_value(action, "scheduled_at", "scheduledAt")
+            )
+            or _coerce_optional_utc_datetime(
+                _object_value(action, "schedule_time", "scheduleTime")
+            )
+            or datetime.min.replace(tzinfo=UTC)
+        )
+
+    return max(action_list, key=_sort_key)
+
+def _dispatch_status_from_temporal_action(action: object | None) -> str | None:
+    if action is None:
+        return None
+    if _object_value(action, "action") is not None:
+        return RecurringWorkflowRunOutcome.ENQUEUED.value
+    result = _object_value(action, "start_workflow_result", "startWorkflowResult")
+    if result is not None:
+        return RecurringWorkflowRunOutcome.ENQUEUED.value
+    raw_status = _object_value(action, "start_workflow_status", "startWorkflowStatus")
+    status_name = str(getattr(raw_status, "name", raw_status) or "").lower()
+    if (
+        "failed" in status_name
+        or "terminated" in status_name
+        or "canceled" in status_name
+    ):
+        return RecurringWorkflowRunOutcome.DISPATCH_ERROR.value
+    if status_name:
+        return RecurringWorkflowRunOutcome.ENQUEUED.value
+    return None
+
+def _dispatch_error_from_temporal_action(action: object | None) -> str | None:
+    if action is None:
+        return None
+    for key in ("failure", "error", "message"):
+        value = _object_value(action, key)
+        if value:
+            return str(value)
+    return None
+
 class RecurringWorkflowsService:
     """CRUD and dispatch helpers for recurring definitions."""
 
@@ -367,13 +479,13 @@ class RecurringWorkflowsService:
         system["recurrence"] = recurrence
         initial_parameters["system"] = system
         return workflow_type, {
-            "workflowType": workflow_type,
+            "workflow_type": workflow_type,
             "title": str(target_payload.get("title") or name),
-            "ownerUserId": str(owner_user_id) if owner_user_id else None,
-            "initialParameters": initial_parameters,
-            "inputArtifactRef": target_payload.get("inputArtifactRef"),
-            "planArtifactRef": target_payload.get("planArtifactRef"),
-            "failurePolicy": target_payload.get("failurePolicy"),
+            "owner_user_id": str(owner_user_id) if owner_user_id else None,
+            "initial_parameters": initial_parameters,
+            "input_artifact_ref": target_payload.get("inputArtifactRef"),
+            "plan_artifact_ref": target_payload.get("planArtifactRef"),
+            "failure_policy": target_payload.get("failurePolicy"),
         }
 
     def _owner_search_attributes(self, owner_user_id: UUID | None) -> dict[str, str]:
@@ -541,14 +653,14 @@ class RecurringWorkflowsService:
             )
 
         try:
-            # We don't update workflow inputs for target changes yet, since update_schedule
-            # doesn't natively support updating action/input args without recreating.
-            # Only cron, policy, state are updated in Phase 2
             if enabled is False:
                 await self._adapter.pause_schedule(definition_id=definition.id)
             elif enabled is True:
                 await self._adapter.unpause_schedule(definition_id=definition.id)
-                
+
+            workflow_type, workflow_input = self._workflow_bundle_for_definition(
+                definition
+            )
             await self._adapter.update_schedule(
                 definition_id=definition.id,
                 cron_expression=cron_normalized,
@@ -558,6 +670,12 @@ class RecurringWorkflowsService:
                 jitter_seconds=policy_obj.jitter_seconds if policy_obj else None,
                 enabled=enabled,
                 note=name if name is not None else None,
+                workflow_type=workflow_type,
+                workflow_input=workflow_input,
+                memo={"definitionId": str(definition.id)},
+                search_attributes=self._owner_search_attributes(
+                    definition.owner_user_id
+                ),
             )
         except Exception as exc:
             logger.error(f"Failed to update temporal schedule for {definition.id}: {exc}")
@@ -643,6 +761,10 @@ class RecurringWorkflowsService:
                 jitter_seconds=policy_obj.jitter_seconds,
                 enabled=bool(dfn.enabled),
                 note=dfn.name or "",
+                workflow_type=workflow_type,
+                workflow_input=workflow_input,
+                memo={"definitionId": str(dfn.id)},
+                search_attributes=self._owner_search_attributes(dfn.owner_user_id),
             )
 
     async def reconcile_schedules(self, limit: int = 100) -> int:
@@ -726,17 +848,43 @@ class RecurringWorkflowsService:
                 )
 
                 if mismatch:
+                    logger.info("Reconcile updating schedule metadata for %s", dfn.id)
+                workflow_type, workflow_input = self._workflow_bundle_for_definition(
+                    dfn
+                )
+                action = getattr(sched, "action", None)
+                temporal_workflow_type = _object_value(action, "workflow")
+                temporal_args = _object_value(action, "args") or []
+                temporal_input = temporal_args[0] if temporal_args else None
+                action_mismatch = (
+                    temporal_workflow_type != workflow_type
+                    or temporal_input != workflow_input
+                )
+
+                if mismatch or action_mismatch:
+                    logger.info("Reconcile updating schedule for %s", dfn.id)
+                    note = (dfn.name or "") if mismatch else None
                     await self._adapter.update_schedule(
                         definition_id=dfn.id,
-                        cron_expression=dfn.cron,
-                        timezone=dfn.timezone,
-                        overlap_mode=policy_obj.overlap_mode,
-                        catchup_mode=policy_obj.catchup_mode,
-                        jitter_seconds=policy_obj.jitter_seconds,
-                        enabled=bool(dfn.enabled),
-                        note=dfn.name or "",
+                        cron_expression=dfn.cron if mismatch else None,
+                        timezone=dfn.timezone if mismatch else None,
+                        overlap_mode=policy_obj.overlap_mode if mismatch else None,
+                        catchup_mode=policy_obj.catchup_mode if mismatch else None,
+                        jitter_seconds=policy_obj.jitter_seconds if mismatch else None,
+                        enabled=bool(dfn.enabled) if mismatch else None,
+                        note=note,
+                        workflow_type=workflow_type if action_mismatch else None,
+                        workflow_input=workflow_input if action_mismatch else None,
+                        memo={"definitionId": str(dfn.id)}
+                        if action_mismatch
+                        else None,
+                        search_attributes=self._owner_search_attributes(
+                            dfn.owner_user_id
+                        )
+                        if action_mismatch
+                        else None,
                     )
-                reconciled += 1
+                    reconciled += 1
 
             except ScheduleAdapterError as exc:
                 logger.warning("Reconciliation adapter error for %s: %s", dfn.id, exc)
@@ -768,7 +916,91 @@ class RecurringWorkflowsService:
         # Temporal reconciliation could be added here in the future using adapter.describe_schedule
         return runs
 
+    async def runtime_summary_for_definition(
+        self,
+        definition: RecurringWorkflowDefinition,
+    ) -> RecurringScheduleRuntimeSummary:
+        """Return the current Temporal schedule timing/status projection."""
+
+        fallback = RecurringScheduleRuntimeSummary(
+            next_run_at=definition.next_run_at,
+            last_scheduled_for=definition.last_scheduled_for,
+            last_dispatch_status=definition.last_dispatch_status,
+            last_dispatch_error=definition.last_dispatch_error,
+        )
+        if not definition.temporal_schedule_id:
+            return fallback
+
+        try:
+            description = await self._adapter.describe_schedule(
+                definition_id=definition.id
+            )
+        except ScheduleNotFoundError as exc:
+            return RecurringScheduleRuntimeSummary(
+                next_run_at=None,
+                last_scheduled_for=definition.last_scheduled_for,
+                last_dispatch_status=(
+                    definition.last_dispatch_status
+                    or RecurringWorkflowRunOutcome.DISPATCH_ERROR.value
+                ),
+                last_dispatch_error=str(exc),
+            )
+        except ScheduleAdapterError as exc:
+            logger.warning(
+                "Failed to describe recurring schedule %s for runtime summary: %s",
+                definition.id,
+                exc,
+            )
+            return fallback
+
+        schedule = _object_value(description, "schedule")
+        state = _object_value(schedule, "state")
+        paused = bool(_object_value(state, "paused")) if state is not None else False
+        info = _object_value(description, "info")
+        next_run_at = None if paused else _first_temporal_datetime(
+            info,
+            "next_action_times",
+            "nextActionTimes",
+            "future_action_times",
+            "futureActionTimes",
+        )
+        last_action = _last_temporal_action(info)
+        last_scheduled_for = _coerce_optional_utc_datetime(
+            _object_value(
+                last_action,
+                "scheduled_at",
+                "scheduledAt",
+                "schedule_time",
+                "scheduleTime",
+            )
+        )
+        dispatch_status = _dispatch_status_from_temporal_action(last_action)
+        dispatch_error = _dispatch_error_from_temporal_action(last_action)
+
+        return RecurringScheduleRuntimeSummary(
+            next_run_at=next_run_at,
+            last_scheduled_for=last_scheduled_for
+            if last_scheduled_for is not None
+            else definition.last_scheduled_for,
+            last_dispatch_status=dispatch_status or definition.last_dispatch_status,
+            last_dispatch_error=dispatch_error or definition.last_dispatch_error,
+        )
+
+    async def runtime_summaries_for_definitions(
+        self,
+        definitions: Iterable[RecurringWorkflowDefinition],
+    ) -> dict[UUID, RecurringScheduleRuntimeSummary]:
+        definition_list = list(definitions)
+        results = await asyncio.gather(
+            *(
+                self.runtime_summary_for_definition(definition)
+                for definition in definition_list
+            )
+        )
+        return dict(zip((definition.id for definition in definition_list), results))
+
 __all__ = [
+    "RecurringScheduleRuntimeSummary",
     "RecurringWorkflowAuthorizationError",
     "RecurringWorkflowNotFoundError",
     "RecurringWorkflowValidationError",

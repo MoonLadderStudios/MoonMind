@@ -1219,6 +1219,29 @@ async def ensure_managed_session_reconcile_schedule_started() -> None:
         schedule_id,
     )
 
+async def ensure_recurring_workflow_schedules_reconciled() -> None:
+    """Best-effort repair for persisted recurring workflow Temporal schedules."""
+    from api_service.db.base import get_async_session_context
+    from api_service.services.recurring_workflows_service import (
+        RecurringWorkflowsService,
+    )
+
+    try:
+        async with get_async_session_context() as session:
+            reconciled = await RecurringWorkflowsService(
+                session,
+            ).reconcile_schedules(limit=500)
+    except Exception:
+        logger.warning(
+            "Failed to reconcile recurring workflow schedules during API startup",
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "Reconciled recurring workflow schedules during API startup: count=%s",
+        reconciled,
+    )
+
 def _register_settings_change_subscribers() -> None:
     """Wire the default SettingsChangePublisher subscribers once per process.
 
@@ -1387,6 +1410,7 @@ async def startup_event():
     # Wait for the Temporal client to be available and initialize provider profile managers
     await ensure_provider_profile_managers_started()
     await ensure_managed_session_reconcile_schedule_started()
+    await ensure_recurring_workflow_schedules_reconciled()
     logger.info("Application startup events completed.")
 
 def teardown_providers():
