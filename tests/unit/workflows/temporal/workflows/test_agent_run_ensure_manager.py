@@ -866,3 +866,36 @@ class TestEnsureManagerAutoStart:
         assert MoonMindAgentRun._request_priority(
             SimpleNamespace(parameters={"priority": "bad"})  # type: ignore[arg-type]
         ) == 0
+
+    def test_request_queue_metadata_reads_moonmind_metadata(self):
+        request = SimpleNamespace(
+            parameters={
+                "metadata": {
+                    "moonmind": {
+                        "queueOrder": "17",
+                        "queuedAt": "2026-06-22T10:00:00+00:00",
+                    }
+                }
+            }
+        )
+
+        assert MoonMindAgentRun._request_queue_metadata(request) == {
+            "queue_order": 17,
+            "queued_at": "2026-06-22T10:00:00+00:00",
+        }
+
+    def test_request_queue_metadata_ignores_invalid_order(self):
+        request = SimpleNamespace(
+            parameters={
+                "metadata": {
+                    "moonmind": {
+                        "queueOrder": "bad",
+                        "queuedAt": "2026-06-22T10:00:00+00:00",
+                    }
+                }
+            }
+        )
+
+        assert MoonMindAgentRun._request_queue_metadata(request) == {
+            "queued_at": "2026-06-22T10:00:00+00:00",
+        }

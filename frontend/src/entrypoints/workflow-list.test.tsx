@@ -137,6 +137,51 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
+  it('renders workflow table dates with two-digit years', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            scheduledFor: '2026-06-21T12:00:00Z',
+            createdAt: '2026-06-21T12:01:00Z',
+            closedAt: '2026-06-21T12:02:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Example task/ });
+    const dateCells = row.querySelectorAll('.queue-table-cell-date');
+    expect(dateCells).toHaveLength(3);
+    const expectedDates = [
+      '2026-06-21T12:00:00Z',
+      '2026-06-21T12:01:00Z',
+      '2026-06-21T12:02:00Z',
+    ].map((iso) =>
+      new Date(iso).toLocaleString(undefined, {
+        year: '2-digit',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+    );
+    Array.from(dateCells).forEach((cell, index) => {
+      expect(cell.textContent).toBe(expectedDates[index]);
+      expect(cell.textContent).not.toContain('2026');
+    });
+  });
+
   it('does not query or render operational metrics on the workflow overview', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

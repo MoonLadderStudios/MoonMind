@@ -3,6 +3,7 @@
 from .models import WorkflowProposal, WorkflowProposalOriginSource, WorkflowProposalStatus
 from .repositories import WorkflowProposalNotFoundError, WorkflowProposalRepository
 from .delivery import (
+    ProposalDecisionStateUpdate,
     ProposalDeliveryError,
     ProposalDeliveryRequest,
     ProposalDeliveryResult,
@@ -30,6 +31,7 @@ __all__ = [
     "WorkflowProposalStatus",
     "WorkflowProposalRepository",
     "WorkflowProposalNotFoundError",
+    "ProposalDecisionStateUpdate",
     "ProposalDeliveryError",
     "ProposalDeliveryRequest",
     "ProposalDeliveryResult",

@@ -8,11 +8,15 @@ import pytest
 
 from moonmind.utils.logging import SecretRedactor
 from moonmind.workflows.proposals.delivery import (
+    GitHubProposalIssueProvider,
     JiraProposalIssueProvider,
+    ProposalDecisionStateUpdate,
     ProposalDeliveryError,
     ProposalDeliveryRequest,
     ProposalDeliveryService,
     ProviderDecisionEvent,
+    _decision_comment,
+    _decision_state_labels,
     _safe_metadata,
     github_decision_event_from_payload,
     github_marker_for_proposal,
@@ -73,6 +77,23 @@ class FakeProvider:
         self.searches: list[ProposalDeliveryRequest] = []
         self.creates: list[object] = []
         self.updates: list[tuple[object, dict[str, object]]] = []
+        self.decision_states: list[dict[str, object]] = []
+
+    async def apply_decision_state(
+        self,
+        request: ProposalDeliveryRequest,
+        issue: dict[str, object],
+        labels,
+        comment,
+    ) -> dict[str, object]:
+        self.decision_states.append(
+            {
+                "issue": issue,
+                "labels": list(labels),
+                "comment": comment,
+            }
+        )
+        return {"labelsUpdated": True, "commented": bool(comment)}
 
     async def search_issue(self, request: ProposalDeliveryRequest) -> dict[str, object] | None:
         self.searches.append(request)
@@ -492,3 +513,258 @@ async def test_jira_provider_does_not_use_issue_key_as_external_url() -> None:
 
     assert created == {"external_key": "MM-1", "external_url": None}
     assert updated == {"external_key": "MM-1", "external_url": None}
+
+
+# ---------------------------------------------------------------------------
+# MM-858: provider-visible promotion/decision state updates
+# ---------------------------------------------------------------------------
+
+def test_decision_state_labels_transition_github_state_and_priority() -> None:
+    labels = _decision_state_labels(
+        _request(),
+        resulting_state="promoted",
+        priority="urgent",
+    )
+
+    assert "moonmind:state:promoted" in labels
+    assert "moonmind:state:open" not in labels
+    assert "moonmind:priority:urgent" in labels
+    # Canonical proposal/target/category labels are preserved.
+    assert "moonmind:proposal" in labels
+    assert "moonmind:target:workflow-repo" in labels
+
+
+def test_decision_state_labels_transition_jira_state() -> None:
+    labels = _decision_state_labels(
+        _request(provider="jira", repository="MM"),
+        resulting_state="dismissed",
+    )
+
+    assert "moonmind-proposal" in labels
+    assert "moonmind-state-dismissed" in labels
+
+
+def test_decision_comment_for_promotion_includes_execution_link() -> None:
+    comment = _decision_comment(
+        ProposalDecisionStateUpdate(
+            decision="promote",
+            accepted=True,
+            actor="reviewer",
+            provider_event_id="evt-promote",
+            resulting_state="promoted",
+            promoted_execution_id="wf-promoted-1",
+            promoted_execution_url="/workflows/wf-promoted-1?source=temporal",
+        ),
+        redactor=SecretRedactor([], "[REDACTED]"),
+    )
+
+    assert "wf-promoted-1" in comment
+    assert "/workflows/wf-promoted-1?source=temporal" in comment
+    assert "audit trail" in comment.lower()
+
+
+@pytest.mark.asyncio
+async def test_record_decision_pushes_promoted_state_and_execution_link() -> None:
+    provider = FakeProvider()
+    service = ProposalDeliveryService(
+        github=provider, redactor=SecretRedactor([], "[REDACTED]")
+    )
+    request = _request(
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+    )
+
+    result = await service.record_decision(
+        request,
+        ProposalDecisionStateUpdate(
+            decision="promote",
+            accepted=True,
+            actor="reviewer",
+            provider_event_id="evt-promote",
+            resulting_state="promoted",
+            promoted_execution_id="wf-promoted-1",
+            promoted_execution_url="/workflows/wf-promoted-1?source=temporal",
+        ),
+    )
+
+    assert result["applied"] is True
+    assert result["resultingExternalState"] == "promoted"
+    assert result["promotedExecutionId"] == "wf-promoted-1"
+    assert len(provider.decision_states) == 1
+    pushed = provider.decision_states[0]
+    assert "moonmind:state:promoted" in pushed["labels"]
+    assert pushed["issue"]["key"] == "42"
+    assert "wf-promoted-1" in pushed["comment"]
+    # Original issue body/title are never rewritten by a state transition.
+    assert provider.updates == []
+    assert provider.creates == []
+
+
+@pytest.mark.asyncio
+async def test_record_decision_skips_when_no_external_issue() -> None:
+    provider = FakeProvider()
+    service = ProposalDeliveryService(github=provider)
+
+    result = await service.record_decision(
+        _request(),
+        ProposalDecisionStateUpdate(
+            decision="dismiss",
+            accepted=True,
+            actor="reviewer",
+            provider_event_id="evt-dismiss",
+            resulting_state="dismissed",
+        ),
+    )
+
+    assert result["applied"] is False
+    assert result["reason"] == "missing_external_issue"
+    assert provider.decision_states == []
+
+
+@pytest.mark.asyncio
+async def test_record_decision_reports_unapplied_when_provider_update_fails() -> None:
+    """A non-raising provider failure (e.g. missing token) must not record applied."""
+
+    @dataclass
+    class FailingProvider(FakeProvider):
+        async def apply_decision_state(self, request, issue, labels, comment):
+            self.decision_states.append(
+                {"issue": issue, "labels": list(labels), "comment": comment}
+            )
+            # GitHubService returns updated=False/created=False instead of raising
+            # when the token is missing or GitHub returns an error.
+            return {"labelsUpdated": False, "commented": False}
+
+    provider = FailingProvider()
+    service = ProposalDeliveryService(
+        github=provider, redactor=SecretRedactor([], "[REDACTED]")
+    )
+
+    result = await service.record_decision(
+        _request(
+            external_key="42",
+            external_url="https://github.example/Moon/Repo/issues/42",
+        ),
+        ProposalDecisionStateUpdate(
+            decision="promote",
+            accepted=True,
+            actor="reviewer",
+            provider_event_id="evt-promote",
+            resulting_state="promoted",
+            promoted_execution_id="wf-promoted-1",
+            promoted_execution_url="/workflows/wf-promoted-1?source=temporal",
+        ),
+    )
+
+    assert result["applied"] is False
+    assert result["reason"] == "provider_state_update_failed"
+    assert result["commented"] is False
+    assert result["providerResponse"]["labelsUpdated"] is False
+    assert len(provider.decision_states) == 1
+
+
+@pytest.mark.asyncio
+async def test_github_apply_decision_state_updates_labels_and_comments_without_body() -> None:
+    class FakeGitHub:
+        def __init__(self) -> None:
+            self.label_calls: list[dict[str, object]] = []
+            self.comment_calls: list[dict[str, object]] = []
+            self.update_calls: list[dict[str, object]] = []
+
+        async def set_issue_labels(self, *, repo, issue_number, labels):
+            self.label_calls.append(
+                {"repo": repo, "issue_number": issue_number, "labels": list(labels)}
+            )
+            return SimpleNamespace(updated=True, external_url=None)
+
+        async def comment_on_issue(self, *, repo, issue_number, body):
+            self.comment_calls.append(
+                {"repo": repo, "issue_number": issue_number, "body": body}
+            )
+            return SimpleNamespace(
+                created=True,
+                external_url="https://github.example/Moon/Repo/issues/42#c1",
+            )
+
+        async def update_issue(self, **kwargs):  # pragma: no cover - guard
+            self.update_calls.append(kwargs)
+            return SimpleNamespace()
+
+    github = FakeGitHub()
+    provider = GitHubProposalIssueProvider(github)
+
+    applied = await provider.apply_decision_state(
+        _request(external_key="42"),
+        {"key": "42", "url": "https://github.example/Moon/Repo/issues/42"},
+        ["moonmind:proposal", "moonmind:state:promoted"],
+        "Execution link: /workflows/wf-1?source=temporal",
+    )
+
+    assert applied["labelsUpdated"] is True
+    assert applied["commented"] is True
+    assert github.label_calls[0]["labels"] == [
+        "moonmind:proposal",
+        "moonmind:state:promoted",
+    ]
+    assert github.comment_calls[0]["issue_number"] == "42"
+    # The issue body is never rewritten via the state-update path.
+    assert github.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_jira_apply_decision_state_sets_labels_and_comments() -> None:
+    class FakeJira:
+        def __init__(self) -> None:
+            self.edits: list[object] = []
+            self.comments: list[object] = []
+
+        async def edit_issue(self, request):
+            self.edits.append(request)
+            return {"updated": True}
+
+        async def add_comment(self, request):
+            self.comments.append(request)
+            return {"commented": True}
+
+    jira = FakeJira()
+    provider = JiraProposalIssueProvider(jira)
+
+    applied = await provider.apply_decision_state(
+        _request(provider="jira", repository="MM", external_key="MM-1"),
+        {"key": "MM-1"},
+        ["moonmind-proposal", "moonmind-state-promoted"],
+        "Execution link: /workflows/wf-1?source=temporal",
+    )
+
+    assert applied["labelsUpdated"] is True
+    assert applied["commented"] is True
+    assert jira.edits[0].fields == {
+        "labels": ["moonmind-proposal", "moonmind-state-promoted"]
+    }
+    assert jira.comments[0].issue_key == "MM-1"
+
+
+def test_provider_decision_parser_ignores_replacement_repository_env_and_tools() -> None:
+    """Only bounded runtime control is honored; injected executable overrides
+    (repository, environment variables, credentials, tool config) are ignored."""
+    result = parse_provider_decision(
+        ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-inject",
+            actor="reviewer",
+            body=(
+                "/moonmind promote --runtime codex --repository Evil/Repo "
+                "--env SECRET=leak --credential ghp_inject --tool shell:rm-rf"
+            ),
+        )
+    )
+
+    assert result.accepted is True
+    assert result.decision == "promote"
+    # The only bounded executable control extracted from issue text is runtime.
+    assert result.runtime_mode == "codex"
+    # ProviderDecisionResult carries no replacement repository/env/credential/tool
+    # fields, so injected executable overrides cannot reach promotion.
+    for forbidden in ("repository", "environment", "env", "credential", "tool"):
+        assert not hasattr(result, forbidden)

@@ -2115,3 +2115,326 @@ async def test_record_provider_decision_event_rejects_external_identity_mismatch
     decision_row = proposal.provider_metadata["providerDecisions"][0]
     assert decision_row["accepted"] is False
     assert decision_row["reason"] == "provider_identity_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_promote_proposal_applies_priority_and_max_attempts_overrides() -> None:
+    """DESIGN-REQ-016: priority and maxAttempts are accepted bounded overrides."""
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=WorkflowProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        provider_metadata={},
+        workflow_create_request={
+            "type": "workflow",
+            "priority": 0,
+            "maxAttempts": 3,
+            "payload": {
+                "repository": "Moon/Repo",
+                "workflow": {"instructions": "Implement feature"},
+            },
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    updated, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+        priority_override=7,
+        max_attempts_override=5,
+    )
+
+    assert updated.status is WorkflowProposalStatus.PROMOTED
+    assert final_request["priority"] == 7
+    assert final_request["maxAttempts"] == 5
+    # The stored snapshot repository/instructions are preserved unchanged.
+    assert final_request["payload"]["repository"] == "Moon/Repo"
+    assert (
+        final_request["payload"]["workflow"]["instructions"] == "Implement feature"
+    )
+
+
+@pytest.mark.asyncio
+async def test_promote_proposal_rejects_max_attempts_override_below_one() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=WorkflowProposalStatus.OPEN,
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        provider_metadata={},
+        workflow_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "workflow": {"instructions": "Implement feature"},
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    with pytest.raises(WorkflowProposalValidationError, match="maxAttempts must be >= 1"):
+        await service.promote_proposal(
+            proposal_id=proposal.id,
+            promoted_by_user_id=uuid4(),
+            max_attempts_override=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_promotion_uses_stored_snapshot_and_ignores_injected_overrides() -> None:
+    """DESIGN-REQ-016: a malicious GitHub command cannot replace repository,
+    instructions, steps, environment variables, credentials, or tool config.
+
+    Only the bounded runtime control is honored; everything else is sourced
+    from the stored proposal snapshot.
+    """
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=WorkflowProposalStatus.ACCEPTED,
+        provider="github",
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        repository="Moon/Repo",
+        promoted_at=None,
+        promoted_by_user_id=None,
+        decided_by_user_id=None,
+        decision_note=None,
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        provider_metadata={},
+        resolved_policy={
+            "allowedActions": [
+                "promote",
+                "dismiss",
+                "defer",
+                "reprioritize",
+                "request_revision",
+            ],
+            "allowedActors": ["reviewer"],
+        },
+        workflow_create_request={
+            "payload": {
+                "repository": "Moon/Repo",
+                "targetRuntime": "gemini_cli",
+                "workflow": {
+                    "instructions": "Implement the stored snapshot task",
+                    "runtime": {"mode": "gemini_cli"},
+                },
+            }
+        },
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    service = WorkflowProposalService(repo, redactor=SecretRedactor([], "***"))
+
+    decision = await service.record_provider_decision_event(
+        proposal_id=proposal.id,
+        event=ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-inject",
+            actor="reviewer",
+            body=(
+                "/moonmind promote --runtime codex --repository Evil/Repo "
+                "--env SECRET=leak --credential ghp_inject --tool shell:rm-rf"
+            ),
+        ),
+    )
+
+    assert decision.accepted is True
+    assert decision.decision == "promote"
+    assert decision.runtime_mode == "codex"
+
+    _updated, final_request = await service.promote_proposal(
+        proposal_id=proposal.id,
+        promoted_by_user_id=uuid4(),
+        runtime_mode_override=decision.runtime_mode,
+    )
+
+    # Only the bounded runtime override is applied.
+    assert final_request["payload"]["targetRuntime"] == "codex"
+    assert final_request["payload"]["workflow"]["runtime"]["mode"] == "codex"
+    # The stored repository/instructions win over the injected GitHub text.
+    assert final_request["payload"]["repository"] == "Moon/Repo"
+    assert (
+        final_request["payload"]["workflow"]["instructions"]
+        == "Implement the stored snapshot task"
+    )
+    serialized = str(final_request)
+    for injected in ("Evil/Repo", "SECRET", "ghp_inject", "shell:rm-rf"):
+        assert injected not in serialized
+
+
+class _StateRecordingDelivery:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object]] = []
+
+    async def record_decision(self, request, update):
+        self.calls.append((request, update))
+        return {
+            "applied": True,
+            "resultingExternalState": update.resulting_state,
+            "promotedExecutionId": update.promoted_execution_id,
+        }
+
+
+def _promotable_proposal_with_decision() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        provider="github",
+        repository="Moon/Repo",
+        title="Add tests",
+        summary="Follow-up",
+        category="tests",
+        tags=["artifact_gap"],
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="d" * 64,
+        workflow_snapshot_ref="artifact://snapshot",
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
+        origin_metadata={"workflow_id": "wf-1"},
+        resolved_policy={"allowedActions": ["promote"], "allowedActors": ["reviewer"]},
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        provider_metadata={
+            "providerDecisions": [
+                {
+                    "providerEventId": "evt-promote",
+                    "decision": "promote",
+                    "accepted": True,
+                    "actor": "reviewer",
+                }
+            ]
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_attach_provider_decision_execution_pushes_promoted_state_through_adapter() -> None:
+    repo = AsyncMock()
+    proposal = _promotable_proposal_with_decision()
+    repo.get_proposal_for_update.return_value = proposal
+    delivery = _StateRecordingDelivery()
+    service = WorkflowProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=delivery,
+    )
+
+    updated = await service.attach_provider_decision_execution(
+        proposal_id=proposal.id,
+        provider_event_id="evt-promote",
+        promoted_execution_id="wf-promoted-1",
+    )
+
+    assert len(delivery.calls) == 1
+    request, update = delivery.calls[0]
+    assert request.external_key == "42"
+    assert update.decision == "promote"
+    assert update.resulting_state == "promoted"
+    assert update.promoted_execution_id == "wf-promoted-1"
+    assert update.promoted_execution_url == "/workflows/wf-promoted-1?source=temporal"
+    syncs = updated.provider_metadata["providerDecisionStateSyncs"]
+    assert syncs[-1]["resultingExternalState"] == "promoted"
+    assert syncs[-1]["promotedExecutionId"] == "wf-promoted-1"
+
+
+class _FailingStateDelivery:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object]] = []
+
+    async def record_decision(self, request, update):
+        self.calls.append((request, update))
+        # Provider adapter returned without raising but did not apply the
+        # promotion state (e.g. missing GitHub token).
+        return {
+            "applied": False,
+            "reason": "provider_state_update_failed",
+            "resultingExternalState": update.resulting_state,
+            "promotedExecutionId": update.promoted_execution_id,
+        }
+
+
+@pytest.mark.asyncio
+async def test_attach_provider_decision_execution_records_warning_when_update_fails() -> None:
+    repo = AsyncMock()
+    proposal = _promotable_proposal_with_decision()
+    repo.get_proposal_for_update.return_value = proposal
+    delivery = _FailingStateDelivery()
+    service = WorkflowProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=delivery,
+    )
+
+    updated = await service.attach_provider_decision_execution(
+        proposal_id=proposal.id,
+        provider_event_id="evt-promote",
+        promoted_execution_id="wf-promoted-1",
+    )
+
+    assert len(delivery.calls) == 1
+    # A non-applied update is surfaced as a warning, not a successful sync.
+    assert "providerDecisionStateSyncs" not in updated.provider_metadata
+    warnings = updated.provider_metadata["providerDecisionUpdateWarnings"]
+    assert warnings[-1]["providerEventId"] == "evt-promote"
+    assert warnings[-1]["reason"] == "provider_state_update_failed"
+    assert warnings[-1]["resultingExternalState"] == "promoted"
+
+
+@pytest.mark.asyncio
+async def test_record_provider_decision_event_does_not_push_rejected_event_to_provider() -> None:
+    repo = AsyncMock()
+    proposal = SimpleNamespace(
+        id=uuid4(),
+        status=WorkflowProposalStatus.OPEN,
+        provider="github",
+        repository="Moon/Repo",
+        title="Add tests",
+        summary="Follow-up",
+        category="tests",
+        tags=["artifact_gap"],
+        review_priority=WorkflowProposalReviewPriority.NORMAL,
+        dedup_key="moon/repo:add-tests",
+        dedup_hash="d" * 64,
+        workflow_snapshot_ref="artifact://snapshot",
+        workflow_create_request={"payload": {"repository": "Moon/Repo"}},
+        origin_metadata={},
+        external_key="42",
+        external_url="https://github.example/Moon/Repo/issues/42",
+        provider_metadata={},
+        resolved_policy={"allowedActions": ["dismiss"], "allowedActors": ["reviewer"]},
+        decision_note=None,
+    )
+    repo.get_proposal_for_update.return_value = proposal
+    delivery = _StateRecordingDelivery()
+    service = WorkflowProposalService(
+        repo,
+        redactor=SecretRedactor([], "***"),
+        delivery_service=delivery,
+    )
+
+    result = await service.record_provider_decision_event(
+        proposal_id=proposal.id,
+        event=ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-promote",
+            actor="reviewer",
+            body="/moonmind promote",
+        ),
+    )
+
+    assert result.accepted is False
+    assert result.reason == "action_not_allowed"
+    # Rejected/unverified decisions are never pushed to the provider issue.
+    assert delivery.calls == []

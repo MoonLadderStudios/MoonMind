@@ -1193,3 +1193,100 @@ async def test_evaluate_pull_request_readiness_blocks_changes_requested_review(m
     assert result.ready is False
     assert result.automated_review_complete is False
     assert result.blockers[0]["summary"] == "Automated review has requested changes."
+
+
+# ---------------------------------------------------------------------------
+# set_issue_labels / comment_on_issue (proposal review-state transitions)
+# MM-858: state labels update without rewriting the issue body, plus comments.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_set_issue_labels_patches_only_labels(monkeypatch):
+    """Label transition must not send title/body, preserving the audit trail."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.patch = AsyncMock(
+        return_value=_mock_response(
+            200,
+            {
+                "number": 42,
+                "html_url": "https://github.com/o/r/issues/42",
+            },
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().set_issue_labels(
+            repo="o/r",
+            issue_number="42",
+            labels=["moonmind:proposal", "moonmind:state:promoted"],
+        )
+
+    assert result.updated is True
+    assert result.external_key == "42"
+    mock_client.patch.assert_awaited_once()
+    call = mock_client.patch.await_args
+    assert call.args[0] == "https://api.github.com/repos/o/r/issues/42"
+    assert call.kwargs["json"] == {
+        "labels": ["moonmind:proposal", "moonmind:state:promoted"]
+    }
+    # Body and title are never resent, so the original issue is preserved.
+    assert "body" not in call.kwargs["json"]
+    assert "title" not in call.kwargs["json"]
+
+
+@pytest.mark.asyncio
+async def test_comment_on_issue_posts_comment_body(monkeypatch):
+    """Comments are additive review-trail entries on the issue comments API."""
+    monkeypatch.setenv("GITHUB_TOKEN", "github-token-fixture")
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(
+        return_value=_mock_response(
+            201,
+            {"html_url": "https://github.com/o/r/issues/42#issuecomment-1"},
+        )
+    )
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch(
+        "moonmind.workflows.adapters.github_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await GitHubService().comment_on_issue(
+            repo="o/r",
+            issue_number="42",
+            body="Execution link: /workflows/wf-1?source=temporal",
+        )
+
+    assert result.created is True
+    mock_client.post.assert_awaited_once()
+    call = mock_client.post.await_args
+    assert call.args[0] == "https://api.github.com/repos/o/r/issues/42/comments"
+    assert call.kwargs["json"] == {
+        "body": "Execution link: /workflows/wf-1?source=temporal"
+    }
+
+
+@pytest.mark.asyncio
+async def test_set_issue_labels_missing_token_returns_summary(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(
+        GitHubService,
+        "resolve_github_token",
+        AsyncMock(return_value=(None, None)),
+    )
+
+    result = await GitHubService().set_issue_labels(
+        repo="o/r", issue_number="42", labels=["moonmind:state:promoted"]
+    )
+
+    assert result.updated is False
+    assert "GitHub auth is not configured" in result.summary

@@ -40,6 +40,17 @@ function mobileRuleBlock(selector: string, maxWidth = 767): string {
   return blocks.join('\n');
 }
 
+function cssRuleBlock(selector: string): string {
+  const normalizedSelector = selector.replace(/\s+/g, ' ').trim();
+  const blocks: string[] = [];
+  cssRoot().walkRules((rule: Rule) => {
+    if (rule.selector.replace(/\s+/g, ' ').trim() === normalizedSelector) {
+      blocks.push(rule.nodes.map((node) => `${node.toString()};`).join('\n'));
+    }
+  });
+  return blocks.join('\n');
+}
+
 describe('WorkflowRowActionsMenu responsive layout', () => {
   it('renders the actions menu in-flow beneath the trigger on mobile cards', () => {
     // On mobile the absolutely-positioned, right-anchored popover used to shoot
@@ -61,6 +72,22 @@ describe('WorkflowRowActionsMenu responsive layout', () => {
     const menuBlock = mobileRuleBlock('.queue-card-actions .td-workflow-actions-menu');
     expect(menuBlock).toContain('width: 100%;');
     expect(menuBlock).toContain('flex-direction: column;');
+  });
+});
+
+describe('Workflow list table dropdown overflow', () => {
+  it('reserves vertical room for table filter and action popovers without disabling horizontal scroll', () => {
+    const wrapperBlock = cssRuleBlock(
+      `.workflow-list-data-slab .queue-table-wrapper:has(
+        .workflow-list-header-filter-popover,
+        .td-workflow-actions-popover
+      )`,
+    );
+    expect(wrapperBlock).toContain('padding-bottom: min(18rem, 45vh);');
+    expect(wrapperBlock).not.toContain('overflow: visible;');
+
+    const tableBlock = cssRuleBlock('.queue-table-wrapper table');
+    expect(tableBlock).not.toContain('overflow: visible;');
   });
 });
 

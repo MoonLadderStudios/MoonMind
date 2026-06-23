@@ -519,6 +519,7 @@ async def test_agent_run_managed_passes_commit_message_override_to_fetch_result(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "default-managed"
@@ -660,6 +661,7 @@ async def test_agent_run_managed_preserves_workflow_scoped_session_metadata(
         execution_profile_ref: str | None,
         profile_selector: dict[str, Any],
         request_priority: int | None = None,
+        request_queue_metadata: dict[str, Any] | None = None,
     ) -> _FakeManagerHandle:
         run.slot_assigned_event.set()
         run._assigned_profile_id = execution_profile_ref or "default-managed"

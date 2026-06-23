@@ -428,11 +428,14 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Execution History' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Run Comparison' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Timeline' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
     });
   });
 
   it('renders recovery evidence from the failed step execution detail payload', async () => {
-    window.history.pushState({}, 'Recovery Evidence Test', '/workflows/test-123?source=temporal');
+    window.history.pushState({}, 'Recovery Evidence Test', '/workflows/test-123/steps?source=temporal');
     const failedStepsSnapshot = {
       ...latestStepsSnapshot,
       steps: latestStepsSnapshot.steps.map((step) =>
@@ -539,9 +542,12 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByLabelText('apply to verify')).toBeNull();
       expect(screen.queryByLabelText('Step dependency edges')).toBeNull();
       expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('aria-current')).toBe('page');
+      expect(screen.getByRole('heading', { name: 'Timeline' })).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Execution History' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Run Comparison' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Show details for Apply patch' }));
@@ -972,7 +978,10 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByRole('link', { name: 'Artifacts' }).getAttribute('aria-current')).toBe('page');
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Step DAG' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Timeline' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Execution History' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Run Comparison' })).toBeNull();
     });
   });
 
@@ -990,6 +999,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Timeline' })).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
     });
   });
 
@@ -1094,6 +1105,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders the required workflow execution identity and section labels', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -1145,7 +1157,8 @@ describe('Workflow Detail Entrypoint', () => {
         expect(screen.getByText(new RegExp(`^${label}:?$`))).toBeTruthy();
       }
       expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
       expect(screen.queryByText(/^Task Detail:?$/)).toBeNull();
@@ -1242,6 +1255,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders compact proposal delivery diagnostics from execution detail outcomes', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -1410,6 +1424,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays original slash instructions and missing runtime command metadata state', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -1456,6 +1471,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays slash command interpretation metadata from the execution snapshot', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -1514,6 +1530,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('displays legacy snake_case slash command metadata from historical execution snapshots', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2417,6 +2434,9 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('opens a Workflow actions menu with labels for every currently available workflow operation', async () => {
+    // Remediate is only available on the Artifacts surface where its create-preview
+    // controls render, so exercise the full menu from the Artifacts subroute.
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-123/artifacts?source=temporal');
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -2532,6 +2552,69 @@ describe('Workflow Detail Entrypoint', () => {
     ]) {
       expect(within(menu).getByRole('menuitem', { name: label })).toBeTruthy();
     }
+  });
+
+  it('hides the Remediate action off the Artifacts surface where its controls are unavailable', async () => {
+    // The remediation mode/authority/action-policy controls only render on the Artifacts
+    // tab; surfacing Remediate elsewhere would submit default settings without operator choice.
+    window.history.pushState({}, 'Steps Test', '/workflows/test-123/steps?source=temporal');
+    const actionPayload: BootPayload = {
+      ...mockPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'Action menu task',
+      summary: 'Execution summary',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canSetTitle: true,
+        canCancel: true,
+      },
+      stepsHref: '/api/executions/test-123/steps',
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => ({ steps: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
+
+    const trigger = await screen.findByRole('button', { name: 'Workflow actions' });
+    fireEvent.click(trigger);
+    const menu = screen.getByRole('menu', { name: 'Workflow actions' });
+    expect(within(menu).getByRole('menuitem', { name: 'Cancel' })).toBeTruthy();
+    expect(within(menu).queryByRole('menuitem', { name: 'Remediate' })).toBeNull();
   });
 
   it('routes menu selections through existing handlers and preserves destructive confirmations', async () => {
@@ -3140,9 +3223,6 @@ describe('Workflow Detail Entrypoint', () => {
     const menu = await openWorkflowActionsMenu();
     const resumeButton = within(menu).getByRole('menuitem', { name: 'Resume from failed step' });
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
-    expect(screen.getByRole('link', { name: 'Resumed from failed step' }).getAttribute('href')).toBe(
-      '/workflows/mm:source',
-    );
     fireEvent.click(resumeButton);
 
     await waitFor(() => {
@@ -3485,6 +3565,7 @@ describe('Workflow Detail Entrypoint', () => {
       payload: { model: 'gpt-5-codex', requestedModel: 'gpt-5-codex' },
     },
   ])('displays the Model fact consistently — $label', async ({ payload }) => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -3536,6 +3617,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('hides the Model fact when no model field is populated', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4008,6 +4090,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('lets operators choose remediation mode, authority, and action policy before submission', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-create-choices/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-remediation-create-choices',
       workflowId: 'test-remediation-create-choices',
@@ -4090,6 +4173,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('hides remediation creation for ineligible completed targets', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-complete/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-complete',
       workflowId: 'test-complete',
@@ -4133,6 +4217,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders approval-gated remediation as read-only when the operator cannot decide', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-readonly-approval/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-readonly-approval',
       workflowId: 'test-readonly-approval',
@@ -4281,6 +4366,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders rich remediation target metadata for selected steps, live observation, evidence degradation, and locks', async () => {
+    window.history.pushState({}, 'Artifacts Test', '/workflows/test-remediation-rich/artifacts?source=temporal');
     const mockExecution = {
       taskId: 'test-remediation-rich',
       workflowId: 'test-remediation-rich',
@@ -4434,20 +4520,17 @@ describe('Workflow Detail Entrypoint', () => {
     });
 
     const root = document.querySelector<HTMLElement>('.workflow-detail-page');
-    const facts = document.querySelector<HTMLElement>('.td-facts-region');
     const artifacts = document.querySelector<HTMLElement>('.td-artifacts-region.td-evidence-region');
-    const actions = document.querySelector<HTMLElement>('.td-actions-region');
 
     expect(root).not.toBeNull();
-    expect(facts).not.toBeNull();
     expect(artifacts).not.toBeNull();
-    expect(actions).not.toBeNull();
     expect(artifacts?.querySelector('.td-evidence-slab.queue-table-wrapper')).not.toBeNull();
     expect(root?.querySelector('.td-evidence-region .panel--floating')).toBeNull();
     expect(root?.querySelector('.td-evidence-region .queue-floating-bar')).toBeNull();
   });
 
   it('renders empty skill provenance when task skill metadata is missing', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4585,6 +4668,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('does not render a PR link for unsafe execution or run-summary URLs', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -4649,6 +4733,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders merge automation visibility from the run summary', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-merge-visibility?source=temporal');
     const mockExecution = {
       taskId: 'test-merge-visibility',
       workflowId: 'test-merge-visibility',
@@ -4733,6 +4818,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders live merge automation visibility from execution detail', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-live-merge-visibility?source=temporal');
     const mockExecution = {
       taskId: 'test-live-merge-visibility',
       workflowId: 'test-live-merge-visibility',
@@ -4801,6 +4887,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('accepts null merge automation artifact refs from execution detail', async () => {
+    window.history.pushState({}, 'Overview Test', '/workflows/test-null-merge-artifact-refs?source=temporal');
     const mockExecution = {
       taskId: 'test-null-merge-artifact-refs',
       workflowId: 'test-null-merge-artifact-refs',

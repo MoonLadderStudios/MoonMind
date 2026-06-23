@@ -32,6 +32,8 @@ from moonmind.schemas.managed_session_models import (
     InterruptCodexManagedSessionTurnRequest,
     LaunchCodexManagedSessionRequest,
     ManagedSessionDockerCapabilityRequest,
+    ManagedSessionEnsureDockerSidecarRequest,
+    ManagedSessionEnsureDockerSidecarResponse,
     ManagedSessionRecordStatus,
     PublishCodexManagedSessionArtifactsRequest,
     SendCodexManagedSessionTurnRequest,
@@ -58,6 +60,9 @@ _RUNTIME_MODULE = "moonmind.workflows.temporal.runtime.codex_session_runtime"
 _CONTAINER_NAME_SANITIZER = re.compile(r"[^a-zA-Z0-9_.-]+")
 _RESERVED_SESSION_ENV_PREFIX = "MOONMIND_SESSION_"
 _MANAGED_SESSION_CONTAINER_UID = 1000
+_EMPTY_ASSISTANT_FAILURE_CAUSE = "app_server_protocol_empty_turn"
+_CLEAR_REQUEST_METADATA_KEY = "lastClearRequest"
+_EMPTY_ASSISTANT_TURN_METADATA_KEY = "emptyAssistantTurn"
 _MANAGED_SESSION_CONTAINER_GID = 1000
 _MANAGED_SESSION_CONTAINER_USER = (
     f"{_MANAGED_SESSION_CONTAINER_UID}:{_MANAGED_SESSION_CONTAINER_GID}"
@@ -152,6 +157,41 @@ def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
         "lastAssistantText": truncated,
         "lastAssistantTextTruncated": True,
         "lastAssistantTextOriginalChars": len(normalized),
+    }
+
+
+def _is_empty_assistant_turn_response(
+    response: CodexManagedSessionTurnResponse,
+) -> bool:
+    if response.metadata.get("failureCause") == _EMPTY_ASSISTANT_FAILURE_CAUSE:
+        return True
+    retry_action = str(response.metadata.get("retryRecommendedAction") or "").strip()
+    reason = str(response.metadata.get("reason") or "").strip()
+    return retry_action == "clear_session" and "produced no assistant output" in reason
+
+
+def _empty_assistant_turn_metadata(
+    record_metadata: Mapping[str, Any],
+    response: CodexManagedSessionTurnResponse,
+) -> dict[str, Any]:
+    existing = record_metadata.get(_EMPTY_ASSISTANT_TURN_METADATA_KEY)
+    previous_count = 0
+    if isinstance(existing, Mapping):
+        try:
+            previous_count = int(existing.get("consecutiveCount") or 0)
+        except (TypeError, ValueError):
+            previous_count = 0
+    count = max(previous_count, 0) + 1
+    return {
+        "failureCause": _EMPTY_ASSISTANT_FAILURE_CAUSE,
+        "consecutiveCount": count,
+        "lastTurnId": response.turn_id,
+        "lastSessionEpoch": response.session_state.session_epoch,
+        "lastThreadId": response.session_state.thread_id,
+        "retryRecommendedAction": "clear_session",
+        "lastReason": str(response.metadata.get("reason") or "").strip()
+        or "codex app-server turn produced no assistant output",
+        "updatedAt": datetime.now(tz=UTC).isoformat(),
     }
 
 def _managed_session_docker_network(
@@ -394,7 +434,17 @@ class DockerCodexManagedSessionController:
     def _session_docker_sidecar_enabled(
         self,
         session_environment: Mapping[str, str],
+        docker_capability: ManagedSessionDockerCapabilityRequest | None = None,
     ) -> bool:
+        if docker_capability is not None:
+            if not docker_capability.allowed or docker_capability.activation == "denied":
+                return False
+            if docker_capability.mode == "sidecar-dind-rootless":
+                raise RuntimeError(
+                    "dockerCapability.mode=sidecar-dind-rootless is not "
+                    "materialized by the Docker session launcher yet"
+                )
+            return True
         raw_mode = self._managed_session_docker_mode(session_environment)
         if raw_mode in _SESSION_DOCKER_MODE_DISABLED_VALUES:
             return False
@@ -420,6 +470,25 @@ class DockerCodexManagedSessionController:
             return False
         workflow_mode = normalize_workflow_docker_mode(workflow_source)
         return workflow_mode != "disabled"
+
+    @staticmethod
+    def _docker_capability_for_launch(
+        request: LaunchCodexManagedSessionRequest,
+        *,
+        sidecar_enabled: bool,
+    ) -> ManagedSessionDockerCapabilityRequest | None:
+        capability = request.docker_capability
+        if capability is not None:
+            return capability
+        if sidecar_enabled:
+            return ManagedSessionDockerCapabilityRequest()
+        return None
+
+    @staticmethod
+    def _docker_activation_at_launch(
+        capability: ManagedSessionDockerCapabilityRequest | None,
+    ) -> bool:
+        return capability is not None and capability.allowed
 
     def _session_docker_sidecar_image(self) -> str:
         return (
@@ -475,7 +544,9 @@ class DockerCodexManagedSessionController:
     async def _launch_docker_sidecar(
         self,
         *,
-        request: LaunchCodexManagedSessionRequest,
+        session_id: str,
+        session_epoch: int,
+        agent_run_id: str,
         docker_network: str | None,
     ) -> str:
         image = self._session_docker_sidecar_image()
@@ -484,9 +555,9 @@ class DockerCodexManagedSessionController:
                 "MOONMIND_MANAGED_SESSION_DOCKER_SIDECAR_IMAGE must be pinned "
                 "to a non-latest tag or digest"
             )
-        sidecar_name = self._sidecar_container_name(request.session_id)
-        socket_volume = self._sidecar_socket_volume_name(request.session_id)
-        graph_volume = self._sidecar_graph_volume_name(request.session_id)
+        sidecar_name = self._sidecar_container_name(session_id)
+        socket_volume = self._sidecar_socket_volume_name(session_id)
+        graph_volume = self._sidecar_graph_volume_name(session_id)
         await self._create_volume(socket_volume)
         await self._create_volume(graph_volume)
         command = [
@@ -499,11 +570,11 @@ class DockerCodexManagedSessionController:
             "--label",
             "moonmind.kind=session-docker-sidecar",
             "--label",
-            f"moonmind.session_id={request.session_id}",
+            f"moonmind.session_id={session_id}",
             "--label",
-            f"moonmind.session_epoch={request.session_epoch}",
+            f"moonmind.session_epoch={session_epoch}",
             "--label",
-            f"moonmind.agent_run_id={request.agent_run_id}",
+            f"moonmind.agent_run_id={agent_run_id}",
             "--label",
             "moonmind.workload_mode=docker-sidecar",
             "-e",
@@ -532,6 +603,9 @@ class DockerCodexManagedSessionController:
             raise RuntimeError("docker sidecar run returned a blank container id")
         await self._wait_docker_sidecar_ready(sidecar_id)
         return sidecar_id
+
+    async def _prepare_docker_sidecar_socket_volume(self, session_id: str) -> None:
+        await self._create_volume(self._sidecar_socket_volume_name(session_id))
 
     def _session_docker_config_path(
         self,
@@ -1187,9 +1261,146 @@ class DockerCodexManagedSessionController:
             else:
                 await asyncio.sleep(0)
 
-        if capability.required:
+        if capability.activation == "on_launch":
             raise RuntimeError("sidecar_not_ready: Docker capability is required")
         return last_status
+
+    async def ensure_docker_sidecar(
+        self,
+        request: ManagedSessionEnsureDockerSidecarRequest,
+    ) -> ManagedSessionEnsureDockerSidecarResponse:
+        record: CodexManagedSessionRecord | None = None
+        if self._session_store is not None:
+            record = self._session_store.load(request.session_id)
+            if record is None:
+                raise RuntimeError(
+                    f"managed session record not found: {request.session_id}"
+                )
+            if record.session_epoch != request.session_epoch:
+                raise RuntimeError(
+                    "sessionEpoch does not match the durable managed session record"
+                )
+            if record.container_id != request.container_id:
+                raise RuntimeError(
+                    "containerId does not match the durable managed session record"
+                )
+            if request.thread_id is not None and record.thread_id != request.thread_id:
+                raise RuntimeError(
+                    "threadId does not match the durable managed session record"
+                )
+            metadata = dict(record.metadata)
+            docker_status = metadata.get("capabilities", {}).get("docker", {})
+            if (
+                isinstance(docker_status, Mapping)
+                and docker_status.get("allowed") is False
+            ):
+                return ManagedSessionEnsureDockerSidecarResponse(
+                    state="not_allowed",
+                    dockerHost=None,
+                    mode=str(docker_status.get("mode") or "sidecar-dind"),
+                    composeAvailable=False,
+                    daemon={"ready": False, "version": ""},
+                    metadata={"reason": "docker_not_allowed"},
+                )
+            docker_network = str(metadata.get("dockerNetwork") or "").strip() or None
+            agent_run_id = record.agent_run_id
+        else:
+            metadata = {}
+            docker_network = self._network_name
+            agent_run_id = request.session_id
+
+        if not await self._container_exists(request.container_id):
+            raise RuntimeError("managed session container is not running")
+
+        sidecar_name = self._sidecar_container_name(request.session_id)
+        if not await self._container_exists(sidecar_name):
+            await self._launch_docker_sidecar(
+                session_id=request.session_id,
+                session_epoch=request.session_epoch,
+                agent_run_id=agent_run_id,
+                docker_network=docker_network,
+            )
+        else:
+            await self._run((self._docker_binary, "start", sidecar_name))
+            await self._wait_docker_sidecar_ready(sidecar_name)
+
+        probe_capability = ManagedSessionDockerCapabilityRequest(
+            allowed=True,
+            activation="on_launch",
+            mode="sidecar-dind",
+            dockerHost=f"unix://{_SESSION_DOCKER_SOCKET_PATH}",
+            composeSupport=request.compose_required,
+        )
+        probe_request = LaunchCodexManagedSessionRequest(
+            agentRunId=agent_run_id,
+            sessionId=request.session_id,
+            sessionEpoch=request.session_epoch,
+            threadId=request.thread_id or (record.thread_id if record else "thread"),
+            workspacePath=record.workspace_path if record else self._workspace_root,
+            sessionWorkspacePath=(
+                record.session_workspace_path if record else self._workspace_root
+            ),
+            artifactSpoolPath=(
+                record.artifact_spool_path if record else self._workspace_root
+            ),
+            codexHomePath="/home/app/.codex",
+            imageRef=record.image_ref if record else "managed-session",
+            environment={"DOCKER_HOST": f"unix://{_SESSION_DOCKER_SOCKET_PATH}"},
+            dockerCapability=probe_capability,
+        )
+        capability_metadata = await self._evaluate_docker_capability(
+            container_id=request.container_id,
+            request=probe_request,
+        )
+        docker_status = capability_metadata.get("capabilities", {}).get("docker", {})
+        if (
+            not isinstance(docker_status, Mapping)
+            or docker_status.get("available") is not True
+        ):
+            return ManagedSessionEnsureDockerSidecarResponse(
+                state="failed",
+                dockerHost=f"unix://{_SESSION_DOCKER_SOCKET_PATH}",
+                mode="sidecar-dind",
+                composeAvailable=False,
+                daemon={"ready": False, "version": ""},
+                metadata={"capabilities": {"docker": docker_status}},
+            )
+
+        response = ManagedSessionEnsureDockerSidecarResponse(
+            state="ready",
+            dockerHost=str(docker_status.get("dockerHost") or ""),
+            mode=str(docker_status.get("mode") or "sidecar-dind"),
+            composeAvailable=bool(docker_status.get("composeAvailable")),
+            daemon=docker_status.get("daemon") or {"ready": True, "version": ""},
+            metadata={
+                "capabilities": {
+                    "docker": {**dict(docker_status), "state": "ready"}
+                }
+            },
+        )
+        if record is not None and self._session_store is not None:
+            next_metadata = self._merge_capability_metadata(
+                metadata,
+                {
+                    "capabilities": {
+                        "docker": {
+                            **dict(docker_status),
+                            "allowed": True,
+                            "activation": "on_demand",
+                            "state": "ready",
+                        }
+                    }
+                },
+            )
+            self._session_store.save(
+                record.model_copy(
+                    update={
+                        "metadata": next_metadata,
+                        "updated_at": datetime.now(tz=UTC),
+                    }
+                )
+            )
+        return response
 
     @staticmethod
     def _locator_from_session_state(
@@ -2322,13 +2533,27 @@ class DockerCodexManagedSessionController:
             if existing_moonmind_url is None or not str(existing_moonmind_url).strip():
                 session_environment["MOONMIND_URL"] = self._moonmind_url
         docker_sidecar_enabled = self._session_docker_sidecar_enabled(
-            session_environment
+            session_environment,
+            request.docker_capability,
+        )
+        docker_capability = self._docker_capability_for_launch(
+            request,
+            sidecar_enabled=docker_sidecar_enabled,
+        )
+        docker_activate_at_launch = self._docker_activation_at_launch(
+            docker_capability
         )
         if docker_sidecar_enabled:
             session_environment["DOCKER_HOST"] = f"unix://{_SESSION_DOCKER_SOCKET_PATH}"
             session_environment.pop("SYSTEM_DOCKER_HOST", None)
-        else:
+            if docker_capability is not None and docker_capability.activation == "on_demand":
+                session_environment["MOONMIND_DOCKER_ACTIVATION_COMMAND"] = "true"
+        elif docker_capability is None:
             self._apply_unrestricted_docker_session_environment(session_environment)
+        else:
+            session_environment.pop("DOCKER_HOST", None)
+            session_environment.pop("SYSTEM_DOCKER_HOST", None)
+            session_environment.pop("MOONMIND_DOCKER_ACTIVATION_COMMAND", None)
         docker_pull_diagnostics: dict[str, Any] = {
             "pullAuth": "anonymous",
             "registry": "ghcr.io",
@@ -2370,6 +2595,7 @@ class DockerCodexManagedSessionController:
                 request.session_id,
                 ignore_failure=True,
             )
+            await self._prepare_docker_sidecar_socket_volume(request.session_id)
         run_command = [
             self._docker_binary,
             "run",
@@ -2407,9 +2633,13 @@ class DockerCodexManagedSessionController:
         docker_network = self._network_name or _managed_session_docker_network(
             session_environment
         )
-        unrestricted_proxy_network = self._unrestricted_docker_proxy_network(
-            session_environment=session_environment,
-            docker_network=docker_network,
+        unrestricted_proxy_network = (
+            None
+            if docker_capability is not None
+            else self._unrestricted_docker_proxy_network(
+                session_environment=session_environment,
+                docker_network=docker_network,
+            )
         )
         if docker_network:
             run_command.extend(["--network", docker_network])
@@ -2465,9 +2695,11 @@ class DockerCodexManagedSessionController:
         )
         container_id = ""
         try:
-            if docker_sidecar_enabled:
+            if docker_activate_at_launch:
                 await self._launch_docker_sidecar(
-                    request=request,
+                    session_id=request.session_id,
+                    session_epoch=request.session_epoch,
+                    agent_run_id=request.agent_run_id,
                     docker_network=docker_network,
                 )
             stdout, _stderr = await self._run(
@@ -2498,10 +2730,49 @@ class DockerCodexManagedSessionController:
             raise
         try:
             await self._wait_ready(container_id=container_id)
-            docker_capability_metadata = await self._evaluate_docker_capability(
-                container_id=container_id,
-                request=request.model_copy(update={"environment": session_environment}),
+            capability_request = request.model_copy(
+                update={
+                    "environment": session_environment,
+                    "docker_capability": docker_capability,
+                }
             )
+            if docker_activate_at_launch:
+                docker_capability_metadata = await self._evaluate_docker_capability(
+                    container_id=container_id,
+                    request=capability_request,
+                )
+            elif docker_capability is not None and docker_capability.allowed:
+                docker_capability_metadata = {
+                    "capabilities": {
+                        "docker": {
+                            "allowed": True,
+                            "available": False,
+                            "activation": docker_capability.activation,
+                            "state": "not_started",
+                            "mode": docker_capability.mode,
+                            "dockerHost": session_environment["DOCKER_HOST"],
+                            "composeAvailable": False,
+                            "daemon": {"ready": False, "version": ""},
+                        }
+                    }
+                }
+            elif docker_capability is not None:
+                docker_capability_metadata = {
+                    "capabilities": {
+                        "docker": {
+                            "allowed": False,
+                            "available": False,
+                            "activation": "denied",
+                            "state": "not_allowed",
+                            "mode": docker_capability.mode,
+                            "dockerHost": None,
+                            "composeAvailable": False,
+                            "daemon": {"ready": False, "version": ""},
+                        }
+                    }
+                }
+            else:
+                docker_capability_metadata = {}
             docker_capability_metadata = self._merge_capability_metadata(
                 {
                     "capabilities": {
@@ -2558,6 +2829,10 @@ class DockerCodexManagedSessionController:
             record_metadata = dict(launch_metadata)
             if docker_sidecar_enabled:
                 record_metadata["dockerSidecarEnabled"] = True
+                record_metadata["dockerActivation"] = (
+                    docker_capability.activation if docker_capability else "on_demand"
+                )
+                record_metadata["dockerNetwork"] = docker_network
             record_request = request.model_copy(update={"metadata": record_metadata})
             record = self._record_from_launch(request=record_request, handle=handle)
             self._session_store.save(record)
@@ -2649,6 +2924,17 @@ class DockerCodexManagedSessionController:
                 assistant_text = terminal_response.metadata.get("assistantText")
                 if isinstance(assistant_text, str) and assistant_text.strip():
                     record_metadata.update(_last_assistant_text_metadata(assistant_text))
+                    record_metadata.pop(_EMPTY_ASSISTANT_TURN_METADATA_KEY, None)
+                empty_assistant_turn = _is_empty_assistant_turn_response(
+                    terminal_response
+                )
+                if empty_assistant_turn:
+                    record_metadata[_EMPTY_ASSISTANT_TURN_METADATA_KEY] = (
+                        _empty_assistant_turn_metadata(
+                            record_metadata,
+                            terminal_response,
+                        )
+                    )
                 updated_record = await self._session_store.update(
                     request.session_id,
                     session_epoch=terminal_response.session_state.session_epoch,
@@ -2683,6 +2969,28 @@ class DockerCodexManagedSessionController:
                                 "action": "send_turn",
                                 "assistantText": terminal_response.metadata.get("assistantText"),
                                 "reason": request.reason,
+                            },
+                        )
+                    elif empty_assistant_turn:
+                        await self._emit_session_event(
+                            record=updated_record,
+                            kind="empty_assistant_turn_detected",
+                            text=(
+                                "Codex app-server completed a turn without "
+                                "assistant output; session clear is recommended."
+                            ),
+                            turn_id=terminal_response.turn_id,
+                            active_turn_id=(
+                                terminal_response.session_state.active_turn_id
+                            ),
+                            metadata={
+                                "action": "send_turn",
+                                "failureCause": _EMPTY_ASSISTANT_FAILURE_CAUSE,
+                                "retryRecommendedAction": "clear_session",
+                                "reason": terminal_response.metadata.get("reason"),
+                                "consecutiveCount": record_metadata[
+                                    _EMPTY_ASSISTANT_TURN_METADATA_KEY
+                                ]["consecutiveCount"],
                             },
                         )
         return terminal_response
@@ -2787,6 +3095,35 @@ class DockerCodexManagedSessionController:
         if session_store is not None:
             previous_record = session_store.load(request.session_id)
             if previous_record is not None:
+                last_clear = previous_record.metadata.get(_CLEAR_REQUEST_METADATA_KEY)
+                if (
+                    request.request_id
+                    and isinstance(last_clear, Mapping)
+                    and last_clear.get("requestId") == request.request_id
+                    and last_clear.get("status") == "completed"
+                    and (
+                        previous_record.session_epoch
+                        == last_clear.get("newSessionEpoch")
+                    )
+                    and previous_record.thread_id == last_clear.get("newThreadId")
+                    and previous_record.latest_reset_boundary_ref
+                ):
+                    return CodexManagedSessionHandle(
+                        runtimeFamily=request.runtime_family,
+                        sessionState=previous_record.session_state(),
+                        status=self._handle_status_from_record_status(
+                            previous_record.status
+                        ),
+                        imageRef=previous_record.image_ref,
+                        controlUrl=previous_record.control_url,
+                        metadata={
+                            "idempotentReplay": True,
+                            "requestId": request.request_id,
+                            "latestResetBoundaryRef": (
+                                previous_record.latest_reset_boundary_ref
+                            ),
+                        },
+                    )
                 if (
                     previous_record.session_epoch == request.session_epoch + 1
                     and previous_record.container_id == request.container_id
@@ -2814,6 +3151,17 @@ class DockerCodexManagedSessionController:
         )
         if previous_record is not None:
             assert session_store is not None
+            record_metadata = dict(previous_record.metadata)
+            if request.request_id:
+                record_metadata[_CLEAR_REQUEST_METADATA_KEY] = {
+                    "requestId": request.request_id,
+                    "status": "accepted",
+                    "previousSessionEpoch": previous_record.session_epoch,
+                    "newSessionEpoch": handle.session_state.session_epoch,
+                    "previousThreadId": previous_record.thread_id,
+                    "newThreadId": handle.session_state.thread_id,
+                    "reason": request.reason,
+                }
             updated_record = await session_store.update(
                 request.session_id,
                 session_epoch=handle.session_state.session_epoch,
@@ -2825,13 +3173,44 @@ class DockerCodexManagedSessionController:
                 status=self._record_status_from_handle_status(handle.status),
                 updated_at=datetime.now(tz=UTC),
                 error_message=None,
+                metadata=record_metadata,
             )
             if self._session_supervisor is not None:
-                await self._session_supervisor.publish_reset_artifacts(
+                updated_record = await self._session_supervisor.publish_reset_artifacts(
                     previous_record=previous_record,
                     record=updated_record,
                     action="clear_session",
                     reason=request.reason,
+                )
+            if request.request_id:
+                completed_metadata = dict(updated_record.metadata)
+                raw_clear_metadata = completed_metadata.get(_CLEAR_REQUEST_METADATA_KEY)
+                clear_metadata = (
+                    dict(raw_clear_metadata)
+                    if isinstance(raw_clear_metadata, Mapping)
+                    else {}
+                )
+                clear_metadata.update(
+                    {
+                        "requestId": request.request_id,
+                        "status": "completed",
+                        "previousSessionEpoch": previous_record.session_epoch,
+                        "newSessionEpoch": updated_record.session_epoch,
+                        "previousThreadId": previous_record.thread_id,
+                        "newThreadId": updated_record.thread_id,
+                        "latestControlEventRef": (
+                            updated_record.latest_control_event_ref
+                        ),
+                        "latestResetBoundaryRef": (
+                            updated_record.latest_reset_boundary_ref
+                        ),
+                    }
+                )
+                completed_metadata[_CLEAR_REQUEST_METADATA_KEY] = clear_metadata
+                await session_store.update(
+                    request.session_id,
+                    metadata=completed_metadata,
+                    updated_at=datetime.now(tz=UTC),
                 )
         else:
             await self._persist_handle_transition(

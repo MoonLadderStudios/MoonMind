@@ -96,7 +96,7 @@ class TestDefaultStrategyClassifyExit:
         assert status == "failed"
         assert failure == "integration_error"
 
-    def test_claude_rate_limited_session_variant(self) -> None:
+    def test_claude_rate_limited_session_limit_variant(self) -> None:
         s = ClaudeCodeStrategy()
         stdout = "You've hit your session limit · resets 3:20am (UTC)"
         result = s.classify_result(exit_code=1, stdout=stdout, stderr="")
@@ -239,11 +239,22 @@ class TestClaudeCodeOutputParser:
     def test_parse_detects_session_limit_message(self) -> None:
         parser = ClaudeCodeOutputParser()
         result = parser.parse(
-            "You've hit your session limit · resets 3:20am (UTC)\n",
+            "You've hit your session limit · resets 9:50pm (UTC)\n",
             "",
         )
         assert result.rate_limited
-        assert any("session limit" in message.lower() for message in result.error_messages)
+        assert result.error_messages == [
+            "You've hit your session limit · resets 9:50pm (UTC)"
+        ]
+
+    def test_parse_ignores_session_limit_prose_without_hit_phrase(self) -> None:
+        parser = ClaudeCodeOutputParser()
+        result = parser.parse(
+            "Updated docs explaining how session limit messages are classified.\n",
+            "",
+        )
+        assert not result.rate_limited
+        assert result.error_messages == []
 
     def test_parse_ignores_clean_output(self) -> None:
         parser = ClaudeCodeOutputParser()
@@ -314,7 +325,7 @@ class TestStrategyClassifyResultRateLimit:
         s = ClaudeCodeStrategy()
         result = s.classify_result(
             exit_code=1,
-            stdout="You've hit your limit · resets 1pm (UTC)\n",
+            stdout="You've hit your session limit · resets 9:50pm (UTC)\n",
             stderr="",
         )
         assert result.status == "failed"

@@ -22,6 +22,16 @@ class _Delivery:
     def __init__(self, *, external_key: str = "42") -> None:
         self.external_key = external_key
         self.requests = []
+        self.decision_states = []
+
+    async def record_decision(self, request, update):
+        self.decision_states.append((request, update))
+        return {
+            "applied": True,
+            "resultingExternalState": update.resulting_state,
+            "promotedExecutionId": update.promoted_execution_id,
+            "promotedExecutionUrl": update.promoted_execution_url,
+        }
 
     async def deliver(self, request):
         self.requests.append(request)
@@ -386,6 +396,52 @@ async def test_provider_approval_creates_one_run_from_stored_snapshot() -> None:
     assert duplicate.reason == "duplicate_event"
     assert duplicate.promoted_execution_id == "wf-1"
     assert len(executions) == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_promotion_pushes_github_state_and_execution_link() -> None:
+    """MM-858: a verified promotion updates GitHub state labels and comments
+    with the promoted execution link through the trusted delivery adapter, while
+    the stored snapshot drives execution and the original issue is preserved."""
+    repo = AsyncMock()
+    record = _delivered_record()
+    repo.get_proposal_for_update.return_value = record
+    delivery = _Delivery()
+    service = WorkflowProposalService(
+        repo,
+        redactor=SecretRedactor([], "[REDACTED]"),
+        delivery_service=delivery,
+    )
+    executions: list[dict[str, object]] = []
+
+    result = await _promote_provider_event(
+        service,
+        record,
+        ProviderDecisionEvent(
+            provider="github",
+            external_key="42",
+            provider_event_id="evt-promote",
+            actor="reviewer",
+            body="replace with unsafe edited text\n/moonmind promote --runtime codex",
+        ),
+        executions,
+    )
+
+    assert result.accepted is True
+    assert result.promoted_execution_id == "wf-1"
+    # The trusted adapter received exactly one promoted state push with the link.
+    promotions = [
+        update
+        for _request, update in delivery.decision_states
+        if update.decision == "promote"
+    ]
+    assert len(promotions) == 1
+    assert promotions[0].resulting_state == "promoted"
+    assert promotions[0].promoted_execution_id == "wf-1"
+    assert promotions[0].promoted_execution_url == "/workflows/wf-1?source=temporal"
+    # The promoted-state sync is recorded on the proposal for observability.
+    syncs = record.provider_metadata["providerDecisionStateSyncs"]
+    assert any(row.get("resultingExternalState") == "promoted" for row in syncs)
 
 
 @pytest.mark.asyncio

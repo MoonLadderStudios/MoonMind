@@ -5482,23 +5482,17 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     );
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
+  // The remediation mode/authority/action-policy controls only render on the Artifacts
+  // tab, so only expose the Remediate action there. Surfacing it on other tabs would let
+  // the operator submit with default remediation settings without seeing those controls.
+  const remediationActionAvailable = canCreateRemediation && detailSubroute === 'artifacts';
   const canShowEditWorkflow = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
-  const canFailedStepResume = Boolean(actions?.canResumeFromFailedStep);
   const editTaskUnavailableReason = canShowEditWorkflow
     ? null
     : actions?.disabledReasons?.canEditForRerun ||
       actions?.disabledReasons?.canUpdateInputs ||
       null;
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
-  const hasTaskEditingActions = taskEditingOn && Boolean(
-    canShowEditWorkflow ||
-      actions?.canRerun ||
-      compareHref ||
-      canFailedStepResume ||
-      editTaskUnavailableReason ||
-      rerunUnavailableReason,
-  );
-  const hasTaskActions = Boolean(actions?.canSetTitle || hasTaskEditingActions || canCreateRemediation);
   const taskInstructions = execution?.taskInstructions?.trim() || '';
   const hasTaskInstructions = taskInstructions.length > 0;
   const runtimeCommand = runtimeCommandFromExecution(execution);
@@ -5541,7 +5535,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     selectedRecoveryStepDisabledReason: selectedRecoveryStep?.reason
       ? formatStatusLabel(selectedRecoveryStep.reason)
       : 'selected step is not eligible',
-    canCreateRemediation,
+    canCreateRemediation: remediationActionAvailable,
     handlers: {
       onRename,
       onEditTask: () => {
@@ -5692,7 +5686,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             ) : null}
           </div>
 
-          {shouldShowRuntimeCommand ? (
+          {detailSubroute === 'overview' && shouldShowRuntimeCommand ? (
             <RuntimeCommandDetail command={runtimeCommand} />
           ) : null}
 
@@ -5768,91 +5762,93 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          <div className="td-facts-region">
-            <SkillProvenanceBadge
-              resolvedSkillsetRef={execution.resolvedSkillsetRef}
-              taskSkills={execution.taskSkills}
-              targetSkill={execution.targetSkill}
-              skillRuntime={execution.skillRuntime}
-            />
+          {detailSubroute === 'overview' ? (
+            <div className="td-facts-region">
+              <SkillProvenanceBadge
+                resolvedSkillsetRef={execution.resolvedSkillsetRef}
+                taskSkills={execution.taskSkills}
+                targetSkill={execution.targetSkill}
+                skillRuntime={execution.skillRuntime}
+              />
 
-            <FactGroup title="Runtime">
-              {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
-              {execution.model ? (
-                <Fact label="Model">
-                  <code className="text-xs">{execution.model}</code>
-                </Fact>
-              ) : null}
-              {execution.profileId ? (
-                <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
-              ) : null}
-              {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
-              {execution.priority !== null && execution.priority !== undefined ? (
-                <Fact label="Priority">{execution.priority}</Fact>
-              ) : null}
-            </FactGroup>
+              <FactGroup title="Runtime">
+                {execution.targetRuntime ? <Fact label="Runtime">{formatRuntimeLabel(execution.targetRuntime)}</Fact> : null}
+                {execution.model ? (
+                  <Fact label="Model">
+                    <code className="text-xs">{execution.model}</code>
+                  </Fact>
+                ) : null}
+                {execution.profileId ? (
+                  <Fact label="Provider Profile">{renderProviderProfileSummary(execution)}</Fact>
+                ) : null}
+                {execution.effort ? <Fact label="Effort">{execution.effort}</Fact> : null}
+                {execution.priority !== null && execution.priority !== undefined ? (
+                  <Fact label="Priority">{execution.priority}</Fact>
+                ) : null}
+              </FactGroup>
 
-            <FactGroup title="Git & Publish">
-              {execution.repository ? (
-                <Fact label="Repository">
-                  <code className="text-xs break-all">{execution.repository}</code>
-                </Fact>
-              ) : null}
-              {execution.publishMode ? (
-                <Fact label="Publish Mode">
-                  {formatPublishModeLabel(execution.publishMode)}
-                </Fact>
-              ) : null}
-              {execution.startingBranch ? (
-                <Fact label="Starting Branch">
-                  <code className="text-xs break-all">{execution.startingBranch}</code>
-                </Fact>
-              ) : null}
-              {execution.targetBranch ? (
-                <Fact label="Target Branch">
-                  <code className="text-xs break-all">{execution.targetBranch}</code>
-                </Fact>
-              ) : null}
-              {prUrl ? (
-                <Fact label="PR Link">
-                  <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
-                    {prUrl}
-                  </a>
-                </Fact>
-              ) : null}
-            </FactGroup>
+              <FactGroup title="Git & Publish">
+                {execution.repository ? (
+                  <Fact label="Repository">
+                    <code className="text-xs break-all">{execution.repository}</code>
+                  </Fact>
+                ) : null}
+                {execution.publishMode ? (
+                  <Fact label="Publish Mode">
+                    {formatPublishModeLabel(execution.publishMode)}
+                  </Fact>
+                ) : null}
+                {execution.startingBranch ? (
+                  <Fact label="Starting Branch">
+                    <code className="text-xs break-all">{execution.startingBranch}</code>
+                  </Fact>
+                ) : null}
+                {execution.targetBranch ? (
+                  <Fact label="Target Branch">
+                    <code className="text-xs break-all">{execution.targetBranch}</code>
+                  </Fact>
+                ) : null}
+                {prUrl ? (
+                  <Fact label="PR Link">
+                    <a className="text-xs break-all" href={prUrl} target="_blank" rel="noreferrer">
+                      {prUrl}
+                    </a>
+                  </Fact>
+                ) : null}
+              </FactGroup>
 
-            <FactGroup title="Lifecycle">
-              <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
-              <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
-              <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
-              <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
-              {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
-              {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
-            </FactGroup>
+              <FactGroup title="Lifecycle">
+                <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
+                <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
+                <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
+                <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
+                {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
+                {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
+              </FactGroup>
 
-            <FactGroup title="Temporal">
-              <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
-              <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
-              {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
-              <Fact label="Source">Temporal</Fact>
-              <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
-              <Fact label="Entry">{execution.entry || '—'}</Fact>
-              <Fact label="Current Run ID">
-                <code className="text-xs break-all">{latestRunId || '—'}</code>
-              </Fact>
-              {resolvedAgentRunId ? (
-                <Fact label="Workflow Run">
-                  <code className="text-xs break-all">{resolvedAgentRunId}</code>
+              <FactGroup title="Temporal">
+                <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
+                <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
+                {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
+                <Fact label="Source">Temporal</Fact>
+                <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
+                <Fact label="Entry">{execution.entry || '—'}</Fact>
+                <Fact label="Current Run ID">
+                  <code className="text-xs break-all">{latestRunId || '—'}</code>
                 </Fact>
-              ) : null}
-              <Fact label="Workflow ID">
-                <code className="text-xs break-all">{workflowId}</code>
-              </Fact>
-            </FactGroup>
-          </div>
+                {resolvedAgentRunId ? (
+                  <Fact label="Workflow Run">
+                    <code className="text-xs break-all">{resolvedAgentRunId}</code>
+                  </Fact>
+                ) : null}
+                <Fact label="Workflow ID">
+                  <code className="text-xs break-all">{workflowId}</code>
+                </Fact>
+              </FactGroup>
+            </div>
+          ) : null}
 
-          {runSummary ? (
+          {detailSubroute === 'overview' && runSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Run Summary</h3>
               {runSummary.finishOutcome ? (
@@ -5898,7 +5894,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {proposalSummary ? (
+          {detailSubroute === 'overview' && proposalSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Proposal Outcomes</h3>
               <div className="grid-2">
@@ -5978,14 +5974,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {execution.waitingReason ? (
-            <section>
-              <h3>Waiting Reason</h3>
-              <p>{execution.waitingReason}</p>
-            </section>
-          ) : null}
-
-          {displayedMergeAutomation ? (
+          {detailSubroute === 'overview' && displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
           ) : null}
 
@@ -6047,9 +6036,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             )
           ) : null}
 
-          <InterventionMonitorPanel execution={execution} />
+          {detailSubroute === 'steps' ? <InterventionMonitorPanel execution={execution} /> : null}
 
-          {execution.attentionRequired ? (
+          {detailSubroute === 'steps' && execution.attentionRequired ? (
             <section className="notice">
               <strong>Attention required.</strong> This task is waiting for external input before it can continue.
             </section>
@@ -6181,139 +6170,119 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          <RemediationRelationshipsPanel
-            inbound={inboundRemediationsQuery.data}
-            outbound={outboundRemediationsQuery.data}
-            inboundError={inboundRemediationsQuery.isError ? (inboundRemediationsQuery.error as Error) : null}
-            outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
-            approvalBusy={remediationApprovalMutation.isPending}
-            showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
-            onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
-              setActionError(null);
-              remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
-            }}
-          />
+          {detailSubroute === 'artifacts' ? (
+            <RemediationRelationshipsPanel
+              inbound={inboundRemediationsQuery.data}
+              outbound={outboundRemediationsQuery.data}
+              inboundError={inboundRemediationsQuery.isError ? (inboundRemediationsQuery.error as Error) : null}
+              outboundError={outboundRemediationsQuery.isError ? (outboundRemediationsQuery.error as Error) : null}
+              approvalBusy={remediationApprovalMutation.isPending}
+              showEmpty={shouldFetchRemediationLinks && (inboundRemediationsQuery.isSuccess || outboundRemediationsQuery.isSuccess)}
+              onApprovalDecision={(remediationWorkflowId, requestId, decision) => {
+                setActionError(null);
+                remediationApprovalMutation.mutate({ remediationWorkflowId, requestId, decision });
+              }}
+            />
+          ) : null}
 
-          {actionsOn && actions && hasTaskActions ? (
+          {actionsOn && actions && remediationActionAvailable ? (
             <section className="stack td-actions-region">
-              <div>
-                <h3>Workflow Action Context</h3>
-                <p className="small">Workflow action settings and related context are shown here; current operations are available from the workflow actions menu.</p>
-              </div>
-              {canCreateRemediation ? (
-                <div className="stack td-remediation-create-preview">
-                  <h4>Remediation create preview</h4>
-                  <div className="grid-2">
-                    <label>
-                      Remediation mode
-                      <select
-                        value={remediationMode}
-                        onChange={(event) => setRemediationMode(event.target.value)}
-                      >
-                        <option value="snapshot_then_follow">Snapshot then follow</option>
-                        <option value="snapshot">Snapshot only</option>
-                        <option value="live_follow">Live follow</option>
-                      </select>
-                    </label>
-                    <label>
-                      Remediation authority
-                      <select
-                        value={remediationAuthority}
-                        onChange={(event) => setRemediationAuthority(event.target.value)}
-                      >
-                        <option value="approval_gated">Approval-gated admin remediation</option>
-                        <option value="observe_only">Troubleshooting only</option>
-                        <option value="admin_auto">Admin remediation</option>
-                      </select>
-                    </label>
-                    <label>
-                      Remediation action policy
-                      <input
-                        value={remediationActionPolicy}
-                        onChange={(event) => setRemediationActionPolicy(event.target.value)}
-                      />
-                    </label>
-                    <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
-                  </div>
-                  <p className="small">
-                    Evidence preview: step ledger, diagnostics, and 2000 log lines.
-                  </p>
-                </div>
-              ) : null}
-              {taskEditingOn && actions.canResumeFromFailedStep && selectedRecoveryOptions.length > 0 ? (
-                <div className="stack">
-                  <label className="field-label" htmlFor="selected-recovery-step">
-                    Recovery start step
+              <div className="stack td-remediation-create-preview">
+                <h4>Remediation create preview</h4>
+                <div className="grid-2">
+                  <label>
+                    Remediation mode
+                    <select
+                      value={remediationMode}
+                      onChange={(event) => setRemediationMode(event.target.value)}
+                    >
+                      <option value="snapshot_then_follow">Snapshot then follow</option>
+                      <option value="snapshot">Snapshot only</option>
+                      <option value="live_follow">Live follow</option>
+                    </select>
                   </label>
-                  <select
-                    id="selected-recovery-step"
-                    value={selectedRecoveryStep?.logicalStepId || ''}
-                    disabled={busy}
-                    onChange={(event) => setSelectedRecoveryStepId(event.target.value)}
-                  >
-                    {selectedRecoveryOptions.map((option) => (
-                      <option
-                        key={option.logicalStepId}
-                        value={option.logicalStepId}
-                        disabled={!option.eligible}
-                      >
-                        {option.title || option.logicalStepId}
-                        {option.isFailedStep ? ' (failed step)' : ''}
-                        {!option.eligible && option.reason ? ` - ${option.reason}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <label>
+                    Remediation authority
+                    <select
+                      value={remediationAuthority}
+                      onChange={(event) => setRemediationAuthority(event.target.value)}
+                    >
+                      <option value="approval_gated">Approval-gated admin remediation</option>
+                      <option value="observe_only">Troubleshooting only</option>
+                      <option value="admin_auto">Admin remediation</option>
+                    </select>
+                  </label>
+                  <label>
+                    Remediation action policy
+                    <input
+                      value={remediationActionPolicy}
+                      onChange={(event) => setRemediationActionPolicy(event.target.value)}
+                    />
+                  </label>
+                  <Card label="Pinned Run"><code className="text-xs break-all">{latestRunId || runId || '—'}</code></Card>
                 </div>
-              ) : null}
-              {editTaskUnavailableReason ? (
                 <p className="small">
-                  Edit workflow unavailable: {formatStatusLabel(editTaskUnavailableReason)}
+                  Evidence preview: step ledger, diagnostics, and 2000 log lines.
                 </p>
-              ) : null}
-              {rerunUnavailableReason ? (
-                <p className="small">
-                  Start New Run unavailable: {formatStatusLabel(rerunUnavailableReason)}
-                </p>
-              ) : null}
-              {actions.disabledReasons?.canResumeFromFailedStep ? (
-                <p className="small">
-                  Failed-step Resume unavailable: {formatStatusLabel(actions.disabledReasons.canResumeFromFailedStep)}
-                </p>
-              ) : null}
-              {execution?.relatedRuns && execution.relatedRuns.length > 0 ? (
-                <div>
-                  <h4>Related runs</h4>
-                  <ul className="step-detail-list">
-                    {execution.relatedRuns.map((item) => (
-                      <li key={`${item.relationship}-${item.workflowId}-${item.runId || ''}`}>
-                        <a href={item.href}>{item.relationship}</a>
-                        {item.status ? <span className="small"> {formatStatusLabel(item.status)}</span> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
+              </div>
             </section>
           ) : null}
 
-          {actionsOn && actions && hasInterventionSection ? (
+          {detailSubroute === 'steps' &&
+          actionsOn &&
+          actions &&
+          taskEditingOn &&
+          actions.canResumeFromFailedStep &&
+          selectedRecoveryOptions.length > 0 ? (
+            <section className="stack td-actions-region">
+              <div className="stack">
+                <label className="field-label" htmlFor="selected-recovery-step">
+                  Recovery start step
+                </label>
+                <select
+                  id="selected-recovery-step"
+                  value={selectedRecoveryStep?.logicalStepId || ''}
+                  disabled={busy}
+                  onChange={(event) => setSelectedRecoveryStepId(event.target.value)}
+                >
+                  {selectedRecoveryOptions.map((option) => (
+                    <option
+                      key={option.logicalStepId}
+                      value={option.logicalStepId}
+                      disabled={!option.eligible}
+                    >
+                      {option.title || option.logicalStepId}
+                      {option.isFailedStep ? ' (failed step)' : ''}
+                      {!option.eligible && option.reason ? ` - ${option.reason}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </section>
+          ) : null}
+
+          {detailSubroute === 'steps' && actionsOn && actions && hasInterventionSection ? (
             <InterventionPanel
               audit={execution.interventionAudit || []}
             />
           ) : null}
 
-          <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
-          <RecoveryEvidencePanel
-            recovery={recoveryEligibility}
-            resume={execution.resume}
-            diagnostics={execution.targetDiagnostics}
-            onResumeFromFailedStep={onResumeFromFailedStep}
-            onRerun={onRerun}
-            busy={busy}
-            taskEditingOn={taskEditingOn}
-          />
+          {detailSubroute === 'steps' ? (
+            <>
+              <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
+              <RecoveryEvidencePanel
+                recovery={recoveryEligibility}
+                resume={execution.resume}
+                diagnostics={execution.targetDiagnostics}
+                onResumeFromFailedStep={onResumeFromFailedStep}
+                onRerun={onRerun}
+                busy={busy}
+                taskEditingOn={taskEditingOn}
+              />
+            </>
+          ) : null}
 
-          {resolvedAgentRunId ? (
+          {detailSubroute === 'steps' && resolvedAgentRunId ? (
             <SessionContinuityPanel
               apiBase={payload.apiBase}
               agentRunId={resolvedAgentRunId}
@@ -6386,7 +6355,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {debugOn && execution.debugFields ? (
+          {detailSubroute === 'overview' && debugOn && execution.debugFields ? (
             <section className="stack">
               <h3>Debug Metadata</h3>
               <div className="grid-2">
