@@ -9726,20 +9726,22 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                       <p className="small">
                         {toolContractSummary(selectedTrustedTool)}
                       </p>
-                      <label>
-                        Tool Version (optional)
-                        <input
-                          data-step-field="toolVersion"
-                          data-step-index={String(index)}
-                          placeholder="1.0"
-                          value={step.toolVersion}
-                          onChange={(event) =>
-                            updateStep(step.localId, {
-                              toolVersion: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
+                      {showAdvancedStepOptions ? (
+                        <label>
+                          Tool Version (optional)
+                          <input
+                            data-step-field="toolVersion"
+                            data-step-index={String(index)}
+                            placeholder="1.0"
+                            value={step.toolVersion}
+                            onChange={(event) =>
+                              updateStep(step.localId, {
+                                toolVersion: event.target.value,
+                              })
+                            }
+                          />
+                        </label>
+                      ) : null}
                       {isPentestTool ? (
                         <div className="notice small">
                           Runs require an approved scope artifact. Inline scope is
