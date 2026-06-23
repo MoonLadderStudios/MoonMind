@@ -2821,6 +2821,8 @@ class TemporalArtifactActivities:
 
         profiles = []
         for row in rows:
+            if not self._provider_profile_launch_ready(row):
+                continue
             command_behavior = row.command_behavior or {}
             billing_metadata = (
                 command_behavior.get("billing")
@@ -2881,6 +2883,52 @@ class TemporalArtifactActivities:
             )
 
         return {"profiles": profiles}
+
+    @staticmethod
+    def _provider_profile_launch_ready(row: Any) -> bool:
+        """Return whether a persisted provider profile is launchable.
+
+        The manager sync consumes only launch-ready rows. SQL filters cover
+        operator intent and connected auth state; this predicate covers the
+        credential/materialization bindings that make setup stubs non-runnable.
+        """
+
+        if not bool(getattr(row, "enabled", False)):
+            return False
+
+        auth_state = getattr(row, "auth_state", None)
+        auth_value = getattr(auth_state, "value", auth_state)
+        if auth_value != "connected":
+            return False
+
+        credential_source = getattr(row, "credential_source", None)
+        credential_value = getattr(credential_source, "value", credential_source)
+        materialization = getattr(row, "runtime_materialization_mode", None)
+        materialization_value = getattr(materialization, "value", materialization)
+
+        if credential_value == "oauth_volume":
+            return bool(
+                str(getattr(row, "volume_ref", "") or "").strip()
+                and str(getattr(row, "volume_mount_path", "") or "").strip()
+            )
+
+        if credential_value == "secret_ref":
+            secret_refs = getattr(row, "secret_refs", None)
+            if not isinstance(secret_refs, dict) or not secret_refs:
+                return False
+            if materialization_value in {
+                "api_key_env",
+                "env_bundle",
+                "config_bundle",
+                "composite",
+            }:
+                return True
+            return False
+
+        if credential_value == "none":
+            return materialization_value in {"config_bundle", "composite"}
+
+        return False
 
     async def provider_profile_ensure_manager(
         self,

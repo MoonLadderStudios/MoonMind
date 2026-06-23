@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -79,6 +80,43 @@ async def test_managed_session_request_preserves_explicit_empty_inputs() -> None
 
     assert request.parameters == {}
     assert request.workspace_spec == {}
+
+async def test_profile_resolution_error_summarizes_setup_condition() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={"execution_profile_ref": "codex-openai"}
+    )
+
+    with pytest.raises(ApplicationError) as exc_info:
+        run._validate_synced_profile_selection(
+            profile_count=0,
+            runtime_id="codex_cli",
+            request=request,
+        )
+
+    message = str(exc_info.value)
+    assert "No launch-ready provider profiles found" in message
+    assert "runtime=codex_cli" in message
+    assert "exact_profile=codex-openai" in message
+    assert "missing_condition=setup_required_or_policy" in message
+
+async def test_slot_waiting_reason_summarizes_capacity_or_cooldown() -> None:
+    run = MoonMindAgentRun()
+    request = _managed_session_request().model_copy(
+        update={
+            "execution_profile_ref": None,
+            "profile_selector": {"providerId": "openai"},
+        }
+    )
+
+    reason = run._build_provider_slot_waiting_reason(
+        runtime_id="codex_cli",
+        request=request,
+    )
+
+    assert "runtime=codex_cli" in reason
+    assert "provider=openai" in reason
+    assert "missing_condition=capacity_or_cooldown" in reason
 
 async def test_managed_fetch_result_input_ignores_legacy_workspace_branch_for_head_branch(
     monkeypatch: pytest.MonkeyPatch,
@@ -1223,7 +1261,7 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
     result = await run.run(request)
 
     assert result.summary == "Recovered on pinned profile."
-    assert ensure_profile_refs == ["codex-default", "codex-default"]
+    assert ensure_profile_refs == ["codex-default", None]
     assert manager_signals[:2] == [
         (
             "report_cooldown",
