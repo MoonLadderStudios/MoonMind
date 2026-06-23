@@ -188,7 +188,10 @@ if [[ "$RUN_DASHBOARD_TESTS" == "1" ]]; then
 
     UI_REPO_ROOT="$REPO_ROOT"
     UI_VITEST_BIN="$VITEST_BIN"
-    UI_TEST_ARGS_EFFECTIVE=("${UI_TEST_ARGS[@]}")
+    UI_TEST_ARGS_EFFECTIVE=()
+    if [[ ${#UI_TEST_ARGS[@]} -gt 0 ]]; then
+        UI_TEST_ARGS_EFFECTIVE=("${UI_TEST_ARGS[@]}")
+    fi
     UI_MIRROR_ROOT=""
     if [[ "$REPO_ROOT" == *:* ]]; then
         UI_MIRROR_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/moonmind-ui-tests.XXXXXX")"
