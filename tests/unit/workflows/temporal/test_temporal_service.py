@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.hard_switch_cutover import RENAMED_USER_WORKFLO
 from moonmind.schemas.temporal_models import (
     CreateExecutionRequest,
     RecoveryCheckpointModel,
+    has_user_workflow_plan_source,
 )
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
@@ -164,6 +165,35 @@ def test_create_execution_request_rejects_user_workflow_without_plan_source():
                 "initialParameters": {},
             }
         )
+
+
+def test_create_execution_request_accepts_workflow_skills_plan_source():
+    request = CreateExecutionRequest.model_validate(
+        {
+            "workflowType": "MoonMind.UserWorkflow",
+            "title": "Run skill",
+            "initialParameters": {
+                "workflow": {
+                    "skills": {
+                        "include": [{"name": "pr-resolver"}],
+                    },
+                },
+            },
+        }
+    )
+
+    assert request.workflow_type == "MoonMind.UserWorkflow"
+
+
+def test_user_workflow_plan_source_accepts_pydantic_artifact_refs():
+    class ArtifactRefModel(BaseModel):
+        artifact_id: str
+
+    assert has_user_workflow_plan_source(
+        initial_parameters={},
+        input_artifact_ref=ArtifactRefModel(artifact_id="art_input"),
+        plan_artifact_ref=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -311,6 +341,7 @@ async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicate
             initial_parameters={
                 "publishMode": "pr",
                 "workflow": {
+                    "instructions": "Test merge automation routing.",
                     "publish": {
                         "mode": "pr",
                         "mergeAutomation": {"enabled": True},
@@ -345,7 +376,10 @@ async def test_create_execution_keeps_default_priority_without_merge_automation(
             failure_policy=None,
             initial_parameters={
                 "publishMode": "pr",
-                "workflow": {"publish": {"mode": "pr"}},
+                "workflow": {
+                    "instructions": "Test default publish priority.",
+                    "publish": {"mode": "pr"},
+                },
             },
             idempotency_key=None,
         )

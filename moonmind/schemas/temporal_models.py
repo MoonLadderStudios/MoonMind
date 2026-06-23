@@ -1575,7 +1575,19 @@ def _has_text(value: Any) -> bool:
 
 
 def _as_dict(value: Any) -> dict[str, Any] | None:
-    return value if isinstance(value, dict) else None
+    if isinstance(value, dict):
+        return value
+    for method_name in ("model_dump", "dict"):
+        method = getattr(value, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            dumped = method()
+        except TypeError:
+            continue
+        if isinstance(dumped, dict):
+            return dumped
+    return None
 
 
 def _has_artifact_ref(value: Any) -> bool:
@@ -1590,6 +1602,8 @@ def _has_artifact_ref(value: Any) -> bool:
 def _has_skill_selector(value: Any) -> bool:
     if _has_text(value):
         return True
+    if isinstance(value, list):
+        return any(_has_skill_selector(item) for item in value)
     selector = _as_dict(value)
     if selector is None:
         return False
@@ -1598,7 +1612,29 @@ def _has_skill_selector(value: Any) -> bool:
         or _has_text(selector.get("id"))
         or _has_text(selector.get("skill"))
         or _has_text(selector.get("skillName"))
+        or _has_skill_selector(selector.get("include"))
+        or _has_skill_selector(selector.get("sets"))
     )
+
+
+def _has_nonempty_sequence(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    for item in value:
+        if item is None:
+            continue
+        if isinstance(item, str) and not item.strip():
+            continue
+        return True
+    return False
+
+
+def _has_structured_workflow_source(mapping: dict[str, Any]) -> bool:
+    if "remediation" in mapping and mapping.get("remediation") is not None:
+        return True
+    if _has_nonempty_sequence(mapping.get("dependsOn")):
+        return True
+    return False
 
 
 def _mapping_has_skill_or_step_source(mapping: dict[str, Any]) -> bool:
@@ -1608,9 +1644,15 @@ def _mapping_has_skill_or_step_source(mapping: dict[str, Any]) -> bool:
         "selected_skill",
         "targetSkill",
         "target_skill",
+        "skills",
+        "skillSelection",
+        "skill_selection",
     ):
         if _has_skill_selector(mapping.get(key)):
             return True
+
+    if _has_structured_workflow_source(mapping):
+        return True
 
     tool = _as_dict(mapping.get("tool"))
     if tool is not None:
