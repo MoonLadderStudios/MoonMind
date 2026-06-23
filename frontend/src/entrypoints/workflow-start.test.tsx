@@ -16149,6 +16149,24 @@ describe("Task Create governed Tool authoring", () => {
       .toBe("github.create_pull_request");
   });
 
+  it("hides Tool Version behind Advanced mode for MM-871", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Tool");
+
+    expect(await within(step).findByLabelText("Tool ID")).toBeTruthy();
+    expect(within(step).queryByLabelText("Tool Version (optional)")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(within(step).getByLabelText("Tool Version (optional)")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+    expect(within(step).queryByLabelText("Tool Version (optional)")).toBeNull();
+  });
+
   it("submits an authored MM-577 Skill step with agentic controls", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
