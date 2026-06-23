@@ -9347,12 +9347,20 @@ class TemporalAgentRuntimeActivities:
         candidate_dirs: list[Path] = []
         try:
             candidate_dirs.extend(workspace_parent.iterdir())
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug(
+                "Could not scan workspace sibling object-store candidates for %s: %s",
+                workspace,
+                exc,
+            )
         try:
             candidate_dirs.extend(git_dir.iterdir())
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug(
+                "Could not scan in-git object-store candidates for %s: %s",
+                workspace,
+                exc,
+            )
 
         additions: list[str] = []
         for candidate_dir in candidate_dirs:
@@ -9572,10 +9580,6 @@ class TemporalAgentRuntimeActivities:
                 if repaired:
                     status_returncode, status_stdout, status_stderr = (
                         await _read_status()
-                    )
-                    detail = status_stderr.decode("utf-8", errors="replace").strip() or (
-                        status_stdout.decode("utf-8", errors="replace").strip()
-                        or "(no stderr)"
                     )
 
         if status_returncode != 0:
