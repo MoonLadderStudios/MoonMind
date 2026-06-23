@@ -1,6 +1,6 @@
 """add provider profile activation state
 
-Revision ID: 316_provider_profile_activation_state
+Revision ID: 316_provider_profile_auth_state
 Revises: 315_workflow_type_enum_cutover
 Create Date: 2026-06-23 00:00:00.000000
 
@@ -11,7 +11,7 @@ from typing import Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "316_provider_profile_activation_state"
+revision: str = "316_provider_profile_auth_state"
 down_revision: Union[str, None] = "315_workflow_type_enum_cutover"
 
 __all__ = ["revision", "down_revision", "upgrade", "downgrade"]
@@ -201,7 +201,21 @@ def _insert_first_party_setup_stubs() -> None:
         )
 
 
-def _backfill_activation_state() -> None:
+def _has_column(table_name: str, column_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
+
+
+def _backfill_activation_state(
+    *, has_validation_status_column: bool | None = None
+) -> None:
+    if has_validation_status_column is None:
+        has_validation_status_column = _has_column(
+            "managed_agent_provider_profiles", "validation_status"
+        )
+
     op.execute(
         """
         UPDATE managed_agent_provider_profiles
@@ -213,18 +227,19 @@ def _backfill_activation_state() -> None:
         WHERE disabled_reason = 'policy_disabled'
         """
     )
-    op.execute(
-        """
-        UPDATE managed_agent_provider_profiles
-        SET
-            enabled = false,
-            auth_state = 'validation_failed',
-            disabled_reason = 'auth_invalid',
-            last_auth_method = NULL
-        WHERE enabled = true
-          AND validation_status IN ('invalid', 'failed', 'validation_failed')
-        """
-    )
+    if has_validation_status_column:
+        op.execute(
+            """
+            UPDATE managed_agent_provider_profiles
+            SET
+                enabled = false,
+                auth_state = 'validation_failed',
+                disabled_reason = 'auth_invalid',
+                last_auth_method = NULL
+            WHERE enabled = true
+              AND validation_status IN ('invalid', 'failed', 'validation_failed')
+            """
+        )
     op.execute(
         """
         UPDATE managed_agent_provider_profiles
