@@ -11142,15 +11142,15 @@ class MoonMindRunWorkflow:
                     if self._managed_runtime_id(agent_id) != self._managed_runtime_id(
                         source_agent_id
                     ):
-                        self._get_logger().warning(
+                        raise ValueError(
                             "Inherited execution_profile_ref '%s' targets runtime "
-                            "'%s' but child runtime is '%s'; falling back to "
-                            "auto-selection.",
-                            profile_id,
-                            self._managed_runtime_id(source_agent_id),
-                            self._managed_runtime_id(agent_id),
+                            "'%s' but child runtime is '%s'."
+                            % (
+                                profile_id,
+                                self._managed_runtime_id(source_agent_id),
+                                self._managed_runtime_id(agent_id),
+                            )
                         )
-                        return None
                 return self._validated_execution_profile_ref(
                     profile_id,
                     agent_id=agent_id,
@@ -11172,13 +11172,10 @@ class MoonMindRunWorkflow:
         if profile_snapshots is None:
             return profile_id
         if profile_id not in profile_snapshots:
-            self._get_logger().warning(
+            raise ValueError(
                 "%s execution_profile_ref '%s' is not a known profile for this "
-                "runtime; falling back to auto-selection.",
-                source_label,
-                profile_id,
+                "runtime." % (source_label, profile_id)
             )
-            return None
         if not isinstance(profile_snapshots, Mapping):
             return profile_id
         snapshot = profile_snapshots.get(profile_id)
@@ -11189,15 +11186,11 @@ class MoonMindRunWorkflow:
             return profile_id
         child_runtime_id = self._managed_runtime_id(agent_id)
         if runtime_id != child_runtime_id:
-            self._get_logger().warning(
+            raise ValueError(
                 "%s execution_profile_ref '%s' belongs to runtime '%s' but child "
-                "runtime is '%s'; falling back to auto-selection.",
-                source_label,
-                profile_id,
-                runtime_id,
-                child_runtime_id,
+                "runtime is '%s'."
+                % (source_label, profile_id, runtime_id, child_runtime_id)
             )
-            return None
         return profile_id
 
     @staticmethod

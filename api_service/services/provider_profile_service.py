@@ -5,7 +5,10 @@ from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from api_service.db.models import ManagedAgentProviderProfile, ProviderProfileAuthState
+from api_service.db.models import ManagedAgentProviderProfile, ManagedSecret
+from api_service.services.provider_profile_readiness import (
+    provider_profile_launch_ready,
+)
 from moonmind.utils.logging import redact_profile_file_templates, redact_sensitive_payload
 
 logger = logging.getLogger(__name__)
@@ -37,10 +40,17 @@ async def normalize_runtime_default_profile(
     if not rows:
         return None
 
+    managed_secret_statuses = await _managed_secret_statuses_for_profiles(
+        session=session,
+        rows=rows,
+    )
     launchable_rows = [
         row
         for row in rows
-        if row.enabled and row.auth_state == ProviderProfileAuthState.CONNECTED
+        if provider_profile_launch_ready(
+            row,
+            managed_secret_statuses=managed_secret_statuses,
+        )
     ]
     if not launchable_rows:
         rows_to_clear = [row for row in rows if row.is_default]
@@ -78,7 +88,11 @@ async def normalize_runtime_default_profile(
 
     return selected_id
 
-def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]:
+def _manager_profile_payload(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str] | None = None,
+) -> dict[str, Any]:
     return {
         "profile_id": row.profile_id,
         "is_default": row.is_default,
@@ -111,6 +125,10 @@ def _manager_profile_payload(row: ManagedAgentProviderProfile) -> dict[str, Any]
         "disabled_reason": (
             row.disabled_reason.value if row.disabled_reason else None
         ),
+        "launch_ready": provider_profile_launch_ready(
+            row,
+            managed_secret_statuses=managed_secret_statuses,
+        ),
         "first_authenticated_at": (
             row.first_authenticated_at.isoformat()
             if row.first_authenticated_at
@@ -135,7 +153,6 @@ async def sync_provider_profile_manager(
         .where(
             ManagedAgentProviderProfile.runtime_id == runtime_id,
             ManagedAgentProviderProfile.enabled.is_(True),
-            ManagedAgentProviderProfile.auth_state == ProviderProfileAuthState.CONNECTED,
         )
         .order_by(
             ManagedAgentProviderProfile.is_default.desc(),
@@ -144,8 +161,22 @@ async def sync_provider_profile_manager(
         )
     )
     result = await session.execute(stmt)
-    rows = result.scalars().all()
-    profiles_payload = [_manager_profile_payload(row) for row in rows]
+    rows = list(result.scalars().all())
+    managed_secret_statuses = await _managed_secret_statuses_for_profiles(
+        session=session,
+        rows=rows,
+    )
+    profiles_payload = [
+        _manager_profile_payload(
+            row,
+            managed_secret_statuses=managed_secret_statuses,
+        )
+        for row in rows
+        if provider_profile_launch_ready(
+            row,
+            managed_secret_statuses=managed_secret_statuses,
+        )
+    ]
 
     try:
         from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -188,3 +219,27 @@ async def sync_provider_profile_manager(
             exc,
             exc_info=True,
         )
+
+
+async def _managed_secret_statuses_for_profiles(
+    *,
+    session: AsyncSession,
+    rows: list[ManagedAgentProviderProfile],
+) -> dict[str, str]:
+    slugs: set[str] = set()
+    for row in rows:
+        for secret_ref in (row.secret_refs or {}).values():
+            if isinstance(secret_ref, str) and secret_ref.startswith("db://"):
+                slug = secret_ref.removeprefix("db://").strip()
+                if slug:
+                    slugs.add(slug)
+    if not slugs:
+        return {}
+
+    result = await session.execute(
+        select(ManagedSecret).where(ManagedSecret.slug.in_(slugs))
+    )
+    return {
+        row.slug: row.status.value if row.status else ""
+        for row in result.scalars().all()
+    }

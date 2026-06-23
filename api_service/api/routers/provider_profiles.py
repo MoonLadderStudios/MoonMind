@@ -1289,6 +1289,11 @@ def _row_to_dict(
     managed_secret_statuses: dict[str, str] | None = None,
     secret_ref_results: dict[str, _SecretRefParseResult] | None = None,
 ) -> dict[str, Any]:
+    readiness = _provider_profile_readiness(
+        row,
+        managed_secret_statuses=managed_secret_statuses,
+        secret_ref_results=secret_ref_results,
+    )
     payload = {
         "profile_id": row.profile_id,
         "runtime_id": row.runtime_id,
@@ -1332,11 +1337,8 @@ def _row_to_dict(
         "last_auth_method": (
             row.last_auth_method.value if row.last_auth_method else None
         ),
-        "readiness": _provider_profile_readiness(
-            row,
-            managed_secret_statuses=managed_secret_statuses,
-            secret_ref_results=secret_ref_results,
-        ),
+        "launch_ready": readiness["launch_ready"],
+        "readiness": readiness,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

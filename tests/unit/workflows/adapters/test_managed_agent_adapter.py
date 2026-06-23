@@ -260,6 +260,36 @@ async def test_resolve_profile_by_id():
     # so the adapter should NOT send a redundant slot request.
     assert ("slot_request", "wf-123", "gemini_cli") not in calls
 
+async def test_resolve_profile_by_id_rejects_not_launch_ready():
+    profiles = [
+        {
+            "profile_id": "prof-disabled",
+            "credential_source": "oauth_volume",
+            "enabled": True,
+            "launch_ready": False,
+        }
+    ]
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-not-ready",
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="gemini_cli",
+        executionProfileRef="prof-disabled",
+        correlationId="corr-not-ready",
+        idempotencyKey="idem-not-ready",
+    )
+    with pytest.raises(ProfileResolutionError, match="not launch-ready"):
+        await adapter.start(request)
+
 async def test_resolve_profile_auto_picks_runtime_default():
     profiles = [
         {
@@ -293,6 +323,46 @@ async def test_resolve_profile_auto_picks_runtime_default():
     )
     handle = await adapter.start(request)
     assert handle.metadata["profile_id"] == "second"
+
+async def test_resolve_profile_selector_excludes_not_launch_ready_default():
+    profiles = [
+        {
+            "profile_id": "blocked-default",
+            "credential_source": "secret_ref",
+            "is_default": True,
+            "launch_ready": False,
+            "priority": 300,
+            "available_slots": 9,
+        },
+        {
+            "profile_id": "ready-fallback",
+            "credential_source": "oauth_volume",
+            "is_default": False,
+            "launch_ready": True,
+            "priority": 100,
+            "available_slots": 1,
+        },
+    ]
+
+    adapter = ManagedAgentAdapter(
+        profile_fetcher=_fake_profiles(profiles),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-ready-fallback",
+    )
+
+    from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        executionProfileRef="auto",
+        correlationId="corr-ready-fallback",
+        idempotencyKey="idem-ready-fallback",
+    )
+    handle = await adapter.start(request)
+    assert handle.metadata["profile_id"] == "ready-fallback"
 
 async def test_resolve_profile_selector_filters():
     profiles = [
@@ -920,7 +990,7 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
                     runtime_id="gemini_cli",
                     credential_source=ProviderCredentialSource.OAUTH_VOLUME,
                     runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-                    volume_ref=None,
+                    volume_ref="oauth-volume://gemini",
                     volume_mount_path="/mnt/auth",
                     account_label="primary",
                     max_parallel_runs=2,
@@ -996,7 +1066,7 @@ async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
                     ManagedAgentProviderProfile(
                         profile_id=pid,
                         runtime_id=runtime,
-                        credential_source=ProviderCredentialSource.SECRET_REF,
+                        credential_source=ProviderCredentialSource.NONE,
                         runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
                         max_parallel_runs=1,
                         cooldown_after_429_seconds=300,
@@ -1038,7 +1108,7 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
                     runtime_id="claude_code",
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.ENV_BUNDLE,
-                    secret_refs={"ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY"},
+                    secret_refs={"ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"},
                     clear_env_keys=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
                     env_template={
                         "ANTHROPIC_BASE_URL": "https://api.minimax.io/anthropic",
@@ -1075,7 +1145,7 @@ async def test_provider_profile_list_preserves_secret_ref_materialization_fields
         assert len(profiles) == 1
         assert profiles[0]["profile_id"] == "claude-minimax"
         assert profiles[0]["secret_refs"] == {
-            "ANTHROPIC_AUTH_TOKEN": "MINIMAX_API_KEY"
+            "ANTHROPIC_AUTH_TOKEN": "env://MINIMAX_API_KEY"
         }
         assert profiles[0]["clear_env_keys"] == [
             "ANTHROPIC_API_KEY",

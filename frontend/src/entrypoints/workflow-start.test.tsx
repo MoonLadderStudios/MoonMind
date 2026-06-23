@@ -9520,11 +9520,13 @@ describe.skip("Task Create Entrypoint", () => {
       {
         profile_id: "profile:codex-default",
         account_label: "Codex Default",
+        provider_id: "openai",
         is_default: true,
       },
       {
         profile_id: "profile:codex-secondary",
         account_label: "Codex Secondary",
+        provider_id: "openrouter",
         is_default: false,
       },
     ];
@@ -9654,6 +9656,12 @@ describe.skip("Task Create Entrypoint", () => {
     expect(presignedUploadIndex).toBeGreaterThanOrEqual(0);
     expect(completeIndex).toBeGreaterThan(presignedUploadIndex);
     expect(executionIndex).toBeGreaterThan(completeIndex);
+    const executionCall = fetchSpy.mock.calls[executionIndex];
+    const executionRequest = JSON.parse(String(executionCall?.[1]?.body));
+    expect(executionRequest.payload.task.runtime).toMatchObject({
+      profileId: "profile:codex-default",
+      profileSelector: { providerId: "openai" },
+    });
   });
 
   it(
@@ -16589,5 +16597,34 @@ describe("resolveDefaultProviderProfileId", () => {
     expect(
       resolveDefaultProviderProfileId(disabled, "claude-anthropic"),
     ).toBe("codex");
+  });
+
+  it("uses priority ordering when no launchable configured or default profile exists", () => {
+    const candidates = [
+      {
+        profile_id: "disabled-default",
+        is_default: true,
+        enabled: true,
+        launch_ready: false,
+        priority: 500,
+      },
+      {
+        profile_id: "low-priority",
+        is_default: false,
+        enabled: true,
+        launch_ready: true,
+        priority: 10,
+      },
+      {
+        profile_id: "high-priority",
+        is_default: false,
+        enabled: true,
+        launch_ready: true,
+        priority: 200,
+      },
+    ];
+    expect(resolveDefaultProviderProfileId(candidates, "disabled-default")).toBe(
+      "high-priority",
+    );
   });
 });

@@ -700,7 +700,7 @@ class TestProviderProfileManagerHelpers:
         assert best is not None
         assert best.profile_id == "p2"
 
-    def test_find_available_profile_prefers_lower_cost_when_billing_patch_enabled(self):
+    def test_find_available_profile_keeps_priority_order_when_billing_patch_enabled(self):
         wf = self._make_workflow()
         wf._profiles["expensive"] = ProfileSlotState(
             profile_id="expensive",
@@ -734,7 +734,7 @@ class TestProviderProfileManagerHelpers:
             best = wf._find_available_profile({"providerId": "openai"})
 
         assert best is not None
-        assert best.profile_id == "cheap"
+        assert best.profile_id == "expensive"
 
     def test_find_available_profile_none_available(self):
         wf = self._make_workflow()
@@ -818,6 +818,19 @@ class TestProviderProfileManagerHelpers:
             wf._find_available_profile(execution_profile_ref="missing-profile")
             is None
         )
+
+    def test_find_available_profile_exact_ref_requires_launch_ready_profile(self):
+        wf = self._make_workflow()
+        wf._profiles["not-ready"] = ProfileSlotState(
+            profile_id="not-ready",
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=300,
+            rate_limit_policy="backoff",
+            enabled=True,
+            launch_ready=False,
+        )
+
+        assert wf._find_available_profile(execution_profile_ref="not-ready") is None
 
     def test_find_available_profile_sorts_by_priority(self):
         wf = self._make_workflow()

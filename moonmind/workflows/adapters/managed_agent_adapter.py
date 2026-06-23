@@ -48,6 +48,9 @@ from moonmind.schemas.agent_runtime_models import (
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
+from api_service.services.provider_profile_readiness import (
+    provider_profile_launch_ready_from_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -944,6 +947,11 @@ class ManagedAgentAdapter:
         if execution_profile_ref is not None:
             for profile in profiles:
                 if profile.get("profile_id") == execution_profile_ref:
+                    if not provider_profile_launch_ready_from_payload(profile):
+                        raise ProfileResolutionError(
+                            f"Provider profile '{execution_profile_ref}' is not "
+                            f"launch-ready for runtime_id='{runtime_id}'"
+                        )
                     return profile
             raise ProfileResolutionError(
                 f"Provider profile '{execution_profile_ref}' not found for "
@@ -954,6 +962,8 @@ class ManagedAgentAdapter:
         eligible_profiles = []
         for profile in profiles:
             if not profile.get("enabled", True):
+                continue
+            if not provider_profile_launch_ready_from_payload(profile):
                 continue
             if normalized_selector:
                 if normalized_selector.get("providerId") and profile.get("provider_id") != normalized_selector.get("providerId"):

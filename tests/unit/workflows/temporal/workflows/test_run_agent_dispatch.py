@@ -1187,7 +1187,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.agent_id, "codex")
         self.assertEqual(request.execution_profile_ref, "codex_default")
 
-    def test_build_agent_execution_request_does_not_inherit_cross_runtime_profile(self) -> None:
+    def test_build_agent_execution_request_rejects_cross_runtime_profile(self) -> None:
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
@@ -1206,28 +1206,29 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "moonmind.workflows.temporal.workflows.run.workflow.info",
             return_value=MockInfo(),
         ):
-            request = wf._build_agent_execution_request(
-                node_inputs={
-                    "runtime": {
-                        "mode": "claude",
-                    },
-                },
-                node_id="node-cross-runtime-profile",
-                tool_name="pr-resolver",
-                workflow_parameters={
-                    "task": {
+            with self.assertRaisesRegex(
+                ValueError,
+                "targets runtime 'codex_cli' but child runtime is 'claude_code'",
+            ):
+                wf._build_agent_execution_request(
+                    node_inputs={
                         "runtime": {
-                            "mode": "codex",
-                            "executionProfileRef": "codex_default",
+                            "mode": "claude",
                         },
                     },
-                },
-            )
+                    node_id="node-cross-runtime-profile",
+                    tool_name="pr-resolver",
+                    workflow_parameters={
+                        "task": {
+                            "runtime": {
+                                "mode": "codex",
+                                "executionProfileRef": "codex_default",
+                            },
+                        },
+                    },
+                )
 
-        self.assertEqual(request.agent_id, "claude")
-        self.assertIsNone(request.execution_profile_ref)
-
-    def test_build_agent_execution_request_does_not_inherit_unknown_profile(self) -> None:
+    def test_build_agent_execution_request_rejects_unknown_inherited_profile(self) -> None:
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
@@ -1246,26 +1247,24 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "moonmind.workflows.temporal.workflows.run.workflow.info",
             return_value=MockInfo(),
         ):
-            request = wf._build_agent_execution_request(
-                node_inputs={
-                    "runtime": {
-                        "mode": "codex",
-                    },
-                },
-                node_id="node-unknown-inherited-profile",
-                tool_name="pr-resolver",
-                workflow_parameters={
-                    "task": {
+            with self.assertRaisesRegex(ValueError, "not a known profile"):
+                wf._build_agent_execution_request(
+                    node_inputs={
                         "runtime": {
                             "mode": "codex",
-                            "executionProfileRef": "hallucinated-profile",
                         },
                     },
-                },
-            )
-
-        self.assertEqual(request.agent_id, "codex")
-        self.assertIsNone(request.execution_profile_ref)
+                    node_id="node-unknown-inherited-profile",
+                    tool_name="pr-resolver",
+                    workflow_parameters={
+                        "task": {
+                            "runtime": {
+                                "mode": "codex",
+                                "executionProfileRef": "hallucinated-profile",
+                            },
+                        },
+                    },
+                )
 
     def test_build_agent_execution_request_prefers_runtime_block_profile_over_top_level(self) -> None:
         """Runtime planner sets profile fields inside the runtime block; these
@@ -1381,10 +1380,10 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(moonmind["queueOrder"], 7)
         self.assertEqual(moonmind["queuedAt"], "2026-06-22T10:00:00+00:00")
 
-    def test_build_agent_execution_request_falls_back_on_invalid_profile_ref(self) -> None:
+    def test_build_agent_execution_request_rejects_invalid_profile_ref(self) -> None:
         """When a plan node carries a profile ID that doesn't match any known
         profile for the runtime (e.g. AI-hallucinated 'default:codex_cli'),
-        the dispatcher should reject it and fall back to auto-selection."""
+        the dispatcher should reject it instead of falling back to auto-selection."""
         from unittest.mock import patch
 
         wf = MoonMindRunWorkflow()
@@ -1399,19 +1398,17 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "moonmind.workflows.temporal.workflows.run.workflow.info",
             return_value=MockInfo(),
         ):
-            request = wf._build_agent_execution_request(
-                node_inputs={
-                    "runtime": {
-                        "mode": "codex",
-                        "profileId": "default:codex_cli",  # Invalid / not in snapshots
+            with self.assertRaisesRegex(ValueError, "not a known profile"):
+                wf._build_agent_execution_request(
+                    node_inputs={
+                        "runtime": {
+                            "mode": "codex",
+                            "profileId": "default:codex_cli",
+                        },
                     },
-                },
-                node_id="node-invalid-profile",
-                tool_name="pr-resolver",
-            )
-
-        self.assertEqual(request.agent_id, "codex")
-        self.assertIsNone(request.execution_profile_ref)
+                    node_id="node-invalid-profile",
+                    tool_name="pr-resolver",
+                )
 
     def test_build_agent_execution_request_accepts_valid_profile_ref(self) -> None:
         """When a plan node carries a profile ID that is in the known snapshots,
