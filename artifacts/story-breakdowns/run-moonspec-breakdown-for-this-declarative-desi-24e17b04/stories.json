@@ -1,0 +1,817 @@
+{
+  "source": {
+    "title": "Provider Profiles",
+    "path": "docs/Security/ProviderProfiles.md",
+    "referencePath": "docs/Security/ProviderProfiles.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "originalDesignText": "# Provider Profiles\n\n**Related design documents:** [SecretsSystem.md](./SecretsSystem.md), [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md), [ManagedAndExternalAgentExecutionModel.md](../Temporal/ManagedAndExternalAgentExecutionModel.md)\n\nStatus: **Desired-State Design**\nOwners: MoonMind Engineering\nLast Updated: 2026-06-23\n\n> [!NOTE]\n> This document replaces the older **Auth Profiles** framing with **Provider Profiles**.\n>\n> A Provider Profile is broader than authentication alone. It defines:\n>\n> - which runtime MoonMind launches,\n> - which upstream provider that runtime should target,\n> - which credential source class is used,\n> - which secret references or OAuth volume back the launch,\n> - how provider-specific configuration is materialized into the runtime environment,\n> - which concurrency and cooldown policy applies, and\n> - whether the profile is launchable after Settings-driven activation.\n>\n> This document does **not** define secret storage, encryption, backend taxonomy, or secret-resolution internals. Those belong to [SecretsSystem.md](./SecretsSystem.md).\n>\n> This document also does **not** define browser-terminal OAuth transport. That belongs to [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md).\n\n---\n\n## 1. Summary\n\nMoonMind-managed runtimes such as Gemini CLI, Claude Code, and Codex CLI do not map one-to-one to a single upstream company or a single authentication method.\n\nExamples:\n\n- `claude_code` may run against:\n  - Anthropic via OAuth\n  - Anthropic via API key\n  - MiniMax via Anthropic-compatible environment shaping\n  - Z.AI via Anthropic-compatible environment shaping\n- `codex_cli` may run against:\n  - OpenAI via OAuth\n  - OpenAI via API key\n  - MiniMax via config + environment materialization\n- `gemini_cli` may run against:\n  - Google via OAuth\n  - Google via API key, where supported by the runtime and policy\n\nThe old question, “which auth method does this runtime use?”, is too narrow.\n\nMoonMind instead needs to answer:\n\n> For this run, which runtime should launch against which provider, using which credential source, materialized in which runtime-specific way, with which concurrency and cooldown policy?\n\nThe Provider Profile system is the durable execution contract that answers that question.\n\nThe Settings experience has one additional product rule:\n\n> Claude, Codex, and Gemini provider profiles should be easy to find and configure in Settings, but they must default to not launchable until the user successfully authenticates OAuth or adds a validated API key. A successful user-initiated OAuth or API-key setup should enable the profile by default.\n\nThis means “disabled by default” is a safety state for unconfigured providers. It is not an extra manual step after setup succeeds.\n\n---\n\n## 2. Document Boundaries\n\nProvider Profiles depend on, but do not replace, other MoonMind systems.\n\n### 2.1 What Provider Profiles own\n\nProvider Profiles are the semantic owner of:\n\n- runtime selection\n- provider selection\n- profile-level routing metadata\n- default model intent for the runtime/provider combination\n- credential source class\n- runtime materialization strategy\n- launch shaping\n- profile-level concurrency and cooldown policy\n- launchable state (`enabled`) and activation metadata (`auth_state`, `disabled_reason`)\n\n### 2.2 What the Secrets System owns\n\nThe Secrets System is the semantic owner of:\n\n- `SecretRef` semantics\n- supported secret backend classes\n- encryption-at-rest behavior\n- root key custody\n- launch-time resolution semantics\n- audit and rotation behavior\n- proxy-first secret handling rules\n\nProvider Profiles may reference secrets, but they do not define what a `SecretRef` means beyond “this field points to one.”\n\n### 2.3 What OAuth Terminal owns\n\nOAuth Terminal is the semantic owner of:\n\n- browser terminal transport\n- PTY/WebSocket session architecture\n- OAuth session lifecycle\n- auth container behavior\n- terminal session metadata\n- verification and profile registration flow for OAuth-backed profiles\n\nProvider Profiles may be created or updated by the OAuth session workflow, but they do not store terminal-session transport details.\n\n### 2.4 What Settings owns\n\nSettings is the product surface for provider discovery and setup.\n\nSettings should expose first-party provider cards for:\n\n- Claude Code / Anthropic\n- Codex CLI / OpenAI\n- Gemini CLI / Google\n\nThose cards may be backed by disabled setup-stub Provider Profiles or by a separate provider-offerings catalog, but the user experience must be the same:\n\n1. The provider is visible before credentials exist.\n2. The user can connect OAuth or add an API key from Settings.\n3. Successful user-initiated setup makes the profile connected and enabled by default.\n4. Failed setup leaves the profile disabled with clear readiness diagnostics.\n\n---\n\n## 3. Goals\n\nThe Provider Profile system must support all of the following:\n\n1. **More than one profile per runtime**\n   - Example: multiple `claude_code` profiles with different providers, accounts, or policies.\n\n2. **More than one provider per runtime**\n   - Example: `claude_code` with Anthropic, MiniMax, or Z.AI.\n\n3. **More than one credential source class per provider**\n   - Example: Anthropic OAuth vs Anthropic API key.\n\n4. **More than one runtime materialization strategy**\n   - Example:\n     - OAuth home directory\n     - single API key environment variable\n     - multi-variable environment bundle\n     - generated config file\n     - composite file + env materialization\n\n5. **Profile-level concurrency and cooldown**\n   - Example: one MiniMax profile allows 4 parallel runs and a 10-minute cooldown after provider 429s.\n\n6. **Explicit or selector-based routing**\n   - A run may request an exact profile or select from compatible profiles using provider, tags, or materialization constraints.\n\n7. **No raw credentials in workflow payloads or persistent profile rows**\n   - Provider Profiles store references, templates, and volume metadata, not raw secret values.\n\n8. **Correct separation between profile semantics and secret semantics**\n   - Provider Profiles decide *which* secret role is needed.\n   - Secrets System decides *how* the secret is stored and resolved.\n\n9. **Correct separation between OAuth transport and OAuth-backed profile state**\n   - Provider Profiles store the resulting OAuth-backed profile metadata.\n   - OAuth session rows store terminal/session transport metadata.\n\n10. **Safe Settings-first activation**\n    - The big three first-party providers are discoverable in Settings.\n    - They are not launchable until first successful OAuth or API-key setup.\n    - A successful Settings setup action enables the profile by default.\n    - Manual user/admin disables are not silently undone by passive background validation.\n\n---\n\n## 4. Non-Goals\n\nThis design does **not** attempt to:\n\n- normalize every provider into an identical logical API,\n- store raw access tokens, API keys, or refresh tokens in the profile row,\n- replace runtime-specific strategy code entirely,\n- eliminate the need for per-runtime launch shaping such as Claude, Gemini, or Codex command construction,\n- define the browser-terminal OAuth UX,\n- redefine secret backends, encryption, or rotation semantics,\n- solve pricing or billing attribution by itself,\n- make an unconfigured first-party provider launchable just because its runtime is installed.\n\nProvider Profiles define **selection, activation, and materialization**, not a universal provider protocol and not a general-purpose secret-management system.\n\n---\n\n## 5. Key Concepts\n\n### 5.1 Runtime vs Provider\n\nA **runtime** is the executable MoonMind launches.\n\nExamples:\n\n- `gemini_cli`\n- `claude_code`\n- `codex_cli`\n\nA **provider** is the upstream service the runtime talks to.\n\nExamples:\n\n- `google`\n- `anthropic`\n- `openai`\n- `minimax`\n- `zai`\n\nA runtime is not the same thing as a provider.\n\nExamples:\n\n- `claude_code` + `anthropic`\n- `claude_code` + `minimax`\n- `claude_code` + `zai`\n- `codex_cli` + `openai`\n- `codex_cli` + `minimax`\n\nThis distinction is foundational.\n\n### 5.2 Credential Source Class\n\nA Provider Profile may source credentials from one of the following classes:\n\n- `oauth_volume`\n- `secret_ref`\n- `none`\n\nExamples:\n\n- Claude Code using Anthropic OAuth: `oauth_volume`\n- Claude Code using Anthropic API key: `secret_ref`\n- Claude Code using MiniMax env bundle: `secret_ref`\n- Codex CLI using MiniMax config + env key: `secret_ref`\n\nThe credential source class is intentionally high-level. It does **not** encode the concrete secret backend. For `secret_ref`, the actual backend may be `env`, `db_encrypted`, `exec`, or another supported backend as defined by [SecretsSystem.md](./SecretsSystem.md).\n\n### 5.3 Runtime Materialization Mode\n\nA Provider Profile may materialize provider access into the runtime in one or more ways:\n\n- `oauth_home`\n- `api_key_env`\n- `env_bundle`\n- `config_bundle`\n- `composite`\n\nThese modes describe **how** MoonMind prepares the runtime, not where the credential ultimately comes from.\n\n### 5.4 Secret Roles vs Secret References\n\nA Provider Profile may define one or more **secret roles** needed for launch, such as:\n\n- `anthropic_api_key`\n- `provider_api_key`\n- `openai_api_key`\n- `google_api_key`\n\nThe `secret_refs` map binds those roles to `SecretRef` values.\n\nExample:\n\n```yaml\nsecret_refs:\n  provider_api_key:\n    secret_id: sec_minimax_m27\n    backend_type: db_encrypted\n```\n\nThe exact persisted `SecretRef` schema is owned by the Secrets System. The examples in this document are illustrative.\n\n### 5.5 Default Model Ownership\n\nProvider Profiles are the correct place to express the default model intent for a runtime/provider combination.\n\nExamples:\n\n- Claude Code + MiniMax defaulting to `MiniMax-M2.7`\n- Codex CLI + MiniMax defaulting to profile `m27`\n- Gemini CLI + Google defaulting to a chosen Gemini model family\n\nHow that model intent gets translated into environment variables, config files, or CLI flags is runtime-specific launch shaping.\n\n### 5.6 Enabled vs Launch Ready\n\n`enabled` is the durable operator/user intent that a profile may be used for launches.\n\n`launch_ready` is the computed execution predicate.\n\nA profile is launch ready only when all of the following are true:\n\n```text\nlaunch_ready =\n  enabled == true\n  AND auth_state == connected\n  AND credential bindings are valid\n  AND OAuth volume metadata is present when OAuth is required\n  AND SecretRefs resolve to active secrets when SecretRefs are required\n  AND provider-specific validation does not block launch\n  AND workspace policy allows the profile\n```\n\nFor legacy or non-authenticated profiles where `auth_state` is absent, readiness may temporarily fall back to the existing credential-source checks during migration. New first-party profiles must use explicit activation state.\n\n### 5.7 Provider Profile\n\nA **Provider Profile** is a named, persistent record that binds:\n\n- runtime\n- provider\n- default model intent\n- credential source class\n- secret references and/or OAuth volume reference\n- runtime materialization strategy\n- concurrency and cooldown policy\n- routing metadata\n- runtime-specific launch behavior\n- activation state and launchability\n\ninto one reusable execution target.\n\n---\n\n## 6. Provider Profile Model\n\n### 6.1 Canonical Contract\n\n```yaml\nManagedAgentProviderProfile:\n  profile_id:                    str\n  runtime_id:                    str            # gemini_cli | claude_code | codex_cli | ...\n  provider_id:                   str            # google | anthropic | openai | minimax | zai | ...\n  provider_label:                str | null\n\n  credential_source:             str            # oauth_volume | secret_ref | none\n  runtime_materialization_mode:  str            # oauth_home | api_key_env | env_bundle | config_bundle | composite\n\n  account_label:                 str | null\n  enabled:                       bool\n  is_default:                    bool\n  tags:                          [str]\n  priority:                      int\n\n  # Settings / activation state\n  auth_state:                    str            # not_configured | oauth_pending | api_key_pending | connected | validation_failed | disconnected\n  disabled_reason:               str | null     # missing_credentials | auth_invalid | user_disabled | policy_disabled | disconnected | null\n  first_authenticated_at:        timestamp | null\n  last_validated_at:             timestamp | null\n  last_auth_method:              str | null     # oauth_volume | secret_ref | manual | null\n\n  # default runtime/provider intent\n  default_model:                 str | null\n  model_overrides:               dict[str, str] # runtime-specific named model defaults\n\n  # concurrency / rate limiting\n  max_parallel_runs:             int\n  cooldown_after_429_seconds:    int\n  rate_limit_policy:             str            # backoff | queue | fail_fast\n  max_lease_duration_seconds:    int\n\n  # credential source bindings\n  volume_ref:                    str | null\n  volume_mount_path:             str | null\n  secret_refs:                   dict[str, SecretRef]\n\n  # runtime materialization\n  clear_env_keys:                [str]\n  env_template:                  dict[str, object]\n  file_templates:                [RuntimeFileTemplate]\n  home_path_overrides:           dict[str, str]\n  command_behavior:              dict[str, object]\n\n  # ownership / audit-friendly metadata\n  owner_user_id:                 str | null\n  created_at:                    timestamp\n  updated_at:                    timestamp\n\nRuntimeFileTemplate:\n  path:                          str\n  format:                        str            # json | toml | yaml | text\n  merge_strategy:                str            # replace | deep_merge | append\n  content_template:              object\n  permissions:                   str | null\n```\n\n### 6.2 Important Semantics\n\n#### `profile_id`\n\nStable identifier referenced by workflows, APIs, and UI.\n\nExamples:\n\n- `gemini_google_oauth_nsticco`\n- `claude_anthropic_oauth_nsticco`\n- `claude_anthropic_api_team`\n- `claude_minimax_m27`\n- `claude_zai_default`\n- `codex_openai_oauth_team`\n- `codex_minimax_m27`\n- `claude_anthropic_default`\n- `codex_openai_default`\n- `gemini_google_default`\n\n#### `provider_id`\n\nRequired. This is what makes the model provider-aware rather than runtime-only.\n\n#### `credential_source`\n\nDefines the credential source class:\n\n- `oauth_volume`: credentials live in a mounted auth volume managed outside the profile row\n- `secret_ref`: credentials resolve from the Secrets System at launch time\n- `none`: no provider secret is required\n\nFirst-party setup stubs for Claude, Codex, and Gemini should use `credential_source = none` until the user successfully completes OAuth or adds a validated API key.\n\n#### `runtime_materialization_mode`\n\nDefines how the runtime is prepared:\n\n- `oauth_home`: mount auth volume and set runtime home variables\n- `api_key_env`: inject a small number of environment variables containing resolved secrets\n- `env_bundle`: inject a provider-specific environment block\n- `config_bundle`: generate provider-specific config file(s)\n- `composite`: combine multiple techniques\n\n#### `enabled`\n\n`enabled` means “eligible for launch selection if readiness checks pass.”\n\nFor first-party Claude, Codex, and Gemini setup stubs, the default must be:\n\n```yaml\nenabled: false\nauth_state: not_configured\ndisabled_reason: missing_credentials\n```\n\nWhen a user successfully completes OAuth or adds a validated API key in Settings, MoonMind should set:\n\n```yaml\nenabled: true\nauth_state: connected\ndisabled_reason: null\n```\n\nunless the profile is policy-blocked or the requested action is passive/background validation of a profile that was explicitly disabled by the user or an admin.\n\n#### `is_default`\n\n`is_default` marks the default profile for a runtime.\n\nA disabled or not-launch-ready setup stub must not become the runtime default. If no launch-ready profile exists for a runtime, default normalization should clear the runtime default instead of choosing a disabled setup stub.\n\n#### `auth_state`\n\n`auth_state` describes credential activation state:\n\n- `not_configured`: no successful OAuth or API key has been recorded\n- `oauth_pending`: an OAuth session is active but not finalized\n- `api_key_pending`: an API key setup flow is active but not validated\n- `connected`: credentials have been verified and the profile may be enabled\n- `validation_failed`: the last attempted credential validation failed\n- `disconnected`: credentials were explicitly disconnected or removed\n\n#### `disabled_reason`\n\n`disabled_reason` explains why `enabled` is false:\n\n- `missing_credentials`: default state before setup\n- `auth_invalid`: credentials failed validation or became invalid\n- `user_disabled`: user intentionally disabled a connected profile\n- `policy_disabled`: workspace/admin policy blocks launch\n- `disconnected`: user disconnected OAuth or removed credentials\n\nThis field protects user intent. Background repair, migration, or passive validation must not convert `user_disabled` to enabled. A direct user-initiated Settings action such as **Connect OAuth**, **Reconnect OAuth**, or **Add API key** may enable the profile by default because that action expresses setup intent.\n\n#### `secret_refs`\n\nMaps secret roles to `SecretRef` values.\n\nThe Provider Profile does not own the exact serialized `SecretRef` shape; it only stores and names the references it needs.\n\n#### `clear_env_keys`\n\nKeys that must be removed or blanked before launch to prevent accidental fallback to another provider or auth path.\n\nThis is required for correctness and security.\n\n#### `env_template`\n\nStructured environment declaration. Values are literals or secret placeholders, never raw secrets stored in the profile row.\n\nExample:\n\n```yaml\nenv_template:\n  ANTHROPIC_BASE_URL: \"https://api.minimax.io/anthropic\"\n  ANTHROPIC_AUTH_TOKEN:\n    from_secret_ref: provider_api_key\n  API_TIMEOUT_MS: \"3000000\"\n```\n\n`from_secret_ref` refers to a key in the profile’s `secret_refs` map.\n\n#### `file_templates`\n\nProvider-specific config files to generate before launch.\n\nExamples:\n\n- Codex TOML provider stanza\n- runtime-local JSON settings\n- generated config fragments under `.moonmind/`\n\n#### `command_behavior`\n\nRuntime strategy hints that are profile-dependent rather than global.\n\nExamples:\n\n- `suppress_cli_model_flag_when_env_model_present: true`\n- `default_codex_profile_name: \"m27\"`\n- `auth_actions: [\"connect_oauth\", \"add_api_key\"]`\n- `auth_readiness: {\"connected\": false, \"launch_ready\": false}`\n\n#### `max_lease_duration_seconds`\n\nMaximum time a slot lease is valid. The `ProviderProfileManager` may evict leases exceeding this bound as a safety net when a workflow terminates without explicitly releasing its slot.\n\n#### `priority`\n\nHigher values mean “prefer this profile first.”\n\nWhen multiple profiles match a selector and have available slots, the highest-priority compatible profile is selected. Ties are broken by most available slots.\n\nRecommended convention:\n\n- `100` = normal default\n- `110`–`130` = preferred alternatives\n- `50`–`90` = fallback or lower-priority profiles\n\n---\n\n## 7. Settings-First Activation Model\n\n### 7.1 Principle\n\nThe Settings page should make the big three providers easy to configure:\n\n- Claude Code / Anthropic\n- Codex CLI / OpenAI\n- Gemini CLI / Google\n\nThese providers should be visible even before credentials exist. They should not be launchable until credentials are verified.\n\nThe expected user experience is:\n\n| User action in Settings | Result |\n| --- | --- |\n| Fresh install / no credentials | Big-three provider cards are visible, disabled, and marked setup required. |\n| User completes OAuth | Profile becomes connected and enabled by default. |\n| User adds a valid API key | Profile becomes connected and enabled by default. |\n| User manually disables a connected profile | Profile stays disabled until the user explicitly enables it again. |\n| OAuth or API-key validation fails | Profile stays disabled with a clear readiness error. |\n| Workspace policy blocks the provider | Profile may be connected, but launch remains blocked by policy. |\n\n### 7.2 First-party setup stubs\n\nMoonMind may seed disabled setup-stub Provider Profiles for the big three. These stubs are Settings affordances, not launch targets.\n\nRecommended stubs:\n\n| Profile ID | Runtime | Provider | Initial state |\n| --- | --- | --- | --- |\n| `claude_anthropic_default` | `claude_code` | `anthropic` | disabled, setup required |\n| `codex_openai_default` | `codex_cli` | `openai` | disabled, setup required |\n| `gemini_google_default` | `gemini_cli` | `google` | disabled, setup required |\n\nA setup stub should look like:\n\n```yaml\nprofile_id: claude_anthropic_default\nruntime_id: claude_code\nprovider_id: anthropic\nprovider_label: Anthropic\n\ncredential_source: none\nruntime_materialization_mode: api_key_env\n\nenabled: false\nis_default: false\nauth_state: not_configured\ndisabled_reason: missing_credentials\ntags: [\"setup-required\", \"first-party\"]\npriority: 100\n\nsecret_refs: {}\nvolume_ref: null\nvolume_mount_path: null\n\ncommand_behavior:\n  supported_auth_methods: [\"oauth_volume\", \"secret_ref\"]\n  auth_actions:\n    - connect_oauth\n    - add_api_key\n  auth_status_label: \"Not connected\"\n  auth_readiness:\n    connected: false\n    launch_ready: false\n```\n\nA separate provider-offerings catalog may replace setup stubs later, but the launch semantics must remain the same: no successful credential setup means no launchable profile.\n\n### 7.3 User-initiated activation\n\nA user-initiated Settings activation is any of:\n\n- **Connect OAuth**\n- **Reconnect OAuth**\n- **Add API key**\n- **Rotate API key** where the new key validates successfully\n\nWhen one of these succeeds, MoonMind should enable the profile by default:\n\n```yaml\nauth_state: connected\ndisabled_reason: null\nenabled: true\nfirst_authenticated_at: <preserve existing value or set now>\nlast_validated_at: <now>\nlast_auth_method: oauth_volume | secret_ref\n```\n\nThis is intentionally different from passive validation. The user is actively configuring the provider so that it can be used.\n\n### 7.4 Passive validation and user-disabled guard\n\nPassive validation includes:\n\n- background credential checks\n- migrations\n- admin repair jobs\n- readiness refreshes\n- provider health probes\n\nPassive validation may update `auth_state`, `last_validated_at`, and diagnostics, but it must not silently re-enable a profile with:\n\n```yaml\ndisabled_reason: user_disabled\n```\n\nOnly an explicit user/admin enable action or a direct setup action in Settings may clear `user_disabled`.\n\n### 7.5 Manual disable and disconnect\n\nManual disable:\n\n```yaml\nenabled: false\ndisabled_reason: user_disabled\nauth_state: connected\n```\n\nDisconnect OAuth or remove credentials:\n\n```yaml\nenabled: false\ndisabled_reason: disconnected\nauth_state: disconnected\nvolume_ref: null      # for OAuth-backed profiles\nvolume_mount_path: null\nsecret_refs: {}       # for API-key-backed profiles, if credential removal is requested\n```\n\nValidation failure:\n\n```yaml\nenabled: false\ndisabled_reason: auth_invalid\nauth_state: validation_failed\n```\n\nPolicy block:\n\n```yaml\nenabled: false\ndisabled_reason: policy_disabled\n```\n\nor, if product needs to preserve the user’s enabled preference while showing a launch block:\n\n```yaml\nenabled: true\ndisabled_reason: null\n# computed launch_ready remains false because policy blocks launch\n```\n\nThe second pattern is preferable when the policy may be temporary, because it keeps user intent separate from policy enforcement.\n\n### 7.6 Settings UI states\n\nBefore setup:\n\n```text\nClaude Code\nStatus: Not connected\nEnabled: Off / unavailable until connected\nActions: Connect OAuth · Add API key\n```\n\nAfter successful OAuth:\n\n```text\nClaude Code\nStatus: OAuth connected\nEnabled: On\nActions: Disable · Reconnect OAuth · Add API key\n```\n\nAfter successful API key:\n\n```text\nClaude Code\nStatus: API key connected\nEnabled: On\nActions: Disable · Rotate key · Switch to OAuth\n```\n\nWhen manually disabled:\n\n```text\nClaude Code\nStatus: Connected, disabled by user\nEnabled: Off\nActions: Enable · Reconnect OAuth · Rotate key\n```\n\nWhen policy-blocked:\n\n```text\nClaude Code\nStatus: Connected, blocked by workspace policy\nEnabled: On or policy-locked Off, depending on policy model\nActions: View policy · Contact admin\n```\n\n### 7.7 API behavior\n\nProvider profile create/update endpoints must not trust client-provided `enabled=true` for first-party setup stubs unless credentials are verified.\n\nRecommended behavior:\n\n```python\ndef may_enable_profile(profile, *, action, readiness, policy) -> bool:\n    if policy.blocks_launch(profile):\n        return False\n    if action in {\"connect_oauth\", \"reconnect_oauth\", \"add_api_key\", \"rotate_api_key\"}:\n        return readiness.credentials_verified\n    if profile.disabled_reason == \"user_disabled\":\n        return False\n    return readiness.launch_ready\n```\n\nPatch requests that set `enabled=true` should fail with a validation error when readiness blockers remain:\n\n```text\nProvider profile cannot be enabled until OAuth or API-key credentials are verified.\n```\n\n---\n\n## 8. OAuth-Backed Provider Profiles\n\n### 8.1 OAuth-backed profiles are profile rows, not terminal-session rows\n\nFor OAuth-backed runtimes, the browser-interactive authentication flow is owned by [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md). The Provider Profile stores the resulting durable launch target.\n\nThe Provider Profile may contain:\n\n- `credential_source = oauth_volume`\n- `runtime_materialization_mode = oauth_home`\n- `volume_ref`\n- `volume_mount_path`\n- `account_label`\n- `auth_state = connected`\n- `enabled = true`\n- concurrency/cooldown policy\n- routing metadata\n\nThe Provider Profile must **not** contain:\n\n- PTY bridge identifiers\n- WebSocket URLs\n- terminal session ids\n- browser session status\n- OAuth access tokens\n- refresh tokens\n\nThose belong to the OAuth session subsystem or to provider-owned credential storage in the mounted auth volume.\n\n### 8.2 OAuth registration flow\n\nAt a high level, an OAuth-backed profile is created or updated through the following flow:\n\n1. Mission Control starts an OAuth session from Settings.\n2. MoonMind creates a short-lived auth container and mounts the target auth volume.\n3. Mission Control attaches through the MoonMind PTY/WebSocket bridge, where required.\n4. The runtime CLI drives the interactive login flow.\n5. MoonMind verifies that valid credential state now exists in the mounted auth volume.\n6. MoonMind creates or updates the Provider Profile.\n7. MoonMind marks the profile connected and enabled by default.\n8. MoonMind tears down the auth container and terminal session.\n\nThe resulting Provider Profile is transport-neutral and reusable long after the browser terminal session has ended.\n\n### 8.3 OAuth success behavior\n\nAfter successful OAuth verification:\n\n```python\nprofile.credential_source = ProviderCredentialSource.OAUTH_VOLUME\nprofile.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME\nprofile.volume_ref = session.volume_ref\nprofile.volume_mount_path = session.volume_mount_path\nprofile.auth_state = \"connected\"\nprofile.disabled_reason = None\nprofile.first_authenticated_at = profile.first_authenticated_at or now\nprofile.last_validated_at = now\nprofile.last_auth_method = \"oauth_volume\"\nprofile.enabled = True\n```\n\nThis auto-enable behavior is correct because OAuth finalization is a direct user-initiated setup action.\n\n### 8.4 OAuth failure behavior\n\nAfter failed OAuth verification:\n\n```python\nprofile.auth_state = \"validation_failed\"\nprofile.disabled_reason = \"auth_invalid\"\nprofile.enabled = False\n```\n\nThe profile should remain visible in Settings with diagnostics and a retry action.\n\n### 8.5 OAuth disconnect behavior\n\nWhen a user disconnects OAuth:\n\n```python\nprofile.auth_state = \"disconnected\"\nprofile.disabled_reason = \"disconnected\"\nprofile.enabled = False\nprofile.volume_ref = None\nprofile.volume_mount_path = None\n```\n\nIf the profile also has a separate API-key credential, product may offer “switch to API key” rather than fully disconnecting all credential methods.\n\n---\n\n## 9. API-Key-Backed Provider Profiles\n\n### 9.1 API-key setup flow\n\nAPI keys should be added through Settings or a dedicated provider profile credentials endpoint. The raw key must never be stored directly in the Provider Profile row.\n\nRecommended endpoint shape:\n\n```http\nPOST /provider-profiles/{profile_id}/credentials/api-key\n```\n\nRequest:\n\n```json\n{\n  \"api_key\": \"raw key supplied by user\",\n  \"account_label\": \"optional label\",\n  \"make_default\": false,\n  \"enable_after_validation\": true\n}\n```\n\nServer behavior:\n\n1. Check `provider_profiles.write` permission.\n2. Validate the API key using provider-specific validation.\n3. Store the key in the Secrets System.\n4. Write only a `SecretRef` into the Provider Profile.\n5. Populate `env_template`, `clear_env_keys`, and any runtime-specific command behavior.\n6. Mark the profile connected.\n7. Enable the profile by default because this is a direct user-initiated setup action.\n8. Return readiness metadata, never the raw key.\n\n### 9.2 API-key success behavior\n\nAfter successful API-key validation:\n\n```python\nprofile.credential_source = ProviderCredentialSource.SECRET_REF\nprofile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV\nprofile.secret_refs[role] = secret_ref\nprofile.auth_state = \"connected\"\nprofile.disabled_reason = None\nprofile.first_authenticated_at = profile.first_authenticated_at or now\nprofile.last_validated_at = now\nprofile.last_auth_method = \"secret_ref\"\nprofile.enabled = True\n```\n\n### 9.3 API-key failure behavior\n\nAfter failed API-key validation:\n\n```python\nprofile.auth_state = \"validation_failed\"\nprofile.disabled_reason = \"auth_invalid\"\nprofile.enabled = False\n```\n\nThe raw candidate key must not be persisted in workflow payloads, profile rows, diagnostics, audit rows, or artifacts.\n\n### 9.4 Recommended first-party API-key mappings\n\n```yaml\nclaude_code + anthropic:\n  secret_role: anthropic_api_key\n  env_template:\n    ANTHROPIC_API_KEY:\n      from_secret_ref: anthropic_api_key\n  clear_env_keys:\n    - ANTHROPIC_AUTH_TOKEN\n    - ANTHROPIC_BASE_URL\n\ncodex_cli + openai:\n  secret_role: openai_api_key\n  env_template:\n    OPENAI_API_KEY:\n      from_secret_ref: openai_api_key\n  clear_env_keys:\n    - MINIMAX_API_KEY\n\ngemini_cli + google:\n  secret_role: google_api_key\n  env_template:\n    GEMINI_API_KEY:\n      from_secret_ref: google_api_key\n  clear_env_keys:\n    - GOOGLE_APPLICATION_CREDENTIALS\n```\n\nRuntime-specific strategies may adjust these defaults when a CLI requires a different key name, config file, or home directory behavior.\n\n---\n\n## 10. Request and Selection Model\n\n### 10.1 Why runtime-only selection is no longer enough\n\nA request that says only:\n\n```json\n{ \"agent_id\": \"claude_code\" }\n```\n\nis ambiguous once multiple providers exist for `claude_code`.\n\nMoonMind must not route a generic Claude request to MiniMax, Z.AI, or Anthropic arbitrarily just because one profile currently has an open slot.\n\nSelection must become provider-aware and readiness-aware.\n\n### 10.2 Request Contract\n\n```yaml\nAgentExecutionRequest:\n  agent_id: str\n  execution_profile_ref: str | null\n  profile_selector:\n    provider_id: str | null\n    tags_any: [str]\n    tags_all: [str]\n    runtime_materialization_mode: str | null\n```\n\n### 10.3 Resolution Order\n\nProvider Profile resolution must follow this order:\n\n1. If `execution_profile_ref` is present, resolve that exact profile.\n2. Otherwise, filter by `runtime_id == agent_id`.\n3. If `profile_selector.provider_id` is present, filter by provider.\n4. Apply tag filters.\n5. Exclude disabled profiles.\n6. Exclude profiles that are not launch ready.\n7. Exclude profiles currently in cooldown.\n8. Exclude profiles with no available slots.\n9. Select the highest-priority compatible profile.\n10. Break ties using the profile with the most free slots.\n\nThis behavior is required for correctness.\n\n### 10.4 Default provider fallback\n\nWhen neither `execution_profile_ref` nor `profile_selector.provider_id` is specified, resolution happens across all launch-ready providers for the runtime.\n\nThis can route a generic request to an alternative provider if:\n\n- the alternative profile is compatible,\n- the alternative profile is launch ready,\n- the alternative has higher priority, or\n- the primary profile is unavailable due to cooldown or slot exhaustion.\n\nTo prevent unintentional cross-provider routing, one or more of the following should be true:\n\n1. **Explicit provider in request**\n   - Recommended default for Mission Control UI flows.\n\n2. **Default tag convention**\n   - Only the primary provider’s launch-ready profiles carry `default`, and the request includes `tags_all: [\"default\"]`.\n\n3. **Priority ordering**\n   - The intended primary provider has higher priority than alternatives.\n\nDisabled setup stubs must never participate in default provider fallback.\n\n---\n\n## 11. Provider Profile Manager Workflow\n\n### 11.1 Concept\n\nMoonMind should treat Provider Profile slot assignment as a first-class orchestration concern.\n\nThe singleton workflow responsible for profile-capacity coordination is:\n\n- `MoonMind.ProviderProfileManager`\n\n### 11.2 Scope\n\nEach runtime family gets one singleton manager workflow:\n\n- `provider-profile-manager:gemini_cli`\n- `provider-profile-manager:claude_code`\n- `provider-profile-manager:codex_cli`\n\nPer-runtime singletons are preferred over one global manager because they:\n\n- keep workflow history growth independent per runtime,\n- allow each manager to Continue-As-New independently,\n- simplify concurrent slot assignment within a runtime family.\n\n### 11.3 Responsibilities\n\nThe manager is the source of truth for:\n\n- active profile leases\n- per-profile slot capacity\n- cooldown windows\n- queued requests\n- assignment decisions\n\n### 11.4 Manager sync payload\n\nThe profile manager should receive only profiles that are both enabled and launch ready.\n\n```python\nprofiles_payload = [\n    profile\n    for profile in provider_profiles\n    if profile.enabled and provider_profile_launch_ready(profile)\n]\n```\n\nThis prevents disabled setup stubs from becoming runnable simply because they exist in the database.\n\n### 11.5 Signals\n\n| Signal | Direction | Payload |\n| --- | --- | --- |\n| `request_slot` | AgentRun → Manager | `{requester_workflow_id, runtime_id, priority?, requested_profile_id?, provider_id?, tags_any?, tags_all?, runtime_materialization_mode?}` |\n| `release_slot` | AgentRun → Manager | `{requester_workflow_id, profile_id}` |\n| `report_cooldown` | AgentRun → Manager | `{profile_id, cooldown_seconds}` |\n| `sync_profiles` | System → Manager | `{profiles: [...]}` |\n| `slot_assigned` | Manager → AgentRun | `{profile_id}` |\n| `shutdown` | System → Manager | none |\n\n### 11.6 Waiting semantics\n\nIf no compatible launch-ready profile is available, the run waits durably in `awaiting_slot` or fails fast according to the request policy.\n\nThe UI and parent workflow should clearly indicate:\n\n- runtime family\n- requested provider, if any\n- requested exact profile, if any\n- whether the missing condition is capacity, cooldown, policy, or provider setup\n\nExample summary:\n\n> Waiting for provider profile slot on `claude_code` (`provider=minimax`)\n\nExample setup-required summary:\n\n> Claude Code is not connected. Connect OAuth or add an API key in Settings.\n\n### 11.7 Cooldown behavior\n\nOn provider 429 or equivalent quota exhaustion:\n\n1. AgentRun signals `report_cooldown(profile_id, duration)`.\n2. AgentRun releases its current slot.\n3. AgentRun re-requests a slot using the same selector or exact profile intent.\n\nIf another compatible launch-ready profile exists, the run may continue on a different profile. Otherwise, it waits.\n\nClaude Code and Codex CLI rate limits must be reported against the selected provider profile whenever the failure can be attributed to that profile. The `AgentRun` should release the current slot, report cooldown, and retry through the same profile selector unless the request required an exact profile. If no compatible profile is available, the run waits in `awaiting_slot`.\n\nThe slot-release + cooldown path is gated by provider error classification. Runtime strategies must classify provider rate-limit signals as `failure_class=\"integration_error\"` with `provider_error_code=\"429\"`, or an equivalent retry recommendation that asks the orchestration layer to wait for provider cooldown instead of retrying immediately.\n\n---\n\n## 12. Runtime Materialization Pipeline\n\nThe launcher must build the final runtime environment in a predictable, layered way.\n\n### 12.1 Required order\n\n1. Start from a sane base environment.\n2. Apply runtime-global defaults.\n3. Load the selected Provider Profile.\n4. Re-check launch readiness at the launch boundary.\n5. Remove or blank `clear_env_keys`.\n6. Resolve `secret_refs` into ephemeral launch-only values where needed.\n7. Materialize `file_templates`.\n8. Apply `env_template`.\n9. Apply `home_path_overrides`.\n10. Apply runtime strategy shaping.\n11. Build command.\n12. Launch subprocess.\n\n### 12.2 Critical rule: layer, do not replace\n\nProvider Profile materialization must **layer onto** a base environment.\n\nIt must **not** replace the subprocess environment wholesale with only the profile’s env template.\n\nOtherwise, essential variables such as `PATH`, `HOME`, and runtime process context may be lost.\n\n### 12.3 Runtime strategy integration\n\nProvider Profiles do not eliminate runtime strategies. Instead:\n\n- Provider Profiles define the data needed to prepare environment variables and files.\n- Runtime strategies interpret `command_behavior`, `default_model`, and runtime-specific launch rules.\n\nExamples:\n\n- Claude strategy may suppress `--model` when model env variables are already present.\n- Codex strategy may select a generated named profile from config.\n- Gemini strategy may clear conflicting keys in OAuth mode.\n- A proxy-first runtime strategy may shape provider URLs toward MoonMind-owned proxy endpoints instead of direct upstream credentials.\n\n---\n\n## 13. Persistence Model\n\n### 13.1 Table\n\nThe provider-aware registry uses `managed_agent_provider_profiles`.\n\n```sql\nCREATE TABLE managed_agent_provider_profiles (\n    profile_id                        TEXT PRIMARY KEY,\n    runtime_id                        TEXT NOT NULL,\n    provider_id                       TEXT NOT NULL,\n    provider_label                    TEXT,\n\n    credential_source                 TEXT NOT NULL,   -- oauth_volume | secret_ref | none\n    runtime_materialization_mode      TEXT NOT NULL,   -- oauth_home | api_key_env | env_bundle | config_bundle | composite\n\n    account_label                     TEXT,\n    enabled                           BOOLEAN NOT NULL DEFAULT FALSE,\n    is_default                        BOOLEAN NOT NULL DEFAULT FALSE,\n    tags                              JSONB NOT NULL DEFAULT '[]'::jsonb,\n    priority                          INTEGER NOT NULL DEFAULT 100,\n\n    auth_state                        TEXT NOT NULL DEFAULT 'not_configured',\n    disabled_reason                   TEXT,\n    first_authenticated_at            TIMESTAMPTZ,\n    last_validated_at                 TIMESTAMPTZ,\n    last_auth_method                  TEXT,\n\n    default_model                     TEXT,\n    model_overrides                   JSONB NOT NULL DEFAULT '{}'::jsonb,\n\n    volume_ref                        TEXT,\n    volume_mount_path                 TEXT,\n    secret_refs                       JSONB NOT NULL DEFAULT '{}'::jsonb,\n\n    clear_env_keys                    JSONB NOT NULL DEFAULT '[]'::jsonb,\n    env_template                      JSONB NOT NULL DEFAULT '{}'::jsonb,\n    file_templates                    JSONB NOT NULL DEFAULT '[]'::jsonb,\n    home_path_overrides               JSONB NOT NULL DEFAULT '{}'::jsonb,\n    command_behavior                  JSONB NOT NULL DEFAULT '{}'::jsonb,\n\n    max_parallel_runs                 INTEGER NOT NULL DEFAULT 1,\n    cooldown_after_429_seconds        INTEGER NOT NULL DEFAULT 300,\n    rate_limit_policy                 TEXT NOT NULL DEFAULT 'backoff',\n    max_lease_duration_seconds        INTEGER NOT NULL DEFAULT 7200,\n\n    owner_user_id                     UUID NULL,\n    created_at                        TIMESTAMPTZ NOT NULL DEFAULT now(),\n    updated_at                        TIMESTAMPTZ NOT NULL DEFAULT now(),\n\n    CONSTRAINT ck_provider_profiles_auth_state CHECK (\n        auth_state IN (\n            'not_configured',\n            'oauth_pending',\n            'api_key_pending',\n            'connected',\n            'validation_failed',\n            'disconnected'\n        )\n    ),\n    CONSTRAINT ck_provider_profiles_disabled_reason CHECK (\n        disabled_reason IS NULL OR disabled_reason IN (\n            'missing_credentials',\n            'auth_invalid',\n            'user_disabled',\n            'policy_disabled',\n            'disconnected'\n        )\n    )\n);\n\nCREATE INDEX ix_provider_profiles_runtime\n    ON managed_agent_provider_profiles(runtime_id);\n\nCREATE INDEX ix_provider_profiles_runtime_provider\n    ON managed_agent_provider_profiles(runtime_id, provider_id);\n\nCREATE INDEX ix_provider_profiles_enabled\n    ON managed_agent_provider_profiles(enabled);\n\nCREATE INDEX ix_provider_profiles_auth_state\n    ON managed_agent_provider_profiles(auth_state);\n```\n\n### 13.2 Persistence rules\n\nSecrets are never stored directly in:\n\n- `secret_refs`\n- `env_template`\n- `file_templates`\n- `command_behavior`\n\nAny sensitive value must be represented indirectly by a `SecretRef` or by an OAuth volume reference.\n\n### 13.3 Default values\n\nNew unconfigured first-party setup stubs should default to:\n\n```yaml\nenabled: false\nauth_state: not_configured\ndisabled_reason: missing_credentials\ncredential_source: none\n```\n\nNew custom profiles should also be created disabled unless the create request is part of a verified setup flow. This makes the safe state the default across all provider profile creation paths.\n\n---\n\n## 14. Security Requirements\n\nThis section states Provider-Profile-specific security rules. Secret encryption, backend behavior, and audit semantics are owned by [SecretsSystem.md](./SecretsSystem.md).\n\n### 14.1 No raw secrets in workflow payloads\n\nWorkflows must reference only:\n\n- `profile_id`\n- optional provider or tag selectors\n\nThey must never carry:\n\n- API keys\n- refresh tokens\n- OAuth access tokens\n- config blobs containing raw secrets\n\n### 14.2 No raw secrets in profile rows\n\nProvider Profiles may store:\n\n- `SecretRef` values\n- file templates\n- environment templates\n- OAuth volume references\n- redacted provider readiness metadata\n\nThey must not store raw secret values.\n\n### 14.3 Launch-only secret resolution\n\n`SecretRef` values are resolved only at controlled execution boundaries and only for the minimum duration needed to launch or proxy the runtime correctly.\n\n### 14.4 Redaction and artifact hygiene\n\nLogs, artifacts, run metadata, diagnostics, and audit rows must redact:\n\n- secret-like strings\n- resolved environment values\n- generated config files containing provider credentials\n- terminal output that may contain OAuth codes or credential paths\n\nGenerated config files that contain secrets are sensitive runtime files, not durable artifacts by default.\n\n### 14.5 Volume isolation\n\nOAuth volumes remain dedicated named volumes with controlled ownership and permissions.\n\nOne runtime should not read another runtime’s credential state unless that sharing is explicitly designed and documented.\n\n### 14.6 Clear competing variables\n\nBefore launch, conflicting variables must be cleared to avoid accidental provider fallback.\n\nExamples:\n\n- Anthropic OAuth profile clears competing Anthropic API-key env vars where needed.\n- MiniMax Claude profile clears `ANTHROPIC_API_KEY`.\n- Codex MiniMax profile clears `OPENAI_API_KEY`.\n- Gemini API-key profiles clear conflicting Google credential env vars when required by runtime behavior.\n\n### 14.7 Proxy-first preference\n\nWhen MoonMind owns the outbound provider call path, proxy-first execution is preferred.\n\nProvider Profiles may still describe escape-hatch materialization for third-party runtimes that genuinely require direct credentials, but the system should prefer proxy-first designs whenever the runtime allows it.\n\n### 14.8 No accidental auto-enable\n\nA profile may be auto-enabled only after successful user-initiated credential setup.\n\nThese events may auto-enable:\n\n- OAuth finalize from Settings\n- API-key add from Settings\n- API-key rotation from Settings, after successful validation\n\nThese events must not auto-enable a user-disabled profile:\n\n- background validation\n- migration\n- readiness diagnostics\n- provider health checks\n- manager sync\n\n---\n\n## 15. Examples\n\n> [!NOTE]\n> The `SecretRef` objects below are illustrative. The exact serialized shape is owned by [SecretsSystem.md](./SecretsSystem.md).\n\n### 15.1 Claude Code + Anthropic setup stub\n\n```yaml\nprofile_id: claude_anthropic_default\nruntime_id: claude_code\nprovider_id: anthropic\nprovider_label: \"Anthropic\"\n\ncredential_source: none\nruntime_materialization_mode: api_key_env\n\naccount_label: null\nenabled: false\nis_default: false\nauth_state: not_configured\ndisabled_reason: missing_credentials\ntags: [\"setup-required\", \"first-party\"]\npriority: 100\n\nsecret_refs: {}\nvolume_ref: null\nvolume_mount_path: null\n\nclear_env_keys:\n  - ANTHROPIC_API_KEY\n  - ANTHROPIC_AUTH_TOKEN\n  - ANTHROPIC_BASE_URL\n\nenv_template: {}\nfile_templates: []\nhome_path_overrides: {}\n\ncommand_behavior:\n  supported_auth_methods: [\"oauth_volume\", \"secret_ref\"]\n  auth_actions: [\"connect_oauth\", \"add_api_key\"]\n  auth_status_label: \"Not connected\"\n  auth_readiness:\n    connected: false\n    launch_ready: false\n```\n\n### 15.2 Claude Code + Anthropic OAuth after setup\n\nThis profile is created or updated by the OAuth session workflow after terminal-based login verification succeeds.\n\n```yaml\nprofile_id: claude_anthropic_default\nruntime_id: claude_code\nprovider_id: anthropic\nprovider_label: \"Anthropic\"\n\ncredential_source: oauth_volume\nruntime_materialization_mode: oauth_home\n\naccount_label: \"nsticco@gmail.com\"\nenabled: true\nis_default: true\nauth_state: connected\ndisabled_reason: null\nlast_auth_method: oauth_volume\ntags: [\"default\", \"oauth\", \"first-party\"]\npriority: 100\n\nvolume_ref: claude_auth_vol_nsticco\nvolume_mount_path: /home/app/.claude\nsecret_refs: {}\n\nclear_env_keys:\n  - ANTHROPIC_API_KEY\n  - ANTHROPIC_AUTH_TOKEN\n\nenv_template: {}\nfile_templates: []\nhome_path_overrides:\n  CLAUDE_HOME: /home/app/.claude\n\ncommand_behavior:\n  auth_status_label: \"Claude OAuth ready\"\n  auth_readiness:\n    connected: true\n    launch_ready: true\n```\n\n### 15.3 Claude Code + Anthropic API key after setup\n\n```yaml\nprofile_id: claude_anthropic_default\nruntime_id: claude_code\nprovider_id: anthropic\nprovider_label: \"Anthropic\"\n\ncredential_source: secret_ref\nruntime_materialization_mode: api_key_env\n\naccount_label: \"team-default\"\nenabled: true\nis_default: true\nauth_state: connected\ndisabled_reason: null\nlast_auth_method: secret_ref\ntags: [\"default\", \"api-key\", \"first-party\"]\npriority: 100\n\nsecret_refs:\n  anthropic_api_key:\n    secret_id: sec_anthropic_team_default\n    backend_type: db_encrypted\n\nclear_env_keys:\n  - ANTHROPIC_AUTH_TOKEN\n  - ANTHROPIC_BASE_URL\n\nenv_template:\n  ANTHROPIC_API_KEY:\n    from_secret_ref: anthropic_api_key\n\nfile_templates: []\nhome_path_overrides: {}\n\ncommand_behavior:\n  auth_status_label: \"Anthropic API key ready\"\n  auth_readiness:\n    connected: true\n    launch_ready: true\n```\n\n### 15.4 Gemini CLI + Google OAuth after setup\n\n```yaml\nprofile_id: gemini_google_default\nruntime_id: gemini_cli\nprovider_id: google\nprovider_label: \"Google\"\n\ncredential_source: oauth_volume\nruntime_materialization_mode: oauth_home\n\naccount_label: \"nsticco@gmail.com (Ultra)\"\nenabled: true\nis_default: true\nauth_state: connected\ndisabled_reason: null\nlast_auth_method: oauth_volume\ntags: [\"default\", \"oauth\", \"first-party\"]\npriority: 100\n\nvolume_ref: gemini_auth_vol_nsticco\nvolume_mount_path: /var/lib/gemini-auth\nsecret_refs: {}\n\nclear_env_keys:\n  - GEMINI_API_KEY\n  - GOOGLE_API_KEY\n\nenv_template: {}\nfile_templates: []\nhome_path_overrides:\n  GEMINI_HOME: /var/lib/gemini-auth\n  GEMINI_CLI_HOME: /var/lib/gemini-auth\n\ncommand_behavior:\n  auth_status_label: \"Gemini OAuth ready\"\n  auth_readiness:\n    connected: true\n    launch_ready: true\n```\n\n### 15.5 Codex CLI + OpenAI OAuth after setup\n\n```yaml\nprofile_id: codex_openai_default\nruntime_id: codex_cli\nprovider_id: openai\nprovider_label: \"OpenAI\"\n\ncredential_source: oauth_volume\nruntime_materialization_mode: oauth_home\n\naccount_label: \"team-oauth\"\nenabled: true\nis_default: true\nauth_state: connected\ndisabled_reason: null\nlast_auth_method: oauth_volume\ntags: [\"default\", \"oauth\", \"first-party\"]\npriority: 100\n\nvolume_ref: codex_auth_vol_team\nvolume_mount_path: /home/app/.codex\nsecret_refs: {}\n\nclear_env_keys:\n  - OPENAI_API_KEY\n  - MINIMAX_API_KEY\n\nenv_template: {}\nfile_templates: []\nhome_path_overrides:\n  CODEX_HOME: /home/app/.codex\n\ncommand_behavior:\n  auth_status_label: \"Codex OAuth ready\"\n  auth_readiness:\n    connected: true\n    launch_ready: true\n```\n\n### 15.6 Claude Code + MiniMax\n\nMiniMax exposes Anthropic-compatible configuration for Claude Code through environment variables. This is a provider-specific `env_bundle`, not merely “generic API key mode.”\n\n```yaml\nprofile_id: claude_minimax_m27\nruntime_id: claude_code\nprovider_id: minimax\nprovider_label: \"MiniMax\"\n\ncredential_source: secret_ref\nruntime_materialization_mode: env_bundle\n\naccount_label: \"MiniMax M2.7\"\nenabled: true\nauth_state: connected\ndisabled_reason: null\ntags: [\"minimax\", \"m27\"]\npriority: 120\n\ndefault_model: \"MiniMax-M2.7\"\nmodel_overrides:\n  small_fast: \"MiniMax-M2.7\"\n  sonnet_equivalent: \"MiniMax-M2.7\"\n  opus_equivalent: \"MiniMax-M2.7\"\n  haiku_equivalent: \"MiniMax-M2.7\"\n\nmax_parallel_runs: 4\ncooldown_after_429_seconds: 600\nrate_limit_policy: backoff\nmax_lease_duration_seconds: 7200\n\nsecret_refs:\n  provider_api_key:\n    secret_id: sec_minimax_m27\n    backend_type: db_encrypted\n\nclear_env_keys:\n  - ANTHROPIC_API_KEY\n\nenv_template:\n  ANTHROPIC_BASE_URL: \"https://api.minimax.io/anthropic\"\n  ANTHROPIC_AUTH_TOKEN:\n    from_secret_ref: provider_api_key\n  API_TIMEOUT_MS: \"3000000\"\n  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: \"1\"\n  ANTHROPIC_MODEL: \"MiniMax-M2.7\"\n  ANTHROPIC_SMALL_FAST_MODEL: \"MiniMax-M2.7\"\n  ANTHROPIC_DEFAULT_SONNET_MODEL: \"MiniMax-M2.7\"\n  ANTHROPIC_DEFAULT_OPUS_MODEL: \"MiniMax-M2.7\"\n  ANTHROPIC_DEFAULT_HAIKU_MODEL: \"MiniMax-M2.7\"\n\nfile_templates: []\nhome_path_overrides: {}\n\ncommand_behavior:\n  suppress_cli_model_flag_when_env_model_present: true\n```\n\n### 15.7 Codex CLI + MiniMax\n\nCodex CLI uses a provider config entry plus a profile entry, backed by an environment variable containing the provider key. This is a `composite` profile.\n\n```yaml\nprofile_id: codex_minimax_m27\nruntime_id: codex_cli\nprovider_id: minimax\nprovider_label: \"MiniMax\"\n\ncredential_source: secret_ref\nruntime_materialization_mode: composite\n\naccount_label: \"MiniMax M2.7\"\nenabled: true\nauth_state: connected\ndisabled_reason: null\ntags: [\"minimax\", \"m27\"]\npriority: 120\n\ndefault_model: \"codex-MiniMax-M2.7\"\nmodel_overrides:\n  codex_profile_name: \"m27\"\n\nmax_parallel_runs: 4\ncooldown_after_429_seconds: 600\nrate_limit_policy: backoff\nmax_lease_duration_seconds: 7200\n\nsecret_refs:\n  provider_api_key:\n    secret_id: sec_minimax_m27\n    backend_type: db_encrypted\n\nclear_env_keys:\n  - OPENAI_API_KEY\n\nenv_template:\n  MINIMAX_API_KEY:\n    from_secret_ref: provider_api_key\n\nfile_templates:\n  - path: \"~/.codex/config.toml\"\n    format: toml\n    merge_strategy: deep_merge\n    permissions: \"0600\"\n    content_template:\n      model_providers:\n        minimax:\n          name: \"MiniMax Chat Completions API\"\n          base_url: \"https://api.minimax.io/v1\"\n          env_key: \"MINIMAX_API_KEY\"\n          wire_api: \"chat\"\n          requires_openai_auth: false\n          request_max_retries: 4\n          stream_max_retries: 10\n          stream_idle_timeout_ms: 300000\n      profiles:\n        m27:\n          model: \"codex-MiniMax-M2.7\"\n          model_provider: \"minimax\"\n\nhome_path_overrides: {}\n\ncommand_behavior:\n  default_codex_profile_name: \"m27\"\n```\n\n---\n\n## 16. Migration Plan\n\n1. Add activation columns:\n   - `auth_state`\n   - `disabled_reason`\n   - `first_authenticated_at`\n   - `last_validated_at`\n   - `last_auth_method`\n\n2. Change model/API defaults:\n   - `enabled` defaults to `false` for new profiles unless creation occurs inside a verified setup flow.\n   - first-party setup stubs default to `auth_state=not_configured` and `disabled_reason=missing_credentials`.\n\n3. Seed or backfill setup stubs for:\n   - `claude_anthropic_default`\n   - `codex_openai_default`\n   - `gemini_google_default`\n\n4. Backfill existing launch-ready OAuth profiles:\n   - `auth_state=connected`\n   - `last_auth_method=oauth_volume`\n   - `enabled=true` if they are currently enabled and not policy-blocked\n\n5. Backfill existing launch-ready SecretRef profiles:\n   - `auth_state=connected`\n   - `last_auth_method=secret_ref`\n   - `enabled=true` if they are currently enabled and not policy-blocked\n\n6. Disable profiles with missing credentials:\n   - `enabled=false`\n   - `auth_state=not_configured` or `validation_failed`\n   - `disabled_reason=missing_credentials` or `auth_invalid`\n\n7. Preserve explicit user/admin disables:\n   - `enabled=false`\n   - `disabled_reason=user_disabled`\n\n8. Update default normalization:\n   - choose only launch-ready profiles\n   - clear default when no launch-ready profile exists\n\n9. Update ProviderProfileManager sync:\n   - sync only enabled and launch-ready profiles\n\n10. Update Settings UI:\n    - show first-party setup cards\n    - expose Connect OAuth and Add API key actions\n    - auto-enable after successful user-initiated setup\n\n---\n\n## 17. Acceptance Tests\n\nThe implementation should include tests for the following behavior:\n\n```text\nNew Claude/Codex/Gemini provider setup stubs are disabled by default.\nProviderProfileCreate does not default first-party managed providers to enabled.\nPATCH enabled=true fails when OAuth/API-key readiness is missing.\nSettings Connect OAuth finalizes only after volume verification succeeds.\nSuccessful OAuth setup sets auth_state=connected and enabled=true.\nSuccessful API-key setup stores a SecretRef and sets enabled=true.\nFailed OAuth setup leaves the profile disabled with validation diagnostics.\nFailed API-key setup does not persist the raw key and leaves the profile disabled.\nManual user disable is not overwritten by background validation.\nDirect user-initiated reconnect or add-key may clear user_disabled and enable the profile.\nProviderProfileManager sync excludes disabled and not-ready profiles.\nDefault provider selection does not choose disabled setup stubs.\nworkflow.default_provider_profile_ref rejects disabled or not-ready profiles.\nSettings provider cards show setup actions for Claude, Codex, and Gemini.\n```\n\n---\n\n## 18. Terminology\n\nThe older **Auth Profile** terminology is deprecated in favor of **Provider Profile**.\n\nExpected names across docs and code:\n\n- `ManagedAgentAuthProfile` → `ManagedAgentProviderProfile`\n- `MoonMind.AuthProfileManager` → `MoonMind.ProviderProfileManager`\n- `managed_agent_auth_profiles` → `managed_agent_provider_profiles`\n\nThe new terminology is required because the object now represents more than authentication alone.\n\n---\n\n## 19. Summary\n\nProvider Profiles replace the narrower Auth Profile concept with a provider-aware execution contract.\n\nA Provider Profile answers all of the following for a managed runtime launch:\n\n- which runtime is being launched,\n- which upstream provider it should talk to,\n- which default model intent applies,\n- where credentials come from,\n- how provider-specific configuration is materialized,\n- which concurrency and cooldown policy applies,\n- how compatible profiles are selected when no exact profile is specified,\n- whether Settings has activated the profile for launch.\n\nThis model is required for MoonMind to correctly support modern runtime/provider combinations such as:\n\n- Claude Code with Anthropic OAuth\n- Claude Code with Anthropic API key\n- Claude Code with MiniMax\n- Claude Code with Z.AI\n- Codex CLI with OpenAI\n- Codex CLI with MiniMax\n- Gemini CLI with Google OAuth\n- Gemini CLI with Google API key\n\nThe Settings activation rule is intentionally simple:\n\n> Big-three provider profiles are visible but not launchable until first OAuth or API-key setup. Successful user-initiated setup enables the profile by default. Manual disables and policy blocks are respected.\n\nThe result is a system that is explicit, secure by default, easy to configure, and aligned with how real managed runtimes work in practice.\n\nMost importantly, it cleanly fits alongside the newer MoonMind architecture:\n\n- [SecretsSystem.md](./SecretsSystem.md) owns secret references, storage, and resolution\n- [OAuthTerminal.md](../ManagedAgents/OAuthTerminal.md) owns interactive OAuth session transport\n- `ProviderProfiles.md` owns the durable runtime/provider launch contract and Settings activation semantics\n"
+  },
+  "sourceDocumentClass": "canonical-declarative",
+  "storyOutputMode": "jira",
+  "extractedAt": "2026-06-23T03:51:11Z",
+  "designSummary": "Provider Profiles define MoonMind's provider-aware managed-runtime execution contract. The design separates provider-profile semantics from secret storage, OAuth terminal transport, Settings setup UX, and runtime strategy code while specifying activation state, credential source classes, materialization modes, request routing, capacity coordination, launch-time security, persistence, migration, and acceptance tests. The operational outcome is that Claude, Codex, Gemini, and alternative provider combinations are visible and configurable in Settings but only launch through explicit, verified, secure, provider-aware profiles.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Provider Profiles are durable execution contracts",
+      "type": "requirement",
+      "source_section": "1. Summary; 19. Summary",
+      "explanation": "A Provider Profile answers runtime, upstream provider, credential source, materialization, concurrency/cooldown, routing, and launchability for managed runtime launches."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "System boundaries stay separated",
+      "type": "constraint",
+      "source_section": "2. Document Boundaries",
+      "explanation": "Provider Profiles own launch-target semantics while Secrets owns SecretRef behavior, OAuth Terminal owns browser-terminal transport, and Settings owns discovery/setup UX."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Support many runtimes, providers, credential classes, and materialization modes",
+      "type": "requirement",
+      "source_section": "3. Goals; 5. Key Concepts",
+      "explanation": "The model must support multiple profiles per runtime, multiple providers per runtime, OAuth/API-key/no-secret credential classes, runtime-specific materialization modes, default model intent, routing metadata, and activation state."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Explicit non-goals preserve scope",
+      "type": "non-goal",
+      "source_section": "4. Non-Goals",
+      "explanation": "Provider Profiles do not normalize every provider into a universal API, store raw credentials, replace runtime strategies, define OAuth terminal UX, redefine secret backends, solve billing, or make unconfigured providers launchable."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Enabled and launch_ready are distinct",
+      "type": "state-model",
+      "source_section": "5.6 Enabled vs Launch Ready",
+      "explanation": "enabled records operator/user intent, while launch_ready is computed from enabled, auth_state, credential validity, OAuth/SecretRef readiness, provider validation, and workspace policy."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Canonical profile and file-template contracts are explicit",
+      "type": "state-model",
+      "source_section": "6. Provider Profile Model",
+      "explanation": "ManagedAgentProviderProfile and RuntimeFileTemplate define persistent fields for runtime/provider identity, credentials, materialization, activation, routing, concurrency, audit metadata, and generated files."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "First-party Settings activation is safe by default",
+      "type": "requirement",
+      "source_section": "7. Settings-First Activation Model",
+      "explanation": "Claude, Codex, and Gemini provider cards are visible before setup but disabled/not launchable until successful OAuth or API-key setup, which enables the profile by default unless policy blocks it."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "User-disabled and policy states are respected",
+      "type": "state-model",
+      "source_section": "7.3-7.7 User-initiated activation, passive validation, manual disable, API behavior",
+      "explanation": "Passive validation may update diagnostics but must not re-enable user-disabled profiles; direct setup or enable actions may clear user_disabled; API writes must reject enabled=true when readiness blockers remain."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "OAuth-backed profiles are reusable profile rows",
+      "type": "integration",
+      "source_section": "8. OAuth-Backed Provider Profiles",
+      "explanation": "OAuth terminal transport creates or updates a provider profile with OAuth volume metadata and connected/enabled state after verification, without storing terminal-session fields or OAuth tokens in the profile."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "API-key setup stores SecretRefs only",
+      "type": "security",
+      "source_section": "9. API-Key-Backed Provider Profiles",
+      "explanation": "API keys are accepted through Settings or credential endpoints, validated, stored in the Secrets System, represented in the profile by SecretRefs/templates, and never persisted raw in profile rows, payloads, diagnostics, audit rows, or artifacts."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Requests resolve profiles provider-aware",
+      "type": "requirement",
+      "source_section": "10. Request and Selection Model",
+      "explanation": "Execution requests support exact profile refs and selectors; resolution filters by runtime, provider, tags, enabled state, launch readiness, cooldown, and available slots, then applies priority and slot tie-breaks."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Default provider fallback avoids accidental disabled or arbitrary routing",
+      "type": "constraint",
+      "source_section": "10.4 Default provider fallback",
+      "explanation": "Generic runtime requests may select compatible launch-ready alternatives by priority/capacity, but disabled setup stubs never participate and UI flows should prefer explicit provider or default-tag constraints."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "ProviderProfileManager coordinates capacity",
+      "type": "integration",
+      "source_section": "11. Provider Profile Manager Workflow",
+      "explanation": "Per-runtime singleton manager workflows own active leases, slot capacity, cooldowns, queued requests, assignment decisions, sync only enabled launch-ready profiles, and expose request/release/cooldown/sync signals."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Waiting and cooldown behavior are durable and observable",
+      "type": "observability",
+      "source_section": "11.6-11.7 Waiting semantics, Cooldown behavior",
+      "explanation": "Runs wait durably or fail fast when no compatible profile is available, surface missing setup/capacity/cooldown/policy context, and report provider 429 cooldowns against the selected profile before re-requesting slots."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Runtime materialization is layered and launch-boundary checked",
+      "type": "requirement",
+      "source_section": "12. Runtime Materialization Pipeline",
+      "explanation": "Launch builds a predictable layered environment from base defaults through selected profile, rechecks readiness, clears competing env vars, resolves secrets only at launch, materializes files, applies templates and strategy shaping, then launches."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Persistence uses provider-aware table and safe defaults",
+      "type": "state-model",
+      "source_section": "13. Persistence Model",
+      "explanation": "Provider profiles persist in managed_agent_provider_profiles with activation columns, indexes, constrained enum values, no raw secrets, and disabled/not_configured/missing_credentials defaults for unconfigured setup stubs and new custom profiles outside verified setup flows."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Provider-profile security rules prevent credential leakage",
+      "type": "security",
+      "source_section": "14. Security Requirements",
+      "explanation": "Workflows carry only profile IDs/selectors, profiles store only refs/templates/volume metadata, secrets resolve only at controlled boundaries, logs/artifacts redact sensitive data, OAuth volumes are isolated, competing variables are cleared, proxy-first is preferred, and only user-initiated setup auto-enables."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Runtime/provider examples define concrete first-party and MiniMax mappings",
+      "type": "artifact",
+      "source_section": "15. Examples",
+      "explanation": "Examples specify expected stub, OAuth, API-key, Gemini, Codex, Claude, and MiniMax profile shapes, including clear_env_keys, env/file templates, defaults, tags, priority, and command behavior."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Migration preserves activation semantics and defaults",
+      "type": "migration",
+      "source_section": "16. Migration Plan",
+      "explanation": "Migration adds activation columns, changes defaults, seeds setup stubs, backfills connected profiles, disables missing/invalid credentials, preserves user disables, updates default normalization, manager sync, and Settings UI."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Acceptance coverage and terminology complete the desired state",
+      "type": "constraint",
+      "source_section": "17. Acceptance Tests; 18. Terminology",
+      "explanation": "Required tests cover stubs, create/update enable guards, OAuth/API-key success and failure, user-disable protection, manager/default exclusions, workflow default rejection, Settings cards, and Auth Profile terminology replacement."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Define provider-aware profile contract and persistence",
+      "description": "As a MoonMind operator and runtime integrator, I need Provider Profiles to persist a provider-aware execution target so managed runtime launches are selected from an explicit contract instead of runtime-only auth records.",
+      "shortName": "profile-contract",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "1. Summary",
+          "2. Document Boundaries",
+          "3. Goals",
+          "4. Non-Goals",
+          "5. Key Concepts",
+          "6. Provider Profile Model",
+          "13. Persistence Model",
+          "19. Summary"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "why": "This establishes the durable object every later setup, selection, and launch path relies on.",
+      "scope": [
+        "Provider-profile domain model fields and enum constraints",
+        "Provider/credential/materialization/default-model/concurrency/routing metadata",
+        "Persistence shape and safe defaults",
+        "Clear boundaries with Secrets, OAuth Terminal, Settings, and runtime strategies"
+      ],
+      "outOfScope": [
+        "Secret backend implementation",
+        "Browser-terminal OAuth transport",
+        "Replacing runtime-specific launch strategy code"
+      ],
+      "independentTest": "Create and validate provider profile records for multiple runtime/provider/credential combinations, then assert persisted fields, enum constraints, safe defaults, source-boundary behavior, and no raw secret storage in profile-owned fields.",
+      "acceptanceCriteria": [
+        "ManagedAgentProviderProfile captures runtime_id, provider_id, credential_source, runtime_materialization_mode, activation state, routing metadata, model intent, concurrency/cooldown policy, SecretRef/OAuth volume bindings, templates, and audit metadata.",
+        "New unconfigured first-party setup stubs and custom profiles outside a verified setup flow default to enabled=false, auth_state=not_configured, disabled_reason=missing_credentials, and credential_source=none where applicable.",
+        "The persistence layer enforces valid auth_state and disabled_reason values and indexes runtime/provider/readiness lookup paths.",
+        "Provider Profile code treats SecretsSystem, OAuthTerminal, Settings, and runtime strategies as separate owners and does not embed their private transport or storage semantics.",
+        "Non-goals are enforced by tests or explicit validation: no universal provider protocol, no raw credential storage, no launchability for unconfigured first-party profiles, and no removal of runtime strategy shaping."
+      ],
+      "requirements": [
+        "Persist provider-aware profiles in managed_agent_provider_profiles or the equivalent provider-aware registry.",
+        "Represent secret requirements as roles and SecretRef bindings, not raw values.",
+        "Represent RuntimeFileTemplate entries with path, format, merge_strategy, content_template, and optional permissions.",
+        "Expose enabled as durable user/operator intent while launch_ready remains computed."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "explanation": "Provider Profiles are durable execution contracts"
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "explanation": "System boundaries stay separated"
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "explanation": "Support many runtimes, providers, credential classes, and materialization modes"
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "explanation": "Explicit non-goals preserve scope"
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "explanation": "Enabled and launch_ready are distinct"
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "explanation": "Canonical profile and file-template contracts are explicit"
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "explanation": "Persistence uses provider-aware table and safe defaults"
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "Existing storage migrations can add or replace the provider-aware table without preserving the older Auth Profile name as a compatibility alias."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Expose safe Settings-first provider activation",
+      "description": "As a user configuring MoonMind, I need Claude, Codex, and Gemini provider cards to be visible but not launchable until credentials are verified, and I need my disable or disconnect intent to be preserved.",
+      "shortName": "settings-activation",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "7. Settings-First Activation Model",
+          "17. Acceptance Tests"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "why": "The Settings experience is the operator-facing path that turns setup stubs into launchable provider profiles without unsafe auto-enable behavior.",
+      "scope": [
+        "Settings-visible first-party setup cards",
+        "Setup-required, connected, disabled, validation-failed, disconnected, and policy-blocked states",
+        "Enable validation rules for direct setup actions versus passive validation",
+        "Readiness diagnostics returned to UI/API callers"
+      ],
+      "outOfScope": [
+        "OAuth terminal transport internals",
+        "Secret backend storage internals",
+        "ProviderProfileManager slot assignment"
+      ],
+      "independentTest": "Exercise Settings/API profile setup and patch flows for fresh stubs, successful setup, failed setup, manual disable, passive validation, policy block, and explicit re-enable, asserting launchability and diagnostics after each transition.",
+      "acceptanceCriteria": [
+        "Claude Code/Anthropic, Codex CLI/OpenAI, and Gemini CLI/Google are discoverable before credentials exist and show setup-required actions.",
+        "Fresh setup stubs are disabled, not default, auth_state=not_configured, and disabled_reason=missing_credentials.",
+        "Successful user-initiated OAuth, reconnect, add-key, or rotate-key setup sets auth_state=connected, disabled_reason=null, enabled=true, and validation timestamps/methods as appropriate unless policy blocks launch.",
+        "PATCH or create requests that attempt enabled=true fail with a clear validation error while OAuth/API-key readiness blockers remain.",
+        "Passive validation, migrations, admin repair jobs, readiness refreshes, and health probes do not clear disabled_reason=user_disabled or silently re-enable profiles.",
+        "Disconnect, validation failure, manual disable, and policy block produce the documented auth_state/disabled_reason/enabled combinations and user-facing diagnostics."
+      ],
+      "requirements": [
+        "Implement may-enable semantics based on action type, readiness, policy, and user-disabled state.",
+        "Keep connected user intent separate from temporary policy blocking when policy may be lifted later.",
+        "Expose Settings UI states and actions matching setup, connected, disabled, and policy-blocked profiles."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-007",
+          "explanation": "First-party Settings activation is safe by default"
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "explanation": "User-disabled and policy states are respected"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "explanation": "Acceptance coverage and terminology complete the desired state"
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Register OAuth-backed provider profiles after verification",
+      "description": "As a user authenticating with OAuth, I need OAuth finalization to create or update a reusable Provider Profile only after the auth volume has verified credentials, without leaking terminal-session details or tokens into profile state.",
+      "shortName": "oauth-profiles",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "8. OAuth-Backed Provider Profiles",
+          "15.2 Claude Code + Anthropic OAuth after setup",
+          "15.4 Gemini CLI + Google OAuth after setup",
+          "15.5 Codex CLI + OpenAI OAuth after setup",
+          "17. Acceptance Tests"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "why": "OAuth is a major first-party setup path and must bridge OAuthTerminal output into the durable launch contract without coupling profiles to browser terminal transport.",
+      "scope": [
+        "OAuth verification to Provider Profile create/update",
+        "OAuth success, failure, and disconnect transitions",
+        "Volume reference and mount metadata storage",
+        "First-party OAuth profile materialization defaults and command readiness metadata"
+      ],
+      "outOfScope": [
+        "PTY/WebSocket browser terminal implementation",
+        "OAuth provider token storage format inside runtime-owned auth volumes"
+      ],
+      "independentTest": "Run the OAuth finalization service with verified, failed, and disconnect outcomes for Claude/Codex/Gemini profiles and assert profile fields, enabled state, absence of terminal/tokens, and Settings readiness metadata.",
+      "acceptanceCriteria": [
+        "OAuth finalization writes credential_source=oauth_volume, runtime_materialization_mode=oauth_home, volume_ref, volume_mount_path, account_label, connected auth_state, null disabled_reason, last_auth_method=oauth_volume, and enabled=true after verification succeeds.",
+        "Failed OAuth verification leaves the profile visible but disabled with auth_state=validation_failed and disabled_reason=auth_invalid.",
+        "OAuth disconnect sets auth_state=disconnected, disabled_reason=disconnected, enabled=false, and clears OAuth volume fields.",
+        "Provider Profile rows never contain PTY bridge IDs, WebSocket URLs, terminal session IDs, browser session status, access tokens, or refresh tokens.",
+        "First-party OAuth profiles include the documented clear_env_keys, home_path_overrides, tags, default readiness labels, and default/priority behavior where applicable."
+      ],
+      "requirements": [
+        "Consume OAuthTerminal verification output through a boundary contract and persist only profile-owned metadata.",
+        "Preserve first_authenticated_at on subsequent reconnects and update last_validated_at on verification.",
+        "Handle optional switch-to-API-key product behavior without retaining OAuth secrets in profile state."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-009",
+          "explanation": "OAuth-backed profiles are reusable profile rows"
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "explanation": "Provider-profile security rules prevent credential leakage"
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "explanation": "Runtime/provider examples define concrete first-party and MiniMax mappings"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "explanation": "Acceptance coverage and terminology complete the desired state"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Validate API-key setup into SecretRef-backed profiles",
+      "description": "As a user adding an API key, I need MoonMind to validate the key, store it in the Secrets System, and update only SecretRef-backed Provider Profile metadata so raw credentials never enter profile rows, workflow payloads, logs, diagnostics, or artifacts.",
+      "shortName": "apikey-profiles",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "9. API-Key-Backed Provider Profiles",
+          "14. Security Requirements",
+          "15.3 Claude Code + Anthropic API key after setup",
+          "17. Acceptance Tests"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "why": "API-key setup is the second first-party activation path and has the highest direct credential-handling risk.",
+      "scope": [
+        "API-key credentials endpoint behavior",
+        "Provider-specific validation before enablement",
+        "SecretRef persistence and env template binding",
+        "Failure handling and raw-key hygiene",
+        "First-party API-key mappings for Claude, Codex, and Gemini"
+      ],
+      "outOfScope": [
+        "Secrets backend encryption and rotation internals beyond consuming returned SecretRefs",
+        "General-purpose provider billing or pricing attribution"
+      ],
+      "independentTest": "Submit valid and invalid API-key setup requests, including rotate-key and readiness-blocked cases, then assert SecretRef-only profile updates, connected/enabled state on success, disabled diagnostics on failure, and secret redaction in captured payload/log/artifact outputs.",
+      "acceptanceCriteria": [
+        "The API-key setup endpoint checks write permission, validates the supplied key provider-specifically, stores the key through the Secrets System, and writes only SecretRefs plus templates into the profile.",
+        "Successful setup sets credential_source=secret_ref, runtime_materialization_mode=api_key_env or provider-required mode, auth_state=connected, disabled_reason=null, first/last validation metadata, last_auth_method=secret_ref, and enabled=true.",
+        "Failed validation sets auth_state=validation_failed, disabled_reason=auth_invalid, enabled=false, and does not persist the candidate key in workflow payloads, profile rows, diagnostics, audit rows, or artifacts.",
+        "First-party mappings bind Anthropic, OpenAI, and Google keys to documented secret roles, env_template entries, and clear_env_keys.",
+        "Runtime-specific deviations for key names, config files, or home directory behavior remain strategy-owned and explicit."
+      ],
+      "requirements": [
+        "Never store raw API keys in Provider Profile JSON fields, generated durable artifacts, or diagnostics.",
+        "Support enable_after_validation and make_default semantics without bypassing readiness and default-normalization rules.",
+        "Support API-key rotation as a user-initiated setup action that may enable after validation."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-010",
+          "explanation": "API-key setup stores SecretRefs only"
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "explanation": "Provider-profile security rules prevent credential leakage"
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "explanation": "Runtime/provider examples define concrete first-party and MiniMax mappings"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "explanation": "Acceptance coverage and terminology complete the desired state"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Resolve execution requests with provider-aware selection",
+      "description": "As an execution requester, I need MoonMind to resolve an exact Provider Profile or compatible provider-aware selector deterministically so runtime-only requests do not accidentally launch against an unsafe or unintended profile.",
+      "shortName": "profile-routing",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "10. Request and Selection Model",
+          "17. Acceptance Tests"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "why": "Once a runtime can target multiple providers, launch correctness depends on deterministic provider-aware filtering and fallback rules.",
+      "scope": [
+        "AgentExecutionRequest profile fields and selectors",
+        "Exact profile resolution",
+        "Provider/tag/materialization filtering",
+        "Enabled, launch_ready, cooldown, and slot exclusion",
+        "Priority and available-slot tie-breaks",
+        "Default-provider fallback guardrails"
+      ],
+      "outOfScope": [
+        "Slot lease lifecycle implementation inside ProviderProfileManager",
+        "Settings setup-card rendering"
+      ],
+      "independentTest": "Resolve requests across multiple profiles for the same runtime with disabled stubs, cooldowns, full slots, provider selectors, tag selectors, exact refs, and priority ties, asserting the selected profile or validation failure.",
+      "acceptanceCriteria": [
+        "AgentExecutionRequest supports execution_profile_ref and profile_selector fields for provider_id, tags_any, tags_all, and runtime_materialization_mode.",
+        "Exact profile references resolve only to the requested profile and fail when it is disabled, not launch-ready, policy-blocked, or incompatible with the runtime request.",
+        "Selector resolution follows the documented order: runtime, provider, tags, enabled, launch_ready, cooldown, available slots, highest priority, then most free slots.",
+        "Disabled setup stubs never participate in default provider fallback or default profile normalization.",
+        "Mission Control default flows either specify provider, use a default tag convention, or rely on explicit priority ordering to avoid unintended cross-provider routing.",
+        "workflow.default_provider_profile_ref rejects disabled or not-ready profiles."
+      ],
+      "requirements": [
+        "Treat runtime-only agent_id requests as ambiguous but still resolvable only across launch-ready compatible providers.",
+        "Expose clear errors when exact or selected profiles are not launchable.",
+        "Keep model identifiers and runtime/provider choices unmodified by hidden compatibility transforms."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-011",
+          "explanation": "Requests resolve profiles provider-aware"
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "explanation": "Default provider fallback avoids accidental disabled or arbitrary routing"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "explanation": "Acceptance coverage and terminology complete the desired state"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Coordinate profile leases, capacity, cooldowns, and waiting",
+      "description": "As a workflow operator, I need each runtime family to coordinate Provider Profile slots, cooldowns, and queueing durably so runs wait or reroute based on provider capacity instead of retrying blindly.",
+      "shortName": "profile-manager",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "11. Provider Profile Manager Workflow",
+          "17. Acceptance Tests"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "why": "Capacity and cooldown are profile-level orchestration concerns that must survive workflow crashes and remain visible to operators.",
+      "scope": [
+        "Per-runtime ProviderProfileManager singleton workflows",
+        "Lease, capacity, cooldown, queue, and assignment state",
+        "request_slot, release_slot, report_cooldown, sync_profiles, slot_assigned, and shutdown signals",
+        "Durable awaiting_slot behavior and operator-visible summaries",
+        "Provider 429 classification integration"
+      ],
+      "outOfScope": [
+        "Provider-specific API-key validation",
+        "Runtime subprocess materialization"
+      ],
+      "independentTest": "Drive a manager workflow with enabled launch-ready profiles, disabled stubs, slot exhaustion, cooldown reports, releases, exact-profile requests, selector-based requests, and 429 classifications, then assert assignments, waiting state, cooldown windows, and UI/projection summaries.",
+      "acceptanceCriteria": [
+        "One ProviderProfileManager singleton exists per runtime family and can Continue-As-New independently.",
+        "Manager sync accepts only profiles that are enabled and launch_ready, preventing disabled setup stubs from becoming runnable.",
+        "Manager state owns active leases, slot capacity, cooldown windows, queued requests, and assignment decisions.",
+        "When no compatible launch-ready profile is available, runs durably enter awaiting_slot or fail fast according to request policy with summaries that identify runtime, provider/exact profile intent, and missing condition.",
+        "On provider 429 or equivalent quota exhaustion, AgentRun reports cooldown for the selected profile, releases the slot, and re-requests through the same selector unless exact-profile intent prevents alternatives.",
+        "Runtime strategies classify provider rate limits into the documented integration_error/provider_error_code or retry recommendation shape needed by orchestration."
+      ],
+      "requirements": [
+        "Evict or recover leases exceeding max_lease_duration_seconds as a safety net.",
+        "Support priority-aware queued requests without embedding large profile content in workflow payloads.",
+        "Make capacity, cooldown, policy, and setup-required states distinguishable in workflow/UI projections."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-013",
+          "explanation": "ProviderProfileManager coordinates capacity"
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "explanation": "Waiting and cooldown behavior are durable and observable"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "explanation": "Acceptance coverage and terminology complete the desired state"
+        }
+      ],
+      "dependencies": [
+        "STORY-005"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Materialize runtime environments securely from selected profiles",
+      "description": "As a managed runtime launcher, I need to layer Provider Profile materialization onto a sane base environment at the launch boundary so credentials, files, provider defaults, and runtime strategy shaping are applied predictably and securely.",
+      "shortName": "runtime-materialization",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "12. Runtime Materialization Pipeline",
+          "14. Security Requirements",
+          "15. Examples"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "why": "The selected profile only becomes useful when launch code translates it into environment variables, generated config, home overrides, and runtime command behavior without credential leakage or process-context loss.",
+      "scope": [
+        "Launch-boundary readiness recheck",
+        "Layered environment construction",
+        "clear_env_keys handling",
+        "SecretRef resolution into ephemeral launch-only values",
+        "file_templates materialization with permissions and merge strategies",
+        "env_template and home_path_overrides application",
+        "runtime strategy command_behavior integration",
+        "Redaction, artifact hygiene, volume isolation, proxy-first preference"
+      ],
+      "outOfScope": [
+        "Profile selection algorithm before launch",
+        "Secrets backend storage implementation",
+        "Making generated secret-bearing config files durable artifacts by default"
+      ],
+      "independentTest": "Launch materialization in a controlled test harness for OAuth, API-key, env_bundle, config_bundle, and composite profiles, asserting base env preservation, cleared competing variables, ephemeral secret resolution, generated file content/permissions, strategy shaping, and redaction of sensitive values.",
+      "acceptanceCriteria": [
+        "The launcher follows the documented order from base environment through runtime-global defaults, selected profile, readiness recheck, clear_env_keys, secret resolution, file templates, env template, home overrides, strategy shaping, command build, and subprocess launch.",
+        "Profile materialization layers onto the base environment and never replaces it wholesale, preserving PATH, HOME, and runtime process context unless explicitly overridden.",
+        "SecretRefs resolve only at controlled launch/proxy boundaries for the minimum duration needed and raw resolved values are redacted from logs, metadata, diagnostics, and durable artifacts.",
+        "Generated files respect format, merge_strategy, and permissions; files containing credentials are sensitive runtime files and are not durable artifacts by default.",
+        "Conflicting provider variables are removed or blanked before launch according to clear_env_keys to prevent accidental fallback.",
+        "Runtime strategies consume command_behavior, default_model, and model_overrides without Provider Profiles replacing strategy-owned command construction.",
+        "Proxy-first execution is preferred when MoonMind owns the outbound provider call path, with direct-credential materialization reserved for runtimes that require it."
+      ],
+      "requirements": [
+        "Support oauth_home, api_key_env, env_bundle, config_bundle, and composite modes.",
+        "Apply concrete example mappings for first-party and MiniMax profiles as integration fixtures.",
+        "Keep workflows carrying only profile IDs/selectors rather than materialized secrets or large config blobs."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-015",
+          "explanation": "Runtime materialization is layered and launch-boundary checked"
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "explanation": "Provider-profile security rules prevent credential leakage"
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "explanation": "Runtime/provider examples define concrete first-party and MiniMax mappings"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-005"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Migrate Auth Profile terminology and activation semantics",
+      "description": "As a maintainer, I need the old Auth Profile framing replaced by Provider Profile terminology and migration behavior so existing records, defaults, manager sync, Settings, and tests align with the provider-aware desired state.",
+      "shortName": "profile-migration",
+      "sourceReference": {
+        "path": "docs/Security/ProviderProfiles.md",
+        "title": "Provider Profiles",
+        "sections": [
+          "16. Migration Plan",
+          "17. Acceptance Tests",
+          "18. Terminology"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "why": "The design replaces a narrower auth concept; the rollout must prevent partial migrations that leave unsafe defaults or stale names behind.",
+      "scope": [
+        "Activation-column migration or equivalent model update",
+        "Setup-stub seeding/backfill",
+        "Connected OAuth and SecretRef profile backfill",
+        "Missing/invalid credential disablement",
+        "User/admin disable preservation",
+        "Default normalization update",
+        "ProviderProfileManager sync update",
+        "Settings UI update",
+        "Auth Profile terminology replacement across docs/code/tests"
+      ],
+      "outOfScope": [
+        "Creating a compatibility alias for old internal contract names",
+        "Changing unrelated secret backend schemas"
+      ],
+      "independentTest": "Run migration/backfill tests against representative old records and source scans for terminology, then assert new columns/states, preserved user disables, disabled invalid profiles, launch-ready-only defaults, manager sync exclusion, Settings cards, and absence of old Auth Profile names in active code/docs.",
+      "acceptanceCriteria": [
+        "Migration adds or maps auth_state, disabled_reason, first_authenticated_at, last_validated_at, and last_auth_method without making unverified profiles launchable.",
+        "First-party setup stubs are seeded or backfilled for claude_anthropic_default, codex_openai_default, and gemini_google_default in disabled setup-required state.",
+        "Existing launch-ready OAuth and SecretRef profiles are backfilled to connected with appropriate last_auth_method and enabled=true only when currently enabled and not policy-blocked.",
+        "Profiles with missing or invalid credentials are disabled with not_configured or validation_failed state and missing_credentials or auth_invalid reasons.",
+        "Explicit user/admin disables are preserved as disabled_reason=user_disabled and are not overwritten by passive validation.",
+        "Default normalization chooses only launch-ready profiles and clears the runtime default when none exists.",
+        "Auth Profile names are replaced with Provider Profile names, including ManagedAgentProviderProfile, MoonMind.ProviderProfileManager, and managed_agent_provider_profiles, without compatibility aliases for internal contracts.",
+        "The acceptance-test list in the source design is represented in unit, integration, or workflow-boundary tests appropriate to each behavior."
+      ],
+      "requirements": [
+        "Grep and update all callers, tests, mocks, docs, and seed templates for renamed internal contracts.",
+        "Keep Temporal/workflow-facing payload changes compatibility-sensitive or provide an explicit cutover plan where old histories cannot be preserved.",
+        "Do not silently transform execution semantics or billing-relevant model/provider values during migration."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-019",
+          "explanation": "Migration preserves activation semantics and defaults"
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "explanation": "Acceptance coverage and terminology complete the desired state"
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-005",
+        "STORY-006"
+      ],
+      "assumptions": [
+        "Because MoonMind is pre-release, internal Auth Profile compatibility aliases should be removed rather than retained unless Temporal in-flight compatibility requires an explicit versioned cutover."
+      ],
+      "needsClarification": [
+        "Which active Temporal histories, if any, must survive the Auth Profile to Provider Profile contract rename cutover?"
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-003",
+      "STORY-004",
+      "STORY-007"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006",
+      "STORY-008"
+    ]
+  },
+  "outOfScope": [
+    {
+      "item": "Secret backend storage, encryption, rotation, and SecretRef schema internals",
+      "rationale": "Owned by docs/Security/SecretsSystem.md; Provider Profiles only reference SecretRefs."
+    },
+    {
+      "item": "Browser-terminal OAuth transport and PTY/WebSocket architecture",
+      "rationale": "Owned by docs/ManagedAgents/OAuthTerminal.md; Provider Profiles only persist verified launch-target metadata."
+    },
+    {
+      "item": "Universal provider API normalization or runtime strategy replacement",
+      "rationale": "The design explicitly preserves runtime-specific strategies and avoids forcing providers into one logical API."
+    },
+    {
+      "item": "Pricing or billing attribution",
+      "rationale": "Provider Profiles carry selection and launch policy; billing is not solved by this design."
+    }
+  ]
+}
