@@ -438,6 +438,38 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "sourceDirectory"
         ] == "{{ inputs.document_directory }}"
 
+        result = await session.execute(
+            select(Preset)
+            .where(
+                Preset.slug == "batch-workflows",
+                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_ref.is_(None),
+            )
+            .options(selectinload(Preset.latest_version))
+        )
+        batch_template = result.scalar_one_or_none()
+        assert batch_template is not None
+        assert batch_template.latest_version is not None
+        batch_annotations = batch_template.latest_version.annotations or {}
+        assert batch_annotations["runtimeInheritance"] == "caller"
+        assert batch_annotations["inputSchema"]["properties"]["source_kind"][
+            "enum"
+        ] == ["jira_board_column", "github_repo_issues"]
+        assert batch_annotations["bindings"]["jira-implement"]["jira_issue_key"] == (
+            "{{ target.jiraIssue.key }}"
+        )
+        assert batch_annotations["bindings"]["github-issue-implement"][
+            "github_issue_ref"
+        ] == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
+        batch_steps = batch_template.latest_version.steps
+        assert len(batch_steps) == 1
+        assert batch_steps[0]["skill"]["id"] == "batch-workflows"
+        assert batch_steps[0]["batchOrchestration"]["runtime"]["inherit"] == "caller"
+        assert (
+            batch_steps[0]["batchOrchestration"]["publish"]["mode"]
+            == "{{ inputs.publish_mode }}"
+        )
+
 @pytest.mark.asyncio
 async def test_startup_deactivates_legacy_speckit_orchestrate_template(
     disabled_env_keys, tmp_path
