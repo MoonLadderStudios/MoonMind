@@ -19,6 +19,8 @@ import json
 import logging
 import os
 import re
+import sys
+import traceback
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -226,7 +228,13 @@ def build_child_request(
         "instructions": goal,
         "inputs": inputs,
         "publish": {"mode": publish_mode},
-        "batchTargetPreset": {
+        # Author the child with the selected preset via ``taskTemplate`` so the
+        # execution API expands the exact slug/version/scope/scopeRef (see
+        # expand_preset_for_child_run). Without this the child is goal-only and
+        # the server goal scheduler silently substitutes a hard-coded global
+        # preset version, dropping any non-default version, personal scope, or
+        # scopeRef. ``batchTargetPreset`` has no readers, so it is not emitted.
+        "taskTemplate": {
             "slug": config.preset_slug,
             "version": config.preset_version,
             "scope": config.preset_scope,
@@ -708,6 +716,10 @@ async def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(asyncio.run(main()))
-    except Exception:
-        print("error: batch-workflows failed. See logs for details.", flush=True)
+    except Exception as exc:  # noqa: BLE001 - surface root cause before exiting
+        # Print the exception message and full traceback to stderr so runtime
+        # failures (missing files, JSON decode errors, HTTP errors) are
+        # diagnosable instead of being swallowed behind a generic message.
+        print(f"error: batch-workflows failed: {exc}", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
         raise SystemExit(1)

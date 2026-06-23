@@ -13,7 +13,6 @@ tags:
 - github
 requiredCapabilities:
 - git
-- jira
 - gh
 annotations:
   sourceSkill: batch-workflows
@@ -325,14 +324,19 @@ steps:
     Auto-bind the resolved issue target into the child preset's issue input
     (jira_issue/jira_issue_key for jira-implement, github_issue/github_issue_ref for
     github-issue-implement) and copy the shared constraints into every child. Apply
-    publish mode "{{ inputs.publish_mode }}" once to every child. Run the helper:
-    python3 .agents/skills/batch-workflows/bin/batch_workflows.py
-    --targets artifacts/batch-workflows-targets.json
-    --target-preset-slug {{ inputs.target_preset_slug }}
-    --target-preset-version {{ inputs.target_preset_version }}
-    --target-preset-scope {{ inputs.target_preset_scope }}
-    --publish-mode {{ inputs.publish_mode }}
-    --max-workflows {{ inputs.max_workflows }}
+    publish mode "{{ inputs.publish_mode }}" once to every child. Run the helper
+    as a single command (the trailing backslashes join the line-continued
+    arguments; without them the shell would terminate the command after the
+    script name and parse the remaining flags as separate commands):
+    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
+    --targets artifacts/batch-workflows-targets.json \
+    --target-preset-slug "{{ inputs.target_preset_slug }}" \
+    --target-preset-version "{{ inputs.target_preset_version }}" \
+    --target-preset-scope "{{ inputs.target_preset_scope }}" \
+    --target-preset-scope-ref "{{ inputs.target_preset_scope_ref }}" \
+    --publish-mode "{{ inputs.publish_mode }}" \
+    --max-workflows "{{ inputs.max_workflows }}" \
+    --constraints "{{ inputs.constraints }}"
     The helper stamps runtimeInheritance="caller" plus a fallback copy of the parent
     runtime on each child and assigns a stable idempotency key so reruns do not
     duplicate child workflows.
@@ -377,6 +381,5 @@ steps:
     id: batch-workflows
     requiredCapabilities:
     - git
-    - jira
     - gh
     args: {}

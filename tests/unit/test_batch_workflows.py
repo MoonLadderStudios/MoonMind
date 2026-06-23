@@ -159,11 +159,53 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     assert payload["task"]["publish"] == {"mode": "pr"}
     assert payload["repository"] == "MoonLadderStudios/MoonMind"
     assert payload["task"]["inputs"]["jira_issue_key"] == "THOR-123"
-    assert payload["task"]["batchTargetPreset"]["slug"] == "jira-implement"
+    # The selected preset is authored as the child taskTemplate (read by the
+    # execution API), not inert batchTargetPreset metadata.
+    assert payload["task"]["taskTemplate"]["slug"] == "jira-implement"
+    assert payload["task"]["taskTemplate"]["version"] == "1.1.0"
+    assert payload["task"]["taskTemplate"]["scope"] == "global"
+    assert "batchTargetPreset" not in payload["task"]
     # Stable, length-bounded idempotency key.
     key = payload["idempotencyKey"]
     assert key.startswith("batch-workflows:jira:THOR-123:sha256:")
     assert len(key) <= module["IDEMPOTENCY_KEY_MAX_LENGTH"]
+
+
+def test_build_child_request_authors_selected_preset_version_scope_and_ref():
+    # A non-default preset version / personal scope / scopeRef must be carried
+    # into the child taskTemplate so the execution API expands the exact
+    # selected preset instead of the goal scheduler's hard-coded global version.
+    module = _load_module()
+    request = module["build_child_request"](
+        _JIRA_TARGET,
+        config=_jira_config(
+            module,
+            preset_version="2.3.0",
+            preset_scope="personal",
+            preset_scope_ref="user-123",
+        ),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    template = request["payload"]["task"]["taskTemplate"]
+    assert template["slug"] == "jira-implement"
+    assert template["version"] == "2.3.0"
+    assert template["scope"] == "personal"
+    assert template["scopeRef"] == "user-123"
+    assert "batchTargetPreset" not in request["payload"]["task"]
+
+
+def test_build_child_request_omits_scope_ref_when_blank():
+    module = _load_module()
+    request = module["build_child_request"](
+        _JIRA_TARGET,
+        config=_jira_config(module, preset_scope_ref=None),
+        runtime=module["RuntimeSelection"](mode="codex_cli"),
+        batch_scope="run-1",
+        inherit_runtime_from_caller=True,
+    )
+    assert "scopeRef" not in request["payload"]["task"]["taskTemplate"]
 
 
 def test_build_child_request_without_caller_omits_inheritance_directive():
