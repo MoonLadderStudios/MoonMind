@@ -1652,6 +1652,11 @@ async def test_create_jira_orchestrate_tasks_wires_ordered_dependencies_and_trac
         "mode": "pr",
         "mergeAutomation": {"enabled": True},
     }
+    assert first_parameters["workflow"]["inputs"]["jira_issue"] == {
+        "key": "MM-501",
+        "summary": "First",
+    }
+    assert "jira_issue_key" not in first_parameters["workflow"]["inputs"]
     assert "merge_automation" not in first_parameters["workflow"]["publish"]
     assert "MM-404" in first_parameters["workflow"]["instructions"]
 
@@ -1799,9 +1804,9 @@ async def test_create_jira_orchestrate_tasks_uses_input_previous_outputs_mapping
     assert orchestration["storyCount"] == 1
     assert orchestration["createdTaskCount"] == 1
     assert orchestration["tasks"][0]["jiraIssueKey"] == "MM-810"
-    assert creator.requests[0]["initial_parameters"]["workflow"]["inputs"][
-        "jira_issue_key"
-    ] == "MM-810"
+    inputs = creator.requests[0]["initial_parameters"]["workflow"]["inputs"]
+    assert inputs["jira_issue"] == {"key": "MM-810", "summary": "Remaining work"}
+    assert "jira_issue_key" not in inputs
 
 @pytest.mark.asyncio
 async def test_create_jira_orchestrate_tasks_propagates_source_design_path():
@@ -1931,6 +1936,7 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
                         "storyIndex": 1,
                         "summary": "First",
                         "issueKey": "MM-501",
+                        "issueUrl": "https://jira.example/browse/MM-501",
                     },
                     {
                         "storyId": "STORY-002",
@@ -1980,7 +1986,12 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
         "Use the existing Jira Implement workflow"
         in first_task["instructions"]
     )
-    assert first_task["inputs"]["jira_issue_key"] == "MM-501"
+    assert first_task["inputs"]["jira_issue"] == {
+        "key": "MM-501",
+        "summary": "First",
+        "url": "https://jira.example/browse/MM-501",
+    }
+    assert "jira_issue_key" not in first_task["inputs"]
     assert first_task["inputs"]["constraints"] == (
         "Preserve source issue MM-404 traceability."
     )

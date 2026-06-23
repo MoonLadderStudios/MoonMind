@@ -1046,6 +1046,93 @@ def _stable_idempotency_key(
     return f"{prefix}:{source_issue_key}:{digest}"[:128]
 
 
+def _jira_issue_input_from_mapping(
+    *,
+    mapping: Mapping[str, Any],
+    issue_key: str,
+    summary: str,
+) -> dict[str, Any]:
+    nested_issue = _mapping(
+        mapping.get("jiraIssue")
+        or mapping.get("jira_issue")
+        or mapping.get("issue")
+    )
+    fields = _mapping(nested_issue.get("fields"))
+    raw_field_status = fields.get("status")
+    raw_status = nested_issue.get("status")
+    raw_field_assignee = fields.get("assignee")
+    raw_assignee = nested_issue.get("assignee")
+    status = _mapping(raw_field_status or raw_status)
+    assignee = _mapping(raw_field_assignee or raw_assignee)
+    resolved_key = _first_string(
+        issue_key,
+        nested_issue.get("key"),
+        nested_issue.get("issueKey"),
+        nested_issue.get("issue_key"),
+        mapping.get("key"),
+        mapping.get("issueKey"),
+        mapping.get("issue_key"),
+    )
+    issue: dict[str, Any] = {"key": resolved_key}
+
+    resolved_summary = _first_string(
+        summary,
+        fields.get("summary"),
+        nested_issue.get("summary"),
+        mapping.get("summary"),
+    )
+    if resolved_summary:
+        issue["summary"] = resolved_summary
+
+    description = _normalize_jira_text(
+        fields.get("description")
+        or nested_issue.get("description")
+        or nested_issue.get("descriptionText")
+        or nested_issue.get("description_text")
+        or mapping.get("description")
+    )
+    if description:
+        issue["description"] = description
+
+    url = _first_string(
+        mapping.get("issueUrl"),
+        mapping.get("issue_url"),
+        mapping.get("url"),
+        mapping.get("browseUrl"),
+        nested_issue.get("url"),
+        nested_issue.get("browseUrl"),
+    )
+    if not url:
+        url = (
+            _issue_url({**dict(mapping), "key": resolved_key})
+            or _issue_url({**dict(nested_issue), "key": resolved_key})
+            or ""
+        )
+    if url:
+        issue["url"] = url
+
+    status_name = _first_string(
+        status.get("name"),
+        raw_field_status if not isinstance(raw_field_status, Mapping) else None,
+        raw_status if not isinstance(raw_status, Mapping) else None,
+    )
+    if status_name:
+        issue["status"] = status_name
+
+    assignee_name = _first_string(
+        assignee.get("displayName"),
+        assignee.get("name"),
+        raw_field_assignee
+        if not isinstance(raw_field_assignee, Mapping)
+        else None,
+        raw_assignee if not isinstance(raw_assignee, Mapping) else None,
+    )
+    if assignee_name:
+        issue["assignee"] = assignee_name
+
+    return issue
+
+
 def _truthy(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -1107,11 +1194,16 @@ def _downstream_task_payload(
         publish.pop("mergeAutomation", None)
         publish.pop("merge_automation", None)
     repository = _string(task_payload.get("repository") or task_payload.get("repo"))
+    jira_issue_input = _jira_issue_input_from_mapping(
+        mapping=mapping,
+        issue_key=issue_key,
+        summary=summary,
+    )
     task: dict[str, Any] = {
         "title": f"Run {preset_label} for {issue_key}: {summary}",
         "instructions": instructions,
         "inputs": {
-            "jira_issue_key": issue_key,
+            "jira_issue": jira_issue_input,
             "source_design_path": source_design_path,
             "constraints": (
                 f"Preserve source issue {source_issue_key} traceability."
