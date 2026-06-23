@@ -3426,6 +3426,85 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
                 for item in registry_payload["skills"]
             ] == [("jira.get_issue", "1.0.0")]
 
+async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
+    tmp_path: Path,
+):
+    from moonmind.workflows.temporal.worker_runtime import _build_runtime_planner
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            planner = TemporalPlanActivities(
+                artifact_service=service,
+                planner=_build_runtime_planner(),
+            )
+
+            result = await planner.plan_generate(
+                principal="user-1",
+                parameters={
+                    "repository": "g3-qrtr/crash_server_main",
+                    "targetRuntime": "claude_code",
+                    "model": "claude-opus-4-8",
+                    "profileId": "claude_anthropic",
+                    "effort": "xhigh",
+                    "publishMode": "none",
+                    "maxAttempts": 3,
+                    "stepCount": 1,
+                    "workflow": {
+                        "tool": {"type": "skill", "name": "auto", "version": "1.0"},
+                        "runtime": {
+                            "mode": "claude_code",
+                            "model": "claude-opus-4-8",
+                            "profileId": "claude_anthropic",
+                            "effort": "xhigh",
+                        },
+                        "steps": [
+                            {
+                                "id": "step-1",
+                                "title": "Run approved PentestGPT assessment",
+                                "type": "tool",
+                                "instructions": "Run the curated PentestGPT tool.",
+                                "tool": {
+                                    "id": "security.pentest.run",
+                                    "inputs": {
+                                        "target": "https://lab.example.test",
+                                        "scope_artifact_ref": "art_scope_valid",
+                                        "operation_mode": "recon_only",
+                                        "runner_profile_id": "pentestgpt-safe",
+                                        "time_budget_minutes": 60,
+                                        "evidence_level": "standard",
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                },
+            )
+
+            _artifact, payload = await service.read(
+                artifact_id=result.plan_ref.artifact_id,
+                principal="user-1",
+            )
+            plan_payload = json.loads(payload.decode("utf-8"))
+            node = plan_payload["nodes"][0]
+
+            assert node["tool"] == {
+                "type": "skill",
+                "name": "security.pentest.run",
+                "version": "1.0",
+            }
+            assert node["inputs"] == {
+                "target": "https://lab.example.test",
+                "scope_artifact_ref": "art_scope_valid",
+                "operation_mode": "recon_only",
+                "runner_profile_id": "pentestgpt-safe",
+                "time_budget_minutes": 60,
+                "evidence_level": "standard",
+            }
+
 async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
     payload = _default_registry_skill_payload(name="pr-resolver", version="1.0")
     policies = payload.get("policies", {})
