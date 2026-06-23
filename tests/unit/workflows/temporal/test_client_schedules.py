@@ -80,6 +80,37 @@ class TestCreateSchedule:
         assert schedule_arg.action.id == f"mm:{_TEST_UUID}:{{{{.ScheduleTime}}}}"
 
     @pytest.mark.asyncio
+    async def test_create_schedule_omits_dynamic_scheduled_for_search_attribute(
+        self,
+    ) -> None:
+        mock_handle = MagicMock()
+        mock_handle.id = _SCHEDULE_ID
+        mock_client = MagicMock()
+        mock_client.create_schedule = AsyncMock(return_value=mock_handle)
+
+        adapter = _make_adapter(mock_client)
+        await adapter.create_schedule(
+            definition_id=_TEST_UUID,
+            cron_expression="0 0 * * *",
+            workflow_type="MoonMind.UserWorkflow",
+            search_attributes={
+                "mm_owner_type": "user",
+                "mm_owner_id": "owner-123",
+            },
+        )
+
+        schedule_arg = mock_client.create_schedule.call_args[0][1]
+        search_attributes = {
+            pair.key.name: pair.value
+            for pair in schedule_arg.action.typed_search_attributes
+        }
+        assert search_attributes == {
+            "mm_owner_type": "user",
+            "mm_owner_id": "owner-123",
+        }
+        assert "mm_scheduled_for" not in search_attributes
+
+    @pytest.mark.asyncio
     async def test_overlap_policy_passed_through(self) -> None:
 
         mock_handle = MagicMock()
