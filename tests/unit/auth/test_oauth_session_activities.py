@@ -16,6 +16,8 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     OAuthSessionStatus,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
 from moonmind.workflows.temporal.activities import oauth_session_activities
@@ -179,6 +181,12 @@ async def test_register_profile_activity_persists_oauth_home_codex_profile(
         assert profile.volume_ref == "codex_auth_volume"
         assert profile.volume_mount_path == "/home/app/.codex"
         assert profile.max_parallel_runs == 3
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.disabled_reason is None
+        assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
+        assert profile.first_authenticated_at is not None
+        assert profile.last_validated_at is not None
 
 @pytest.mark.asyncio
 async def test_register_profile_activity_rejects_codex_oauth_profile_without_refs(

@@ -296,6 +296,18 @@ def test_managed_agent_provider_profile_accepts_valid_per_profile_limits() -> No
     assert profile.max_parallel_runs == 2
     assert profile.cooldown_after_429_seconds == 120
 
+def test_managed_agent_provider_profile_clears_disabled_reason_when_enabled() -> None:
+    profile = ManagedAgentProviderProfile(
+        profileId="enabled-clears-disabled-reason",
+        runtimeId="claude_code",
+        credentialSource="secret_ref",
+        runtimeMaterializationMode="api_key_env",
+        enabled=True,
+        authState="connected",
+    )
+
+    assert profile.disabled_reason is None
+
 def test_codex_oauth_provider_profile_requires_auth_volume_refs() -> None:
     with pytest.raises(ValidationError, match="volumeRef is required"):
         ManagedAgentProviderProfile(

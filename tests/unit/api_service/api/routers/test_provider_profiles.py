@@ -515,7 +515,6 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
         "model_overrides": {"smart": "test-model-v3"},
         "enabled": True,
         "auth_state": "connected",
-        "disabled_reason": None,
         "last_auth_method": "secret_ref",
     }
     
@@ -533,6 +532,31 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["auth_state"] == "connected"
     assert data["disabled_reason"] is None
     assert data["last_auth_method"] == "secret_ref"
+
+
+@pytest.mark.asyncio
+async def test_create_enabled_provider_profile_clears_default_disabled_reason(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "enabled_profile_clears_disabled_reason",
+        "runtime_id": "enabled_profile_clear_runtime",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://enabled_profile_secret"},
+        "enabled": True,
+        "auth_state": "connected",
+        "last_auth_method": "secret_ref",
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["enabled"] is True
+    assert data["auth_state"] == "connected"
+    assert data["disabled_reason"] is None
 
 
 @pytest.mark.asyncio
@@ -658,6 +682,62 @@ async def test_update_profile_can_become_runtime_default(
     profiles = {profile["profile_id"]: profile for profile in listed.json()}
     assert profiles["patch_runtime_default_first"]["is_default"] is False
     assert profiles["patch_runtime_default_second"]["is_default"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_profile_rejects_enabled_without_connected_auth_state(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    payload = {
+        "profile_id": "patch_enabled_requires_connected_auth",
+        "runtime_id": "patch_enabled_requires_connected",
+        "credential_source": "none",
+        "runtime_materialization_mode": "composite",
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            "/api/v1/provider-profiles/patch_enabled_requires_connected_auth",
+            json={"enabled": True},
+        )
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 422
+    assert update_response.json()["detail"] == (
+        "Enabled profiles require auth_state=connected"
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_profile_clears_disabled_reason_when_enabled(
+    client_app: AsyncClient,
+    _module_db,
+) -> None:
+    payload = {
+        "profile_id": "patch_enabled_clears_disabled_reason",
+        "runtime_id": "patch_enabled_clears",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://patch_enabled_secret"},
+        "auth_state": "connected",
+        "disabled_reason": "missing_credentials",
+    }
+
+    async with client_app as client:
+        create_response = await client.post("/api/v1/provider-profiles", json=payload)
+        update_response = await client.patch(
+            "/api/v1/provider-profiles/patch_enabled_clears_disabled_reason",
+            json={"enabled": True},
+        )
+
+    assert create_response.status_code == 201
+    assert update_response.status_code == 200
+    data = update_response.json()
+    assert data["enabled"] is True
+    assert data["auth_state"] == "connected"
+    assert data["disabled_reason"] is None
 
 
 @pytest.mark.asyncio

@@ -6,15 +6,13 @@ Create Date: 2026-06-23 00:00:00.000000
 
 """
 
-from typing import Sequence, Union
+from typing import Union
 
 import sqlalchemy as sa
 from alembic import op
 
 revision: str = "316_provider_profile_activation_state"
 down_revision: Union[str, None] = "315_workflow_type_enum_cutover"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
 
 __all__ = ["revision", "down_revision", "upgrade", "downgrade"]
 
@@ -79,6 +77,11 @@ def upgrade() -> None:
     op.add_column(
         "managed_agent_provider_profiles",
         sa.Column("last_auth_method", auth_method_enum, nullable=True),
+    )
+    op.execute(
+        "UPDATE managed_agent_provider_profiles "
+        "SET auth_state = 'connected', disabled_reason = NULL "
+        "WHERE enabled = true"
     )
 
     op.create_check_constraint(

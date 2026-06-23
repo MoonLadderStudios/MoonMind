@@ -729,10 +729,8 @@ class ManagedAgentProviderProfile(BaseModel):
             raise ValueError(
                 "enabled provider profiles must have authState='connected'"
             )
-        if self.enabled and self.disabled_reason is not None:
-            raise ValueError(
-                "enabled provider profiles must not set disabledReason"
-            )
+        if self.enabled:
+            self.disabled_reason = None
 
         validate_codex_oauth_profile_refs(
             runtime_id=self.runtime_id,

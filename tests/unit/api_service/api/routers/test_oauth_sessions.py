@@ -19,6 +19,8 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     OAuthSessionStatus,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
 from api_service.main import app
@@ -1126,6 +1128,15 @@ async def test_finalize_oauth_session_returns_projection_after_verifying_and_reg
         OAuthSessionStatus.VERIFYING,
         OAuthSessionStatus.REGISTERING_PROFILE,
     ]
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.disabled_reason is None
+        assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
+        assert profile.first_authenticated_at is not None
+        assert profile.last_validated_at is not None
 
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_is_idempotent_for_succeeded_session(
@@ -1148,6 +1159,9 @@ async def test_finalize_oauth_session_is_idempotent_for_succeeded_session(
                 account_label="codex account",
                 owner_user_id=None,
                 enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+                last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
             )
         )
         session.add(

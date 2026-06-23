@@ -134,8 +134,8 @@ class ProviderProfileCreate(BaseModel):
     def _validate_runtime_env(self) -> "ProviderProfileCreate":
         if self.enabled and self.auth_state != ProviderProfileAuthState.CONNECTED.value:
             raise ValueError("enabled profiles require auth_state=connected")
-        if self.enabled and self.disabled_reason is not None:
-            raise ValueError("enabled profiles must not set disabled_reason")
+        if self.enabled:
+            self.disabled_reason = None
         validate_codex_oauth_profile_refs(
             runtime_id=self.runtime_id,
             credential_source=self.credential_source,
@@ -461,6 +461,14 @@ async def update_profile(
         elif key == "last_auth_method" and value is not None:
             value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
+
+    if profile.enabled:
+        if profile.auth_state != ProviderProfileAuthState.CONNECTED:
+            raise HTTPException(
+                status_code=422,
+                detail="Enabled profiles require auth_state=connected",
+            )
+        profile.disabled_reason = None
 
     if requested_is_default is False:
         profile.is_default = False
