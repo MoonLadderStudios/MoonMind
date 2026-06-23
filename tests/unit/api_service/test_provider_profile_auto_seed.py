@@ -112,12 +112,17 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert claude_profile.volume_mount_path is None
     assert claude_profile.clear_env_keys == [
         "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY",
+        "OPENAI_API_KEY",
+    ]
+    first_party_clear_keys = {p.profile_id: p.clear_env_keys for p in profiles}
+    assert first_party_clear_keys["claude_anthropic"] == [
+        "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_BASE_URL",
         "CLAUDE_API_KEY",
         "OPENAI_API_KEY",
     ]
-    first_party_clear_keys = {p.profile_id: p.clear_env_keys for p in profiles}
     assert first_party_clear_keys["gemini_default"] == [
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
