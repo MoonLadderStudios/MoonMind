@@ -646,7 +646,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
         {
             "profile_id": "gemini_default",
             "runtime_id": "gemini_cli",
-            "is_default": True,
+            "is_default": False,
             "provider_id": "google",
             "provider_label": "Google",
             "default_model": None,  # inherits runtime default: gemini-3.1-pro
@@ -657,11 +657,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "gemini_cli", "volume_mount_path"
             ),
             "account_label": "Gemini CLI (auto-seeded)",
+            "enabled": False,
+            "auth_state": "not_configured",
+            "disabled_reason": "missing_credentials",
+            "command_behavior": {
+                "auth_actions": ["connect_oauth"],
+                "auth_status_label": "Setup required",
+                "auth_readiness": {
+                    "connected": False,
+                    "launch_ready": False,
+                    "failure_reason": "missing_credentials",
+                },
+            },
         },
         {
             "profile_id": "codex_default",
             "runtime_id": "codex_cli",
-            "is_default": True,
+            "is_default": False,
             "provider_id": "openai",
             "provider_label": "OpenAI",
             "default_model": None,  # inherits runtime default: gpt-5.5
@@ -670,11 +682,23 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_ref": get_provider_default("codex_cli", "volume_ref"),
             "volume_mount_path": get_provider_default("codex_cli", "volume_mount_path"),
             "account_label": "Codex CLI (auto-seeded)",
+            "enabled": False,
+            "auth_state": "not_configured",
+            "disabled_reason": "missing_credentials",
+            "command_behavior": {
+                "auth_actions": ["connect_oauth"],
+                "auth_status_label": "Setup required",
+                "auth_readiness": {
+                    "connected": False,
+                    "launch_ready": False,
+                    "failure_reason": "missing_credentials",
+                },
+            },
         },
         {
             "profile_id": "claude_anthropic",
             "runtime_id": "claude_code",
-            "is_default": True,
+            "is_default": False,
             "provider_id": "anthropic",
             "provider_label": "Anthropic",
             "default_model": None,  # inherits runtime default: claude-opus-4-8
@@ -690,6 +714,20 @@ async def _auto_seed_provider_profiles() -> list[str]:
                 "OPENAI_API_KEY",
             ],
             "account_label": "Claude Code (auto-seeded)",
+            "enabled": False,
+            "auth_state": "not_configured",
+            "disabled_reason": "missing_credentials",
+            "command_behavior": {
+                "auth_strategy": "claude_credential_methods",
+                "auth_state": "not_configured",
+                "auth_actions": ["connect_oauth", "use_api_key"],
+                "auth_status_label": "Setup required",
+                "auth_readiness": {
+                    "connected": False,
+                    "launch_ready": False,
+                    "failure_reason": "missing_credentials",
+                },
+            },
         },
 
     ]
@@ -725,6 +763,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_ref": None,
             "volume_mount_path": None,
             "account_label": "Claude Code via MiniMax (auto-seeded)",
+            "enabled": True,
+            "auth_state": "connected",
+            "disabled_reason": None,
+            "last_auth_method": "secret_ref",
         })
 
     if os.environ.get("OPENROUTER_API_KEY"):
@@ -768,6 +810,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_ref": None,
             "volume_mount_path": None,
             "account_label": "Codex CLI via OpenRouter (auto-seeded)",
+            "enabled": True,
+            "auth_state": "connected",
+            "disabled_reason": None,
+            "last_auth_method": "secret_ref",
         })
 
     seeded: list[str] = []
@@ -934,7 +980,10 @@ async def _auto_seed_provider_profiles() -> list[str]:
                         "rate_limit_policy",
                         ManagedAgentRateLimitPolicy.BACKOFF,
                     ),
-                    enabled=True,
+                    enabled=bool(profile_def.get("enabled", True)),
+                    auth_state=profile_def.get("auth_state", "connected"),
+                    disabled_reason=profile_def.get("disabled_reason"),
+                    last_auth_method=profile_def.get("last_auth_method"),
                     is_default=bool(profile_def.get("is_default", False)),
                     max_lease_duration_seconds=profile_def.get(
                         "max_lease_duration_seconds", 7200

@@ -43,6 +43,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
 _claude_manual_validation_client: httpx.AsyncClient | None = None
 
+AUTH_STATE_NOT_CONFIGURED = "not_configured"
+AUTH_STATE_CONNECTED = "connected"
+AUTH_STATE_VALIDATION_FAILED = "validation_failed"
+AUTH_STATE_DISCONNECTED = "disconnected"
+DISABLED_REASON_MISSING_CREDENTIALS = "missing_credentials"
+DISABLED_REASON_AUTH_INVALID = "auth_invalid"
+DISABLED_REASON_USER_DISABLED = "user_disabled"
+DISABLED_REASON_POLICY_DISABLED = "policy_disabled"
+DISABLED_REASON_DISCONNECTED = "disconnected"
+
 
 @dataclass(frozen=True, slots=True)
 class _SecretRefParseResult:
@@ -93,7 +103,7 @@ class ProviderProfileCreate(BaseModel):
     max_parallel_runs: int = Field(default=1, ge=1)
     cooldown_after_429_seconds: int = Field(default=900, ge=0)
     rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
-    enabled: bool = True
+    enabled: bool = False
     is_default: bool = False
     max_lease_duration_seconds: int = Field(default=7200, ge=60)
 
@@ -200,6 +210,11 @@ class ProviderProfileResponse(BaseModel):
     rate_limit_policy: str
     enabled: bool
     is_default: bool
+    auth_state: str
+    disabled_reason: Optional[str] = None
+    first_authenticated_at: Optional[str] = None
+    last_validated_at: Optional[str] = None
+    last_auth_method: Optional[str] = None
     max_lease_duration_seconds: int
     readiness: "ProviderProfileReadiness"
     created_at: Optional[str]
@@ -351,10 +366,16 @@ async def create_profile(
         cooldown_after_429_seconds=body.cooldown_after_429_seconds,
         rate_limit_policy=ManagedAgentRateLimitPolicy(body.rate_limit_policy),
         enabled=body.enabled,
+        auth_state=AUTH_STATE_NOT_CONFIGURED,
+        disabled_reason=(
+            DISABLED_REASON_MISSING_CREDENTIALS if not body.enabled else None
+        ),
         is_default=False,
         max_lease_duration_seconds=body.max_lease_duration_seconds,
     )
     _validate_codex_oauth_profile_row(profile)
+    if profile.enabled:
+        _require_may_enable(profile)
     session.add(profile)
     await session.flush()
     await normalize_runtime_default_profile(
@@ -394,6 +415,7 @@ async def update_profile(
 
     update_data = body.model_dump(exclude_unset=True)
     requested_is_default = update_data.pop("is_default", None)
+    requested_enabled = update_data.get("enabled")
     for key, value in update_data.items():
         if key == "rate_limit_policy" and value is not None:
             value = ManagedAgentRateLimitPolicy(value)
@@ -402,6 +424,20 @@ async def update_profile(
         elif key == "runtime_materialization_mode" and value is not None:
             value = RuntimeMaterializationMode(value)
         setattr(profile, key, value)
+
+    if requested_enabled is False:
+        if profile.auth_state == AUTH_STATE_CONNECTED:
+            profile.disabled_reason = DISABLED_REASON_USER_DISABLED
+        elif profile.auth_state == AUTH_STATE_DISCONNECTED:
+            profile.disabled_reason = DISABLED_REASON_DISCONNECTED
+        elif profile.auth_state == AUTH_STATE_VALIDATION_FAILED:
+            profile.disabled_reason = DISABLED_REASON_AUTH_INVALID
+        else:
+            profile.auth_state = AUTH_STATE_NOT_CONFIGURED
+            profile.disabled_reason = DISABLED_REASON_MISSING_CREDENTIALS
+    elif requested_enabled is True:
+        _require_may_enable(profile)
+        profile.disabled_reason = None
 
     if requested_is_default is False:
         profile.is_default = False
@@ -492,6 +528,11 @@ async def commit_claude_manual_auth(
     profile.account_label = (
         body.account_label or profile.account_label or "Claude Anthropic"
     )
+    _mark_profile_connected(
+        profile,
+        auth_method="secret_ref",
+        validated_at=validated_at,
+    )
     behavior = dict(profile.command_behavior or {})
     behavior.update(
         {
@@ -564,14 +605,19 @@ async def validate_claude_oauth_profile(
         ) from exc
 
     if not verification.get("verified", False):
+        validation_failed_at = datetime.now(UTC)
         reason = redact_sensitive_payload(str(verification.get("reason") or "unknown"))
+        _mark_profile_validation_failed(
+            profile,
+            validated_at=validation_failed_at,
+        )
         _update_claude_auth_behavior(
             profile,
             auth_state="validation_failed",
             status_label="Claude OAuth validation failed",
             readiness={
                 "connected": False,
-                "last_validated_at": datetime.now(UTC).isoformat(),
+                "last_validated_at": validation_failed_at.isoformat(),
                 "backing_secret_exists": False,
                 "launch_ready": False,
                 "failure_reason": reason,
@@ -585,6 +631,11 @@ async def validate_claude_oauth_profile(
         )
 
     validated_at = datetime.now(UTC)
+    _mark_profile_connected(
+        profile,
+        auth_method="oauth_volume",
+        validated_at=validated_at,
+    )
     _update_claude_auth_behavior(
         profile,
         auth_state="connected",
@@ -626,9 +677,10 @@ async def disconnect_claude_oauth_profile(
         profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
     profile.volume_ref = None
     profile.volume_mount_path = None
+    _mark_profile_disconnected(profile)
     _update_claude_auth_behavior(
         profile,
-        auth_state="not_connected",
+        auth_state="disconnected",
         status_label="Claude OAuth disconnected",
         readiness={
             "connected": False,
@@ -720,6 +772,87 @@ def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+def _activation_blockers(row: ManagedAgentProviderProfile) -> list[str]:
+    blockers: list[str] = []
+    auth_state = row.auth_state or AUTH_STATE_NOT_CONFIGURED
+    disabled_reason = row.disabled_reason
+    if auth_state != AUTH_STATE_CONNECTED:
+        blockers.append(f"auth_state must be connected, got {auth_state}.")
+    if disabled_reason in {
+        DISABLED_REASON_MISSING_CREDENTIALS,
+        DISABLED_REASON_AUTH_INVALID,
+        DISABLED_REASON_DISCONNECTED,
+        DISABLED_REASON_POLICY_DISABLED,
+    }:
+        blockers.append(f"disabled_reason blocks enable: {disabled_reason}.")
+
+    credential_source = row.credential_source.value if row.credential_source else None
+    materialization_mode = (
+        row.runtime_materialization_mode.value
+        if row.runtime_materialization_mode
+        else None
+    )
+    secret_check = _secret_refs_check(
+        row,
+        credential_source=credential_source,
+        managed_secret_statuses={},
+        secret_ref_results=_secret_ref_results_for_rows([row]).get(row.profile_id, {}),
+    )
+    if secret_check["status"] == "error":
+        blockers.append(secret_check["message"])
+    oauth_check = _oauth_volume_check(
+        row,
+        credential_source=credential_source,
+        materialization_mode=materialization_mode,
+    )
+    if oauth_check["status"] == "error":
+        blockers.append(oauth_check["message"])
+    provider_check = _provider_validation_check(row)
+    if provider_check["status"] == "error":
+        blockers.append(provider_check["message"])
+    return blockers
+
+def _require_may_enable(row: ManagedAgentProviderProfile) -> None:
+    blockers = _activation_blockers(row)
+    if blockers:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Provider profile cannot be enabled until credential setup "
+                "is connected and readiness blockers are resolved: "
+                + "; ".join(blockers)
+            ),
+        )
+
+def _mark_profile_connected(
+    row: ManagedAgentProviderProfile,
+    *,
+    auth_method: str,
+    validated_at: datetime,
+) -> None:
+    row.enabled = True
+    row.auth_state = AUTH_STATE_CONNECTED
+    row.disabled_reason = None
+    if row.first_authenticated_at is None:
+        row.first_authenticated_at = validated_at
+    row.last_validated_at = validated_at
+    row.last_auth_method = auth_method
+
+def _mark_profile_validation_failed(
+    row: ManagedAgentProviderProfile,
+    *,
+    validated_at: datetime,
+) -> None:
+    row.enabled = False
+    row.auth_state = AUTH_STATE_VALIDATION_FAILED
+    row.disabled_reason = DISABLED_REASON_AUTH_INVALID
+    row.last_validated_at = validated_at
+
+def _mark_profile_disconnected(row: ManagedAgentProviderProfile) -> None:
+    row.enabled = False
+    row.auth_state = AUTH_STATE_DISCONNECTED
+    row.disabled_reason = DISABLED_REASON_DISCONNECTED
 
 def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
     if row.runtime_id != "claude_code" or row.provider_id != "anthropic":
@@ -899,6 +1032,7 @@ def _provider_profile_readiness(
 
     checks = [
         _required_fields_check(row),
+        _activation_state_check(row),
         _enabled_check(row),
         _secret_refs_check(
             row,
@@ -967,6 +1101,31 @@ def _enabled_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
         "Enabled state",
         "pass" if row.enabled else "error",
         "Profile is enabled." if row.enabled else "Profile is disabled.",
+    )
+
+def _activation_state_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    auth_state = row.auth_state or AUTH_STATE_NOT_CONFIGURED
+    disabled_reason = row.disabled_reason
+    if auth_state == AUTH_STATE_CONNECTED and disabled_reason is None:
+        return _readiness_check(
+            "activation_state",
+            "Activation state",
+            "pass",
+            "Provider profile credentials are connected.",
+        )
+    if disabled_reason == DISABLED_REASON_USER_DISABLED and auth_state == AUTH_STATE_CONNECTED:
+        return _readiness_check(
+            "activation_state",
+            "Activation state",
+            "error",
+            "Provider profile was manually disabled by the user.",
+        )
+    reason = disabled_reason or "not connected"
+    return _readiness_check(
+        "activation_state",
+        "Activation state",
+        "error",
+        f"Provider profile is not launchable: auth_state={auth_state}, disabled_reason={reason}.",
     )
 
 
@@ -1151,6 +1310,17 @@ def _row_to_dict(
         ),
         "enabled": row.enabled,
         "is_default": row.is_default,
+        "auth_state": row.auth_state or AUTH_STATE_NOT_CONFIGURED,
+        "disabled_reason": row.disabled_reason,
+        "first_authenticated_at": (
+            row.first_authenticated_at.isoformat()
+            if row.first_authenticated_at
+            else None
+        ),
+        "last_validated_at": (
+            row.last_validated_at.isoformat() if row.last_validated_at else None
+        ),
+        "last_auth_method": row.last_auth_method,
         "max_lease_duration_seconds": row.max_lease_duration_seconds,
         "readiness": _provider_profile_readiness(
             row,

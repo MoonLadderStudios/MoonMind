@@ -68,9 +68,27 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert defaults["codex_default"] is None
     assert defaults["claude_anthropic"] is None
     runtime_defaults = {p.profile_id: p.is_default for p in profiles}
-    assert runtime_defaults["gemini_default"] is True
-    assert runtime_defaults["codex_default"] is True
-    assert runtime_defaults["claude_anthropic"] is True
+    assert runtime_defaults["gemini_default"] is False
+    assert runtime_defaults["codex_default"] is False
+    assert runtime_defaults["claude_anthropic"] is False
+    activation = {
+        p.profile_id: (p.enabled, p.auth_state, p.disabled_reason) for p in profiles
+    }
+    assert activation["gemini_default"] == (
+        False,
+        "not_configured",
+        "missing_credentials",
+    )
+    assert activation["codex_default"] == (
+        False,
+        "not_configured",
+        "missing_credentials",
+    )
+    assert activation["claude_anthropic"] == (
+        False,
+        "not_configured",
+        "missing_credentials",
+    )
     provider_ids = {p.profile_id: p.provider_id for p in profiles}
     assert provider_ids["codex_default"] == "openai"
     assert provider_ids["claude_anthropic"] == "anthropic"
@@ -160,7 +178,13 @@ async def test_auto_seed_includes_minimax_when_env_set(_module_db, monkeypatch):
     assert mm_profile.is_default is False
 
     anthropic_profile = next(p for p in profiles if p.profile_id == "claude_anthropic")
-    assert anthropic_profile.is_default is True
+    assert anthropic_profile.is_default is False
+    assert anthropic_profile.enabled is False
+    assert anthropic_profile.disabled_reason == "missing_credentials"
+    assert mm_profile.enabled is True
+    assert mm_profile.auth_state == "connected"
+    assert mm_profile.disabled_reason is None
+    assert mm_profile.is_default is True
 
 @pytest.mark.asyncio
 async def test_auto_seed_adds_minimax_after_initial_seed(_module_db, monkeypatch):
@@ -382,7 +406,11 @@ async def test_auto_seed_includes_openrouter_codex_profile_when_env_set(
     assert profile.cooldown_after_429_seconds == 300
 
     codex_default = next(p for p in profiles if p.profile_id == "codex_default")
-    assert codex_default.is_default is True
+    assert codex_default.is_default is False
+    assert codex_default.enabled is False
+    assert profile.enabled is True
+    assert profile.auth_state == "connected"
+    assert profile.is_default is True
 
 @pytest.mark.asyncio
 async def test_auto_seed_reconciles_openrouter_codex_config_template_for_existing_profile(

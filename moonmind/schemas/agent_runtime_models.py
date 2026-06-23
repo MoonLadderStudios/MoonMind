@@ -623,6 +623,11 @@ class ManagedAgentProviderProfile(BaseModel):
         default_factory=dict, alias="rateLimitPolicy"
     )
     enabled: bool = Field(True, alias="enabled")
+    auth_state: str = Field("not_configured", alias="authState")
+    disabled_reason: str | None = Field(None, alias="disabledReason")
+    first_authenticated_at: str | None = Field(None, alias="firstAuthenticatedAt")
+    last_validated_at: str | None = Field(None, alias="lastValidatedAt")
+    last_auth_method: str | None = Field(None, alias="lastAuthMethod")
 
     # -- Volume & account binding (optional) --
     volume_ref: str | None = Field(None, alias="volumeRef")

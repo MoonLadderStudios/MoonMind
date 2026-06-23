@@ -506,7 +506,6 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
         "rate_limit_policy": "queue",
         "default_model": "test-model-v2",
         "model_overrides": {"smart": "test-model-v3"},
-        "enabled": True
     }
     
     async with client_app as client:
@@ -519,21 +518,119 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["rate_limit_policy"] == "queue"
     assert data["default_model"] == "test-model-v2"
     assert data["model_overrides"] == {"smart": "test-model-v3"}
-    assert data["is_default"] is True
+    assert data["enabled"] is False
+    assert data["is_default"] is False
+    assert data["auth_state"] == "not_configured"
+    assert data["disabled_reason"] == "missing_credentials"
+
 
 @pytest.mark.asyncio
-async def test_create_second_profile_can_become_runtime_default(
+async def test_create_provider_profile_rejects_enabled_without_setup(
     client_app: AsyncClient,
     _module_db,
 ):
-    """Creating a second profile with is_default should move the runtime default."""
+    payload = {
+        "profile_id": "new_enabled_profile",
+        "runtime_id": "claude_v1",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://secret_v1"},
+        "enabled": True,
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 422
+    assert "cannot be enabled until credential setup is connected" in response.text
+
+
+@pytest.mark.asyncio
+async def test_patch_enabled_requires_connected_activation_state(
+    client_app: AsyncClient,
+    _module_db,
+):
+    profile_id = "setup_stub_patch_enable"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                enabled=False,
+                auth_state="not_configured",
+                disabled_reason="missing_credentials",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": True},
+        )
+
+    assert response.status_code == 422
+    assert "auth_state must be connected" in response.text
+
+
+@pytest.mark.asyncio
+async def test_manual_disable_persists_user_disabled_until_explicit_enable(
+    client_app: AsyncClient,
+    _module_db,
+):
+    profile_id = "connected_manual_disable"
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                enabled=True,
+                auth_state="connected",
+                disabled_reason=None,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        disabled_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": False},
+        )
+        enabled_response = await client.patch(
+            f"/api/v1/provider-profiles/{profile_id}",
+            json={"enabled": True},
+        )
+
+    assert disabled_response.status_code == 200
+    assert disabled_response.json()["enabled"] is False
+    assert disabled_response.json()["auth_state"] == "connected"
+    assert disabled_response.json()["disabled_reason"] == "user_disabled"
+    assert enabled_response.status_code == 200
+    assert enabled_response.json()["enabled"] is True
+    assert enabled_response.json()["disabled_reason"] is None
+
+@pytest.mark.asyncio
+async def test_disabled_created_profiles_do_not_become_runtime_default(
+    client_app: AsyncClient,
+    _module_db,
+):
+    """Raw profile creation creates setup stubs that cannot become defaults."""
     first_payload = {
         "profile_id": "runtime_default_first",
         "runtime_id": "codex_cli",
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://first_secret"},
-        "enabled": True,
     }
     second_payload = {
         "profile_id": "runtime_default_second",
@@ -541,7 +638,6 @@ async def test_create_second_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://second_secret"},
-        "enabled": True,
         "is_default": True,
     }
 
@@ -551,14 +647,14 @@ async def test_create_second_profile_can_become_runtime_default(
         listed = await client.get("/api/v1/provider-profiles", params={"runtime_id": "codex_cli"})
 
     assert first_response.status_code == 201
-    assert first_response.json()["is_default"] is True
+    assert first_response.json()["is_default"] is False
     assert second_response.status_code == 201
-    assert second_response.json()["is_default"] is True
+    assert second_response.json()["is_default"] is False
     assert listed.status_code == 200
 
     profiles = {profile["profile_id"]: profile for profile in listed.json()}
     assert profiles["runtime_default_first"]["is_default"] is False
-    assert profiles["runtime_default_second"]["is_default"] is True
+    assert profiles["runtime_default_second"]["is_default"] is False
 
 @pytest.mark.asyncio
 async def test_update_profile_can_become_runtime_default(
@@ -571,7 +667,6 @@ async def test_update_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_first_secret"},
-        "enabled": True,
         "is_default": True,
     }
     second_payload = {
@@ -580,7 +675,6 @@ async def test_update_profile_can_become_runtime_default(
         "credential_source": "secret_ref",
         "runtime_materialization_mode": "api_key_env",
         "secret_refs": {"API_KEY": "env://patch_second_secret"},
-        "enabled": True,
     }
 
     async with client_app as client:
@@ -603,7 +697,7 @@ async def test_update_profile_can_become_runtime_default(
 
     profiles = {profile["profile_id"]: profile for profile in listed.json()}
     assert profiles["patch_runtime_default_first"]["is_default"] is False
-    assert profiles["patch_runtime_default_second"]["is_default"] is True
+    assert profiles["patch_runtime_default_second"]["is_default"] is False
 
 
 @pytest.mark.asyncio
@@ -1035,6 +1129,12 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert submitted_token not in profile_response.text
     assert profile_payload["credential_source"] == "secret_ref"
     assert profile_payload["runtime_materialization_mode"] == "api_key_env"
+    assert profile_payload["enabled"] is True
+    assert profile_payload["auth_state"] == "connected"
+    assert profile_payload["disabled_reason"] is None
+    assert profile_payload["first_authenticated_at"] is not None
+    assert profile_payload["last_validated_at"] is not None
+    assert profile_payload["last_auth_method"] == "secret_ref"
     assert profile_payload["volume_ref"] == "claude_auth_volume"
     assert profile_payload["volume_mount_path"] == "/home/app/.claude"
     assert profile_payload["secret_refs"] == {
@@ -1156,6 +1256,9 @@ async def test_claude_oauth_lifecycle_actions_validate_and_disconnect(
     assert disconnect_response.json()["status"] == "disconnected"
     profile_payload = profile_response.json()
     assert profile_payload["credential_source"] == "none"
+    assert profile_payload["enabled"] is False
+    assert profile_payload["auth_state"] == "disconnected"
+    assert profile_payload["disabled_reason"] == "disconnected"
     assert profile_payload["volume_ref"] is None
     assert profile_payload["volume_mount_path"] is None
     assert profile_payload["command_behavior"]["auth_actions"] == ["use_api_key"]
@@ -1436,6 +1539,9 @@ async def test_claude_oauth_validate_failure_redacts_secret_like_reason(
     async with db_base.async_session_maker() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
         assert profile is not None
+        assert profile.enabled is False
+        assert profile.auth_state == "validation_failed"
+        assert profile.disabled_reason == "auth_invalid"
         readiness = (profile.command_behavior or {}).get("auth_readiness", {})
         assert raw_secret not in str(readiness)
         assert raw_path not in str(readiness)

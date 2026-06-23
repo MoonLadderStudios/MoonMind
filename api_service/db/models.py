@@ -1961,6 +1961,7 @@ class ManagedAgentProviderProfile(Base):
         Index("ix_provider_profiles_runtime", "runtime_id"),
         Index("ix_provider_profiles_provider", "provider_id"),
         Index("ix_provider_profiles_enabled", "enabled"),
+        Index("ix_provider_profiles_auth_state", "auth_state"),
         Index(
             "ux_provider_profiles_runtime_default",
             "runtime_id",
@@ -2009,6 +2010,20 @@ class ManagedAgentProviderProfile(Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    auth_state: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="not_configured",
+        server_default=text("'not_configured'"),
+    )
+    disabled_reason: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    first_authenticated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_validated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_auth_method: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
 
     tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
