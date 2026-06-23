@@ -18,6 +18,8 @@ from api_service.db.models import (
     ManagedAgentRateLimitPolicy,
     ManagedSecret,
     ProviderCredentialSource,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
 )
 from api_service.main import app
@@ -1035,6 +1037,12 @@ async def test_claude_manual_auth_commit_stores_secret_ref_only(
     assert submitted_token not in profile_response.text
     assert profile_payload["credential_source"] == "secret_ref"
     assert profile_payload["runtime_materialization_mode"] == "api_key_env"
+    assert profile_payload["enabled"] is True
+    assert profile_payload["auth_state"] == "connected"
+    assert profile_payload["disabled_reason"] is None
+    assert profile_payload["first_authenticated_at"] is not None
+    assert profile_payload["last_validated_at"] is not None
+    assert profile_payload["last_auth_method"] == "secret_ref"
     assert profile_payload["volume_ref"] == "claude_auth_volume"
     assert profile_payload["volume_mount_path"] == "/home/app/.claude"
     assert profile_payload["secret_refs"] == {
@@ -1156,6 +1164,10 @@ async def test_claude_oauth_lifecycle_actions_validate_and_disconnect(
     assert disconnect_response.json()["status"] == "disconnected"
     profile_payload = profile_response.json()
     assert profile_payload["credential_source"] == "none"
+    assert profile_payload["enabled"] is False
+    assert profile_payload["auth_state"] == "disconnected"
+    assert profile_payload["disabled_reason"] == "disconnected"
+    assert profile_payload["last_validated_at"] is not None
     assert profile_payload["volume_ref"] is None
     assert profile_payload["volume_mount_path"] is None
     assert profile_payload["command_behavior"]["auth_actions"] == ["use_api_key"]
@@ -1432,6 +1444,15 @@ async def test_claude_oauth_validate_failure_redacts_secret_like_reason(
     assert "Claude OAuth validation failed:" in detail
     assert "[REDACTED]" in detail
     assert "[REDACTED_AUTH_PATH]" in detail
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is False
+        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+        assert profile.disabled_reason == ProviderProfileDisabledReason.AUTH_INVALID
+        assert profile.last_validated_at is not None
+        assert profile.last_auth_method is None
 
     async with db_base.async_session_maker() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)

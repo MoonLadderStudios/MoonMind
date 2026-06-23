@@ -1953,6 +1953,32 @@ class ManagedAgentRateLimitPolicy(str, enum.Enum):
     QUEUE = "queue"
     FAIL_FAST = "fail_fast"
 
+class ProviderProfileAuthState(str, enum.Enum):
+    """Canonical provider profile credential activation state."""
+
+    NOT_CONFIGURED = "not_configured"
+    OAUTH_PENDING = "oauth_pending"
+    API_KEY_PENDING = "api_key_pending"
+    CONNECTED = "connected"
+    VALIDATION_FAILED = "validation_failed"
+    DISCONNECTED = "disconnected"
+
+class ProviderProfileDisabledReason(str, enum.Enum):
+    """Canonical reason a provider profile is disabled."""
+
+    MISSING_CREDENTIALS = "missing_credentials"
+    AUTH_INVALID = "auth_invalid"
+    USER_DISABLED = "user_disabled"
+    POLICY_DISABLED = "policy_disabled"
+    DISCONNECTED = "disconnected"
+
+class ProviderProfileAuthMethod(str, enum.Enum):
+    """Credential method that last authenticated a provider profile."""
+
+    OAUTH_VOLUME = "oauth_volume"
+    SECRET_REF = "secret_ref"
+    MANUAL = "manual"
+
 class ManagedAgentProviderProfile(Base):
     """Named provider configuration and execution policy for a managed agent runtime."""
 
@@ -2012,6 +2038,44 @@ class ManagedAgentProviderProfile(Base):
 
     tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     priority: Mapped[int] = mapped_column(Integer, nullable=False, default=100, server_default=text("100"))
+    auth_state: Mapped[ProviderProfileAuthState] = mapped_column(
+        Enum(
+            ProviderProfileAuthState,
+            name="providerprofileauthstate",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=ProviderProfileAuthState.NOT_CONFIGURED,
+        server_default=ProviderProfileAuthState.NOT_CONFIGURED.value,
+    )
+    disabled_reason: Mapped[Optional[ProviderProfileDisabledReason]] = mapped_column(
+        Enum(
+            ProviderProfileDisabledReason,
+            name="providerprofiledisabledreason",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
+    )
+    first_authenticated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_validated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_auth_method: Mapped[Optional[ProviderProfileAuthMethod]] = mapped_column(
+        Enum(
+            ProviderProfileAuthMethod,
+            name="providerprofileauthmethod",
+            native_enum=True,
+            validate_strings=True,
+            values_callable=_enum_values,
+        ),
+        nullable=True,
+    )
 
     volume_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     volume_mount_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)

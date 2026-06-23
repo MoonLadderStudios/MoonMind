@@ -2842,6 +2842,25 @@ class TemporalArtifactActivities:
                     "volume_mount_path": row.volume_mount_path,
                     "account_label": row.account_label,
                     "secret_refs": row.secret_refs or {},
+                    "auth_state": (
+                        row.auth_state.value if row.auth_state else "not_configured"
+                    ),
+                    "disabled_reason": (
+                        row.disabled_reason.value if row.disabled_reason else None
+                    ),
+                    "first_authenticated_at": (
+                        row.first_authenticated_at.isoformat()
+                        if row.first_authenticated_at
+                        else None
+                    ),
+                    "last_validated_at": (
+                        row.last_validated_at.isoformat()
+                        if row.last_validated_at
+                        else None
+                    ),
+                    "last_auth_method": (
+                        row.last_auth_method.value if row.last_auth_method else None
+                    ),
                     "clear_env_keys": row.clear_env_keys or [],
                     "env_template": row.env_template or {},
                     "file_templates": row.file_templates or [],

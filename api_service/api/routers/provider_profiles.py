@@ -18,6 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user
 from api_service.db.models import (
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
     ManagedAgentProviderProfile,
     ManagedAgentRateLimitPolicy,
@@ -82,6 +85,18 @@ class ProviderProfileCreate(BaseModel):
     
     tags: Optional[list[str]] = None
     priority: int = Field(default=100)
+    auth_state: str = Field(
+        default="not_configured",
+        pattern="^(not_configured|oauth_pending|api_key_pending|connected|validation_failed|disconnected)$",
+    )
+    disabled_reason: Optional[str] = Field(
+        default=None,
+        pattern="^(missing_credentials|auth_invalid|user_disabled|policy_disabled|disconnected)$",
+    )
+    last_auth_method: Optional[str] = Field(
+        default=None,
+        pattern="^(oauth_volume|secret_ref|manual)$",
+    )
     
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
@@ -138,6 +153,18 @@ class ProviderProfileUpdate(BaseModel):
     account_label: Optional[str] = None
     tags: Optional[list[str]] = None
     priority: Optional[int] = None
+    auth_state: Optional[str] = Field(
+        default=None,
+        pattern="^(not_configured|oauth_pending|api_key_pending|connected|validation_failed|disconnected)$",
+    )
+    disabled_reason: Optional[str] = Field(
+        default=None,
+        pattern="^(missing_credentials|auth_invalid|user_disabled|policy_disabled|disconnected)$",
+    )
+    last_auth_method: Optional[str] = Field(
+        default=None,
+        pattern="^(oauth_volume|secret_ref|manual)$",
+    )
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
     env_template: Optional[dict[str, Any]] = None
@@ -189,6 +216,11 @@ class ProviderProfileResponse(BaseModel):
     account_label: Optional[str]
     tags: Optional[list[str]] = None
     priority: int = 100
+    auth_state: str = "not_configured"
+    disabled_reason: Optional[str] = None
+    first_authenticated_at: Optional[str] = None
+    last_validated_at: Optional[str] = None
+    last_auth_method: Optional[str] = None
     secret_refs: Optional[dict[str, str]] = None
     clear_env_keys: Optional[list[str]] = None
     env_template: Optional[dict[str, Any]] = None
@@ -236,6 +268,30 @@ class ClaudeManualAuthCommitResponse(BaseModel):
     readiness: ClaudeManualAuthReadiness
     profile_id: str
     secret_ref: str
+
+
+def _set_profile_auth_lifecycle(
+    profile: ManagedAgentProviderProfile,
+    *,
+    auth_state: ProviderProfileAuthState,
+    disabled_reason: ProviderProfileDisabledReason | None,
+    last_auth_method: ProviderProfileAuthMethod | None = None,
+    validated_at: datetime | None = None,
+    enabled: bool | None = None,
+) -> None:
+    profile.auth_state = auth_state
+    profile.disabled_reason = disabled_reason
+    if enabled is not None:
+        profile.enabled = enabled
+    if validated_at is not None:
+        if (
+            auth_state == ProviderProfileAuthState.CONNECTED
+            and profile.first_authenticated_at is None
+        ):
+            profile.first_authenticated_at = validated_at
+        profile.last_validated_at = validated_at
+    if last_auth_method is not None:
+        profile.last_auth_method = last_auth_method
 
 # ---------------------------------------------------------------------------
 # Dependency: DB session
@@ -340,6 +396,17 @@ async def create_profile(
         account_label=body.account_label,
         tags=body.tags,
         priority=body.priority,
+        auth_state=ProviderProfileAuthState(body.auth_state),
+        disabled_reason=(
+            ProviderProfileDisabledReason(body.disabled_reason)
+            if body.disabled_reason is not None
+            else None
+        ),
+        last_auth_method=(
+            ProviderProfileAuthMethod(body.last_auth_method)
+            if body.last_auth_method is not None
+            else None
+        ),
         secret_refs=body.secret_refs,
         clear_env_keys=body.clear_env_keys,
         env_template=body.env_template,
@@ -401,6 +468,12 @@ async def update_profile(
             value = ProviderCredentialSource(value)
         elif key == "runtime_materialization_mode" and value is not None:
             value = RuntimeMaterializationMode(value)
+        elif key == "auth_state" and value is not None:
+            value = ProviderProfileAuthState(value)
+        elif key == "disabled_reason" and value is not None:
+            value = ProviderProfileDisabledReason(value)
+        elif key == "last_auth_method" and value is not None:
+            value = ProviderProfileAuthMethod(value)
         setattr(profile, key, value)
 
     if requested_is_default is False:
@@ -492,6 +565,14 @@ async def commit_claude_manual_auth(
     profile.account_label = (
         body.account_label or profile.account_label or "Claude Anthropic"
     )
+    _set_profile_auth_lifecycle(
+        profile,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        last_auth_method=ProviderProfileAuthMethod.SECRET_REF,
+        validated_at=validated_at,
+        enabled=True,
+    )
     behavior = dict(profile.command_behavior or {})
     behavior.update(
         {
@@ -564,14 +645,22 @@ async def validate_claude_oauth_profile(
         ) from exc
 
     if not verification.get("verified", False):
+        failed_at = datetime.now(UTC)
         reason = redact_sensitive_payload(str(verification.get("reason") or "unknown"))
+        _set_profile_auth_lifecycle(
+            profile,
+            auth_state=ProviderProfileAuthState.VALIDATION_FAILED,
+            disabled_reason=ProviderProfileDisabledReason.AUTH_INVALID,
+            validated_at=failed_at,
+            enabled=False,
+        )
         _update_claude_auth_behavior(
             profile,
             auth_state="validation_failed",
             status_label="Claude OAuth validation failed",
             readiness={
                 "connected": False,
-                "last_validated_at": datetime.now(UTC).isoformat(),
+                "last_validated_at": failed_at.isoformat(),
                 "backing_secret_exists": False,
                 "launch_ready": False,
                 "failure_reason": reason,
@@ -585,6 +674,14 @@ async def validate_claude_oauth_profile(
         )
 
     validated_at = datetime.now(UTC)
+    _set_profile_auth_lifecycle(
+        profile,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+        validated_at=validated_at,
+        enabled=True,
+    )
     _update_claude_auth_behavior(
         profile,
         auth_state="connected",
@@ -626,17 +723,26 @@ async def disconnect_claude_oauth_profile(
         profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
     profile.volume_ref = None
     profile.volume_mount_path = None
+    disconnected_at = datetime.now(UTC)
+    _set_profile_auth_lifecycle(
+        profile,
+        auth_state=ProviderProfileAuthState.DISCONNECTED,
+        disabled_reason=ProviderProfileDisabledReason.DISCONNECTED,
+        validated_at=disconnected_at,
+        enabled=False,
+    )
     _update_claude_auth_behavior(
         profile,
-        auth_state="not_connected",
+        auth_state="disconnected",
         status_label="Claude OAuth disconnected",
         readiness={
             "connected": False,
-            "last_validated_at": datetime.now(UTC).isoformat(),
+            "last_validated_at": disconnected_at.isoformat(),
             "backing_secret_exists": False,
             "launch_ready": False,
         },
     )
+    await normalize_runtime_default_profile(session=session, runtime_id=profile.runtime_id)
     await session.commit()
     await session.refresh(profile)
     await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
@@ -1138,6 +1244,21 @@ def _row_to_dict(
         "account_label": row.account_label,
         "tags": row.tags or [],
         "priority": row.priority,
+        "auth_state": row.auth_state.value if row.auth_state else "not_configured",
+        "disabled_reason": (
+            row.disabled_reason.value if row.disabled_reason else None
+        ),
+        "first_authenticated_at": (
+            row.first_authenticated_at.isoformat()
+            if row.first_authenticated_at
+            else None
+        ),
+        "last_validated_at": (
+            row.last_validated_at.isoformat() if row.last_validated_at else None
+        ),
+        "last_auth_method": (
+            row.last_auth_method.value if row.last_auth_method else None
+        ),
         "secret_refs": row.secret_refs or {},
         "clear_env_keys": row.clear_env_keys or [],
         "env_template": row.env_template or {},

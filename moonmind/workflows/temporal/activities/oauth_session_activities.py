@@ -24,6 +24,8 @@ from temporalio import activity, exceptions
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
     ManagedAgentOAuthSession,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     OAuthSessionStatus,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
@@ -33,6 +35,64 @@ from moonmind.workflows.temporal.runtime.providers.registry import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _oauth_runtime_profile_defaults(
+    runtime_id: str, *, volume_mount_path: str | None
+) -> dict[str, object]:
+    if runtime_id == "claude_code":
+        return {
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "clear_env_keys": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+            "home_path_overrides": (
+                {"CLAUDE_HOME": volume_mount_path} if volume_mount_path else {}
+            ),
+            "command_behavior": {
+                "auth_status_label": "Claude OAuth ready",
+                "auth_readiness": {"connected": True, "launch_ready": True},
+            },
+        }
+    if runtime_id == "gemini_cli":
+        return {
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "clear_env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            "home_path_overrides": (
+                {
+                    "GEMINI_HOME": volume_mount_path,
+                    "GEMINI_CLI_HOME": volume_mount_path,
+                }
+                if volume_mount_path
+                else {}
+            ),
+            "command_behavior": {
+                "auth_status_label": "Gemini OAuth ready",
+                "auth_readiness": {"connected": True, "launch_ready": True},
+            },
+        }
+    if runtime_id == "codex_cli":
+        return {
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "clear_env_keys": ["OPENAI_API_KEY", "MINIMAX_API_KEY"],
+            "home_path_overrides": (
+                {"CODEX_HOME": volume_mount_path} if volume_mount_path else {}
+            ),
+            "command_behavior": {
+                "auth_status_label": "Codex OAuth ready",
+                "auth_readiness": {"connected": True, "launch_ready": True},
+            },
+        }
+    return {
+        "tags": ["oauth"],
+        "priority": 100,
+        "clear_env_keys": [],
+        "home_path_overrides": {},
+        "command_behavior": {
+            "auth_status_label": "OAuth ready",
+            "auth_readiness": {"connected": True, "launch_ready": True},
+        },
+    }
 
 @activity.defn(name="oauth_session.ensure_volume")
 async def oauth_session_ensure_volume(
@@ -377,6 +437,11 @@ async def oauth_session_register_profile(
         except ValueError:
             policy_enum = ManagedAgentRateLimitPolicy.BACKOFF
 
+        validated_at = datetime.now(timezone.utc)
+        runtime_defaults = _oauth_runtime_profile_defaults(
+            session_obj.runtime_id,
+            volume_mount_path=session_obj.volume_mount_path,
+        )
         profile_data = {
             "runtime_id": session_obj.runtime_id,
             "provider_id": metadata.get("provider_id")
@@ -389,6 +454,20 @@ async def oauth_session_register_profile(
             "volume_ref": session_obj.volume_ref,
             "volume_mount_path": session_obj.volume_mount_path,
             "account_label": session_obj.account_label,
+            "tags": runtime_defaults["tags"],
+            "priority": runtime_defaults["priority"],
+            "clear_env_keys": runtime_defaults["clear_env_keys"],
+            "home_path_overrides": runtime_defaults["home_path_overrides"],
+            "command_behavior": runtime_defaults["command_behavior"],
+            "auth_state": ProviderProfileAuthState.CONNECTED,
+            "disabled_reason": None,
+            "first_authenticated_at": (
+                existing_profile.first_authenticated_at
+                if existing_profile and existing_profile.first_authenticated_at
+                else validated_at
+            ),
+            "last_validated_at": validated_at,
+            "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
             "max_parallel_runs": metadata.get("max_parallel_runs", 1),
             "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
             "rate_limit_policy": policy_enum,

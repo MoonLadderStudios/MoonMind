@@ -87,9 +87,30 @@ async def test_auto_seed_creates_default_profiles(_module_db, monkeypatch):
     assert claude_profile.volume_mount_path == "/home/app/.claude"
     assert claude_profile.clear_env_keys == [
         "ANTHROPIC_API_KEY",
-        "CLAUDE_API_KEY",
-        "OPENAI_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
     ]
+    assert claude_profile.tags == ["default", "oauth", "first-party"]
+    assert claude_profile.home_path_overrides == {"CLAUDE_HOME": "/home/app/.claude"}
+    assert claude_profile.command_behavior == {
+        "auth_status_label": "Claude OAuth ready",
+        "auth_readiness": {
+            "connected": True,
+            "launch_ready": True,
+        },
+    }
+
+    codex_profile = next(p for p in profiles if p.profile_id == "codex_default")
+    assert codex_profile.clear_env_keys == ["OPENAI_API_KEY", "MINIMAX_API_KEY"]
+    assert codex_profile.tags == ["default", "oauth", "first-party"]
+    assert codex_profile.home_path_overrides == {"CODEX_HOME": "/home/app/.codex"}
+
+    gemini_profile = next(p for p in profiles if p.profile_id == "gemini_default")
+    assert gemini_profile.clear_env_keys == ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
+    assert gemini_profile.tags == ["default", "oauth", "first-party"]
+    assert gemini_profile.home_path_overrides == {
+        "GEMINI_HOME": "/var/lib/gemini-auth",
+        "GEMINI_CLI_HOME": "/var/lib/gemini-auth",
+    }
 
 @pytest.mark.asyncio
 async def test_auto_seed_is_idempotent(_module_db, monkeypatch):
@@ -270,7 +291,7 @@ async def test_auto_seed_reconciles_legacy_codex_default_provider(
 async def test_auto_seed_backfills_claude_api_key_clear_env_for_existing_profile(
     _module_db, monkeypatch
 ):
-    """Existing Claude OAuth profiles should clear the newer Claude API key alias."""
+    """Existing Claude OAuth profiles should clear the documented auth token key."""
     from api_service.main import _auto_seed_provider_profiles
 
     monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
@@ -293,7 +314,7 @@ async def test_auto_seed_backfills_claude_api_key_clear_env_for_existing_profile
             "ANTHROPIC_API_KEY",
             "OPENAI_API_KEY",
             "CUSTOM_ENV",
-            "CLAUDE_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
         ]
 
 @pytest.mark.asyncio

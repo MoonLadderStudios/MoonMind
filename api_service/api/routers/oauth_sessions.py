@@ -27,6 +27,9 @@ from api_service.db.models import (
     User,
     ManagedAgentProviderProfile,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
     ManagedAgentRateLimitPolicy,
 )
@@ -196,6 +199,126 @@ def _oauth_session_is_expired(session: ManagedAgentOAuthSession) -> bool:
 
 def _oauth_default(runtime_id: str, key: str) -> str | None:
     return get_provider_default(runtime_id, key)
+
+def _oauth_runtime_profile_defaults(
+    runtime_id: str,
+    *,
+    volume_mount_path: str | None,
+) -> dict[str, object]:
+    if runtime_id == "claude_code":
+        return {
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "clear_env_keys": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+            "home_path_overrides": (
+                {"CLAUDE_HOME": volume_mount_path} if volume_mount_path else {}
+            ),
+            "command_behavior": {
+                "auth_status_label": "Claude OAuth ready",
+                "auth_readiness": {"connected": True, "launch_ready": True},
+            },
+        }
+    if runtime_id == "gemini_cli":
+        return {
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "clear_env_keys": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+            "home_path_overrides": (
+                {
+                    "GEMINI_HOME": volume_mount_path,
+                    "GEMINI_CLI_HOME": volume_mount_path,
+                }
+                if volume_mount_path
+                else {}
+            ),
+            "command_behavior": {
+                "auth_status_label": "Gemini OAuth ready",
+                "auth_readiness": {"connected": True, "launch_ready": True},
+            },
+        }
+    if runtime_id == "codex_cli":
+        return {
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "clear_env_keys": ["OPENAI_API_KEY", "MINIMAX_API_KEY"],
+            "home_path_overrides": (
+                {"CODEX_HOME": volume_mount_path} if volume_mount_path else {}
+            ),
+            "command_behavior": {
+                "auth_status_label": "Codex OAuth ready",
+                "auth_readiness": {"connected": True, "launch_ready": True},
+            },
+        }
+    return {
+        "tags": ["oauth"],
+        "priority": 100,
+        "clear_env_keys": [],
+        "home_path_overrides": {},
+        "command_behavior": {
+            "auth_status_label": "OAuth ready",
+            "auth_readiness": {"connected": True, "launch_ready": True},
+        },
+    }
+
+def _failed_oauth_command_behavior(
+    runtime_id: str,
+    *,
+    reason: str,
+    validated_at: datetime,
+) -> dict[str, object]:
+    label = {
+        "claude_code": "Claude OAuth validation failed",
+        "gemini_cli": "Gemini OAuth validation failed",
+        "codex_cli": "Codex OAuth validation failed",
+    }.get(runtime_id, "OAuth validation failed")
+    return {
+        "auth_status_label": label,
+        "auth_state": ProviderProfileAuthState.VALIDATION_FAILED.value,
+        "auth_readiness": {
+            "connected": False,
+            "launch_ready": False,
+            "failure_reason": reason,
+            "last_validated_at": validated_at.isoformat(),
+        },
+    }
+
+async def _mark_profile_oauth_validation_failed(
+    db: AsyncSession,
+    *,
+    session_obj: ManagedAgentOAuthSession,
+    current_user: User,
+    reason: str,
+    existing_profile: ManagedAgentProviderProfile | None,
+) -> None:
+    failed_at = datetime.now(timezone.utc)
+    metadata = session_obj.metadata_json or {}
+    profile = existing_profile
+    if profile is None:
+        profile = ManagedAgentProviderProfile(
+            profile_id=session_obj.profile_id,
+            runtime_id=session_obj.runtime_id,
+            provider_id=metadata.get("provider_id")
+            or _oauth_default(session_obj.runtime_id, "provider_id")
+            or "unknown",
+            provider_label=metadata.get("provider_label")
+            or _oauth_default(session_obj.runtime_id, "provider_label"),
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+            volume_ref=session_obj.volume_ref,
+            volume_mount_path=session_obj.volume_mount_path,
+            account_label=session_obj.account_label,
+            owner_user_id=current_user.id,
+        )
+        db.add(profile)
+    profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+    profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+    profile.enabled = False
+    profile.last_validated_at = failed_at
+    profile.command_behavior = _failed_oauth_command_behavior(
+        session_obj.runtime_id,
+        reason=reason,
+        validated_at=failed_at,
+    )
 
 def _provider_profile_summary(
     profile: ManagedAgentProviderProfile | None,
@@ -683,6 +806,22 @@ async def finalize_oauth_session(
     ]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Cannot finalize session in {session_obj.status.name} state")
 
+    profile_result = await db.execute(
+        select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.profile_id == session_obj.profile_id
+        )
+    )
+    existing_profile = profile_result.scalars().first()
+    if (
+        existing_profile
+        and existing_profile.owner_user_id is not None
+        and str(existing_profile.owner_user_id) != str(current_user.id)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this profile",
+        )
+
     if not skip_verification:
         session_obj.status = OAuthSessionStatus.VERIFYING
         await db.commit()
@@ -699,11 +838,19 @@ async def finalize_oauth_session(
                 volume_mount_path=session_obj.volume_mount_path,
             )
             if not verification.get("verified", False):
-                session_obj.status = OAuthSessionStatus.FAILED
-                session_obj.completed_at = datetime.now(timezone.utc)
-                session_obj.failure_reason = (
+                failure_reason = (
                     "Volume verification failed: "
                     f"{verification.get('reason', 'unknown')}"
+                )
+                session_obj.status = OAuthSessionStatus.FAILED
+                session_obj.completed_at = datetime.now(timezone.utc)
+                session_obj.failure_reason = failure_reason
+                await _mark_profile_oauth_validation_failed(
+                    db,
+                    session_obj=session_obj,
+                    current_user=current_user,
+                    reason=failure_reason,
+                    existing_profile=existing_profile,
                 )
                 await db.commit()
                 await _stop_oauth_auth_runner(session_obj)
@@ -725,6 +872,13 @@ async def finalize_oauth_session(
             session_obj.status = OAuthSessionStatus.FAILED
             session_obj.completed_at = datetime.now(timezone.utc)
             session_obj.failure_reason = "Volume verification unavailable"
+            await _mark_profile_oauth_validation_failed(
+                db,
+                session_obj=session_obj,
+                current_user=current_user,
+                reason=session_obj.failure_reason,
+                existing_profile=existing_profile,
+            )
             await db.commit()
             await _stop_oauth_auth_runner(session_obj)
             await _fail_oauth_session_workflow(
@@ -734,13 +888,6 @@ async def finalize_oauth_session(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=session_obj.failure_reason,
             )
-
-    profile_result = await db.execute(
-        select(ManagedAgentProviderProfile).where(
-            ManagedAgentProviderProfile.profile_id == session_obj.profile_id
-        )
-    )
-    existing_profile = profile_result.scalars().first()
 
     metadata = session_obj.metadata_json or {}
     policy_str = metadata.get("rate_limit_policy", ManagedAgentRateLimitPolicy.BACKOFF.value)
@@ -753,16 +900,11 @@ async def finalize_oauth_session(
             detail=f"Unsupported rate_limit_policy: {policy_str}"
         )
 
-    if (
-        existing_profile
-        and existing_profile.owner_user_id is not None
-        and str(existing_profile.owner_user_id) != str(current_user.id)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to update this profile",
-        )
-
+    validated_at = datetime.now(timezone.utc)
+    runtime_defaults = _oauth_runtime_profile_defaults(
+        session_obj.runtime_id,
+        volume_mount_path=session_obj.volume_mount_path,
+    )
     profile_data = {
         "runtime_id": session_obj.runtime_id,
         "provider_id": metadata.get("provider_id")
@@ -775,6 +917,20 @@ async def finalize_oauth_session(
         "volume_ref": session_obj.volume_ref,
         "volume_mount_path": session_obj.volume_mount_path,
         "account_label": session_obj.account_label,
+        "tags": runtime_defaults["tags"],
+        "priority": runtime_defaults["priority"],
+        "clear_env_keys": runtime_defaults["clear_env_keys"],
+        "home_path_overrides": runtime_defaults["home_path_overrides"],
+        "command_behavior": runtime_defaults["command_behavior"],
+        "auth_state": ProviderProfileAuthState.CONNECTED,
+        "disabled_reason": None,
+        "first_authenticated_at": (
+            existing_profile.first_authenticated_at
+            if existing_profile and existing_profile.first_authenticated_at
+            else validated_at
+        ),
+        "last_validated_at": validated_at,
+        "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
         "max_parallel_runs": metadata.get("max_parallel_runs", 1),
         "cooldown_after_429_seconds": metadata.get("cooldown_after_429_seconds", 900),
         "rate_limit_policy": policy_enum,

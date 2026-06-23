@@ -627,6 +627,8 @@ async def _auto_seed_provider_profiles() -> list[str]:
     from api_service.db.models import (
         ManagedAgentProviderProfile,
         ProviderCredentialSource,
+        ProviderProfileAuthMethod,
+        ProviderProfileAuthState,
         RuntimeMaterializationMode,
         ManagedAgentRateLimitPolicy,
     )
@@ -656,6 +658,27 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_mount_path": get_provider_default(
                 "gemini_cli", "volume_mount_path"
             ),
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "auth_state": ProviderProfileAuthState.CONNECTED,
+            "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
+            "clear_env_keys": [
+                "GEMINI_API_KEY",
+                "GOOGLE_API_KEY",
+            ],
+            "home_path_overrides": {
+                "GEMINI_HOME": get_provider_default("gemini_cli", "volume_mount_path"),
+                "GEMINI_CLI_HOME": get_provider_default(
+                    "gemini_cli", "volume_mount_path"
+                ),
+            },
+            "command_behavior": {
+                "auth_status_label": "Gemini OAuth ready",
+                "auth_readiness": {
+                    "connected": True,
+                    "launch_ready": True,
+                },
+            },
             "account_label": "Gemini CLI (auto-seeded)",
         },
         {
@@ -669,6 +692,24 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "runtime_materialization_mode": RuntimeMaterializationMode.OAUTH_HOME,
             "volume_ref": get_provider_default("codex_cli", "volume_ref"),
             "volume_mount_path": get_provider_default("codex_cli", "volume_mount_path"),
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "auth_state": ProviderProfileAuthState.CONNECTED,
+            "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
+            "clear_env_keys": [
+                "OPENAI_API_KEY",
+                "MINIMAX_API_KEY",
+            ],
+            "home_path_overrides": {
+                "CODEX_HOME": get_provider_default("codex_cli", "volume_mount_path"),
+            },
+            "command_behavior": {
+                "auth_status_label": "Codex OAuth ready",
+                "auth_readiness": {
+                    "connected": True,
+                    "launch_ready": True,
+                },
+            },
             "account_label": "Codex CLI (auto-seeded)",
         },
         {
@@ -684,11 +725,26 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "volume_mount_path": get_provider_default(
                 "claude_code", "volume_mount_path"
             ),
+            "tags": ["default", "oauth", "first-party"],
+            "priority": 100,
+            "auth_state": ProviderProfileAuthState.CONNECTED,
+            "last_auth_method": ProviderProfileAuthMethod.OAUTH_VOLUME,
             "clear_env_keys": [
                 "ANTHROPIC_API_KEY",
-                "CLAUDE_API_KEY",
-                "OPENAI_API_KEY",
+                "ANTHROPIC_AUTH_TOKEN",
             ],
+            "home_path_overrides": {
+                "CLAUDE_HOME": get_provider_default(
+                    "claude_code", "volume_mount_path"
+                ),
+            },
+            "command_behavior": {
+                "auth_status_label": "Claude OAuth ready",
+                "auth_readiness": {
+                    "connected": True,
+                    "launch_ready": True,
+                },
+            },
             "account_label": "Claude Code (auto-seeded)",
         },
 
@@ -915,11 +971,18 @@ async def _auto_seed_provider_profiles() -> list[str]:
                     provider_id=profile_def["provider_id"],
                     provider_label=profile_def.get("provider_label"),
                     default_model=profile_def.get("default_model"),
+                    model_overrides=profile_def.get("model_overrides"),
                     credential_source=profile_def["credential_source"],
                     runtime_materialization_mode=profile_def["runtime_materialization_mode"],
                     volume_ref=profile_def.get("volume_ref"),
                     volume_mount_path=profile_def.get("volume_mount_path"),
                     account_label=profile_def.get("account_label"),
+                    tags=profile_def.get("tags"),
+                    priority=profile_def.get("priority", 100),
+                    auth_state=profile_def.get(
+                        "auth_state", ProviderProfileAuthState.NOT_CONFIGURED
+                    ),
+                    last_auth_method=profile_def.get("last_auth_method"),
                     secret_refs=profile_def.get("secret_refs"),
                     clear_env_keys=profile_def.get("clear_env_keys"),
                     env_template=profile_def.get("env_template"),

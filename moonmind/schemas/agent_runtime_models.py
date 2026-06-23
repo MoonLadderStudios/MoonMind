@@ -615,6 +615,11 @@ class ManagedAgentProviderProfile(BaseModel):
     # -- Policy & routing --
     tags: list[str] = Field(default_factory=list, alias="tags")
     priority: int = Field(default=100, alias="priority", ge=0)
+    auth_state: str = Field(default="not_configured", alias="authState")
+    disabled_reason: str | None = Field(None, alias="disabledReason")
+    first_authenticated_at: str | None = Field(None, alias="firstAuthenticatedAt")
+    last_validated_at: str | None = Field(None, alias="lastValidatedAt")
+    last_auth_method: str | None = Field(None, alias="lastAuthMethod")
     max_parallel_runs: int = Field(default=1, alias="maxParallelRuns", ge=1)
     cooldown_after_429_seconds: int = Field(
         default=900, alias="cooldownAfter429Seconds", ge=0

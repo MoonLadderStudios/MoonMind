@@ -19,6 +19,9 @@ from api_service.db.models import (
     ManagedAgentProviderProfile,
     OAuthSessionStatus,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
 )
 from api_service.main import app
@@ -925,9 +928,16 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
 
     async with db_base.async_session_maker() as session:
         row = await session.get(ManagedAgentOAuthSession, session_id)
+        profile = await session.get(ManagedAgentProviderProfile, "codex-cli-failed-verify")
         assert row is not None
         assert row.status == OAuthSessionStatus.FAILED
         assert row.failure_reason == "Volume verification failed: no_credentials_found"
+        assert profile is not None
+        assert profile.enabled is False
+        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+        assert profile.disabled_reason == ProviderProfileDisabledReason.AUTH_INVALID
+        assert profile.last_validated_at is not None
+        assert profile.command_behavior["auth_readiness"]["launch_ready"] is False
     assert stopped == {
         "session_id": session_id,
         "container_name": "moonmind_auth_oas_verifyfailed1",
@@ -1026,6 +1036,21 @@ async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
         )
         assert profile.volume_ref == "codex_auth_volume"
         assert profile.volume_mount_path == "/home/app/.codex"
+        assert profile.account_label == "codex account"
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.disabled_reason is None
+        assert profile.first_authenticated_at is not None
+        assert profile.last_validated_at is not None
+        assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
+        assert profile.tags == ["default", "oauth", "first-party"]
+        assert profile.priority == 100
+        assert profile.clear_env_keys == ["OPENAI_API_KEY", "MINIMAX_API_KEY"]
+        assert profile.home_path_overrides == {"CODEX_HOME": "/home/app/.codex"}
+        assert profile.command_behavior == {
+            "auth_status_label": "Codex OAuth ready",
+            "auth_readiness": {"connected": True, "launch_ready": True},
+        }
         assert profile.max_parallel_runs == 2
     assert stopped == {
         "session_id": session_id,
@@ -1423,8 +1448,21 @@ async def test_finalize_oauth_session_registers_claude_oauth_profile(
         )
         assert profile.volume_ref == "claude_auth_volume"
         assert profile.volume_mount_path == "/home/app/.claude"
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.disabled_reason is None
+        assert profile.first_authenticated_at is not None
+        assert profile.last_validated_at is not None
+        assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
+        assert profile.tags == ["default", "oauth", "first-party"]
+        assert profile.clear_env_keys == [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+        ]
+        assert profile.home_path_overrides == {"CLAUDE_HOME": "/home/app/.claude"}
         assert "credentials" not in repr(profile.__dict__)
-        assert "token" not in repr(profile.__dict__).lower()
+        assert "access_token" not in repr(profile.__dict__).lower()
+        assert "refresh_token" not in repr(profile.__dict__).lower()
     assert synced_runtimes == ["claude_code"]
 
 @pytest.mark.asyncio
