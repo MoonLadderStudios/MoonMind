@@ -20,6 +20,7 @@ from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
     ProviderCredentialSource,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
     ManagedAgentRateLimitPolicy,
 )
@@ -89,6 +90,8 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
                     default_model="qwen/qwen3.6-plus",
+                    secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+                    auth_state=ProviderProfileAuthState.CONNECTED,
                     priority=100,
                     max_parallel_runs=4,
                     cooldown_after_429_seconds=300,
@@ -105,6 +108,8 @@ async def test_two_openrouter_profiles_independently_resolvable(tmp_path: Path) 
                     credential_source=ProviderCredentialSource.SECRET_REF,
                     runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
                     default_model="anthropic/claude-sonnet-4-20250514",
+                    secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY_ALT"},
+                    auth_state=ProviderProfileAuthState.CONNECTED,
                     priority=50,
                     max_parallel_runs=2,
                     cooldown_after_429_seconds=300,
@@ -269,6 +274,7 @@ async def test_profile_roundtrip_via_provider_profile_list(tmp_path: Path) -> No
                     runtime_materialization_mode=RuntimeMaterializationMode.COMPOSITE,
                     default_model="qwen/qwen3.6-plus",
                     secret_refs={"provider_api_key": "env://OPENROUTER_API_KEY"},
+                    auth_state=ProviderProfileAuthState.CONNECTED,
                     clear_env_keys=["OPENAI_API_KEY", "OPENROUTER_API_KEY"],
                     env_template={
                         "OPENROUTER_API_KEY": {

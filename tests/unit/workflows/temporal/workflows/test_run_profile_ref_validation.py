@@ -33,6 +33,41 @@ def test_validated_execution_profile_ref_rejects_runtime_mismatch() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        {"profile_id": "codex-disabled", "runtime_id": "codex_cli", "enabled": False},
+        {
+            "profile_id": "codex-disabled",
+            "runtime_id": "codex_cli",
+            "launch_ready": False,
+        },
+        {
+            "profile_id": "codex-disabled",
+            "runtime_id": "codex_cli",
+            "readiness": {"launch_ready": False},
+        },
+        {
+            "profile_id": "codex-disabled",
+            "runtime_id": "codex_cli",
+            "command_behavior": {"auth_readiness": {"launch_ready": False}},
+        },
+    ],
+)
+def test_validated_execution_profile_ref_rejects_non_launchable_profile(
+    snapshot: dict[str, object],
+) -> None:
+    workflow = MoonMindUserWorkflow()
+    workflow._profile_snapshots = {"codex-disabled": snapshot}
+
+    with pytest.raises(ValueError, match="not launch-ready"):
+        workflow._validated_execution_profile_ref(
+            "codex-disabled",
+            agent_id="codex_cli",
+            source_label="Task",
+        )
+
+
 def test_inherited_execution_profile_ref_rejects_runtime_mismatch() -> None:
     workflow = MoonMindUserWorkflow()
     workflow._profile_snapshots = {

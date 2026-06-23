@@ -18,6 +18,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import (
         AgentExecutionRequest,
     )
+    from api_service.services.provider_profile_readiness import (
+        provider_profile_launch_ready_from_payload,
+    )
     from moonmind.schemas.agent_skill_models import SkillSelector
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
@@ -11181,6 +11184,11 @@ class MoonMindRunWorkflow:
         snapshot = profile_snapshots.get(profile_id)
         if not isinstance(snapshot, Mapping):
             return profile_id
+        if not provider_profile_launch_ready_from_payload(dict(snapshot)):
+            raise ValueError(
+                "%s execution_profile_ref '%s' is not launch-ready for this "
+                "runtime." % (source_label, profile_id)
+            )
         runtime_id = self._coerce_text(snapshot.get("runtime_id"), max_chars=160)
         if not runtime_id or not agent_id:
             return profile_id
