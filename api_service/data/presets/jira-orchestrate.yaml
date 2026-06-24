@@ -1,6 +1,6 @@
 slug: jira-orchestrate
 title: Jira Orchestrate
-description: Move a Jira issue through implementation by using its preset brief as the MoonSpec orchestration input, creating a PR, and advancing the issue to Code Review.
+description: Move a Jira issue through implementation by using its preset brief as the MoonSpec orchestration input, creating a PR, and advancing the issue to Review.
 scope: global
 version: 1.0.0
 tags:
@@ -474,7 +474,7 @@ steps:
 
       Before committing, inspect the latest post-remediation moonspec-verify result and confirm the verdict is FULLY_IMPLEMENTED. If the latest verdict is ADDITIONAL_WORK_NEEDED, NO_DETERMINATION, BLOCKED, FAILED_UNRECOVERABLE, or ENVIRONMENT_CONTAMINATED_BY_SKILL_PROJECTION, stop without committing, pushing, creating a pull request, or changing Jira. Classify runtime or infrastructure causes as environment failure.
 
-      This Jira Orchestrate handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Code Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the task is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Code Review and report the exact blocker.
+      This Jira Orchestrate handoff step is the explicit PR-publication step for this preset. It intentionally owns pull request creation before the Jira Review transition so the confirmed pull request URL is available to both Jira and MoonMind publish handling. If generic managed-runtime guidance says not to push or create a pull request, treat this step-specific handoff instruction as the controlling instruction for this step only. If the task is submitted with PR merge automation enabled, the parent workflow must use the pull request URL produced by this step as the published PR and then run merge automation against that PR. If the runtime instructions, task parameters, authentication, remote configuration, branch protection, or repository permissions prevent committing, pushing, or creating the pull request in this step, stop before changing Jira to Review and report the exact blocker.
 
       First confirm the working tree contains only intentional changes for this issue and no raw credentials. Commit the work with a concise message that includes {{ inputs.jira_issue_key }}. Push the current non-protected work branch and create a non-draft pull request with the available authenticated GitHub tooling.
 
@@ -496,15 +496,15 @@ steps:
       args: {}
       requiredCapabilities:
         - git
-  - title: Move Jira issue to Code Review
+  - title: Move Jira issue to Review
     annotations:
       jiraOrchestrateRole: code-review-handoff
     instructions: |-
-      Change Jira issue {{ inputs.jira_issue_key }} to status Code Review only after the pull request exists.
+      Change Jira issue {{ inputs.jira_issue_key }} to status Review only after the pull request exists.
 
-      Before using any Jira transition tool, read the previous pull request creation result or artifacts/jira-orchestrate-pr.json and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If no confirmed pull request URL is available, stop without changing Jira and report that Code Review is blocked until PR creation succeeds.
+      Before using any Jira transition tool, read the previous pull request creation result or artifacts/jira-orchestrate-pr.json and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key }}. If no confirmed pull request URL is available, stop without changing Jira and report that Review is blocked until PR creation succeeds.
 
-      Use the trusted Jira issue updater workflow and Jira transition tools. Match Code Review against the issue's available transitions or target statuses; do not guess transition IDs. Add or preserve a Jira-visible reference to the pull request when supported by the trusted tools. Re-fetch the issue when possible and report the confirmed status.
+      Use the trusted Jira issue updater workflow and Jira transition tools. Match Review against the issue's available transitions or target statuses; do not guess transition IDs. Add or preserve a Jira-visible reference to the pull request when supported by the trusted tools. Re-fetch the issue when possible and report the confirmed status.
     skill:
       id: jira-issue-updater
       requiredCapabilities:
