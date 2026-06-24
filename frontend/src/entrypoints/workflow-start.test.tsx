@@ -6429,7 +6429,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run the dependent stage." },
     });
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
       target: { value: "mm:dep-1" },
     });
 
@@ -10630,7 +10630,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Add mm:dep-1 first time (selecting the option adds it directly).
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
       target: { value: "mm:dep-1" },
     });
 
@@ -10640,7 +10640,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     // After adding, mm:dep-1 should be removed from the dropdown options
     // (filtered out by availableDependencyOptions).
-    const select = screen.getByLabelText("Existing run") as HTMLSelectElement;
+    const select = screen.getByRole("combobox", {
+      name: "Dependencies",
+    }) as HTMLSelectElement;
     const options = Array.from(select.options).map((o) => o.value);
     expect(options).not.toContain("mm:dep-1");
 
@@ -10650,7 +10652,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(1);
 
     // Add a second dependency to verify the list grows.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
       target: { value: "mm:dep-2" },
     });
 
@@ -10668,7 +10670,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     // Add 10 dependencies (each selection adds the chosen prerequisite).
     for (let i = 1; i <= 10; i += 1) {
-      fireEvent.change(screen.getByLabelText("Existing run"), {
+      fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
         target: { value: `mm:dep-${i}` },
       });
     }
@@ -10681,7 +10683,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Try to add an 11th.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
       target: { value: "mm:dep-11" },
     });
 
@@ -10757,7 +10759,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Re-selecting the placeholder option is a no-op: nothing is added.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
       target: { value: "" },
     });
 
@@ -13563,7 +13565,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(publishModeSelect, { target: { value: "branch" } });
     // Selecting a prerequisite from the dropdown adds it directly; there is no
     // separate "Add dependency" button.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
       target: { value: "mm:dep-641" },
     });
     await waitFor(() => {
