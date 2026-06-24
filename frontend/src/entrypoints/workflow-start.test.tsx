@@ -3760,7 +3760,7 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
       ).toBe("speckit-implement");
     });
-    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.queryByText("Schedule")).toBeNull();
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
   });
 
@@ -3904,7 +3904,7 @@ describe.skip("Task Create Entrypoint", () => {
         headers: { Accept: "application/json" },
       }),
     );
-    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.queryByText("Schedule")).toBeNull();
     expect(screen.getByRole("button", { name: "Start New Run" })).toBeTruthy();
   });
 
@@ -4950,7 +4950,11 @@ describe.skip("Task Create Entrypoint", () => {
 
     const objectiveItem = (await screen.findByText("objective.png (1.2 KB)"))
       .closest("li") as HTMLElement;
-    fireEvent.click(within(objectiveItem).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      within(objectiveItem).getByRole("button", {
+        name: "Remove objective attachment objective.png",
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -6429,7 +6433,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run the dependent stage." },
     });
-    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-1" },
     });
 
@@ -7851,7 +7855,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
     expect(await screen.findByDisplayValue("3")).not.toBeNull();
     expect(screen.getByText("Task Presets (optional)")).not.toBeNull();
-    expect(screen.getByText("Schedule (optional)")).not.toBeNull();
+    expect(screen.getByText("Schedule")).not.toBeNull();
   });
 
   it("right-aligns Task Presets actions with Apply last", async () => {
@@ -10630,7 +10634,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Add mm:dep-1 first time (selecting the option adds it directly).
-    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-1" },
     });
 
@@ -10641,7 +10645,7 @@ describe.skip("Task Create Entrypoint", () => {
     // After adding, mm:dep-1 should be removed from the dropdown options
     // (filtered out by availableDependencyOptions).
     const select = screen.getByRole("combobox", {
-      name: "Dependencies",
+      name: "Prerequisite",
     }) as HTMLSelectElement;
     const options = Array.from(select.options).map((o) => o.value);
     expect(options).not.toContain("mm:dep-1");
@@ -10652,7 +10656,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(1);
 
     // Add a second dependency to verify the list grows.
-    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-2" },
     });
 
@@ -10670,7 +10674,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     // Add 10 dependencies (each selection adds the chosen prerequisite).
     for (let i = 1; i <= 10; i += 1) {
-      fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
+      fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
         target: { value: `mm:dep-${i}` },
       });
     }
@@ -10683,7 +10687,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Try to add an 11th.
-    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-11" },
     });
 
@@ -10759,7 +10763,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Re-selecting the placeholder option is a no-op: nothing is added.
-    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "" },
     });
 
@@ -13565,7 +13569,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(publishModeSelect, { target: { value: "branch" } });
     // Selecting a prerequisite from the dropdown adds it directly; there is no
     // separate "Add dependency" button.
-    fireEvent.change(screen.getByRole("combobox", { name: "Dependencies" }), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-641" },
     });
     await waitFor(() => {

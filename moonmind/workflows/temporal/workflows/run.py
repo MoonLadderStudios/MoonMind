@@ -176,6 +176,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
 )
 DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
+JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
@@ -383,6 +384,9 @@ RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
 RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
+RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = (
+    "run-jira-blocker-recheck-retry-floor-v1"
+)
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -491,6 +495,7 @@ RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 # memo command require a reset/versioning cutover; see
 # docs/tmp/RunStatusMemoUpsertCutover.md.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
+RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
@@ -1095,6 +1100,40 @@ class MoonMindRunWorkflow:
             )
         return kwargs
 
+    def _jira_blocker_recheck_retry_attempts_override(
+        self,
+        *,
+        route: TemporalActivityRoute,
+        execute_payload: Mapping[str, Any],
+        step_retry_overrides_enabled: bool,
+    ) -> int | None:
+        if step_retry_overrides_enabled:
+            invocation_payload = execute_payload.get("invocation_payload")
+            if isinstance(invocation_payload, Mapping):
+                invocation_inputs = invocation_payload.get("inputs")
+                invocation_options = invocation_payload.get("options")
+                explicit_override = self._step_retry_attempts_override(
+                    node_inputs=(
+                        invocation_inputs
+                        if isinstance(invocation_inputs, Mapping)
+                        else None
+                    ),
+                    node_options=(
+                        invocation_options
+                        if isinstance(invocation_options, Mapping)
+                        else None
+                    ),
+                )
+                if explicit_override is not None:
+                    return explicit_override
+
+        if (
+            workflow.patched(RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH)
+            and route.retries.max_attempts < JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS
+        ):
+            return JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS
+        return None
+
     def _decode_json_payload(
         self,
         payload: Any,
@@ -1149,6 +1188,8 @@ class MoonMindRunWorkflow:
         )
         if not artifact_id:
             raise ValueError(f"artifact.create returned no artifact_id for {name}")
+        if not workflow.patched(RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH):
+            return str(artifact_id)
         await execute_typed_activity(
             "artifact.write_complete",
             ArtifactWriteCompleteInput(
@@ -6206,10 +6247,16 @@ class MoonMindRunWorkflow:
                         boundary="before_execution",
                         updated_at=workflow.now(),
                     )
+                    step_execution_naming_enabled = workflow.patched(
+                        RUN_STEP_EXECUTION_NAMING_PATCH
+                    )
+                    step_execution_manifest_enabled = workflow.patched(
+                        RUN_STEP_EXECUTION_MANIFEST_PATCH
+                    )
 
                     if (
                         tool_type != "agent_runtime"
-                        and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)
+                        and step_execution_manifest_enabled
                     ):
                         await self._record_step_execution_manifest(
                             node_id,
@@ -6299,7 +6346,7 @@ class MoonMindRunWorkflow:
                                 execution_profile_ref=request.execution_profile_ref,
                                 parameters=parameters,
                             )
-                            if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
+                            if step_execution_manifest_enabled:
                                 await self._record_step_execution_manifest(
                                     node_id,
                                     phase="start",
@@ -6340,6 +6387,9 @@ class MoonMindRunWorkflow:
                                     logical_step_id=node_id,
                                     attempt=current_step_execution,
                                 )
+                            slot_continuity_enabled = workflow.patched(
+                                RUN_SLOT_CONTINUITY_PATCH
+                            )
                             if self._is_step_execution_launch_blocked(
                                 node_id,
                                 attempt=current_step_execution,
@@ -6355,7 +6405,7 @@ class MoonMindRunWorkflow:
                                 }
                                 result_status = "FAILED"
                                 break
-                            if workflow.patched(RUN_SLOT_CONTINUITY_PATCH):
+                            if slot_continuity_enabled:
                                 self._mark_slot_continuity_for_next_step(
                                     request=request,
                                     ordered_nodes=ordered_nodes,
@@ -6382,7 +6432,7 @@ class MoonMindRunWorkflow:
                             )
                             if current_step_execution > 1:
                                 step_execution_label = "attempt"
-                                if workflow.patched(RUN_STEP_EXECUTION_NAMING_PATCH):
+                                if step_execution_naming_enabled:
                                     step_execution_label = "execution"
                                 child_workflow_id = (
                                     f"{child_workflow_id}:{step_execution_label}{current_step_execution}"
@@ -8230,24 +8280,13 @@ class MoonMindRunWorkflow:
                     raise ValueError(
                         "skill Jira blocker recheck requires activity context"
                     )
-                max_attempts_override = None
-                if step_retry_overrides_enabled:
-                    invocation_payload = execute_payload.get("invocation_payload")
-                    if isinstance(invocation_payload, Mapping):
-                        invocation_inputs = invocation_payload.get("inputs")
-                        invocation_options = invocation_payload.get("options")
-                        max_attempts_override = self._step_retry_attempts_override(
-                            node_inputs=(
-                                invocation_inputs
-                                if isinstance(invocation_inputs, Mapping)
-                                else None
-                            ),
-                            node_options=(
-                                invocation_options
-                                if isinstance(invocation_options, Mapping)
-                                else None
-                            ),
-                        )
+                max_attempts_override = (
+                    self._jira_blocker_recheck_retry_attempts_override(
+                        route=route,
+                        execute_payload=execute_payload,
+                        step_retry_overrides_enabled=step_retry_overrides_enabled,
+                    )
+                )
                 if coalesce_wait:
                     recheck_payload = self._compact_jira_blocker_recheck_payload(
                         execute_payload
@@ -11563,6 +11602,8 @@ class MoonMindRunWorkflow:
                     if self._managed_runtime_id(agent_id) != self._managed_runtime_id(
                         source_agent_id
                     ):
+                        if self._workflow_is_replaying():
+                            return profile_id
                         raise ValueError(
                             "Inherited execution_profile_ref '%s' targets runtime "
                             "'%s' but child runtime is '%s'."
@@ -11612,6 +11653,8 @@ class MoonMindRunWorkflow:
             return profile_id
         child_runtime_id = self._managed_runtime_id(agent_id)
         if runtime_id != child_runtime_id:
+            if self._workflow_is_replaying():
+                return profile_id
             raise ValueError(
                 "%s execution_profile_ref '%s' belongs to runtime '%s' but child "
                 "runtime is '%s'."
@@ -11630,6 +11673,15 @@ class MoonMindRunWorkflow:
         }
         normalized_agent_id = _normalize_agent_runtime_id(agent_id)
         return runtime_mapping.get(normalized_agent_id, normalized_agent_id)
+
+    @staticmethod
+    def _workflow_is_replaying() -> bool:
+        try:
+            return bool(workflow.unsafe.is_replaying())
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return False
+            raise
 
     @staticmethod
     def _plan_node_tool_mapping(node: Mapping[str, Any]) -> Mapping[str, Any] | None:
