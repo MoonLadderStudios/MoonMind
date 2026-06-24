@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { renderWithClient } from "../utils/test-utils";
@@ -10,6 +10,109 @@ const mockPayload: BootPayload = {
   apiBase: "/api",
   initialData: {},
 };
+
+const detailSchedule = {
+  id: "schedule-alpha",
+  name: "Nightly detail sweep",
+  description: "Keeps the repository current.",
+  enabled: true,
+  scheduleType: "cron",
+  cron: "0 2 * * *",
+  timezone: "UTC",
+  lastDispatchStatus: "enqueued",
+  lastDispatchError: null,
+  nextRunAt: "2026-06-25T02:00:00Z",
+  lastScheduledFor: "2026-06-24T02:00:00Z",
+  scopeType: "personal",
+  scopeRef: "user-1",
+  target: {
+    kind: "queue_task",
+    job: {
+      payload: {
+        repository: "MoonLadderStudios/MoonMind",
+      },
+    },
+  },
+  policy: {
+    overlap: { mode: "skip" },
+    catchup: { mode: "latest" },
+  },
+  temporalScheduleId: "temporal-schedule-alpha",
+  version: 1,
+  createdAt: "2026-06-20T00:00:00Z",
+  updatedAt: "2026-06-24T00:00:00Z",
+};
+
+const detailRuns = {
+  items: [
+    {
+      id: "run-1",
+      definitionId: "schedule-alpha",
+      scheduledFor: "2026-06-24T02:00:00Z",
+      trigger: "schedule",
+      outcome: "enqueued",
+      dispatchAttempts: 1,
+      dispatchAfter: null,
+      temporalWorkflowId: "workflow-from-schedule",
+      temporalRunId: "temporal-run-1",
+      message: "Started",
+      createdAt: "2026-06-24T02:00:01Z",
+      updatedAt: "2026-06-24T02:00:02Z",
+    },
+  ],
+};
+
+const detailPayload: BootPayload = {
+  page: "schedules",
+  apiBase: "/api",
+  initialData: {
+    dashboardConfig: {
+      initialPath: "/schedules/schedule-alpha",
+      sources: {
+        schedules: {
+          list: "/console/schedules?scope=personal",
+          detail: "/console/schedules/{definitionId}",
+          update: "/console/schedules/{definitionId}",
+          runNow: "/console/schedules/{definitionId}/run",
+          runs: "/console/schedules/{definitionId}/runs?limit=200",
+        },
+      },
+    },
+  },
+};
+
+function mockScheduleDetailFetch(fetchSpy: MockInstance, overrides: Partial<typeof detailSchedule> = {}) {
+  const schedule = { ...detailSchedule, ...overrides };
+  fetchSpy.mockImplementation(async (input, init) => {
+    const url = String(input);
+    const method = String(init?.method || "GET").toUpperCase();
+    if (url === "/console/schedules/schedule-alpha" && method === "PATCH") {
+      return {
+        ok: true,
+        json: async () => ({ ...schedule, ...(JSON.parse(String(init?.body || "{}")) as object) }),
+      } as Response;
+    }
+    if (url === "/console/schedules/schedule-alpha/run" && method === "POST") {
+      return {
+        ok: true,
+        json: async () => ({ ...detailRuns.items[0], id: "run-manual", trigger: "manual" }),
+      } as Response;
+    }
+    if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+      return {
+        ok: true,
+        json: async () => detailRuns,
+      } as Response;
+    }
+    if (url === "/console/schedules/schedule-alpha") {
+      return {
+        ok: true,
+        json: async () => schedule,
+      } as Response;
+    }
+    throw new Error(`Unexpected fetch ${method} ${url}`);
+  });
+}
 
 describe("SchedulesPage", () => {
   let fetchSpy: MockInstance;
@@ -76,7 +179,6 @@ describe("SchedulesPage", () => {
 
   afterEach(() => {
     fetchSpy.mockRestore();
-    window.history.pushState({}, "Schedules", "/schedules");
   });
 
   it("renders streamlined schedule status, target, cadence, and policy columns", async () => {
@@ -180,177 +282,158 @@ describe("SchedulesPage", () => {
     expect(fetchSpy.mock.calls[0]?.[0]).toBe("/tenant/api/recurring-tasks?scope=personal");
   });
 
-  it("MM-894 renders schedule detail with workflow-derived shell and schedule labels", async () => {
-    window.history.pushState({}, "Schedule detail", "/schedules/schedule-1");
-    fetchSpy.mockImplementation(async (url, init) => {
-      if (String(url) === "/api/recurring-workflows/schedule-1/runs?limit=200") {
-        return {
-          ok: true,
-          json: async () => ({
-            items: [
-              {
-                id: "run-1",
-                definitionId: "schedule-1",
-                scheduledFor: "2026-06-01T09:00:00Z",
-                trigger: "schedule",
-                outcome: "dispatched",
-                dispatchAttempts: 1,
-                temporalWorkflowId: "workflow-123",
-                temporalRunId: "run-123",
-                createdAt: "2026-06-01T09:00:02Z",
-                updatedAt: "2026-06-01T09:00:03Z",
-              },
-            ],
-          }),
-        } as Response;
-      }
-      if (String(url) === "/api/recurring-workflows/schedule-1/run" && init?.method === "POST") {
-        return {
-          ok: true,
-          json: async () => ({ id: "manual-run" }),
-        } as Response;
-      }
-      if (String(url) === "/api/recurring-workflows/schedule-1") {
-        return {
-          ok: true,
-          json: async () => ({
-            id: "schedule-1",
-            name: "Daily repository sweep",
-            description: "Sweep the repository every weekday.",
-            enabled: true,
-            cron: "0 9 * * 1-5",
-            timezone: "UTC",
-            nextRunAt: "2026-06-02T09:00:00Z",
-            lastScheduledFor: "2026-06-01T09:00:00Z",
-            lastDispatchStatus: "dispatched",
-            lastDispatchError: null,
-            temporalScheduleId: "temporal-schedule-1",
-            scopeType: "personal",
-            scopeRef: "user-1",
-            target: {
-              kind: "workflow",
-              runtime: "codex",
-              model: "gpt-5",
-              publishMode: "pull_request",
-              job: {
-                payload: {
-                  repository: "MoonLadderStudios/MoonMind",
-                  runtime: "codex",
-                  model: "gpt-5",
-                  publishMode: "pull_request",
+  it("loads the recurring schedule detail route by the routed definition id", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Temporal Schedule ID")).not.toBeNull();
+    expect(screen.getByText("temporal-schedule-alpha")).not.toBeNull();
+    expect(screen.getByText("MoonLadderStudios/MoonMind")).not.toBeNull();
+    expect(screen.getByText("Started")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "workflow-from-schedule" }).getAttribute("href")).toBe(
+      "/workflows/workflow-from-schedule?source=temporal",
+    );
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(false);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
+  });
+
+  it("ignores malformed schedule route ids instead of throwing during render", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          ...detailPayload,
+          initialData: {
+            dashboardConfig: {
+              initialPath: "/schedules/%",
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal",
                 },
               },
             },
-            policy: {
-              overlap: { mode: "skip" },
-              catchup: { mode: "latest" },
-            },
-            updatedAt: "2026-06-01T10:00:00Z",
-          }),
-        } as Response;
-      }
-      throw new Error(`Unexpected fetch ${String(url)}`);
-    });
-
-    renderWithClient(<SchedulesPage payload={mockPayload} />);
-
-    expect(await screen.findByRole("heading", { name: "Schedule Detail" })).not.toBeNull();
-    expect(screen.getByText("Schedules / schedule-1")).not.toBeNull();
-    expect(await screen.findByRole("heading", { name: "Daily repository sweep" })).not.toBeNull();
-    expect(document.querySelector(".workflow-detail-page.schedule-detail-page")).toBeTruthy();
-    expect(document.querySelector(".toolbar-identity-row .status.status-running")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
-    expect(screen.getByRole("link", { name: "Runs" })).not.toBeNull();
-    expect(screen.getByRole("link", { name: "Configuration" })).not.toBeNull();
-    expect(screen.queryByRole("link", { name: "Edit schedule" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Steps" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Artifacts" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Activity" })).toBeNull();
-
-    expect(screen.getAllByText("Schedule name").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Schedule state").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Schedule definition ID").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Temporal Schedule ID").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Target facts").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Next run").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Last run").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Dispatch result").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Updated time").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("temporal-schedule-1").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/MoonLadderStudios\/MoonMind/).length).toBeGreaterThan(0);
-
-    fireEvent.click(screen.getByRole("link", { name: "Runs" }));
-    expect((await screen.findByRole("link", { name: "workflow-123" })).getAttribute("href")).toBe(
-      "/workflows/workflow-123?source=temporal",
+          },
+        }}
+      />,
     );
 
-    fireEvent.click(screen.getByRole("link", { name: "Configuration" }));
-    const detailPanel = screen.getByLabelText("Schedule detail panel");
-    expect(within(detailPanel).getByText("Cron")).not.toBeNull();
-    expect(within(detailPanel).getByText("Timezone")).not.toBeNull();
-    expect(within(detailPanel).getByText("Policy")).not.toBeNull();
+    expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal");
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+  it("keeps update requests keyed by the route definition id", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Nightly detail sweep updated" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.some(([url, init]) => (
-        String(url) === "/api/recurring-workflows/schedule-1/run" && init?.method === "POST"
-      ))).toBe(true);
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => (
+          String(url) === "/console/schedules/schedule-alpha"
+          && String(init?.method || "GET").toUpperCase() === "PATCH"
+          && String(init?.body || "").includes("Nightly detail sweep updated")
+        )),
+      ).toBe(true);
+    });
+    expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("sends an empty description when the edit form clears an existing description", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    await waitFor(() => {
+      const updateCall = fetchSpy.mock.calls.find(([url, init]) => (
+        String(url) === "/console/schedules/schedule-alpha"
+        && String(init?.method || "GET").toUpperCase() === "PATCH"
+      ));
+      expect(updateCall).toBeDefined();
+      expect(JSON.parse(String(updateCall?.[1]?.body || "{}")).description).toBe("");
     });
   });
 
-  it("MM-894 renders Activity only when schedule activity data is available", async () => {
-    window.history.pushState({}, "Schedule detail", "/schedules/schedule-activity#activity");
-    fetchSpy.mockImplementation(async (url) => {
-      if (String(url).endsWith("/runs?limit=200")) {
-        return { ok: true, json: async () => ({ items: [] }) } as Response;
+  it("reports update and run failures separately", async () => {
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/console/schedules/schedule-alpha" && method === "PATCH") {
+        return { ok: false, statusText: "Update rejected", json: async () => ({}) } as Response;
       }
-      return {
-        ok: true,
-        json: async () => ({
-          id: "schedule-activity",
-          name: "Schedule with activity",
-          enabled: false,
-          cron: "15 * * * *",
-          timezone: "UTC",
-          temporalScheduleId: "temporal-activity",
-          lastDispatchStatus: null,
-          lastDispatchError: null,
-          nextRunAt: null,
-          lastScheduledFor: null,
-          target: {},
-          policy: {},
-          updatedAt: "2026-06-01T10:00:00Z",
-          activity: [
-            {
-              id: "activity-1",
-              title: "Temporal describe refreshed",
-              message: "Schedule metadata was refreshed.",
-              updatedAt: "2026-06-01T10:00:00Z",
-            },
-          ],
-        }),
-      } as Response;
+      if (url === "/console/schedules/schedule-alpha/run" && method === "POST") {
+        return { ok: false, statusText: "Run rejected", json: async () => ({}) } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: true, json: async () => detailRuns } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha") {
+        return { ok: true, json: async () => detailSchedule } as Response;
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
     });
 
-    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
 
-    const activityLink = await screen.findByRole("link", { name: "Activity" });
-    expect(activityLink.getAttribute("aria-current")).toBe("page");
-    expect(await screen.findByText("Temporal describe refreshed")).not.toBeNull();
-    expect(screen.getByText("Schedule metadata was refreshed.")).not.toBeNull();
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    expect(await screen.findByText("Failed to update schedule: Update rejected")).not.toBeNull();
+    expect(await screen.findByText("Failed to run schedule: Run rejected")).not.toBeNull();
   });
 
-  it("MM-894 renders non-Error schedule detail failures without unsafe casts", async () => {
-    window.history.pushState({}, "Schedule detail", "/schedules/schedule-failure");
-    fetchSpy.mockImplementation(async (url) => {
-      if (String(url).endsWith("/runs?limit=200")) {
-        return { ok: true, json: async () => ({ items: [] }) } as Response;
+  it("renders non-Error schedule detail failures without unsafe casts", async () => {
+    fetchSpy.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: true, json: async () => detailRuns } as Response;
       }
       throw "schedule unavailable";
     });
 
-    renderWithClient(<SchedulesPage payload={mockPayload} />);
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
 
     expect((await screen.findByRole("alert")).textContent).toContain("schedule unavailable");
+  });
+
+  it("runs schedules from the same routed definition id and leaves run links on workflow detail routes", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => (
+          String(url) === "/console/schedules/schedule-alpha/run"
+          && String(init?.method || "GET").toUpperCase() === "POST"
+        )),
+      ).toBe(true);
+    });
+    expect(screen.getByRole("link", { name: "workflow-from-schedule" }).getAttribute("href")).toBe(
+      "/workflows/workflow-from-schedule?source=temporal",
+    );
+    expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
   });
 });

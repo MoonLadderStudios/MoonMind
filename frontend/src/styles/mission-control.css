@@ -1226,81 +1226,107 @@ h1 {
   color: color-mix(in srgb, rgb(var(--mm-danger)) 76%, rgb(var(--mm-ink)) 24%);
 }
 
-.schedule-detail-page .schedules-summary-grid {
-  margin-bottom: 0.9rem;
-}
-
-.schedule-detail-page .schedules-summary-item strong {
-  font-size: 0.95rem;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.schedule-detail-layout {
+.schedules-detail-title {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
-  gap: 0.9rem;
-  align-items: start;
+  gap: 0.3rem;
+  min-width: 0;
 }
 
-.schedule-detail-main,
-.schedule-detail-facts,
-.schedule-detail-overview,
-.schedule-detail-config-grid {
+.schedules-detail-title nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.schedules-detail-title a {
+  color: rgb(var(--mm-accent));
+  text-decoration: none;
+}
+
+.schedules-detail-title a:hover {
+  text-decoration: underline;
+}
+
+.schedules-detail-grid {
   display: grid;
-  gap: 0.75rem;
+  grid-template-columns: minmax(0, 2fr) minmax(16rem, 0.85fr);
+  gap: 0.85rem;
 }
 
-.schedule-detail-facts {
-  padding: 0.85rem;
-  border: 1px solid rgb(var(--mm-border) / 0.58);
-  border-radius: 0.8rem;
-  background: rgb(var(--mm-panel) / 0.9);
+.schedules-detail-panel {
+  display: grid;
+  gap: 0.85rem;
 }
 
-.schedule-detail-fact {
+.schedules-detail-list {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0;
+}
+
+.schedules-detail-list div {
   display: grid;
   gap: 0.2rem;
   min-width: 0;
 }
 
-.schedule-detail-fact span {
+.schedules-detail-list dt {
   color: rgb(var(--mm-muted));
-  font-size: 0.76rem;
-  font-weight: 700;
+  font-size: 0.78rem;
+  font-weight: 720;
   text-transform: uppercase;
 }
 
-.schedule-detail-fact strong {
-  color: rgb(var(--mm-ink));
-  font-size: 0.9rem;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-
-.schedule-detail-config-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.schedule-detail-activity-list {
-  display: grid;
-  gap: 0.65rem;
-}
-
-.schedule-detail-activity-item {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0.72rem;
-  border: 1px solid rgb(var(--mm-border) / 0.58);
-  border-radius: 0.55rem;
-  background: rgb(var(--mm-panel) / 0.72);
-}
-
-.schedule-detail-activity-item span,
-.schedule-detail-activity-item p {
+.schedules-detail-list dd {
+  min-width: 0;
   margin: 0;
+  overflow-wrap: anywhere;
+  color: rgb(var(--mm-ink));
+  font-size: 0.92rem;
+}
+
+.schedules-edit-form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.schedules-edit-form label {
+  display: grid;
+  gap: 0.35rem;
   color: rgb(var(--mm-muted));
+  font-size: 0.84rem;
+  font-weight: 680;
+}
+
+.schedules-edit-form input,
+.schedules-edit-form textarea {
+  width: 100%;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
+  font: inherit;
+}
+
+.schedules-checkbox-label {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  width: fit-content;
+}
+
+.schedules-json-block {
+  max-height: 22rem;
+  margin: 0;
+  overflow: auto;
+  padding: 0.85rem;
+  border: 1px solid rgb(var(--mm-border) / 0.68);
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-ink) / 0.04);
+  color: rgb(var(--mm-ink));
   font-size: 0.82rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .manifests-advanced-grid,
@@ -1759,13 +1785,12 @@ tbody tr:hover {
 }
 
 @media (max-width: 720px) {
-  .schedule-detail-layout,
-  .schedule-detail-config-grid {
-    grid-template-columns: 1fr;
-  }
-
   .schedules-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .schedules-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .provider-profiles-table-wrap {
@@ -3818,6 +3843,30 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-attachments-list {
   margin-top: 0;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) li > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.5rem;
+  flex: 0 0 auto;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button svg {
+  width: 1rem;
+  height: 1rem;
 }
 
 .queue-attachment-preview {

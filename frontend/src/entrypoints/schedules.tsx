@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { DataTable } from '../components/tables/DataTable';
 
 import { z } from 'zod';
@@ -23,46 +23,56 @@ const ScheduleSchema = z.object({
   target: z.record(z.string(), z.unknown()).optional(),
   policy: z.record(z.string(), z.unknown()).optional(),
   temporalScheduleId: z.string().nullable().optional(),
-  createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
-  activity: z.array(z.record(z.string(), z.unknown())).optional(),
 }).passthrough();
 
 const SchedulesResponseSchema = z.object({
   items: z.array(ScheduleSchema),
 });
 
+const ScheduleRunSchema = z.object({
+  id: z.string(),
+  definitionId: z.string(),
+  scheduledFor: z.string(),
+  trigger: z.string(),
+  outcome: z.string(),
+  dispatchAttempts: z.number(),
+  dispatchAfter: z.string().nullable().optional(),
+  temporalWorkflowId: z.string().nullable().optional(),
+  temporalRunId: z.string().nullable().optional(),
+  message: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+}).passthrough();
+
 const ScheduleRunsResponseSchema = z.object({
-  items: z.array(z.object({
-    id: z.string(),
-    definitionId: z.string().optional(),
-    scheduledFor: z.string(),
-    trigger: z.string().optional(),
-    outcome: z.string(),
-    dispatchAttempts: z.number().optional(),
-    dispatchAfter: z.string().nullable().optional(),
-    temporalWorkflowId: z.string().nullable().optional(),
-    temporalRunId: z.string().nullable().optional(),
-    message: z.string().nullable().optional(),
-    createdAt: z.string().optional(),
-    updatedAt: z.string().optional(),
-  }).passthrough()),
+  items: z.array(ScheduleRunSchema),
 });
 
 type Schedule = z.infer<typeof ScheduleSchema>;
-type ScheduleRun = z.infer<typeof ScheduleRunsResponseSchema>['items'][number];
-type ScheduleDetailTab = 'overview' | 'runs' | 'configuration' | 'activity';
+type ScheduleRun = z.infer<typeof ScheduleRunSchema>;
+
+type ScheduleSources = {
+  list?: string | undefined;
+  detail?: string | undefined;
+  update?: string | undefined;
+  runNow?: string | undefined;
+  runs?: string | undefined;
+};
 
 const SchedulesBootDataSchema = z
   .object({
+    initialPath: z.string().optional(),
     dashboardConfig: z
       .object({
+        initialPath: z.string().optional(),
         sources: z
           .object({
             schedules: z
               .object({
                 list: z.string().optional(),
                 detail: z.string().optional(),
+                update: z.string().optional(),
                 runNow: z.string().optional(),
                 runs: z.string().optional(),
               })
@@ -80,6 +90,7 @@ const SchedulesBootDataSchema = z
           .object({
             list: z.string().optional(),
             detail: z.string().optional(),
+            update: z.string().optional(),
             runNow: z.string().optional(),
             runs: z.string().optional(),
           })
@@ -91,44 +102,50 @@ const SchedulesBootDataSchema = z
   })
   .passthrough();
 
+function scheduleBootData(payload: BootPayload) {
+  const parsed = SchedulesBootDataSchema.safeParse(payload.initialData || {});
+  return parsed.success ? parsed.data : undefined;
+}
+
+function scheduleSources(payload: BootPayload): ScheduleSources | undefined {
+  const bootData = scheduleBootData(payload);
+  return bootData?.dashboardConfig?.sources?.schedules || bootData?.sources?.schedules;
+}
+
 function scheduleListEndpoint(payload: BootPayload): string {
   const schedules = scheduleSources(payload);
   return schedules?.list || `${payload.apiBase || '/api'}/recurring-tasks?scope=personal`;
 }
 
-function scheduleSources(payload: BootPayload) {
-  const parsed = SchedulesBootDataSchema.safeParse(payload.initialData || {});
-  return parsed.success
-    ? parsed.data.dashboardConfig?.sources?.schedules || parsed.data.sources?.schedules
-    : undefined;
+function scheduleRouteDefinitionId(payload: BootPayload): string | null {
+  const bootData = scheduleBootData(payload);
+  const rawPath = bootData?.dashboardConfig?.initialPath || bootData?.initialPath || '';
+  const path = rawPath.split('?')[0]?.split('#')[0] || '';
+  const match = path.match(/^\/schedules\/([^/]+)$/);
+  if (!match) {
+    return null;
+  }
+  try {
+    const definitionId = decodeURIComponent(match[1] || '').trim();
+    return definitionId && definitionId.toLowerCase() !== 'new' ? definitionId : null;
+  } catch {
+    return null;
+  }
 }
 
-function applyScheduleEndpointTemplate(template: string, definitionId: string): string {
+function scheduleEndpoint(
+  payload: BootPayload,
+  key: 'detail' | 'update' | 'runNow' | 'runs',
+  definitionId: string,
+): string {
+  const fallbackPath = key === 'runNow'
+    ? '/recurring-workflows/{definitionId}/run'
+    : key === 'runs'
+      ? '/recurring-workflows/{definitionId}/runs?limit=200'
+      : '/recurring-workflows/{definitionId}';
+  const template = scheduleSources(payload)?.[key] || `${payload.apiBase || '/api'}${fallbackPath}`;
   const encoded = encodeURIComponent(definitionId);
-  return template
-    .replaceAll('{definitionId}', encoded)
-    .replaceAll('{definition_id}', encoded)
-    .replaceAll('{id}', encoded);
-}
-
-function scheduleDetailEndpoint(payload: BootPayload, definitionId: string): string {
-  const template = scheduleSources(payload)?.detail || `${payload.apiBase || '/api'}/recurring-workflows/{id}`;
-  return applyScheduleEndpointTemplate(template, definitionId);
-}
-
-function scheduleRunNowEndpoint(payload: BootPayload, definitionId: string): string {
-  const template = scheduleSources(payload)?.runNow || `${payload.apiBase || '/api'}/recurring-workflows/{id}/run`;
-  return applyScheduleEndpointTemplate(template, definitionId);
-}
-
-function scheduleRunsEndpoint(payload: BootPayload, definitionId: string): string {
-  const template = scheduleSources(payload)?.runs || `${payload.apiBase || '/api'}/recurring-workflows/{id}/runs?limit=200`;
-  return applyScheduleEndpointTemplate(template, definitionId);
-}
-
-function scheduleIdFromLocation(): string | null {
-  const match = window.location.pathname.match(/^\/schedules\/([^/]+)$/);
-  return match?.[1] ? decodeURIComponent(match[1]) : null;
+  return template.replaceAll('{definitionId}', encoded).replaceAll('{id}', encoded);
 }
 
 function formatWhen(value: string | null | undefined): string {
@@ -152,18 +169,8 @@ function displayValue(value: string | null | undefined): string {
   return normalized || '-';
 }
 
-function displayUnknown(value: unknown): string {
-  if (typeof value === 'string') {
-    return displayValue(value);
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  return '-';
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error || 'Unknown error');
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : String(error || fallback);
 }
 
 function titleCaseLabel(value: string): string {
@@ -191,21 +198,17 @@ function targetKind(schedule: Schedule): string {
   return typeof raw === 'string' && raw.trim() ? titleCaseLabel(formatStatusLabel(raw)) : 'Queue task';
 }
 
-function targetPayload(schedule: Schedule): Record<string, unknown> {
+function targetRepository(schedule: Schedule): string {
   const job = schedule.target?.job;
   if (!job || typeof job !== 'object' || !('payload' in job)) {
-    return {};
+    return '-';
   }
   const payload = (job as { payload?: unknown }).payload;
-  return payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-}
-
-function targetRepository(schedule: Schedule): string {
-  return displayUnknown(targetPayload(schedule).repository);
-}
-
-function targetFact(schedule: Schedule, key: string): string {
-  return displayUnknown(targetPayload(schedule)[key] ?? schedule.target?.[key]);
+  if (!payload || typeof payload !== 'object' || !('repository' in payload)) {
+    return '-';
+  }
+  const repository = (payload as { repository?: unknown }).repository;
+  return typeof repository === 'string' && repository.trim() ? repository : '-';
 }
 
 function policySummary(schedule: Schedule): string {
@@ -220,6 +223,39 @@ function policySummary(schedule: Schedule): string {
   return [overlapMode, catchupMode].filter(Boolean).map((value) => titleCaseLabel(formatStatusLabel(value))).join(' / ') || '-';
 }
 
+function formatJsonValue(value: unknown): string {
+  if (!value || (typeof value === 'object' && Object.keys(value as Record<string, unknown>).length === 0)) {
+    return '-';
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function runWorkflowHref(run: ScheduleRun): string | null {
+  return run.temporalWorkflowId ? `/workflows/${encodeURIComponent(run.temporalWorkflowId)}?source=temporal` : null;
+}
+
+type ScheduleEditForm = {
+  name: string;
+  description: string;
+  enabled: boolean;
+  cron: string;
+  timezone: string;
+};
+
+function editFormFromSchedule(schedule: Schedule): ScheduleEditForm {
+  return {
+    name: schedule.name,
+    description: schedule.description || '',
+    enabled: schedule.enabled,
+    cron: schedule.cron,
+    timezone: schedule.timezone,
+  };
+}
+
 function isDueSoon(schedule: Schedule, now: number): boolean {
   if (!schedule.enabled || !schedule.nextRunAt) {
     return false;
@@ -228,213 +264,17 @@ function isDueSoon(schedule: Schedule, now: number): boolean {
   return Number.isFinite(nextRun) && nextRun >= now && nextRun <= now + 24 * 60 * 60 * 1000;
 }
 
-function scheduleDetailTabFromHash(hasActivity: boolean): ScheduleDetailTab {
-  const raw = window.location.hash.replace(/^#/, '').toLowerCase();
-  if (raw === 'runs' || raw === 'configuration' || (raw === 'activity' && hasActivity)) {
-    return raw;
-  }
-  return 'overview';
-}
-
-function scheduleStatusClass(schedule: Schedule): string {
-  const state = scheduleState(schedule);
-  if (state === 'active') {
-    return 'status status-running';
-  }
-  if (state === 'attention') {
-    return 'status status-failed';
-  }
-  return 'status status-waiting';
-}
-
-function DetailFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="schedule-detail-fact">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function ScheduleDetailNav({
-  current,
-  hasActivity,
-  onSelect,
-}: {
-  current: ScheduleDetailTab;
-  hasActivity: boolean;
-  onSelect: (tab: ScheduleDetailTab) => void;
-}) {
-  const tabs: Array<{ id: ScheduleDetailTab; label: string }> = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'runs', label: 'Runs' },
-    { id: 'configuration', label: 'Configuration' },
-    ...(hasActivity ? [{ id: 'activity' as const, label: 'Activity' }] : []),
-  ];
-  return (
-    <nav className="td-subroute-nav" aria-label="Schedule detail sections">
-      {tabs.map((tab) => (
-        <a
-          key={tab.id}
-          href={`#${tab.id}`}
-          aria-current={current === tab.id ? 'page' : undefined}
-          onClick={(event) => {
-            event.preventDefault();
-            window.history.replaceState({}, '', `#${tab.id}`);
-            onSelect(tab.id);
-          }}
-        >
-          {tab.label}
-        </a>
-      ))}
-    </nav>
-  );
-}
-
-function ScheduleSummaryGrid({ schedule }: { schedule: Schedule }) {
-  return (
-    <section className="schedules-summary-grid" aria-label="Schedule summary">
-      <div className="schedules-summary-item">
-        <span>Next run</span>
-        <strong>{formatWhen(schedule.nextRunAt)}</strong>
-      </div>
-      <div className="schedules-summary-item">
-        <span>Cadence</span>
-        <strong>{schedule.cron}</strong>
-      </div>
-      <div className="schedules-summary-item">
-        <span>Last run</span>
-        <strong>{formatWhen(schedule.lastScheduledFor)}</strong>
-      </div>
-      <div className="schedules-summary-item">
-        <span>Dispatch result</span>
-        <strong>{schedule.lastDispatchStatus ? titleCaseLabel(formatStatusLabel(schedule.lastDispatchStatus)) : '-'}</strong>
-      </div>
-    </section>
-  );
-}
-
-function ScheduleFactsRail({ schedule }: { schedule: Schedule }) {
-  return (
-    <aside className="td-facts-region schedule-detail-facts" aria-label="Schedule facts">
-      <DetailFact label="Schedule definition ID" value={schedule.id} />
-      <DetailFact label="Temporal Schedule ID" value={displayValue(schedule.temporalScheduleId)} />
-      <DetailFact label="Schedule state" value={stateLabel(schedule)} />
-      <DetailFact label="Target workflow type" value={targetKind(schedule)} />
-      <DetailFact label="Runtime" value={targetFact(schedule, 'runtime')} />
-      <DetailFact label="Model" value={targetFact(schedule, 'model')} />
-      <DetailFact label="Repository" value={targetRepository(schedule)} />
-      <DetailFact label="Publish mode" value={targetFact(schedule, 'publishMode')} />
-      <DetailFact label="Updated time" value={formatWhen(schedule.updatedAt)} />
-    </aside>
-  );
-}
-
-function ScheduleRunsTable({ runs, isLoading, isError, error }: {
-  runs: ScheduleRun[];
-  isLoading: boolean;
-  isError: boolean;
-  error: unknown;
-}) {
-  if (isLoading) {
-    return <p className="loading">Loading schedule runs...</p>;
-  }
-  if (isError) {
-    return <div className="notice error" role="alert">{errorMessage(error)}</div>;
-  }
-  return (
-    <DataTable
-      data={runs}
-      columns={[
-        { key: 'scheduledFor', header: 'Scheduled for', render: (run) => formatWhen(run.scheduledFor) },
-        { key: 'outcome', header: 'Dispatch result', render: (run) => titleCaseLabel(formatStatusLabel(run.outcome)) },
-        {
-          key: 'temporalWorkflowId',
-          header: 'Workflow',
-          render: (run) => run.temporalWorkflowId ? (
-            <a href={`/workflows/${encodeURIComponent(run.temporalWorkflowId)}?source=temporal`}>
-              {run.temporalWorkflowId}
-            </a>
-          ) : '-',
-        },
-        { key: 'trigger', header: 'Trigger', render: (run) => run.trigger ? titleCaseLabel(formatStatusLabel(run.trigger)) : '-' },
-        { key: 'updatedAt', header: 'Updated time', render: (run) => formatWhen(run.updatedAt) },
-      ]}
-      emptyMessage="No runs have been dispatched for this schedule yet."
-      getRowKey={(run) => run.id}
-      ariaLabel="Schedule runs"
-    />
-  );
-}
-
-function ScheduleTabPanel({
-  schedule,
-  runs,
-  runsLoading,
-  runsError,
-  runsQueryError,
-  tab,
-}: {
-  schedule: Schedule;
-  runs: ScheduleRun[];
-  runsLoading: boolean;
-  runsError: boolean;
-  runsQueryError: unknown;
-  tab: ScheduleDetailTab;
-}) {
-  if (tab === 'runs') {
-    return <ScheduleRunsTable runs={runs} isLoading={runsLoading} isError={runsError} error={runsQueryError} />;
-  }
-  if (tab === 'configuration') {
-    return (
-      <div className="schedule-detail-config-grid">
-        <DetailFact label="Schedule name" value={schedule.name} />
-        <DetailFact label="Schedule state" value={stateLabel(schedule)} />
-        <DetailFact label="Cron" value={schedule.cron} />
-        <DetailFact label="Timezone" value={displayValue(schedule.timezone)} />
-        <DetailFact label="Scope" value={[schedule.scopeType, schedule.scopeRef].filter(Boolean).join(' / ') || '-'} />
-        <DetailFact label="Policy" value={policySummary(schedule)} />
-        <DetailFact label="Target facts" value={[targetKind(schedule), targetRepository(schedule)].filter((value) => value !== '-').join(' / ') || '-'} />
-        <DetailFact label="Updated time" value={formatWhen(schedule.updatedAt)} />
-      </div>
-    );
-  }
-  if (tab === 'activity') {
-    return (
-      <div className="schedule-detail-activity-list">
-        {(schedule.activity || []).map((event, index) => (
-          <div className="schedule-detail-activity-item" key={`${displayUnknown(event.id)}-${index}`}>
-            <strong>{displayUnknown(event.title ?? event.type ?? event.status)}</strong>
-            <span>{formatWhen(displayUnknown(event.updatedAt ?? event.createdAt ?? event.time))}</span>
-            <p>{displayUnknown(event.message ?? event.summary)}</p>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  return (
-    <div className="schedule-detail-overview">
-      <DetailFact label="Schedule name" value={schedule.name} />
-      <DetailFact label="Schedule state" value={stateLabel(schedule)} />
-      <DetailFact label="Schedule definition ID" value={schedule.id} />
-      <DetailFact label="Temporal Schedule ID" value={displayValue(schedule.temporalScheduleId)} />
-      <DetailFact label="Target facts" value={[targetKind(schedule), targetRepository(schedule), targetFact(schedule, 'runtime'), targetFact(schedule, 'model')].filter((value) => value !== '-').join(' / ') || '-'} />
-      <DetailFact label="Next run" value={formatWhen(schedule.nextRunAt)} />
-      <DetailFact label="Last run" value={formatWhen(schedule.lastScheduledFor)} />
-      <DetailFact label="Dispatch result" value={schedule.lastDispatchStatus ? titleCaseLabel(formatStatusLabel(schedule.lastDispatchStatus)) : '-'} />
-      <DetailFact label="Updated time" value={formatWhen(schedule.updatedAt)} />
-      {schedule.lastDispatchError ? <div className="notice error">{schedule.lastDispatchError}</div> : null}
-    </div>
-  );
-}
-
 function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; definitionId: string }) {
   const queryClient = useQueryClient();
-  const detailEndpoint = useMemo(() => scheduleDetailEndpoint(payload, definitionId), [payload, definitionId]);
-  const runsEndpoint = useMemo(() => scheduleRunsEndpoint(payload, definitionId), [payload, definitionId]);
-  const runNowEndpoint = useMemo(() => scheduleRunNowEndpoint(payload, definitionId), [payload, definitionId]);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
+  const detailEndpoint = useMemo(() => scheduleEndpoint(payload, 'detail', definitionId), [payload, definitionId]);
+  const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
+  const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
+  const runsEndpoint = useMemo(() => scheduleEndpoint(payload, 'runs', definitionId), [payload, definitionId]);
+
   const detailQuery = useQuery({
-    queryKey: ['schedule-detail', detailEndpoint],
+    queryKey: ['schedule-detail', definitionId, detailEndpoint],
     queryFn: async () => {
       const response = await fetch(detailEndpoint, { credentials: 'include' });
       if (!response.ok) {
@@ -443,8 +283,9 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       return ScheduleSchema.parse(await response.json());
     },
   });
+
   const runsQuery = useQuery({
-    queryKey: ['schedule-runs', runsEndpoint],
+    queryKey: ['schedule-runs', definitionId, runsEndpoint],
     queryFn: async () => {
       const response = await fetch(runsEndpoint, { credentials: 'include' });
       if (!response.ok) {
@@ -453,103 +294,366 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       return ScheduleRunsResponseSchema.parse(await response.json());
     },
   });
-  const hasActivity = Boolean(detailQuery.data?.activity?.length);
-  const [tab, setTab] = useState<ScheduleDetailTab>(() => scheduleDetailTabFromHash(hasActivity));
+
   useEffect(() => {
-    setTab(scheduleDetailTabFromHash(hasActivity));
-    const handleHashChange = () => {
-      setTab(scheduleDetailTabFromHash(hasActivity));
-    };
-    window.addEventListener('hashchange', handleHashChange);
-    return () => {
-      window.removeEventListener('hashchange', handleHashChange);
-    };
-  }, [hasActivity]);
-  const runNow = useMutation({
-    mutationFn: async () => {
-      const response = await fetch(runNowEndpoint, { method: 'POST', credentials: 'include' });
+    if (detailQuery.data && !isEditing) {
+      setEditForm(editFormFromSchedule(detailQuery.data));
+    }
+  }, [detailQuery.data, isEditing]);
+
+  const refreshDetail = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['schedule-detail', definitionId] }),
+      queryClient.invalidateQueries({ queryKey: ['schedule-runs', definitionId] }),
+    ]);
+  };
+
+  const updateMutation = useMutation({
+    mutationFn: async (form: ScheduleEditForm) => {
+      const response = await fetch(updateEndpoint, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name,
+          description: form.description,
+          enabled: form.enabled,
+          cron: form.cron,
+          timezone: form.timezone,
+        }),
+      });
       if (!response.ok) {
-        throw new Error(`Run now failed: ${response.statusText}`);
+        throw new Error(`Failed to update schedule: ${response.statusText}`);
       }
-      return response.json();
+      return ScheduleSchema.parse(await response.json());
+    },
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(['schedule-detail', definitionId, detailEndpoint], updated);
+      setEditForm(editFormFromSchedule(updated));
+      setIsEditing(false);
+      await refreshDetail();
+    },
+  });
+
+  const runNowMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(runNowEndpoint, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to run schedule: ${response.statusText}`);
+      }
+      return ScheduleRunSchema.parse(await response.json());
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['schedule-detail', detailEndpoint] });
-      await queryClient.invalidateQueries({ queryKey: ['schedule-runs', runsEndpoint] });
+      await refreshDetail();
     },
   });
 
   const schedule = detailQuery.data;
-  const currentTab = tab === 'activity' && !hasActivity ? 'overview' : tab;
+  const runs = runsQuery.data?.items || [];
+  const currentForm = editForm || (schedule ? editFormFromSchedule(schedule) : null);
+
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (currentForm) {
+      updateMutation.mutate(currentForm);
+    }
+  };
+
+  if (detailQuery.isLoading) {
+    return (
+      <div className="schedules-page stack">
+        <p className="loading">Loading recurring schedule...</p>
+      </div>
+    );
+  }
+
+  if (detailQuery.isError || !schedule) {
+    return (
+      <div className="schedules-page stack">
+        <a href="/schedules" className="secondary">Back to schedules</a>
+        <div className="schedules-error" role="alert">{errorMessage(detailQuery.error, 'Schedule not found')}</div>
+      </div>
+    );
+  }
+
   return (
-    <div className="stack workflow-detail-page schedule-detail-page">
-      <div className="toolbar">
-        <div>
-          <h2 className="page-title">Schedule Detail</h2>
-          <div className="toolbar-identity-row">
-            <p className="page-meta">Schedules / {definitionId}</p>
-            {schedule ? <span className={scheduleStatusClass(schedule)}>{stateLabel(schedule)}</span> : null}
-          </div>
+    <div className="schedules-page schedules-detail-page stack">
+      <header className="toolbar schedules-toolbar">
+        <div className="schedules-detail-title">
+          <nav className="page-meta" aria-label="Breadcrumb">
+            <a href="/schedules">Schedules</a>
+            <span>/</span>
+            <span>{schedule.name}</span>
+          </nav>
+          <h2 className="page-title">{schedule.name}</h2>
+          <p className="page-meta">{displayValue(schedule.description)}</p>
+          <p className="page-meta" title={definitionId}>Definition ID: {definitionId}</p>
         </div>
         <div className="toolbar-controls">
-          <a href="/schedules" className="secondary">Back to schedules</a>
-          <button type="button" onClick={() => runNow.mutate()} disabled={runNow.isPending || !schedule}>
-            {runNow.isPending ? 'Running now' : 'Run now'}
+          <span className={`schedules-state schedules-state--${scheduleState(schedule)}`}>
+            {stateLabel(schedule)}
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void refreshDetail()}
+            disabled={detailQuery.isFetching || runsQuery.isFetching}
+          >
+            {detailQuery.isFetching || runsQuery.isFetching ? 'Refreshing' : 'Refresh'}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => {
+              setEditForm(editFormFromSchedule(schedule));
+              setIsEditing((value) => !value);
+            }}
+          >
+            {isEditing ? 'Cancel edit' : 'Edit schedule'}
+          </button>
+          <button
+            type="button"
+            className="button"
+            onClick={() => runNowMutation.mutate()}
+            disabled={runNowMutation.isPending}
+          >
+            {runNowMutation.isPending ? 'Running' : 'Run now'}
           </button>
         </div>
+      </header>
+
+      {updateMutation.isError && (
+        <div className="schedules-error" role="alert">
+          {errorMessage(updateMutation.error, 'Failed to update schedule')}
+        </div>
+      )}
+      {runNowMutation.isError && (
+        <div className="schedules-error" role="alert">
+          {errorMessage(runNowMutation.error, 'Failed to run schedule')}
+        </div>
+      )}
+
+      <section className="schedules-summary-grid" aria-label="Schedule detail summary">
+        <div className="schedules-summary-item">
+          <span>Next Run</span>
+          <strong>{formatWhen(schedule.nextRunAt)}</strong>
+        </div>
+        <div className="schedules-summary-item">
+          <span>Cadence</span>
+          <strong>{schedule.cron}</strong>
+        </div>
+        <div className="schedules-summary-item">
+          <span>Last Run</span>
+          <strong>{formatWhen(schedule.lastScheduledFor)}</strong>
+        </div>
+        <div className="schedules-summary-item">
+          <span>Dispatch</span>
+          <strong>{schedule.lastDispatchStatus ? titleCaseLabel(formatStatusLabel(schedule.lastDispatchStatus)) : '-'}</strong>
+        </div>
+      </section>
+
+      <div className="schedules-detail-grid">
+        <section className="panel--data schedules-detail-panel" aria-label="Schedule configuration">
+          <div className="section-heading-row">
+            <h3>Configuration</h3>
+          </div>
+          {isEditing && currentForm ? (
+            <form className="schedules-edit-form" onSubmit={onSubmit}>
+              <label>
+                <span>Name</span>
+                <input
+                  value={currentForm.name}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, name: value } : null);
+                  }}
+                  required
+                />
+              </label>
+              <label>
+                <span>Description</span>
+                <textarea
+                  value={currentForm.description}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, description: value } : null);
+                  }}
+                  rows={3}
+                />
+              </label>
+              <label>
+                <span>Cron</span>
+                <input
+                  value={currentForm.cron}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, cron: value } : null);
+                  }}
+                  required
+                />
+              </label>
+              <label>
+                <span>Timezone</span>
+                <input
+                  value={currentForm.timezone}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, timezone: value } : null);
+                  }}
+                  required
+                />
+              </label>
+              <label className="schedules-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={currentForm.enabled}
+                  onChange={(event) => {
+                    const value = event.currentTarget.checked;
+                    setEditForm((previous) => previous ? { ...previous, enabled: value } : null);
+                  }}
+                />
+                <span>Enabled</span>
+              </label>
+              <div className="toolbar-controls">
+                <button type="submit" className="button" disabled={updateMutation.isPending}>
+                  {updateMutation.isPending ? 'Saving' : 'Save schedule'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    setEditForm(editFormFromSchedule(schedule));
+                    setIsEditing(false);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <dl className="schedules-detail-list">
+              <div>
+                <dt>Cron</dt>
+                <dd><code>{schedule.cron}</code></dd>
+              </div>
+              <div>
+                <dt>Timezone</dt>
+                <dd>{displayValue(schedule.timezone)}</dd>
+              </div>
+              <div>
+                <dt>Target</dt>
+                <dd>{targetKind(schedule)}</dd>
+              </div>
+              <div>
+                <dt>Repository</dt>
+                <dd>{targetRepository(schedule)}</dd>
+              </div>
+              <div>
+                <dt>Policy</dt>
+                <dd>{policySummary(schedule)}</dd>
+              </div>
+              <div>
+                <dt>Last Dispatch Error</dt>
+                <dd>{displayValue(schedule.lastDispatchError)}</dd>
+              </div>
+            </dl>
+          )}
+        </section>
+
+        <aside className="panel--data schedules-detail-panel" aria-label="Schedule facts">
+          <div className="section-heading-row">
+            <h3>Facts</h3>
+          </div>
+          <dl className="schedules-detail-list">
+            <div>
+              <dt>Definition ID</dt>
+              <dd title={definitionId}>{definitionId}</dd>
+            </div>
+            <div>
+              <dt>Temporal Schedule ID</dt>
+              <dd>{displayValue(schedule.temporalScheduleId)}</dd>
+            </div>
+            <div>
+              <dt>Scope</dt>
+              <dd>{displayValue(schedule.scopeType)} / {displayValue(schedule.scopeRef)}</dd>
+            </div>
+            <div>
+              <dt>Type</dt>
+              <dd>{displayValue(schedule.scheduleType)}</dd>
+            </div>
+            <div>
+              <dt>Updated</dt>
+              <dd>{formatWhen(schedule.updatedAt)}</dd>
+            </div>
+          </dl>
+        </aside>
       </div>
 
-      <ScheduleDetailNav current={currentTab} hasActivity={hasActivity} onSelect={setTab} />
-      {runNow.isError ? <div className="notice error" role="alert">{errorMessage(runNow.error)}</div> : null}
+      <section className="panel--data schedules-detail-panel" aria-label="Schedule run history">
+        <div className="section-heading-row">
+          <h3>Runs</h3>
+        </div>
+        {runsQuery.isError ? (
+          <div className="schedules-error" role="alert">{errorMessage(runsQuery.error, 'Failed to fetch schedule runs')}</div>
+        ) : (
+          <DataTable
+            data={runs}
+            columns={[
+              {
+                key: 'scheduledFor',
+                header: 'Scheduled For',
+                render: (item) => formatWhen(item.scheduledFor),
+              },
+              {
+                key: 'outcome',
+                header: 'Outcome',
+                render: (item) => titleCaseLabel(formatStatusLabel(item.outcome)),
+              },
+              {
+                key: 'trigger',
+                header: 'Trigger',
+                render: (item) => titleCaseLabel(formatStatusLabel(item.trigger)),
+              },
+              {
+                key: 'temporalWorkflowId',
+                header: 'Workflow',
+                render: (item) => {
+                  const href = runWorkflowHref(item);
+                  return href ? <a href={href}>{item.temporalWorkflowId}</a> : '-';
+                },
+              },
+              {
+                key: 'message',
+                header: 'Message',
+                render: (item) => displayValue(item.message),
+              },
+            ]}
+            emptyMessage={runsQuery.isLoading ? 'Loading schedule runs...' : 'No runs recorded for this schedule.'}
+            getRowKey={(item) => item.id}
+            ariaLabel="Schedule runs"
+          />
+        )}
+      </section>
 
-      {detailQuery.isLoading ? (
-        <p className="loading">Loading schedule...</p>
-      ) : detailQuery.isError ? (
-        <div className="notice error" role="alert">{errorMessage(detailQuery.error)}</div>
-      ) : schedule ? (
-        <>
-          <div className="td-hero">
-            <div className="td-hero-body">
-              <div className="td-hero-headline">
-                <h3 className="td-title-text">{schedule.name}</h3>
-                <p className="meta-inline">
-                  Schedule definition
-                  <span className="dot">·</span>
-                  {schedule.id}
-                  {schedule.temporalScheduleId ? (
-                    <>
-                      <span className="dot">·</span>
-                      {schedule.temporalScheduleId}
-                    </>
-                  ) : null}
-                </p>
-                {schedule.description ? <p className="page-meta">{schedule.description}</p> : null}
-              </div>
-            </div>
-          </div>
-          <ScheduleSummaryGrid schedule={schedule} />
-          <div className="schedule-detail-layout">
-            <section className="td-evidence-region schedule-detail-main" aria-label="Schedule detail panel">
-              <ScheduleTabPanel
-                schedule={schedule}
-                runs={runsQuery.data?.items || []}
-                runsLoading={runsQuery.isLoading}
-                runsError={runsQuery.isError}
-                runsQueryError={runsQuery.error}
-                tab={currentTab}
-              />
-            </section>
-            <ScheduleFactsRail schedule={schedule} />
-          </div>
-        </>
-      ) : (
-        <p>No schedule details.</p>
-      )}
+      <section className="panel--data schedules-detail-panel" aria-label="Schedule target payload">
+        <div className="section-heading-row">
+          <h3>Target Payload</h3>
+        </div>
+        <pre className="schedules-json-block">{formatJsonValue(schedule.target)}</pre>
+      </section>
     </div>
   );
 }
 
-function ScheduleListPage({ payload }: { payload: BootPayload }) {
+export function SchedulesPage({ payload }: { payload: BootPayload }) {
+  const routeDefinitionId = useMemo(() => scheduleRouteDefinitionId(payload), [payload]);
+  if (routeDefinitionId) {
+    return <ScheduleDetailPage payload={payload} definitionId={routeDefinitionId} />;
+  }
+
   const listEndpoint = useMemo(() => scheduleListEndpoint(payload), [payload]);
   const { data, isLoading, isError, error, isFetching, refetch } = useQuery({
     queryKey: ['schedules', listEndpoint],
@@ -611,7 +715,7 @@ function ScheduleListPage({ payload }: { payload: BootPayload }) {
         {isLoading ? (
           <p className="loading">Loading recurring schedules...</p>
         ) : isError ? (
-          <div className="schedules-error" role="alert">{errorMessage(error)}</div>
+          <div className="schedules-error" role="alert">{errorMessage(error, 'Failed to fetch schedules')}</div>
         ) : (
           <DataTable
             data={schedules}
@@ -688,15 +792,6 @@ function ScheduleListPage({ payload }: { payload: BootPayload }) {
         )}
       </section>
     </div>
-  );
-}
-
-export function SchedulesPage({ payload }: { payload: BootPayload }) {
-  const definitionId = scheduleIdFromLocation();
-  return definitionId ? (
-    <ScheduleDetailPage payload={payload} definitionId={definitionId} />
-  ) : (
-    <ScheduleListPage payload={payload} />
   );
 }
 export default SchedulesPage;
