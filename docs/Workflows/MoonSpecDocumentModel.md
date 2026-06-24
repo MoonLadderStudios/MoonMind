@@ -48,3 +48,18 @@ Reconciliation updates a canonical document only when discoveries **definitely r
 - **Best practices**: the implementation deliberately and correctly diverged from a documented approach for a defensible, verification-backed reason.
 
 Stylistic preferences, speculative improvements, and unverified observations never qualify. Reconciliation preserves desired-state framing: it never downgrades a canonical document to match buggy or incomplete code, and it never inserts imperative content into canonical files. Updates that would conflict with the constitution, README, or architecture direction are escalated as Jira issues instead of applied.
+
+## Documentation Architecture Standard
+
+The [Documentation Architecture Standard](../DocumentationArchitecture.md) defines the documentation viewpoints (architecture, design, and contract viewpoints) that organize canonical declarative documents. Its viewpoint rules **refine** canonical declarative documents; they do **not** replace this model's lifecycle, classification, precedence, or reconciliation rules. The document classes, classification rule, precedence rule, and reconciliation expectation defined above remain authoritative, and the standard is read as a refinement layered on top of them rather than a substitute. See the standard for the rules themselves; they are not restated here.
+
+### Read order
+
+Read MoonSpec documentation in this order:
+
+1. **MoonSpec Document Model** (this document) — document classes, classification, precedence, and reconciliation.
+2. **[Documentation Architecture Standard](../DocumentationArchitecture.md)** — viewpoint rules that refine the canonical declarative documents.
+3. **Project-local architecture / design / contract docs** — the canonical declarative documents for the project at hand.
+4. **Optional project-local implementation scratch** — temporary execution artifacts and imperative working documents, when present.
+
+Downstream projects may adapt this read order with minor local additions (for example, engineering or owner matrices, or a project constitution) without changing the relative ordering above.
