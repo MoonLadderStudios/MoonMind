@@ -1684,7 +1684,6 @@ def _build_runtime_planner():
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
-                step_type = _selected_step_type(step_entry)
                 tool_type = _selected_step_tool_type(step_entry)
                 tool_version = _selected_step_tool_version(step_entry)
                 is_agent_runtime_step = tool_type == "agent_runtime"
