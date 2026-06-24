@@ -1196,6 +1196,20 @@ resume run:
 
 The resumed run does not reconstruct progress from logs and does not silently rerun steps 1 and 2.
 
+#### 20.2.1 Failed-run recovery manifest
+
+Checkpoint-backed recovery is the default failed-run path. Every failed run emits a **recovery manifest** (a durable artifact, `reports/recovery_manifest.json`, plus a compact execution-linked reference carried in the finish summary) **before** terminal failure is reported. The manifest content type is `application/vnd.moonmind.failed-run-recovery+json;version=1`.
+
+The manifest names:
+
+- the **last accepted step** and the **failed logical step** with its **execution ordinal**;
+- the **checkpoint refs** available for resume (ref-only, by boundary);
+- the **checkpoint validation result** (`valid`, `missing`, `corrupted`, `unauthorized`, `incompatible`, `invalid`, or `not_evaluated`);
+- the **side-effect dispositions** classified as `accepted`, `discarded`, `blocked`, or `needs_compensation`;
+- the **resume allowance** and, when resume is not allowed, the **blocked reason**.
+
+The contract is fail-closed: `resumeAllowed` can be true only when checkpoint validation is `valid` and a checkpoint ref is present. A blocked, missing, corrupted, unauthorized, or workspace-policy-incompatible checkpoint can never be silently degraded into a full rerun presented as resume — it is recorded as blocked with the reason, and the manifest's recovery eligibility falls back to `full_retry` (or `environment_fix` for environment/system failures). Restore-time checkpoint re-validation still runs and fails closed when a resume is actually attempted.
+
 ### 20.3 Autonomous story loop
 
 Desired behavior:
