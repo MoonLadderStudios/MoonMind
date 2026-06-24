@@ -11178,7 +11178,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             </div>
           ) : null}
           <label>
-            Existing run
+            Dependencies
             <select
               id="queue-dependency-picker"
               value={selectedDependencyWorkflowId}
