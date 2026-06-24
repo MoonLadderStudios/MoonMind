@@ -7124,6 +7124,8 @@ export interface components {
             policy?: {
                 [key: string]: unknown;
             };
+            /** Temporalscheduleid */
+            temporalScheduleId?: string | null;
             /** Version */
             version: number;
             /**

@@ -262,6 +262,7 @@ describe("SchedulesPage", () => {
     expect(screen.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
     expect(screen.getByRole("link", { name: "Runs" })).not.toBeNull();
     expect(screen.getByRole("link", { name: "Configuration" })).not.toBeNull();
+    expect(screen.queryByRole("link", { name: "Edit schedule" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Steps" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Artifacts" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Activity" })).toBeNull();
@@ -298,7 +299,7 @@ describe("SchedulesPage", () => {
   });
 
   it("MM-894 renders Activity only when schedule activity data is available", async () => {
-    window.history.pushState({}, "Schedule detail", "/schedules/schedule-activity");
+    window.history.pushState({}, "Schedule detail", "/schedules/schedule-activity#activity");
     fetchSpy.mockImplementation(async (url) => {
       if (String(url).endsWith("/runs?limit=200")) {
         return { ok: true, json: async () => ({ items: [] }) } as Response;
@@ -334,8 +335,22 @@ describe("SchedulesPage", () => {
     renderWithClient(<SchedulesPage payload={mockPayload} />);
 
     const activityLink = await screen.findByRole("link", { name: "Activity" });
-    fireEvent.click(activityLink);
+    expect(activityLink.getAttribute("aria-current")).toBe("page");
     expect(await screen.findByText("Temporal describe refreshed")).not.toBeNull();
     expect(screen.getByText("Schedule metadata was refreshed.")).not.toBeNull();
+  });
+
+  it("MM-894 renders non-Error schedule detail failures without unsafe casts", async () => {
+    window.history.pushState({}, "Schedule detail", "/schedules/schedule-failure");
+    fetchSpy.mockImplementation(async (url) => {
+      if (String(url).endsWith("/runs?limit=200")) {
+        return { ok: true, json: async () => ({ items: [] }) } as Response;
+      }
+      throw "schedule unavailable";
+    });
+
+    renderWithClient(<SchedulesPage payload={mockPayload} />);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("schedule unavailable");
   });
 });

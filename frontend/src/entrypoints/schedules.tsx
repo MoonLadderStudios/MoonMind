@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DataTable } from '../components/tables/DataTable';
 
 import { z } from 'zod';
@@ -160,6 +160,10 @@ function displayUnknown(value: unknown): string {
     return String(value);
   }
   return '-';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error || 'Unknown error');
 }
 
 function titleCaseLabel(value: string): string {
@@ -336,7 +340,7 @@ function ScheduleRunsTable({ runs, isLoading, isError, error }: {
     return <p className="loading">Loading schedule runs...</p>;
   }
   if (isError) {
-    return <div className="notice error" role="alert">{(error as Error).message}</div>;
+    return <div className="notice error" role="alert">{errorMessage(error)}</div>;
   }
   return (
     <DataTable
@@ -451,6 +455,16 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   });
   const hasActivity = Boolean(detailQuery.data?.activity?.length);
   const [tab, setTab] = useState<ScheduleDetailTab>(() => scheduleDetailTabFromHash(hasActivity));
+  useEffect(() => {
+    setTab(scheduleDetailTabFromHash(hasActivity));
+    const handleHashChange = () => {
+      setTab(scheduleDetailTabFromHash(hasActivity));
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+    };
+  }, [hasActivity]);
   const runNow = useMutation({
     mutationFn: async () => {
       const response = await fetch(runNowEndpoint, { method: 'POST', credentials: 'include' });
@@ -479,7 +493,6 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         </div>
         <div className="toolbar-controls">
           <a href="/schedules" className="secondary">Back to schedules</a>
-          <a href={`/workflows/new?scheduleMode=recurring&scheduleId=${encodeURIComponent(definitionId)}`} className="secondary">Edit schedule</a>
           <button type="button" onClick={() => runNow.mutate()} disabled={runNow.isPending || !schedule}>
             {runNow.isPending ? 'Running now' : 'Run now'}
           </button>
@@ -487,12 +500,12 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       </div>
 
       <ScheduleDetailNav current={currentTab} hasActivity={hasActivity} onSelect={setTab} />
-      {runNow.isError ? <div className="notice error" role="alert">{(runNow.error as Error).message}</div> : null}
+      {runNow.isError ? <div className="notice error" role="alert">{errorMessage(runNow.error)}</div> : null}
 
       {detailQuery.isLoading ? (
         <p className="loading">Loading schedule...</p>
       ) : detailQuery.isError ? (
-        <div className="notice error" role="alert">{(detailQuery.error as Error).message}</div>
+        <div className="notice error" role="alert">{errorMessage(detailQuery.error)}</div>
       ) : schedule ? (
         <>
           <div className="td-hero">
@@ -598,7 +611,7 @@ function ScheduleListPage({ payload }: { payload: BootPayload }) {
         {isLoading ? (
           <p className="loading">Loading recurring schedules...</p>
         ) : isError ? (
-          <div className="schedules-error" role="alert">{(error as Error).message}</div>
+          <div className="schedules-error" role="alert">{errorMessage(error)}</div>
         ) : (
           <DataTable
             data={schedules}
