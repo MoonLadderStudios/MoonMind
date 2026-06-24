@@ -3622,11 +3622,13 @@ class MoonMindAgentRun:
                             provider_failure_event
                         )
                     )
-                else:
+                elif self.final_result is not None:
                     requires_provider_cooldown = provider_error_requires_cooldown(
                         provider_error_code=self.final_result.provider_error_code,
                         retry_recommendation=self.final_result.retry_recommendation,
                     )
+                else:
+                    requires_provider_cooldown = False
 
                 if (
                     request.agent_kind == "managed"
