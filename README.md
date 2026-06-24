@@ -3,13 +3,11 @@
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/main/docs/assets/moonmindlogo.png">
-        <img src="https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/main/docs/assets/moonmindlogo.png" alt="MoonMind" width="420">
+        <img src="https://raw.githubusercontent.com/MoonLadderStudios/MoonMind/main/docs/assets/moonmindlogo.png" alt="MoonMind" width="210">
     </picture>
 </p>
 
-MoonMind is an open-source control plane that makes Claude Code and Codex CLI **safer**, more **resilient**, and more **observable** by wrapping agent CLI runs in durable workflows, provider-profile policy, isolated execution, artifact-backed logs, diagnostics, and Mission Control.
-
-MoonMind does not replace your agent. It gives your agent an operational envelope.
+MoonMind is an open-source framework that makes Claude Code and Codex CLI **safer**, more **resilient**, and more **observable** by wrapping agent CLI runs in Docker containers, using Temporal-based durable workflows, and providing a powerful UI dashboard.
 
 ## Quick Start
 
@@ -38,12 +36,12 @@ If you already have a subscription with a model provider:
 
 Claude Code and Codex CLI are remarkable agents, but long-running autonomous work needs more than a terminal process:
 
-- What credentials did the agent receive, and what provider and model policy was used?
-- What happened before the run failed, stalled, or hit a rate limit?
 - Can I close my laptop and trust the workflow to continue?
 - Can I inspect logs, diagnostics, artifacts, and step evidence after the fact?
 - Can I run build and test containers without handing the agent the host Docker socket?
 - Can I intervene, clear context, retry, or recover without losing the audit trail?
+- What credentials did the agent receive, and what provider and model policy was used?
+- What happened before the run failed, stalled, or hit a rate limit?
 
 MoonMind exists to answer those questions. Progress against each promise below is tracked milestone-by-milestone in the [MoonMind Roadmap](docs/MoonMindRoadmap.md).
 
