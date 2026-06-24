@@ -1210,6 +1210,24 @@ The manifest names:
 
 The contract is fail-closed: `resumeAllowed` can be true only when checkpoint validation is `valid` and a checkpoint ref is present. A blocked, missing, corrupted, unauthorized, or workspace-policy-incompatible checkpoint can never be silently degraded into a full rerun presented as resume — it is recorded as blocked with the reason, and the manifest's recovery eligibility falls back to `full_retry` (or `environment_fix` for environment/system failures). Restore-time checkpoint re-validation still runs and fails closed when a resume is actually attempted.
 
+#### 20.2.2 Incident reconstruction manifest
+
+Every failed run also emits a single **incident reconstruction manifest** (a durable artifact, `reports/incident_reconstruction.json`, plus a compact execution-linked summary carried in the finish summary as `incidentReconstruction`) **before** terminal failure is reported. It is built after the recovery manifest so it reuses the recovery side-effect dispositions and checkpoint restore candidate rather than recomputing them. The manifest content type is `application/vnd.moonmind.incident-reconstruction+json;version=1`.
+
+The manifest correlates, in one reconstruction path, the evidence an operator needs to answer *what happened* without reading raw worker internals:
+
+- the governing **resilience policy** ref (MM-880);
+- the **provider / profile / credential source** and the sanitized **provider failure event** (MM-882) — structured fields only; raw provider payloads are referenced via `rawErrorRef`, never inlined;
+- the **failed logical step** and its **execution ordinal**;
+- **progress** signals (bounded counts + current step);
+- **workspace changes** (per-step disposition refs);
+- accepted/blocked **side-effect dispositions** and the **checkpoint restore candidate** (linked from the recovery manifest);
+- **cost** — the cost-attribution settings (runtime/model/effort/cost center/budget ref) plus observed token/cost **where available** (`observedAvailable` stays false and the numeric fields stay absent when the runtime did not report usage);
+- **trace spans** across the API, workflow, activity, provider, side-effect, log, artifact, and step-manifest boundaries;
+- the durable **logs** ref and named **artifact** refs.
+
+A stable, replay-safe **correlation (trace) id** — deterministically derived from the workflow/run identity — joins all of this. The same trace id is stamped onto each step-execution manifest as a compact `traceRef` (with a per-step span id), so a step can be correlated to the run's incident reconstruction and to its trace/log slice through one id. The manifest enumerates **every** correlated category: each is either present with a locator or named absent with a reason code, so a failed run never silently omits a category. All large evidence is carried as bounded refs (it is never duplicated into workflow history), and secret-bearing values and raw provider payloads are redacted or artifact-gated. Mission Control/report surfaces link to the durable manifest (memo key `incident_reconstruction_ref`) rather than duplicating its evidence.
+
 ### 20.3 Autonomous story loop
 
 Desired behavior:
