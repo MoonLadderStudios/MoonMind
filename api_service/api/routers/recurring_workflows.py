@@ -46,6 +46,7 @@ class RecurringWorkflowDefinitionModel(BaseModel):
     last_scheduled_for: Optional[datetime] = Field(None, alias="lastScheduledFor")
     last_dispatch_status: Optional[str] = Field(None, alias="lastDispatchStatus")
     last_dispatch_error: Optional[str] = Field(None, alias="lastDispatchError")
+    temporal_schedule_id: Optional[str] = Field(None, alias="temporalScheduleId")
     owner_user_id: Optional[UUID] = Field(None, alias="ownerUserId")
     scope_type: str = Field(..., alias="scopeType")
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
@@ -158,6 +159,7 @@ def _serialize_definition(
             if runtime_summary is not None
             else definition.last_dispatch_error
         ),
+        temporal_schedule_id=definition.temporal_schedule_id,
         owner_user_id=definition.owner_user_id,
         scope_type=definition.scope_type.value,
         scope_ref=definition.scope_ref,

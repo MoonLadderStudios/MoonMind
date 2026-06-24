@@ -7110,6 +7110,8 @@ export interface components {
             lastDispatchStatus?: string | null;
             /** Lastdispatcherror */
             lastDispatchError?: string | null;
+            /** Temporalscheduleid */
+            temporalScheduleId?: string | null;
             /** Owneruserid */
             ownerUserId?: string | null;
             /** Scopetype */
