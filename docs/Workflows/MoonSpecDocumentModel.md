@@ -62,4 +62,4 @@ Read MoonSpec documentation in this order:
 3. **Project-local architecture / design / contract docs** — the canonical declarative documents for the project at hand.
 4. **Optional project-local implementation scratch** — temporary execution artifacts and imperative working documents, when present.
 
-Downstream projects may adapt this read order with minor local additions (for example, engineering or owner matrices, or a project constitution) without changing the relative ordering above.
+Downstream projects may adapt this read order with minor local additions (for example, engineering or owner matrices, or a project constitution, which must always be positioned at the very beginning of the read order) without changing the relative ordering above.
