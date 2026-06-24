@@ -511,6 +511,27 @@ def _coerce_story_payload(value: Any) -> list[dict[str, Any]]:
         return [dict(value)] if value.get("summary") or value.get("title") else []
     return [dict(story) for story in _list(value) if isinstance(story, Mapping)]
 
+def _has_explicit_empty_story_list(value: Any) -> bool:
+    if isinstance(value, str) and value.strip():
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return False
+    if isinstance(value, Mapping):
+        for key in ("stories", "userStories", "user_stories", "items", "issues"):
+            if key not in value:
+                continue
+            stories_value = value.get(key)
+            return (
+                isinstance(stories_value, Sequence)
+                and not isinstance(stories_value, (str, bytes, bytearray))
+                and len(stories_value) == 0
+            )
+        return False
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return len(value) == 0
+    return False
+
 def _story_summary(story: Mapping[str, Any], *, index: int) -> str:
     for key in ("summary", "title", "name", "userStory", "user_story"):
         value = _string(story.get(key))
@@ -1591,6 +1612,58 @@ def _fallback_result(
         },
     )
 
+def _jira_noop_result(
+    *,
+    original_story_count: int,
+    dependency_mode: str,
+    skipped_stories: Sequence[Mapping[str, Any]] = (),
+    blocked_stories: Sequence[Mapping[str, Any]] = (),
+    partial_stories_adjusted: Sequence[Mapping[str, Any]] = (),
+    story_breakdown_artifact_ref: str = "",
+    story_breakdown_path: str = "",
+) -> ToolResult:
+    story_output: dict[str, Any] = {
+        "mode": "jira",
+        "status": "jira_noop",
+        "storyCount": original_story_count,
+        "eligibleStoryCount": 0,
+        "createdCount": 0,
+        "dependencyMode": dependency_mode,
+        "skippedStories": [dict(story) for story in skipped_stories],
+        "blockedStories": [dict(story) for story in blocked_stories],
+        "partialStoriesAdjusted": [
+            dict(story) for story in partial_stories_adjusted
+        ],
+    }
+    if story_breakdown_artifact_ref:
+        story_output["storyBreakdownArtifactRef"] = story_breakdown_artifact_ref
+    if story_breakdown_path:
+        story_output["storyBreakdownPath"] = story_breakdown_path
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "storyOutput": story_output,
+            "jira": {
+                "createdCount": 0,
+                "createdIssues": [],
+                "dependencyMode": dependency_mode,
+                "issueMappings": [],
+                "linkResults": [],
+                "linkCount": 0,
+                "dependencyChainComplete": (
+                    None
+                    if dependency_mode == JIRA_DEPENDENCY_MODE_NONE
+                    else True
+                ),
+                "skippedStories": [dict(story) for story in skipped_stories],
+                "blockedStories": [dict(story) for story in blocked_stories],
+                "partialStoriesAdjusted": [
+                    dict(story) for story in partial_stories_adjusted
+                ],
+            },
+        },
+    )
+
 def _unpublished_handoff_reason(
     *,
     previous_outputs: Mapping[str, Any],
@@ -1895,6 +1968,9 @@ async def create_jira_issues_from_stories(
     )
     breakdown_source_path = _breakdown_source_path(raw_story_payload)
     stories = _coerce_story_payload(raw_story_payload)
+    artifact_ref_was_read = False
+    artifact_payload_had_explicit_empty_stories = False
+    artifact_ref = ""
     if not stories:
         artifact_ref = _string(
             inputs.get("storyBreakdownArtifactRef")
@@ -1928,6 +2004,10 @@ async def create_jira_issues_from_stories(
                         parsed_payload = artifact_payload
                 breakdown_source_path = _breakdown_source_path(parsed_payload)
                 stories = _coerce_story_payload(parsed_payload)
+                artifact_ref_was_read = True
+                artifact_payload_had_explicit_empty_stories = (
+                    _has_explicit_empty_story_list(parsed_payload)
+                )
             except Exception as exc:
                 if fallback_for_missing_stories:
                     return _fallback_result(
@@ -1939,6 +2019,22 @@ async def create_jira_issues_from_stories(
                         dependency_mode=dependency_mode,
                     )
                 raise
+    if (
+        not stories
+        and artifact_ref_was_read
+        and artifact_payload_had_explicit_empty_stories
+    ):
+        return _jira_noop_result(
+            original_story_count=0,
+            dependency_mode=dependency_mode,
+            story_breakdown_artifact_ref=artifact_ref,
+            story_breakdown_path=_string(
+                inputs.get("storyBreakdownPath")
+                or story_output.get("storyBreakdownPath")
+                or previous_outputs.get("storyBreakdownPath")
+                or previous_story_output.get("storyBreakdownPath")
+            ),
+        )
     if not stories:
         repo = _string(inputs.get("repository") or inputs.get("repo"))
         ref = _string(
@@ -2019,37 +2115,12 @@ async def create_jira_issues_from_stories(
         partial_stories_adjusted,
     ) = _reconcile_stories_for_jira_creation(stories)
     if not stories:
-        return ToolResult(
-            status="COMPLETED",
-            outputs={
-                "storyOutput": {
-                    "mode": "jira",
-                    "status": "jira_noop",
-                    "storyCount": original_story_count,
-                    "eligibleStoryCount": 0,
-                    "createdCount": 0,
-                    "dependencyMode": dependency_mode,
-                    "skippedStories": skipped_stories,
-                    "blockedStories": blocked_stories,
-                    "partialStoriesAdjusted": partial_stories_adjusted,
-                },
-                "jira": {
-                    "createdCount": 0,
-                    "createdIssues": [],
-                    "dependencyMode": dependency_mode,
-                    "issueMappings": [],
-                    "linkResults": [],
-                    "linkCount": 0,
-                    "dependencyChainComplete": (
-                        None
-                        if dependency_mode == JIRA_DEPENDENCY_MODE_NONE
-                        else True
-                    ),
-                    "skippedStories": skipped_stories,
-                    "blockedStories": blocked_stories,
-                    "partialStoriesAdjusted": partial_stories_adjusted,
-                },
-            },
+        return _jira_noop_result(
+            original_story_count=original_story_count,
+            dependency_mode=dependency_mode,
+            skipped_stories=skipped_stories,
+            blocked_stories=blocked_stories,
+            partial_stories_adjusted=partial_stories_adjusted,
         )
 
     if not project_key:

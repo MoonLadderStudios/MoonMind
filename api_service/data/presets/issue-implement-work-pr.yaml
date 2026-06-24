@@ -155,7 +155,7 @@ steps:
     inputs.issue_provider }} issue {{ inputs.issue_ref }} to Done automatically. If
     the runtime instructions, task parameters, authentication, remote configuration,
     branch protection, or repository permissions prevent committing, pushing, or creating
-    the pull request in this step, stop before changing Jira to Code Review and report
+    the pull request in this step, stop before changing Jira to Review and report
     the exact blocker.
 
 
