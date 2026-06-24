@@ -16679,6 +16679,7 @@ describe("Task Create runtime switch layout stability", () => {
                 profile_id: "profile:codex-default",
                 account_label: "Codex Default",
                 is_default: true,
+                default_effort: "high",
               },
               {
                 profile_id: "profile:codex-secondary",
@@ -16686,6 +16687,12 @@ describe("Task Create runtime switch layout stability", () => {
                 is_default: false,
               },
             ],
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ workflowId: "mm:workflow-123" }),
           } as Response);
         }
         if (url.startsWith("/api/workflows/skills")) {
@@ -16806,5 +16813,39 @@ describe("Task Create runtime switch layout stability", () => {
     });
     expect(screen.getByRole("option", { name: /Claude Default/ })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
+  });
+
+  it("omits task effort when the selected provider profile defines a default effort", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const providerProfileSelect = (await screen.findByLabelText(
+      "Provider profile",
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(providerProfileSelect.value).toBe("profile:codex-default");
+    });
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run the profile default effort task." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+
+    expect(request.payload.task.runtime).toMatchObject({
+      mode: "codex_cli",
+      model: "gpt-5.4",
+      profileId: "profile:codex-default",
+    });
+    expect(request.payload.task.runtime).not.toHaveProperty("effort");
   });
 });

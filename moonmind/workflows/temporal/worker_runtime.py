@@ -765,6 +765,26 @@ _STORY_OUTPUT_TASK_TOOLS = frozenset(
     }
 )
 _MOONSPEC_BREAKDOWN_TOOLS = frozenset({"moonspec-breakdown"})
+_DIRECT_STORY_TOOL_CONTEXT_KEYS = (
+    "repository",
+    "repo",
+    "branch",
+    "startingBranch",
+    "targetBranch",
+    "storyBreakdownPath",
+    "storyBreakdownMarkdownPath",
+    "storyOutput",
+)
+_AUTHORED_STEP_METADATA_KEYS = (
+    "source",
+    "annotations",
+    "jiraOrchestration",
+    "jira_orchestration",
+    "documentUpdateOrchestration",
+    "document_update_orchestration",
+    "storyOutput",
+    "story_output",
+)
 
 def _normalize_required_capability_tokens(value: Any) -> list[str]:
     if not isinstance(value, list):
@@ -955,6 +975,41 @@ def _selected_step_tool_inputs(step_entry: Mapping[str, Any]) -> dict[str, Any]:
         _coerce_mapping(step_tool.get("inputs"))
         or _coerce_mapping(step_tool.get("args"))
     )
+
+
+def _merge_story_output_inputs(
+    existing: Mapping[str, Any] | None,
+    override: Any,
+) -> dict[str, Any]:
+    return {
+        **_coerce_mapping(existing),
+        **_coerce_mapping(override),
+    }
+
+
+def _authored_step_metadata_inputs(
+    step_entry: Mapping[str, Any],
+    *,
+    include_type: bool,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {}
+    step_type = _selected_step_type(step_entry)
+    if include_type and step_type:
+        metadata["type"] = step_type
+    for key in _AUTHORED_STEP_METADATA_KEYS:
+        if key in step_entry:
+            metadata[key] = deepcopy(step_entry[key])
+    return metadata
+
+
+def _direct_story_tool_context_inputs(
+    node_inputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        key: deepcopy(node_inputs[key])
+        for key in _DIRECT_STORY_TOOL_CONTEXT_KEYS
+        if key in node_inputs
+    }
 
 def _canonical_step_fingerprint(step_entry: Mapping[str, Any]) -> str:
     try:
@@ -1632,6 +1687,10 @@ def _build_runtime_planner():
                 tool_type = _selected_step_tool_type(step_entry)
                 tool_version = _selected_step_tool_version(step_entry)
                 is_agent_runtime_step = tool_type == "agent_runtime"
+                step_metadata_inputs = _authored_step_metadata_inputs(
+                    step_entry,
+                    include_type=is_agent_runtime_step or "source" in step_entry,
+                )
                 step_extra_inputs = {
                     k: v
                     for k, v in step_entry.items()
@@ -1654,6 +1713,7 @@ def _build_runtime_planner():
                         **step_extra_inputs,
                         "instructions": step_instructions,
                     }
+                    step_node_inputs.update(step_metadata_inputs)
                     if base_runtime_payload or step_runtime_payload:
                         step_node_inputs["runtime"] = {
                             **base_runtime_payload,
@@ -1671,7 +1731,20 @@ def _build_runtime_planner():
                     for key, value in step_tool_inputs.items():
                         step_node_inputs.setdefault(key, value)
                 else:
-                    step_node_inputs = dict(step_tool_inputs)
+                    step_node_inputs = (
+                        _direct_story_tool_context_inputs(node_inputs)
+                        if _story_output_task_tool_selected(step_tool_name)
+                        else {}
+                    )
+                    step_node_inputs.update(dict(step_tool_inputs))
+                    for key, value in step_metadata_inputs.items():
+                        if key in {"storyOutput", "story_output"}:
+                            step_node_inputs["storyOutput"] = _merge_story_output_inputs(
+                                _coerce_mapping(step_node_inputs.get("storyOutput")),
+                                value,
+                            )
+                            continue
+                        step_node_inputs[key] = value
                     if step_tool_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS:
                         step_node_inputs.setdefault("instructions", step_instructions)
                 step_runtime_payload = _coerce_mapping(step_node_inputs.get("runtime"))
