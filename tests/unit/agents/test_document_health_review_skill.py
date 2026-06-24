@@ -1,5 +1,9 @@
 from pathlib import Path
 
+from moonmind.services.skill_resolution import (
+    extract_required_skill_names_from_skill_markdown,
+)
+
 _SKILLS_DIR = Path(__file__).resolve().parents[3] / ".agents" / "skills"
 _SKILL_PATH = _SKILLS_DIR / "document-health-review" / "SKILL.md"
 
@@ -90,14 +94,15 @@ def test_document_health_review_severity_and_failure_modes() -> None:
     assert "classify the claim as `ambiguous`, not `stale`" in text
 
 
-def test_document_health_review_is_self_contained() -> None:
+def test_document_health_review_declares_document_update_dependency() -> None:
     text = _skill_text()
 
-    # The skill must not depend on the external ``document-update`` skill. When
-    # ``document-health-review`` is selected alone, the resolver materializes
-    # only this skill (plus its ``required-skills`` closure), so any reference
-    # to ``../document-update/SKILL.md`` would dangle in the active projection.
-    # The dependency was removed so the skill stands alone.
-    assert "document-update" not in text
+    required_skills = extract_required_skill_names_from_skill_markdown(
+        text,
+        skill_name="document-health-review",
+    )
+
+    assert required_skills == ("document-update",)
+    assert (_SKILLS_DIR / "document-update" / "SKILL.md").is_file()
     # It still inlines the drift-analysis mechanics it relies on.
     assert "drift" in text.lower()

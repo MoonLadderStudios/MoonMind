@@ -2,6 +2,7 @@
 name: document-health-review
 description: Review technical and strategy documents for codebase drift, strategic alignment, cross-document conflicts, simplification opportunities, engineering quality, and document organization. Use when auditing whether docs should be kept, updated, merged, split, moved, archived, or deleted.
 metadata:
+  required-skills: "document-update"
   required-capabilities:
     - git
 ---
