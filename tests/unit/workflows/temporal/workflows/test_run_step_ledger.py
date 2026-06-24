@@ -1869,6 +1869,7 @@ async def test_write_json_artifact_supports_serialized_list_result(
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
 
     async def fake_execute_activity(
         activity_type: str,
@@ -1884,7 +1885,7 @@ async def test_write_json_artifact_supports_serialized_list_result(
         **_kwargs: Any,
     ) -> None:
         assert activity_type == "artifact.write_complete"
-        assert run_module._get_from_result(payload, "artifact_id") == "art_list_payload"
+        assert payload.artifact_id == "art_list_payload"
         return None
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
