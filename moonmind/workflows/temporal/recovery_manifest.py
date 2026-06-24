@@ -199,9 +199,35 @@ def _build_side_effect_dispositions(
                     target=_text(record.get("target")),
                     reason=_text(record.get("reason")),
                     idempotencyKey=_text(record.get("idempotencyKey")),
+                    compensationRef=_text(record.get("compensationRef")),
                 )
             )
     return dispositions
+
+
+def _side_effect_resume_block_reason(
+    dispositions: Sequence[RecoverySideEffectDispositionModel],
+) -> str | None:
+    """Return a blocked reason when a recorded side effect makes resume unsafe.
+
+    Resuming re-executes the failed logical step from its checkpoint boundary,
+    so a blocked non-idempotent effect, or an accepted non-idempotent external
+    mutation that has not yet been compensated, would be re-applied. Resume must
+    stay ineligible until the side-effect policy in
+    ``docs/Steps/StepExecutionsAndCheckpointing.md`` §11 has accounted for the
+    non-repeatable mutation (recorded as a completed ``compensationRef``).
+    """
+
+    block_reason: str | None = None
+    for disposition in dispositions:
+        if disposition.disposition == "blocked":
+            return "side_effect_blocked"
+        if (
+            disposition.disposition == "needs_compensation"
+            and not disposition.compensation_ref
+        ):
+            block_reason = "side_effect_needs_compensation"
+    return block_reason
 
 
 def _resolve_failed_step(
@@ -383,9 +409,18 @@ def build_failed_run_recovery_manifest(
         validation = RecoveryCheckpointValidationModel(result="missing")
 
     # Resume is allowed only when checkpoint validation is valid, a checkpoint
-    # ref exists, and there is a failed logical step to resume.
+    # ref exists, there is a failed logical step to resume, and no recorded
+    # side effect still requires compensation. A blocked or uncompensated
+    # non-idempotent external mutation would be re-applied on resume, so it
+    # keeps resume ineligible until compensation is recorded.
+    side_effect_block_reason = _side_effect_resume_block_reason(
+        side_effect_dispositions
+    )
     resume_allowed = bool(
-        validation.result == "valid" and resume_ref and failed_step_id
+        validation.result == "valid"
+        and resume_ref
+        and failed_step_id
+        and side_effect_block_reason is None
     )
 
     if resume_allowed:
@@ -409,10 +444,14 @@ def build_failed_run_recovery_manifest(
             )
         elif not resume_ref:
             blocked_reason = "no_checkpoint_evidence"
-        else:
+        elif validation.result != "valid":
             blocked_reason = _BLOCKED_REASON_FOR_RESULT.get(
                 validation.result, "checkpoint_not_validated"
             )
+        else:
+            # Checkpoint evidence is valid; resume is blocked solely by a
+            # blocked or uncompensated non-idempotent side effect.
+            blocked_reason = side_effect_block_reason or "checkpoint_not_validated"
         environment_failure = failure_category == "system_error"
         eligibility = RecoveryEligibilityDiagnosticModel(
             eligible=False,

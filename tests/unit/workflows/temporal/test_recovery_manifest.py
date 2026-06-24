@@ -239,6 +239,103 @@ def test_side_effects_are_classified_for_recovery() -> None:
     }
 
 
+def test_uncompensated_side_effect_blocks_resume_despite_valid_checkpoint() -> None:
+    # A failed step with a valid checkpoint but an accepted, already-occurred
+    # non-idempotent external mutation must not advertise resume until the
+    # mutation has been compensated (StepExecutionsAndCheckpointing.md §11).
+    manifest = _build(
+        side_effect_records={
+            "run-tests": [
+                {
+                    "class": "publication",
+                    "operation": "repo.merge",
+                    "disposition": "accepted",
+                    "kind": "normal",
+                }
+            ]
+        }
+    )
+
+    assert manifest.validation.result == "valid"
+    assert manifest.resume_allowed is False
+    assert manifest.blocked_reason == "side_effect_needs_compensation"
+    assert manifest.recovery_eligibility.eligible is False
+    assert (
+        manifest.recovery_eligibility.disabled_reason_code
+        == "side_effect_needs_compensation"
+    )
+    assert manifest.recovery_eligibility.default_action == "full_retry"
+
+
+def test_blocked_side_effect_blocks_resume_despite_valid_checkpoint() -> None:
+    manifest = _build(
+        side_effect_records={
+            "run-tests": [
+                {
+                    "class": "external_non_idempotent",
+                    "operation": "jira.transition",
+                    "disposition": "blocked",
+                    "reason": "workflow_state_not_gate_approved",
+                }
+            ]
+        }
+    )
+
+    assert manifest.validation.result == "valid"
+    assert manifest.resume_allowed is False
+    assert manifest.blocked_reason == "side_effect_blocked"
+    assert manifest.recovery_eligibility.eligible is False
+
+
+def test_compensated_side_effect_allows_resume() -> None:
+    # Once a completed compensation ref is recorded, the non-idempotent effect
+    # is accounted for and checkpoint resume is allowed again.
+    manifest = _build(
+        side_effect_records={
+            "run-tests": [
+                {
+                    "class": "publication",
+                    "operation": "repo.merge",
+                    "disposition": "accepted",
+                    "kind": "normal",
+                    "compensationRef": "artifact://compensation/repo-merge",
+                }
+            ]
+        }
+    )
+
+    assert manifest.validation.result == "valid"
+    assert manifest.resume_allowed is True
+    assert manifest.blocked_reason is None
+    assert manifest.recovery_eligibility.eligible is True
+    disposition = next(
+        item
+        for item in manifest.side_effect_dispositions
+        if item.operation == "repo.merge"
+    )
+    assert disposition.disposition == "needs_compensation"
+    assert disposition.compensation_ref == "artifact://compensation/repo-merge"
+
+
+def test_idempotent_accepted_side_effect_does_not_block_resume() -> None:
+    # Idempotent / workspace-scoped accepted effects can safely repeat, so they
+    # must not block checkpoint resume.
+    manifest = _build(
+        side_effect_records={
+            "run-tests": [
+                {
+                    "class": "workspace_mutation",
+                    "operation": "edit-file",
+                    "disposition": "accepted",
+                }
+            ]
+        }
+    )
+
+    assert manifest.resume_allowed is True
+    assert manifest.blocked_reason is None
+
+
 def test_recovery_source_failed_step_used_when_no_failed_ledger_row() -> None:
     rows = [
         {
