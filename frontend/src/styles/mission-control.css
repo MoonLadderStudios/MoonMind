@@ -3738,6 +3738,30 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-top: 0;
 }
 
+:is(.queue-step-attachments-list, #queue-dependency-list) li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) li > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 0.5rem;
+  flex: 0 0 auto;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button svg {
+  width: 1rem;
+  height: 1rem;
+}
+
 .queue-attachment-preview {
   display: block;
   max-width: min(100%, 16rem);
