@@ -1860,6 +1860,131 @@ async def test_jira_blocker_wait_rechecks_with_compact_payload_and_no_manifest(
 
 
 @pytest.mark.asyncio
+async def test_jira_blocker_recheck_applies_retry_floor_for_one_attempt_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    captured_max_attempts: list[int] = []
+    blocked_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "blocked",
+            "blockingIssues": [{"issueKey": "MM-685", "done": False}],
+            "summary": "MM-686 is blocked by MM-685.",
+        },
+    }
+    continue_result = {
+        "status": "COMPLETED",
+        "outputs": {
+            "targetIssueKey": "MM-686",
+            "decision": "continue",
+            "blockingIssues": [],
+            "summary": "All Jira blockers are Done.",
+        },
+    }
+    execute_payload = {
+        "registry_snapshot_ref": "art_registry",
+        "principal": "owner-1",
+        "invocation_payload": {
+            "id": "check-blockers",
+            "tool": {
+                "type": "skill",
+                "name": "jira.check_blockers",
+                "version": "1.0",
+            },
+            "inputs": {
+                "targetIssueKey": "MM-686",
+                "blockerPreflight": {
+                    "targetIssueKey": "MM-686",
+                    "linkType": "Blocks",
+                },
+            },
+            "options": {},
+        },
+        "idempotency_key": "base-key",
+    }
+    route = TemporalActivityRoute(
+        activity_type="mm.tool.execute",
+        task_queue="mm.activity.integrations",
+        fleet="integrations",
+        capability_class="tools",
+        timeouts=TemporalActivityTimeouts(
+            start_to_close_seconds=30,
+            schedule_to_close_seconds=120,
+        ),
+        retries=TemporalActivityRetries(max_attempts=1, max_interval_seconds=30),
+    )
+
+    async def fake_execute_activity(
+        _activity_type: str,
+        _payload: Any,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured_max_attempts.append(kwargs["retry_policy"].maximum_attempts)
+        return continue_result
+
+    async def fake_noop_async(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _timeout_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_workflow_module.RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH,
+            run_workflow_module.RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH,
+        },
+    )
+    monkeypatch.setattr(
+        MoonMindRunWorkflow,
+        "_wait_if_paused_at_safe_boundary",
+        fake_noop_async,
+    )
+
+    result, skipped = await workflow._wait_for_jira_blocker_resolution(
+        execution_result=blocked_result,
+        node_id="check-blockers",
+        tool_name="jira.check_blockers",
+        tool_type="skill",
+        failure_mode="FAIL_FAST",
+        route=route,
+        execute_payload=execute_payload,
+    )
+
+    assert skipped is False
+    assert result == continue_result
+    assert captured_max_attempts == [
+        run_workflow_module.JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS
+    ]
+
+
+@pytest.mark.asyncio
 async def test_jira_blocker_recheck_activity_failure_respects_failure_mode(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
