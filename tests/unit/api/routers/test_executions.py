@@ -8656,6 +8656,63 @@ def test_get_execution_steps_returns_503_for_slow_temporal_query(
     assert observed_timeouts == [0.01]
     assert response.json()["detail"]["code"] == "temporal_unavailable"
 
+def test_get_execution_steps_uses_projection_fallback_when_temporal_query_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    user = _override_user_dependencies(app, is_superuser=False)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.memo = {
+        **record.memo,
+        "summary": "Executing plan step 1/1: implement",
+    }
+    record.parameters = {
+        "workflow": {
+            "steps": [
+                {
+                    "id": "implement",
+                    "title": "Implement fix",
+                    "type": "skill",
+                    "skill": {"id": "pr-resolver"},
+                },
+            ],
+        },
+    }
+    mock_service.describe_execution.return_value = record
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    session = AsyncMock()
+    app.dependency_overrides[get_async_session] = lambda: session
+    _override_query_client(
+        app,
+        error=RPCError(
+            "Unable to query workflow due to Workflow Task in failed state.",
+            RPCStatusCode.FAILED_PRECONDITION,
+            None,
+        ),
+    )
+    monkeypatch.setattr(settings.temporal, "temporal_authoritative_read_enabled", True)
+
+    async def _raise_sync_failure(*_args, **_kwargs):
+        raise RPCError("Temporal query failed", RPCStatusCode.FAILED_PRECONDITION, None)
+
+    monkeypatch.setattr(
+        "api_service.core.sync.fetch_and_sync_execution",
+        _raise_sync_failure,
+    )
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1/steps")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["workflowId"] == "mm:wf-1"
+    assert payload["steps"][0]["logicalStepId"] == "implement"
+    assert payload["steps"][0]["status"] == "running"
+    session.rollback.assert_awaited_once()
+    assert mock_service.describe_execution.await_args.kwargs["include_orphaned"] is True
+
 def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

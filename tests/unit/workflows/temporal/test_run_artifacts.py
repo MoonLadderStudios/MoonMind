@@ -1655,6 +1655,11 @@ def _captured_search_attribute_pairs(
     )
     monkeypatch.setattr(
         run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
         "upsert_search_attributes",
         lambda pairs: captured.__setitem__("pairs", pairs),
     )

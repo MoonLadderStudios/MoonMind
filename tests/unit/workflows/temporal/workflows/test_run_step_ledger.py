@@ -1115,6 +1115,30 @@ def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "progress" not in latest_memo
     assert "checks" not in latest_memo
 
+def test_update_search_attributes_status_memo_is_patch_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memo_updates = _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._waiting_reason = "dependency_wait"
+    workflow._attention_required = True
+
+    workflow._update_search_attributes()
+
+    assert memo_updates == []
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_STATUS_MEMO_UPSERT_PATCH,
+    )
+    workflow._update_search_attributes()
+
+    assert memo_updates[-1] == {
+        "waiting_reason": "dependency_wait",
+        "attention_required": True,
+    }
+
 def test_run_memo_includes_current_step_order_when_step_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
