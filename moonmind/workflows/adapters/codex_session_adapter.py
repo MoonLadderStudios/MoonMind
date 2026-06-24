@@ -70,6 +70,10 @@ from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     EMPTY_ASSISTANT_FAILURE_CAUSE,
 )
+from moonmind.workflows.temporal.managed_session_conformance import (
+    ManagedSessionRuntimeCapabilities,
+    codex_managed_session_capabilities,
+)
 from moonmind.workflows.temporal.managed_session_errors import (
     is_managed_session_locator_mismatch_error,
 )
@@ -341,6 +345,16 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             defer_turn_instructions_until_session_launch
         )
         self._run_states: dict[str, CodexSessionExecutionState] = {}
+
+    @classmethod
+    def managed_session_capabilities(cls) -> ManagedSessionRuntimeCapabilities:
+        """Expose the Codex managed-session capability descriptor.
+
+        The shared cross-runtime conformance suite consumes this metadata at the
+        adapter boundary to determine, truthfully, that Codex is session-capable.
+        """
+
+        return codex_managed_session_capabilities()
 
     async def start(self, request: AgentExecutionRequest) -> AgentRunHandle:
         binding = self._require_binding(request)
