@@ -695,10 +695,10 @@ def build_runtime_config(
             "schedules": {
                 "list": "/api/recurring-workflows?scope=personal",
                 "create": "/api/recurring-workflows",
-                "detail": "/api/recurring-workflows/{id}",
-                "update": "/api/recurring-workflows/{id}",
-                "runNow": "/api/recurring-workflows/{id}/run",
-                "runs": "/api/recurring-workflows/{id}/runs?limit=200",
+                "detail": "/api/recurring-workflows/{definitionId}",
+                "update": "/api/recurring-workflows/{definitionId}",
+                "runNow": "/api/recurring-workflows/{definitionId}/run",
+                "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200",
             },
             "temporal": {
                 "list": temporal_dashboard.list_endpoint,

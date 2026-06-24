@@ -46,12 +46,12 @@ class RecurringWorkflowDefinitionModel(BaseModel):
     last_scheduled_for: Optional[datetime] = Field(None, alias="lastScheduledFor")
     last_dispatch_status: Optional[str] = Field(None, alias="lastDispatchStatus")
     last_dispatch_error: Optional[str] = Field(None, alias="lastDispatchError")
+    temporal_schedule_id: Optional[str] = Field(None, alias="temporalScheduleId")
     owner_user_id: Optional[UUID] = Field(None, alias="ownerUserId")
     scope_type: str = Field(..., alias="scopeType")
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     target: dict[str, Any] = Field(default_factory=dict, alias="target")
     policy: dict[str, Any] = Field(default_factory=dict, alias="policy")
-    temporal_schedule_id: Optional[str] = Field(None, alias="temporalScheduleId")
     version: int = Field(..., alias="version")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
@@ -159,12 +159,12 @@ def _serialize_definition(
             if runtime_summary is not None
             else definition.last_dispatch_error
         ),
+        temporal_schedule_id=definition.temporal_schedule_id,
         owner_user_id=definition.owner_user_id,
         scope_type=definition.scope_type.value,
         scope_ref=definition.scope_ref,
         target=dict(definition.target or {}),
         policy=dict(definition.policy or {}),
-        temporal_schedule_id=definition.temporal_schedule_id,
         version=int(definition.version or 1),
         created_at=definition.created_at,
         updated_at=definition.updated_at,

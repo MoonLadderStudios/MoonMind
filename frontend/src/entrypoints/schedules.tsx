@@ -145,7 +145,7 @@ function scheduleEndpoint(
       : '/recurring-workflows/{definitionId}';
   const template = scheduleSources(payload)?.[key] || `${payload.apiBase || '/api'}${fallbackPath}`;
   const encoded = encodeURIComponent(definitionId);
-  return template.replaceAll('{definitionId}', encoded).replaceAll('{id}', encoded);
+  return template.replaceAll('{definitionId}', encoded);
 }
 
 function formatWhen(value: string | null | undefined): string {
