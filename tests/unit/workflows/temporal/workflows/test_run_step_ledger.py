@@ -198,15 +198,18 @@ def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
         "                        RUN_STEP_EXECUTION_MANIFEST_PATCH\n"
         "                    )"
     )
-    guard = "and step_execution_manifest_enabled"
+    non_agent_guard = (
+        'tool_type != "agent_runtime"\n'
+        "                        and step_execution_manifest_enabled"
+    )
     start_manifest_call = (
         "await self._record_step_execution_manifest(\n"
         "                            node_id,\n"
         '                            phase="start",'
     )
 
-    assert source.index(guard_assignment) < source.index(guard)
-    assert source.index(guard) < source.index(start_manifest_call)
+    assert source.index(guard_assignment) < source.index(non_agent_guard)
+    assert source.index(non_agent_guard) < source.index(start_manifest_call)
 
 
 @pytest.mark.asyncio
