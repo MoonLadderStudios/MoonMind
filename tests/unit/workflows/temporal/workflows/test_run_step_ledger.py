@@ -328,6 +328,220 @@ async def test_run_compiles_and_records_resilience_policy_before_step_execution(
 
 
 @pytest.mark.asyncio
+async def test_resilience_policy_preserves_string_rate_limit_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # provider_profile.list serializes a DB-backed profile's rate-limit policy as
+    # a bare strategy string (e.g. "backoff"), not a mapping. The compiled policy
+    # must preserve it instead of dropping it to an empty mapping.
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._target_runtime = "codex_cli"
+    workflow._profile_snapshots = {
+        "prof-db": {
+            "profile_id": "prof-db",
+            "runtime_id": "codex_cli",
+            "cooldown_after_429_seconds": 450,
+            "rate_limit_policy": "backoff",
+        }
+    }
+    activity_calls: list[dict[str, Any]] = []
+    artifact_writes: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any):
+        assert activity_type == "resilience.compile_policy"
+        activity_calls.append(dict(payload))
+        return _resilience_policy_compile_result(payload)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        artifact_writes.append({"name": name, "payload": payload})
+        return "artifact://resilience/policy"
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+
+    await workflow._compile_and_record_resilience_policy(
+        parameters={"executionProfileRef": "prof-db"}
+    )
+
+    assert activity_calls[0]["cooldownAfter429Seconds"] == 450
+    assert activity_calls[0]["rateLimitPolicy"] == {"strategy": "backoff"}
+    assert artifact_writes[0]["payload"]["providerCooldown"]["rateLimitPolicy"] == {
+        "strategy": "backoff"
+    }
+
+
+@pytest.mark.asyncio
+async def test_step_resilience_policy_ref_compiled_for_node_level_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A plan node that resolves to a provider profile different from the
+    # run-level inherited profile must reference a policy compiled with that
+    # node's cooldown/rate-limit values, not the run-level policy.
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_STEP_RESILIENCE_POLICY_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    workflow._target_runtime = "codex_cli"
+    workflow._run_resilience_profile_id = "prof-run"
+    run_ref = {
+        "policyId": "resilience-policy-run",
+        "policyVersion": 1,
+        "digest": "run-digest",
+        "contentType": run_module.RESILIENCE_POLICY_CONTENT_TYPE,
+        "envelopeRef": "artifact://resilience/run",
+    }
+    workflow._resilience_policy_ref = run_ref
+    workflow._resilience_policy_refs_by_profile = {"prof-run": run_ref}
+    workflow._profile_snapshots = {
+        "prof-run": {
+            "profile_id": "prof-run",
+            "runtime_id": "codex_cli",
+            "cooldownAfter429Seconds": 100,
+            "rateLimitPolicy": {"strategy": "queue"},
+        },
+        "prof-node": {
+            "profile_id": "prof-node",
+            "runtime_id": "codex_cli",
+            "cooldown_after_429_seconds": 777,
+            "rate_limit_policy": "backoff",
+        },
+    }
+    activity_calls: list[dict[str, Any]] = []
+    artifact_writes: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any):
+        assert activity_type == "resilience.compile_policy"
+        activity_calls.append(dict(payload))
+        return _resilience_policy_compile_result(payload)
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        artifact_writes.append({"name": name, "payload": payload})
+        return f"artifact://resilience/{len(artifact_writes)}"
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+
+    await workflow._resolve_step_resilience_policy_ref(
+        node_id="delegate-agent",
+        execution_profile_ref="prof-node",
+        parameters={"model": "gpt-5"},
+    )
+
+    assert activity_calls[0]["providerProfileId"] == "prof-node"
+    assert activity_calls[0]["cooldownAfter429Seconds"] == 777
+    assert activity_calls[0]["rateLimitPolicy"] == {"strategy": "backoff"}
+    step_ref = workflow._step_resilience_policy_refs["delegate-agent"]
+    assert step_ref != run_ref
+    assert step_ref["envelopeRef"] == "artifact://resilience/1"
+    assert workflow._resilience_policy_refs_by_profile["prof-node"] == step_ref
+    assert artifact_writes[0]["name"] == "reports/resilience_policy_prof-node.json"
+    assert (
+        artifact_writes[0]["payload"]["providerCooldown"]["providerProfileId"]
+        == "prof-node"
+    )
+
+    # A node that inherits the run-level profile keeps the run-level policy and
+    # does not trigger another compilation.
+    await workflow._resolve_step_resilience_policy_ref(
+        node_id="inherits-run",
+        execution_profile_ref="prof-run",
+        parameters={"model": "gpt-5"},
+    )
+    assert "inherits-run" not in workflow._step_resilience_policy_refs
+    assert len(activity_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_step_execution_manifest_prefers_per_step_resilience_policy_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    run_ref = {
+        "policyId": "resilience-policy-run",
+        "policyVersion": 1,
+        "digest": "run-digest",
+        "contentType": run_module.RESILIENCE_POLICY_CONTENT_TYPE,
+        "envelopeRef": "artifact://resilience/run",
+    }
+    step_ref = {
+        "policyId": "resilience-policy-node",
+        "policyVersion": 1,
+        "digest": "node-digest",
+        "contentType": run_module.RESILIENCE_POLICY_CONTENT_TYPE,
+        "envelopeRef": "artifact://resilience/node",
+    }
+    workflow._resilience_policy_ref = run_ref
+    workflow._step_resilience_policy_refs = {"delegate-agent": step_ref}
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append({"name": name, "payload": payload})
+        return "artifact://step/manifest"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "delegate-agent",
+                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "inputs": {"title": "Delegate agent"},
+            },
+            {
+                "id": "plain-step",
+                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "inputs": {"title": "Plain step"},
+            },
+        ],
+        dependency_map={"delegate-agent": [], "plain-step": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running("delegate-agent", updated_at=now, summary="run")
+    workflow._mark_step_running("plain-step", updated_at=now, summary="run")
+
+    await workflow._record_step_execution_manifest(
+        "delegate-agent",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+    await workflow._record_step_execution_manifest(
+        "plain-step",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    # The overriding node references its per-step policy; the other falls back
+    # to the run-level policy.
+    assert writes[0]["payload"]["execution"]["resiliencePolicyRef"] == step_ref
+    assert writes[1]["payload"]["execution"]["resiliencePolicyRef"] == run_ref
+
+
+@pytest.mark.asyncio
 async def test_start_manifest_uses_launch_context_projection_refs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

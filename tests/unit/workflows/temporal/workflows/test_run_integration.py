@@ -45,6 +45,53 @@ def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] 
         "edges": edges or []
     }).encode("utf-8")
 
+def _mock_resilience_policy_envelope(payload: Any) -> dict[str, Any]:
+    """Return a valid compiled ResiliencePolicy envelope for the MM-880 activity."""
+    from moonmind.schemas.resilience_policy_models import compile_resilience_policy
+
+    data = payload if isinstance(payload, dict) else {}
+    compiled_at = data.get("compiledAt") or "2026-04-07T12:00:00+00:00"
+    return compile_resilience_policy(
+        compiled_at=datetime.fromisoformat(compiled_at),
+        workflow_id=data.get("workflowId"),
+        run_id=data.get("runId"),
+        policy_version=data.get("policyVersion", 1),
+        attempts={
+            "stepMaxAttempts": 3,
+            "stepNoProgressLimit": 2,
+            "jobSelfHealMaxResets": 1,
+        },
+        timeouts={"stepTimeoutSeconds": 900, "stepIdleTimeoutSeconds": 300},
+        provider_cooldown={
+            "cooldownAfter429Seconds": data.get("cooldownAfter429Seconds", 900),
+            "providerProfileId": data.get("providerProfileId"),
+            "rateLimitPolicy": data.get("rateLimitPolicy", {}),
+        },
+        checkpoints={
+            "checkpointRequired": True,
+            "requiredBoundaries": [
+                "after_prepare",
+                "before_execution",
+                "after_execution",
+            ],
+        },
+        idempotency={
+            "sideEffectIdempotencyRequired": True,
+            "keyStrategy": "step_execution_operation",
+        },
+        outbound_scanning={"highSecurityMode": False, "blockOnFinding": False},
+        observability={
+            "liveLogsTimelineEnabled": False,
+            "structuredHistoryEnabled": True,
+        },
+        cost_attribution={
+            "runtimeId": data.get("runtimeId"),
+            "model": data.get("model"),
+            "effort": data.get("effort"),
+        },
+    ).model_dump(by_alias=True, mode="json")
+
+
 def _normalize_payload(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
@@ -544,6 +591,8 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
             return ({"artifact_id": "artifact://bundle/1"}, {"upload_url": "unused"})
         if activity_type == "artifact.write_complete":
             return {"ok": True}
+        if activity_type == "resilience.compile_policy":
+            return _mock_resilience_policy_envelope(payload)
         return {"status": "COMPLETED", "outputs": {}}
 
     async def fake_execute_child_workflow(
