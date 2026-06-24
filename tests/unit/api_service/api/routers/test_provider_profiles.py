@@ -644,6 +644,7 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
         "cooldown_after_429_seconds": 60,
         "rate_limit_policy": "queue",
         "default_model": "test-model-v2",
+        "default_effort": "high",
         "model_overrides": {"smart": "test-model-v3"},
         "enabled": True,
         "auth_state": "connected",
@@ -659,6 +660,7 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
     assert data["credential_source"] == "secret_ref"
     assert data["rate_limit_policy"] == "queue"
     assert data["default_model"] == "test-model-v2"
+    assert data["default_effort"] == "high"
     assert data["model_overrides"] == {"smart": "test-model-v3"}
     assert data["is_default"] is True
     assert data["auth_state"] == "connected"
