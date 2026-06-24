@@ -6256,7 +6256,7 @@ class MoonMindRunWorkflow:
 
                     if (
                         tool_type != "agent_runtime"
-                        and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)
+                        and step_execution_manifest_enabled
                     ):
                         await self._record_step_execution_manifest(
                             node_id,
@@ -9427,7 +9427,8 @@ class MoonMindRunWorkflow:
                 return "; ".join(parts) + "."
             reason = str(story_output.get("reason") or "").strip()
             if status:
-                return f"Jira story output finished with status {status}: {reason}".strip()
+                suffix = f": {reason}" if reason else ""
+                return f"Jira story output finished with status {status}{suffix}."
 
         orchestration = outputs.get("jiraOrchestration") or outputs.get(
             "jira_orchestration"

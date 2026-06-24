@@ -2274,6 +2274,15 @@ def test_record_execution_context_summarizes_trusted_jira_downstream_outputs(
     )
     assert mock_run_workflow._operator_summary == mock_run_workflow._last_step_summary
 
+
+def test_trusted_jira_output_summary_omits_empty_reason_suffix() -> None:
+    summary = MoonMindRunWorkflow._trusted_jira_output_summary(
+        {"storyOutput": {"status": "jira_blocked", "reason": ""}}
+    )
+
+    assert summary == "Jira story output finished with status jira_blocked."
+
+
 def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_commit_count(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:
