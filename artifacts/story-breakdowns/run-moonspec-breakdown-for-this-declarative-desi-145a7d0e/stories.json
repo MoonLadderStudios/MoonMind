@@ -1,0 +1,21 @@
+{
+  "status": "ERROR",
+  "errorCode": "moonspec-breakdown imperative-input",
+  "error": "Imperative input: provide the underlying declarative design or explicitly confirm imperative input",
+  "source": {
+    "title": "inline user request",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "imperative-input",
+    "originalText": "Create Jira issues to implement this plan based on the suggested implementation order"
+  },
+  "extractedAt": "2026-06-24T20:41:45Z",
+  "coverageGate": "NOT_RUN - input was classified as imperative and no explicit imperative override was provided.",
+  "stories": [],
+  "coverageMatrix": {},
+  "classification": {
+    "primaryFraming": "imperative",
+    "reason": "The supplied text instructs the agent to create Jira issues from an unspecified plan; it does not describe desired system state, architecture, contracts, behavior, or acceptance semantics to decompose into independently testable stories.",
+    "requiredResolution": "Provide a readable declarative design document path or paste the underlying declarative design. Alternatively, explicitly confirm imperative input if decomposition of a checklist or plan is intended."
+  }
+}
