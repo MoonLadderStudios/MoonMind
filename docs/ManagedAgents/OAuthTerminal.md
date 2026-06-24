@@ -136,6 +136,12 @@ At session startup, the Codex session runtime copies eligible auth entries from
 `MANAGED_AUTH_VOLUME_PATH` into the per-run `codexHomePath`, then starts Codex
 App Server with `CODEX_HOME` pointing at that per-run home.
 
+Eligible auth entries exclude generated config, session transcripts, temporary
+runtime directories, logs/state databases, and transient Codex remote-plugin
+installer metadata. Actual credential seed files remain fail-fast if unreadable;
+optional plugin cache files may be skipped when their source permissions do not
+allow the managed-session user to copy them.
+
 ## 4. Volume Targeting Rules
 
 1. **Auth volumes are provider-profile credential stores.**

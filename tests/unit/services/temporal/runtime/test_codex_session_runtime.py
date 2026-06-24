@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
@@ -3454,6 +3455,136 @@ def test_runtime_launch_session_seeds_auth_directories_and_excludes_sessions(
     assert not Path(request.codex_home_path, ".tmp").exists()
     assert not Path(request.codex_home_path, "tmp").exists()
     assert not Path(request.codex_home_path, "linked-auth.json").exists()
+
+
+def test_runtime_launch_session_skips_unreadable_plugin_install_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    (auth_volume_path / "auth.json").write_text('{"token":"oauth"}', encoding="utf-8")
+    remote_plugin_dir = (
+        auth_volume_path
+        / "plugins"
+        / "cache"
+        / "openai-curated-remote"
+        / "github"
+    )
+    remote_plugin_dir.mkdir(parents=True)
+    marker_path = remote_plugin_dir / ".codex-remote-plugin-install.json"
+    marker_path.write_text('{"installed":true}', encoding="utf-8")
+    cache_index_path = remote_plugin_dir / "plugin-cache-index.json"
+    cache_index_path.write_text('{"cache":true}', encoding="utf-8")
+    skill_path = remote_plugin_dir / "0.1.5" / "skills" / "github" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# GitHub\n", encoding="utf-8")
+
+    real_copy2 = shutil.copy2
+
+    def _copy2_without_marker(
+        source: str | os.PathLike[str],
+        destination: str | os.PathLike[str],
+        *args: object,
+        **kwargs: object,
+    ) -> str:
+        if Path(source).name == ".codex-remote-plugin-install.json":
+            raise AssertionError("plugin install metadata should not be copied")
+        if Path(source) == cache_index_path:
+            raise PermissionError("optional plugin cache metadata is unreadable")
+        return str(real_copy2(source, destination, *args, **kwargs))
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.copy2",
+        _copy2_without_marker,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    runtime.launch_session(request)
+
+    codex_home_path = Path(request.codex_home_path)
+    assert (codex_home_path / "auth.json").is_file()
+    assert (
+        codex_home_path
+        / "plugins"
+        / "cache"
+        / "openai-curated-remote"
+        / "github"
+        / "0.1.5"
+        / "skills"
+        / "github"
+        / "SKILL.md"
+    ).is_file()
+    assert not (
+        codex_home_path
+        / "plugins"
+        / "cache"
+        / "openai-curated-remote"
+        / "github"
+        / ".codex-remote-plugin-install.json"
+    ).exists()
+    assert not (
+        codex_home_path
+        / "plugins"
+        / "cache"
+        / "openai-curated-remote"
+        / "github"
+        / "plugin-cache-index.json"
+    ).exists()
+
+
+def test_runtime_launch_session_fails_on_unreadable_auth_seed_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    script = write_fake_app_server(tmp_path)
+    request = launch_request(tmp_path)
+    auth_volume_path = tmp_path / "auth-volume"
+    auth_volume_path.mkdir()
+    auth_path = auth_volume_path / "auth.json"
+    auth_path.write_text('{"token":"oauth"}', encoding="utf-8")
+
+    def _raise_permission(
+        source: str | os.PathLike[str],
+        _destination: str | os.PathLike[str],
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
+        if Path(source) == auth_path:
+            raise PermissionError("auth seed unreadable")
+        raise AssertionError(f"unexpected copy source: {source}")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.codex_session_runtime.shutil.copy2",
+        _raise_permission,
+    )
+    runtime = CodexManagedSessionRuntime(
+        workspace_path=request.workspace_path,
+        session_workspace_path=request.session_workspace_path,
+        artifact_spool_path=request.artifact_spool_path,
+        codex_home_path=request.codex_home_path,
+        auth_volume_path=str(auth_volume_path),
+        image_ref=request.image_ref,
+        control_url="docker-exec://mm-codex-session-sess-1",
+        container_id="ctr-1",
+        app_server_command=("python3", str(script)),
+    )
+
+    with pytest.raises(PermissionError, match="auth seed unreadable"):
+        runtime.launch_session(request)
+
 
 def test_runtime_launch_session_auth_seed_overwrites_read_only_files_on_retry(
     tmp_path: Path,

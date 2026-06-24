@@ -56,6 +56,7 @@ _DEFAULT_TURN_COMPLETION_TIMEOUT_SECONDS = (
 )
 _STDOUT_EOF = object()
 _AUTH_SEED_EXCLUDED_NAMES = frozenset({".tmp", "config.toml", "sessions", "tmp"})
+_AUTH_SEED_EXCLUDED_FILE_NAMES = frozenset({".codex-remote-plugin-install.json"})
 _AUTH_SEED_EXCLUDED_PREFIXES: tuple[str, ...] = ("logs_", "state_")
 _ROLLOUT_RECOVERY_MAX_BYTES = 4 * 1024 * 1024
 _ROLLOUT_RECOVERY_TIMESTAMP_SKEW_SECONDS = 5.0
@@ -490,10 +491,26 @@ class CodexManagedSessionRuntime:
         return not any(name.startswith(prefix) for prefix in _AUTH_SEED_EXCLUDED_PREFIXES)
 
     @staticmethod
+    def _should_seed_auth_file(path: Path) -> bool:
+        return path.name not in _AUTH_SEED_EXCLUDED_FILE_NAMES
+
+    @staticmethod
+    def _is_optional_auth_seed_cache_path(path: Path) -> bool:
+        parts = path.parts
+        needle = ("plugins", "cache")
+        return any(
+            tuple(parts[index : index + len(needle)]) == needle
+            for index in range(0, max(len(parts) - len(needle) + 1, 0))
+        )
+
+    @staticmethod
     def _copy_auth_seed_file(
         source: str | os.PathLike[str],
         destination: str | os.PathLike[str],
     ) -> None:
+        source_path = Path(source)
+        if not CodexManagedSessionRuntime._should_seed_auth_file(source_path):
+            return
         destination_path = Path(destination)
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         if destination_path.is_symlink() or destination_path.exists():
@@ -503,7 +520,14 @@ class CodexManagedSessionRuntime:
                     f"{destination_path}"
                 )
             destination_path.unlink()
-        shutil.copy2(source, destination_path)
+        try:
+            shutil.copy2(source_path, destination_path)
+        except PermissionError:
+            if CodexManagedSessionRuntime._is_optional_auth_seed_cache_path(
+                source_path
+            ):
+                return
+            raise
 
     def _seed_codex_home_from_auth_volume(self) -> None:
         if self._auth_volume_path is None:
