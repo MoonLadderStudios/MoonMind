@@ -25,4 +25,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise NotImplementedError("One-way migration: provider profile default effort")
+    op.drop_column("managed_agent_provider_profiles", "default_effort")

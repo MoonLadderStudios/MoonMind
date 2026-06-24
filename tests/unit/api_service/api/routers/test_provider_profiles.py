@@ -669,6 +669,25 @@ async def test_create_provider_profile(client_app: AsyncClient, _module_db):
 
 
 @pytest.mark.asyncio
+async def test_create_provider_profile_rejects_overlong_default_effort(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = {
+        "profile_id": "overlong_default_effort_create",
+        "runtime_id": "claude_v1",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "api_key_env",
+        "secret_refs": {"API_KEY": "env://overlong_default_effort_create"},
+        "default_effort": "x" * 65,
+    }
+
+    async with client_app as client:
+        response = await client.post("/api/v1/provider-profiles", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_enabled_provider_profile_clears_default_disabled_reason(
     client_app: AsyncClient, _module_db
 ) -> None:
@@ -1244,6 +1263,22 @@ async def test_update_profile(client_app: AsyncClient, _module_db):
     data = response.json()
     assert data["max_parallel_runs"] == 10
     assert data["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_provider_profile_rejects_overlong_default_effort(
+    client_app: AsyncClient, _module_db
+) -> None:
+    sample_profile = await get_or_create_sample_profile()
+
+    async with client_app as client:
+        response = await client.patch(
+            f"/api/v1/provider-profiles/{sample_profile.profile_id}",
+            json={"default_effort": "x" * 65},
+        )
+
+    assert response.status_code == 422
+
 
 @pytest.mark.asyncio
 async def test_delete_profile(client_app: AsyncClient, _module_db):

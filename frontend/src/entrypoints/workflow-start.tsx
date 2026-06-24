@@ -8802,6 +8802,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
+    const selectedProviderDefaultEffort =
+      selectedProviderProfile?.default_effort?.trim?.() || "";
+    const submittedEffort =
+      providerProfile && selectedProviderDefaultEffort ? "" : effort.trim();
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
@@ -8819,7 +8823,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       runtime: {
         mode: normalizedRuntime,
         ...(model.trim() ? { model: model.trim() } : {}),
-        ...(effort.trim() ? { effort: effort.trim() } : {}),
+        ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
         ...(selectedProviderId
           ? { profileSelector: { providerId: selectedProviderId } }

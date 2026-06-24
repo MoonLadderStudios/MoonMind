@@ -74,7 +74,7 @@ class ProviderProfileCreate(BaseModel):
     provider_id: str = Field(default="unknown", max_length=64)
     provider_label: Optional[str] = None
     default_model: Optional[str] = None
-    default_effort: Optional[str] = None
+    default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
     
     credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
@@ -152,7 +152,7 @@ class ProviderProfileUpdate(BaseModel):
     provider_id: Optional[str] = Field(default=None, max_length=64)
     provider_label: Optional[str] = None
     default_model: Optional[str] = None
-    default_effort: Optional[str] = None
+    default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
     credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
