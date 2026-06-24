@@ -8640,8 +8640,11 @@ class CodexWorker:
         else:
             focus_text = (
                 "Propose the best continuation. If this task is part of a series/phased plan, "
-                "propose the next concrete phase/task. If not, propose one meaningful refactor, "
-                "performance improvement, or feature extension related to the completed work."
+                "propose the next concrete phase/task. If not, propose one meaningful feature "
+                "extension or follow-on capability that builds on the completed work. "
+                "Leave standalone code-quality work—refactors, performance tuning, and "
+                "test-coverage improvements—to the code-improvement-proposal hook so the "
+                "two success-only hooks do not emit duplicate or competing follow-ups."
             )
 
         return (

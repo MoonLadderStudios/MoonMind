@@ -1693,6 +1693,12 @@ def test_compose_proposal_instruction_uses_code_improvement_focus(
     assert (
         "improvement to the code worked on in this run" not in continuation_instruction
     )
+    # MM-891: the continuation fallback must not overlap with the dedicated
+    # code-improvement-proposal hook. It no longer offers standalone refactor /
+    # performance follow-ups and instead defers code-quality work to that hook,
+    # so the two success-only hooks cannot emit duplicate or competing proposals.
+    assert "one meaningful refactor" not in continuation_instruction
+    assert "code-improvement-proposal hook" in continuation_instruction
 
 
 async def test_post_workflow_proposal_skills_run_code_improvement_on_success(
