@@ -130,7 +130,7 @@ def test_tampered_digest_is_rejected() -> None:
     dumped = env.model_dump(by_alias=True, mode="json")
     dumped["digest"] = "0" * 64
 
-    with pytest.raises(ResiliencePolicyError):
+    with pytest.raises(ValidationError, match="digest does not match"):
         ResiliencePolicyEnvelope.model_validate(dumped)
 
 
@@ -139,7 +139,7 @@ def test_tampered_policy_id_is_rejected() -> None:
     dumped = env.model_dump(by_alias=True, mode="json")
     dumped["policyId"] = "resilience-policy-deadbeefdeadbeef"
 
-    with pytest.raises(ResiliencePolicyError):
+    with pytest.raises(ValidationError, match="policyId does not match"):
         ResiliencePolicyEnvelope.model_validate(dumped)
 
 

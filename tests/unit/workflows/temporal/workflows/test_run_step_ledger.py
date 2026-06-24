@@ -70,6 +70,7 @@ def _ordered_nodes() -> list[dict]:
 def _dependency_map() -> dict[str, list[str]]:
     return {"prepare": [], "run-tests": ["prepare"]}
 
+
 def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
     boundary = str(payload.get("boundary") or "unknown")
     checkpoint_id = str(payload.get("idempotencyKey") or f"checkpoint:{boundary}")
@@ -87,6 +88,56 @@ def _checkpoint_create_result(payload: Any) -> dict[str, Any]:
         "diagnosticRefs": [],
         "idempotencyKey": checkpoint_id,
     }
+
+
+def _resilience_policy_compile_result(payload: Any) -> dict[str, Any]:
+    return compile_resilience_policy(
+        compiled_at=datetime.fromisoformat(payload["compiledAt"]),
+        workflow_id=payload["workflowId"],
+        run_id=payload["runId"],
+        policy_version=payload.get("policyVersion", 1),
+        attempts={
+            "stepMaxAttempts": 3,
+            "stepNoProgressLimit": 2,
+            "jobSelfHealMaxResets": 1,
+        },
+        timeouts={"stepTimeoutSeconds": 900, "stepIdleTimeoutSeconds": 300},
+        provider_cooldown={
+            "cooldownAfter429Seconds": payload.get("cooldownAfter429Seconds", 900),
+            "providerProfileId": payload.get("providerProfileId"),
+            "rateLimitPolicy": payload.get("rateLimitPolicy", {}),
+        },
+        checkpoints={
+            "checkpointRequired": True,
+            "requiredBoundaries": [
+                "after_prepare",
+                "before_execution",
+                "after_execution",
+            ],
+        },
+        idempotency={
+            "sideEffectIdempotencyRequired": True,
+            "keyStrategy": "step_execution_operation",
+        },
+        outbound_scanning={"highSecurityMode": False, "blockOnFinding": False},
+        observability={
+            "liveLogsTimelineEnabled": False,
+            "structuredHistoryEnabled": True,
+        },
+        cost_attribution={
+            "runtimeId": payload.get("runtimeId"),
+            "model": payload.get("model"),
+            "effort": payload.get("effort"),
+        },
+    ).model_dump(by_alias=True, mode="json")
+
+
+def _resilience_policy_artifact_create_result() -> tuple[
+    dict[str, str],
+    dict[str, str],
+]:
+    return ({"artifact_id": "art_resilience_policy"}, {"upload_url": "unused"})
+
 
 def _approval_policy_plan_payload() -> dict[str, Any]:
     return {
@@ -2223,9 +2274,13 @@ async def test_run_execution_stage_marks_step_reviewing_and_records_passed_check
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/resilience_policy"):
+                return _resilience_policy_artifact_create_result()
             if str(payload.get("name") or "").startswith("reports/step_execution"):
                 return (
                     {"artifact_id": next(step_execution_artifact_ids)},
@@ -2413,9 +2468,13 @@ async def test_run_execution_stage_retries_failed_reviews_with_feedback_and_retr
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/resilience_policy"):
+                return _resilience_policy_artifact_create_result()
             if str(payload.get("name") or "").startswith("reports/step_execution"):
                 return (
                     {"artifact_id": next(step_execution_artifact_ids)},
@@ -2587,9 +2646,13 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/resilience_policy"):
+                return _resilience_policy_artifact_create_result()
             return ({"artifact_id": next(artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return {
@@ -2756,9 +2819,13 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/resilience_policy"):
+                return _resilience_policy_artifact_create_result()
             return ({"artifact_id": next(artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return {
@@ -2903,9 +2970,13 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/resilience_policy"):
+                return _resilience_policy_artifact_create_result()
             return ({"artifact_id": next(artifact_ids)}, {"upload_url": "unused"})
         if activity_type == "step.review":
             return {
@@ -3049,9 +3120,13 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
         payload: Any,
         **_kwargs: Any,
     ) -> Any:
+        if activity_type == "resilience.compile_policy":
+            return _resilience_policy_compile_result(payload)
         if activity_type == "provider_profile.list":
             return {"profiles": []}
         if activity_type == "artifact.create":
+            if str(payload.get("name") or "").startswith("reports/resilience_policy"):
+                return _resilience_policy_artifact_create_result()
             if str(payload.get("name") or "").startswith("reports/step_execution"):
                 return (
                     {"artifact_id": next(step_execution_artifact_ids)},
