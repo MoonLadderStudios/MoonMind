@@ -271,6 +271,47 @@ class AgentRuntimeFetchResultInput(AgentRuntimeStatusInput):
                 setattr(self, field_name, normalized or None)
         return self
 
+
+class ResiliencePolicyCompileInput(BaseModel):
+    """Input for the ``resilience.compile_policy`` activity (MM-880).
+
+    Carries the per-run variable bits (identity, compile timestamp, cost
+    attribution dimensions, and the resolved provider cooldown) so the activity
+    can capture the remaining resilience values (attempts, timeouts, outbound
+    scanning, observability, checkpoints, idempotency) from worker-side config
+    once, at run start, into a deterministic versioned envelope.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    workflow_id: str | None = Field(None, alias="workflowId")
+    run_id: str | None = Field(None, alias="runId")
+    policy_version: int = Field(1, alias="policyVersion", ge=1)
+    compiled_at: str | None = Field(
+        None,
+        alias="compiledAt",
+        description="ISO-8601 compile timestamp supplied by the workflow clock.",
+    )
+    runtime_id: str | None = Field(None, alias="runtimeId")
+    provider_profile_id: str | None = Field(None, alias="providerProfileId")
+    cooldown_after_429_seconds: int | None = Field(
+        None,
+        alias="cooldownAfter429Seconds",
+        ge=0,
+        description="Resolved provider cooldown captured from the profile snapshot.",
+    )
+    rate_limit_policy: dict[str, Any] = Field(
+        default_factory=dict,
+        alias="rateLimitPolicy",
+        description="Resolved compact rate-limit policy captured from the profile snapshot.",
+    )
+    rate_limit_policy_ref: str | None = Field(None, alias="rateLimitPolicyRef")
+    model: str | None = Field(None, alias="model")
+    effort: str | None = Field(None, alias="effort")
+    cost_center: str | None = Field(None, alias="costCenter")
+    budget_ref: str | None = Field(None, alias="budgetRef")
+
+
 class AgentRuntimeCancelInput(BaseModel):
     """Public input for agent_runtime.cancel."""
 

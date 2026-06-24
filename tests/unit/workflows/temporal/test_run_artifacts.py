@@ -14,6 +14,28 @@ from moonmind.workflows.temporal.activity_catalog import (
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 
+
+@pytest.fixture(autouse=True)
+def _stub_resilience_policy_compile(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the MM-880 ResiliencePolicy compile for execution-stage tests here.
+
+    These tests exercise publish/PR/failure behavior with generic
+    ``execute_activity`` mocks and do not assert on the compiled
+    ResiliencePolicy. Stubbing the compile keeps the generic mock's fallback
+    payload from being validated as a ResiliencePolicy envelope. Dedicated
+    coverage for the compile lives in ``test_run_step_ledger.py``.
+    """
+
+    async def _noop(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(
+        run_workflow_module.MoonMindRunWorkflow,
+        "_compile_and_record_resilience_policy",
+        _noop,
+    )
+
+
 def _normalize_payload(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload

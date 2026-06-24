@@ -37,6 +37,11 @@ with workflow.unsafe.imports_passed_through():
         DependencyStatusSnapshotInput,
         ExecutionTerminalStateInput,
         PlanGenerateInput,
+        ResiliencePolicyCompileInput,
+    )
+    from moonmind.schemas.resilience_policy_models import (
+        RESILIENCE_POLICY_CONTENT_TYPE,
+        ResiliencePolicyEnvelope,
     )
     from moonmind.workflows.temporal.jules_bundle import (
         build_bundle_spec,
@@ -450,6 +455,15 @@ RUN_MOONSPEC_VERIFY_REMEDIATION_INDEX_PATCH = (
     "run-moonspec-verify-remediation-index-v1"
 )
 RUN_STEP_RETRY_OVERRIDES_PATCH = "run-step-retry-overrides-v1"
+# MM-880: compile + persist a versioned ResiliencePolicy envelope before step
+# execution begins so every step execution can be traced to the policy values
+# that governed it.
+RUN_RESILIENCE_POLICY_PATCH = "run-resilience-policy-v1"
+# MM-880: compile + persist a per-step ResiliencePolicy envelope when a plan node
+# resolves to a provider profile that differs from the run-level inherited
+# profile, so that step's manifest references the cooldown/rate-limit values that
+# actually governed its child runtime instead of the run-level policy.
+RUN_STEP_RESILIENCE_POLICY_PATCH = "run-step-resilience-policy-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
@@ -810,6 +824,17 @@ class MoonMindRunWorkflow:
         self._merge_automation_head_sha: Optional[str] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
+        # MM-880: compact reference to the versioned ResiliencePolicy envelope
+        # compiled for this run, attached before step execution begins.
+        self._resilience_policy_ref: Optional[dict[str, Any]] = None
+        # MM-880: provider profile id that governed the run-level policy, plus a
+        # per-step / per-profile policy cache. Steps whose resolved provider
+        # profile differs from the run-level one reference a policy compiled with
+        # that profile's cooldown/rate-limit values rather than the run-level
+        # policy.
+        self._run_resilience_profile_id: Optional[str] = None
+        self._step_resilience_policy_refs: dict[str, dict[str, Any]] = {}
+        self._resilience_policy_refs_by_profile: dict[str, dict[str, Any]] = {}
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int = 0
@@ -1125,6 +1150,20 @@ class MoonMindRunWorkflow:
             **self._step_execution_compact_execution_refs(logical_step_id),
             **(execution or {}),
         }
+        # MM-880: stamp the versioned ResiliencePolicy reference governing this
+        # step so it can be traced to the exact policy values that applied.
+        # Steps whose resolved provider profile differs from the run-level one
+        # reference a policy compiled with that node's profile; all others fall
+        # back to the run-level policy.
+        policy_ref = (
+            self._step_resilience_policy_refs.get(logical_step_id)
+            or self._resilience_policy_ref
+        )
+        if policy_ref:
+            execution_payload.setdefault(
+                "resiliencePolicyRef",
+                dict(policy_ref),
+            )
         side_effects_payload: dict[str, Any] = {}
         side_effect_records: list[Mapping[str, Any]] = []
         outputs: Mapping[str, Any] | None = None
@@ -5639,6 +5678,179 @@ class MoonMindRunWorkflow:
         if has_data:
             self._profile_snapshots = snapshots
 
+    async def _compile_and_record_resilience_policy(
+        self, *, parameters: Mapping[str, Any]
+    ) -> None:
+        """MM-880: compile + persist the versioned ResiliencePolicy for this run.
+
+        Captures the resilience values that govern the run (attempts, timeouts,
+        no-progress handling, provider cooldowns, checkpoint requirements,
+        side-effect idempotency, outbound scanning, observability, and cost
+        attribution) into one deterministic, artifact-backed envelope before
+        step execution begins, and records a compact reference for forensic
+        traceability. Compilation happens at an activity boundary so the values
+        are captured once and never inferred from environment/provider state
+        after the fact.
+        """
+
+        if self._resilience_policy_ref is not None:
+            return
+
+        provider_profile_id = self._inherited_execution_profile_ref(parameters)
+        self._run_resilience_profile_id = provider_profile_id
+        policy_ref = await self._compile_resilience_policy_envelope_ref(
+            provider_profile_id=provider_profile_id,
+            parameters=parameters,
+            artifact_name="reports/resilience_policy.json",
+        )
+        self._resilience_policy_ref = policy_ref
+        # Seed the per-profile cache so steps that inherit the run-level profile
+        # reuse this policy instead of recompiling an identical one.
+        self._resilience_policy_refs_by_profile[provider_profile_id or ""] = policy_ref
+        self._update_memo()
+
+    def _resolve_provider_cooldown_inputs(
+        self, provider_profile_id: str | None
+    ) -> tuple[int | None, dict[str, Any]]:
+        """Extract a profile's cooldown + rate-limit policy from snapshots.
+
+        The ``provider_profile.list`` activity serializes a DB-backed profile's
+        rate-limit policy as a bare strategy string (for example ``"backoff"``),
+        while OAuth/in-memory snapshots may carry a mapping. Preserve either
+        shape so the compiled ResiliencePolicy never silently drops the
+        configured rate-limit strategy (which later failure/cooldown review
+        relies on to know which policy governed the run).
+        """
+
+        cooldown_after_429_seconds: int | None = None
+        rate_limit_policy: dict[str, Any] = {}
+        snapshots = getattr(self, "_profile_snapshots", None)
+        if provider_profile_id and isinstance(snapshots, Mapping):
+            snapshot = snapshots.get(provider_profile_id)
+            if isinstance(snapshot, Mapping):
+                raw_cooldown = snapshot.get("cooldownAfter429Seconds")
+                if raw_cooldown is None:
+                    raw_cooldown = snapshot.get("cooldown_after_429_seconds")
+                if isinstance(raw_cooldown, int) and not isinstance(raw_cooldown, bool):
+                    cooldown_after_429_seconds = raw_cooldown
+                raw_rate_limit_policy = snapshot.get("rateLimitPolicy")
+                if raw_rate_limit_policy is None:
+                    raw_rate_limit_policy = snapshot.get("rate_limit_policy")
+                if isinstance(raw_rate_limit_policy, Mapping):
+                    rate_limit_policy = dict(raw_rate_limit_policy)
+                elif isinstance(raw_rate_limit_policy, str):
+                    strategy = raw_rate_limit_policy.strip()
+                    if strategy:
+                        rate_limit_policy = {"strategy": strategy}
+        return cooldown_after_429_seconds, rate_limit_policy
+
+    async def _compile_resilience_policy_envelope_ref(
+        self,
+        *,
+        provider_profile_id: str | None,
+        parameters: Mapping[str, Any],
+        artifact_name: str,
+    ) -> dict[str, Any]:
+        """Compile + persist a versioned ResiliencePolicy and return its ref.
+
+        Shared by the run-level policy and per-step policies. Compilation
+        happens at an activity boundary so the values are captured once and
+        never inferred from environment/provider state after the fact.
+        """
+
+        cooldown_after_429_seconds, rate_limit_policy = (
+            self._resolve_provider_cooldown_inputs(provider_profile_id)
+        )
+        compile_input = ResiliencePolicyCompileInput(
+            workflowId=workflow.info().workflow_id,
+            runId=workflow.info().run_id,
+            compiledAt=workflow.now().isoformat(),
+            runtimeId=self._target_runtime,
+            providerProfileId=provider_profile_id,
+            cooldownAfter429Seconds=cooldown_after_429_seconds,
+            rateLimitPolicy=rate_limit_policy,
+            model=self._coerce_text(parameters.get("model"), max_chars=160),
+            effort=self._coerce_text(parameters.get("effort"), max_chars=80),
+        )
+
+        compile_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "resilience.compile_policy"
+        )
+        envelope_payload = await workflow.execute_activity(
+            "resilience.compile_policy",
+            compile_input.model_dump(by_alias=True, exclude_none=True, mode="json"),
+            **self._execute_kwargs_for_route(compile_route),
+        )
+        if isinstance(envelope_payload, tuple) and envelope_payload:
+            envelope_payload = envelope_payload[0]
+        envelope = ResiliencePolicyEnvelope.model_validate(envelope_payload)
+
+        envelope_ref = await self._write_json_artifact(
+            name=artifact_name,
+            payload=envelope.model_dump(by_alias=True, mode="json"),
+            content_type=RESILIENCE_POLICY_CONTENT_TYPE,
+            metadata_json={
+                "artifact_kind": "resilience_policy_envelope",
+                "policyId": envelope.policy_id,
+                "policyVersion": envelope.policy_version,
+                "digest": envelope.digest,
+            },
+        )
+        return envelope.compact_ref(envelope_ref=envelope_ref).model_dump(
+            by_alias=True, mode="json"
+        )
+
+    async def _resolve_step_resilience_policy_ref(
+        self,
+        *,
+        node_id: str,
+        execution_profile_ref: str | None,
+        parameters: Mapping[str, Any],
+    ) -> None:
+        """Stamp a per-step ResiliencePolicy ref when a node overrides the profile.
+
+        MM-880: when a plan node resolves to a provider profile that differs
+        from the run-level inherited profile, its step manifests must reference
+        a policy compiled with that node's profile (cooldown + rate-limit)
+        rather than the run-level policy. Without this, a step using a
+        node-level profile would be traced to the wrong cooldown/rate-limit
+        values during failure review. Policies are cached per profile so a
+        profile is compiled at most once per run.
+        """
+
+        if not workflow.patched(RUN_STEP_RESILIENCE_POLICY_PATCH):
+            return
+        if self._resilience_policy_ref is None:
+            return
+        profile_id = (execution_profile_ref or "").strip() or None
+        run_profile_id = (self._run_resilience_profile_id or "").strip() or None
+        if profile_id is None or profile_id == run_profile_id:
+            # No override (or it matches the run-level profile): the run-level
+            # policy already governs this step.
+            return
+        cached = self._resilience_policy_refs_by_profile.get(profile_id)
+        if cached is None:
+            cached = await self._compile_resilience_policy_envelope_ref(
+                provider_profile_id=profile_id,
+                parameters=parameters,
+                artifact_name=(
+                    "reports/resilience_policy_"
+                    f"{self._artifact_slug(profile_id)}.json"
+                ),
+            )
+            self._resilience_policy_refs_by_profile[profile_id] = cached
+        self._step_resilience_policy_refs[node_id] = cached
+
+    @staticmethod
+    def _artifact_slug(value: str) -> str:
+        """Return a filesystem-safe slug for embedding in an artifact name."""
+
+        slug = "".join(
+            char if char.isalnum() or char in {"-", "_"} else "-"
+            for char in str(value)
+        ).strip("-")
+        return slug or "profile"
+
     async def _run_execution_stage(
         self, *, parameters: dict[str, Any], plan_ref: Optional[str]
     ) -> None:
@@ -5654,6 +5866,12 @@ class MoonMindRunWorkflow:
         # can validate plan node profile refs against known profiles.
         if workflow.patched(RUN_FETCH_PROFILE_SNAPSHOTS_PATCH):
             await self._fetch_profile_snapshots()
+
+        # MM-880: compile + persist the versioned ResiliencePolicy envelope
+        # before any step executes, so every step execution can be traced to the
+        # exact policy values that governed it.
+        if workflow.patched(RUN_RESILIENCE_POLICY_PATCH):
+            await self._compile_and_record_resilience_policy(parameters=parameters)
 
         artifact_read_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("artifact.read")
         plan_payload = await execute_typed_activity(
@@ -5989,6 +6207,11 @@ class MoonMindRunWorkflow:
                                 step_execution=current_step_execution,
                                 queue_order=index,
                                 attempt_reason=attempt_reason,
+                            )
+                            await self._resolve_step_resilience_policy_ref(
+                                node_id=node_id,
+                                execution_profile_ref=request.execution_profile_ref,
+                                parameters=parameters,
                             )
                             if workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH):
                                 await self._record_step_execution_manifest(
@@ -7626,6 +7849,11 @@ class MoonMindRunWorkflow:
                 step_execution=self._step_execution_for(node_id) or 1,
                 queue_order=self._step_execution_for(node_id) or 1,
                 attempt_reason="policy_revalidation",
+            )
+            await self._resolve_step_resilience_policy_ref(
+                node_id=node_id,
+                execution_profile_ref=request.execution_profile_ref,
+                parameters=workflow_parameters,
             )
             child_workflow_id = (
                 f"{workflow.info().workflow_id}:agent:{node_id}:"
@@ -12695,6 +12923,10 @@ class MoonMindRunWorkflow:
             memo_dict["logs_artifact_ref"] = self._logs_ref
         if self._summary_ref:
             memo_dict["summary_artifact_ref"] = self._summary_ref
+        # MM-880: expose the versioned ResiliencePolicy reference for forensic
+        # review. Only populated once the policy has been compiled for the run.
+        if self._resilience_policy_ref:
+            memo_dict["resilience_policy_ref"] = dict(self._resilience_policy_ref)
         if self._pull_request_url:
             memo_dict["pull_request_url"] = self._pull_request_url
         merge_automation_summary = self._merge_automation_summary_from_context()
