@@ -249,6 +249,8 @@ type ScheduleEditForm = {
   targetJson: string;
 };
 
+const SUPPORTED_CATCHUP_MODES = new Set(['none', 'last', 'all']);
+
 function editFormFromSchedule(schedule: Schedule): ScheduleEditForm {
   const overlap = schedule.policy?.overlap;
   const catchup = schedule.policy?.catchup;
@@ -265,7 +267,7 @@ function editFormFromSchedule(schedule: Schedule): ScheduleEditForm {
     overlapMode: overlap && typeof overlap === 'object' && 'mode' in overlap
       ? String((overlap as { mode?: unknown }).mode || 'skip')
       : 'skip',
-    catchupMode: catchupMode === 'latest' ? 'last' : catchupMode,
+    catchupMode,
     jitterSeconds: typeof jitterSeconds === 'number' || typeof jitterSeconds === 'string'
       ? String(jitterSeconds)
       : '0',
@@ -374,6 +376,9 @@ function validateScheduleEditForm(form: ScheduleEditForm): ScheduleEditErrors {
   if (!Number.isInteger(jitter) || jitter < 0) {
     errors.jitterSeconds = 'Jitter seconds must be a non-negative integer.';
   }
+  if (!SUPPORTED_CATCHUP_MODES.has(form.catchupMode)) {
+    errors.catchupMode = `Catchup policy '${form.catchupMode}' is not supported for editing.`;
+  }
   const targetResult = parseTargetJson(form.targetJson);
   if (targetResult.error) {
     errors.targetJson = targetResult.error;
@@ -386,7 +391,17 @@ function hasFormErrors(errors: ScheduleEditErrors): boolean {
 }
 
 function stableJson(value: unknown): string {
-  return JSON.stringify(value);
+  return JSON.stringify(value, (_, candidate) => {
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      return Object.keys(candidate as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((result, key) => {
+          result[key] = (candidate as Record<string, unknown>)[key];
+          return result;
+        }, {});
+    }
+    return candidate;
+  });
 }
 
 function buildPolicyPayload(schedule: Schedule, form: ScheduleEditForm): Record<string, unknown> {
@@ -510,8 +525,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   };
 
   const updateMutation = useMutation({
-    mutationFn: async ({ form, schedule }: { form: ScheduleEditForm; schedule: Schedule }) => {
-      const patchPayload = buildSchedulePatchPayload(schedule, form);
+    mutationFn: async ({ patchPayload }: { patchPayload: Record<string, unknown> }) => {
       const response = await fetch(updateEndpoint, {
         method: 'PATCH',
         credentials: 'include',
@@ -551,8 +565,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const schedule = detailQuery.data;
   const runs = runsQuery.data?.items || [];
   const currentForm = editForm || (schedule ? editFormFromSchedule(schedule) : null);
-  const formErrors = currentForm ? validateScheduleEditForm(currentForm) : {};
-  const visibleFormErrors = { ...submitErrors, ...formErrors };
+  const visibleFormErrors = submitErrors;
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -562,7 +575,12 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       if (hasFormErrors(errors)) {
         return;
       }
-      updateMutation.mutate({ form: currentForm, schedule });
+      const patchPayload = buildSchedulePatchPayload(schedule, currentForm);
+      if (Object.keys(patchPayload).length === 0) {
+        setIsEditing(false);
+        return;
+      }
+      updateMutation.mutate({ patchPayload });
     }
   };
 
@@ -740,12 +758,15 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                   onChange={(event) => {
                     const value = event.currentTarget.value;
                     setEditForm((previous) => previous ? { ...previous, catchupMode: value } : null);
+                    setSubmitErrors((previous) => ({ ...previous, catchupMode: undefined }));
                   }}
+                  aria-invalid={Boolean(visibleFormErrors.catchupMode)}
                 >
                   <option value="none">Do not catch up</option>
                   <option value="last">Run latest missed occurrence</option>
                   <option value="all">Run all missed occurrences</option>
                 </select>
+                {visibleFormErrors.catchupMode && <span className="schedules-field-error">{visibleFormErrors.catchupMode}</span>}
               </label>
               <label>
                 <span>Jitter Seconds</span>

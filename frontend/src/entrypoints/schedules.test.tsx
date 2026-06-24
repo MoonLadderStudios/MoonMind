@@ -35,7 +35,7 @@ const detailSchedule = {
   },
   policy: {
     overlap: { mode: "skip" },
-    catchup: { mode: "latest" },
+    catchup: { mode: "last" },
   },
   version: 1,
   createdAt: "2026-06-20T00:00:00Z",
@@ -430,7 +430,7 @@ describe("SchedulesPage", () => {
     });
   });
 
-  it("shows immediate cron and timezone feedback and blocks invalid saves", async () => {
+  it("shows submitted cron and timezone feedback and blocks invalid saves", async () => {
     mockScheduleDetailFetch(fetchSpy);
 
     renderWithClient(<SchedulesPage payload={detailPayload} />);
@@ -440,10 +440,12 @@ describe("SchedulesPage", () => {
     fireEvent.change(screen.getByLabelText("Cron"), { target: { value: "bad cron" } });
     fireEvent.change(screen.getByLabelText("Timezone"), { target: { value: "Mars/Base" } });
 
-    expect(await screen.findByText("Cron must contain exactly 5 fields.")).not.toBeNull();
-    expect(screen.getByText("Timezone 'Mars/Base' is invalid.")).not.toBeNull();
+    expect(screen.queryByText("Cron must contain exactly 5 fields.")).toBeNull();
+    expect(screen.queryByText("Timezone 'Mars/Base' is invalid.")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+    expect(await screen.findByText("Cron must contain exactly 5 fields.")).not.toBeNull();
+    expect(screen.getByText("Timezone 'Mars/Base' is invalid.")).not.toBeNull();
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.some(([url, init]) => (
@@ -452,6 +454,89 @@ describe("SchedulesPage", () => {
         )),
       ).toBe(false);
     });
+  });
+
+  it("does not patch when saving an unchanged schedule", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Save schedule" })).toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url, init]) => (
+        String(url) === "/console/schedules/schedule-alpha"
+        && String(init?.method || "GET").toUpperCase() === "PATCH"
+      )),
+    ).toBe(false);
+  });
+
+  it("does not patch target values when only JSON object key order changes", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      target: {
+        workflowType: "MoonMind.WorkflowExecution",
+        initialParameters: {
+          repository: "MoonLadderStudios/MoonMind",
+          branch: "main",
+        },
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.change(screen.getByLabelText("Target Workflow Parameters"), {
+      target: {
+        value: JSON.stringify({
+          initialParameters: {
+            branch: "main",
+            repository: "MoonLadderStudios/MoonMind",
+          },
+          workflowType: "MoonMind.WorkflowExecution",
+        }, null, 2),
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Save schedule" })).toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([url, init]) => (
+        String(url) === "/console/schedules/schedule-alpha"
+        && String(init?.method || "GET").toUpperCase() === "PATCH"
+      )),
+    ).toBe(false);
+  });
+
+  it("blocks editing unsupported catchup modes instead of rewriting them", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      policy: {
+        overlap: { mode: "skip" },
+        catchup: { mode: "latest" },
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.change(screen.getByLabelText("Jitter Seconds"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    expect(await screen.findByText("Catchup policy 'latest' is not supported for editing.")).not.toBeNull();
+    expect(
+      fetchSpy.mock.calls.some(([url, init]) => (
+        String(url) === "/console/schedules/schedule-alpha"
+        && String(init?.method || "GET").toUpperCase() === "PATCH"
+      )),
+    ).toBe(false);
   });
 
   it("reports update and run failures separately", async () => {
@@ -477,6 +562,7 @@ describe("SchedulesPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Nightly detail sweep updated" } });
     fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
     fireEvent.click(screen.getByRole("button", { name: "Run now" }));
 
