@@ -25,7 +25,7 @@ This skill operationalizes the reconciliation expectation in `docs/Workflows/Moo
 - Optional: doc-drift notes from a `story-reconcile-implementation` report.
 - Optional: explicit scope limits from the orchestration step.
 
-Discoveries are the only valid basis for edits. Do not re-derive drift by auditing the whole document; that is `document-update`'s job, not this skill's.
+Discoveries are the only valid basis for edits. Do not re-derive drift by auditing the whole document; this skill is intentionally limited to reconciling verified discoveries from the MoonSpec run.
 
 ## Update Gate
 
@@ -45,12 +45,10 @@ When no discovery passes the gate, report `NO_UPDATE_REQUIRED` with a one-line r
 
 ## Editing Rules
 
-Follow the editing doctrine of the `document-update` skill (`.agents/skills/document-update/SKILL.md`):
-
 - Update only the sections the gated discoveries name. Make the smallest coherent edit.
 - Preserve desired-state framing: never downgrade the documented desired state to match buggy or incomplete code.
-- Never insert migration narratives, status checklists, phase plans, or implementation backlogs into canonical docs (Constitution XII).
-- Remove superseded text outright instead of layering compatibility language (Constitution XIII).
+- Never insert migration narratives, status checklists, phase plans, or implementation backlogs into canonical docs. Migration, rollout, and MoonSpec execution notes belong under `docs/tmp/` or local-only/gitignored artifact paths.
+- Remove superseded text outright instead of layering compatibility language, in keeping with the pre-release compatibility policy.
 - Preserve the document's voice, heading structure, and terminology where they remain accurate.
 - Cite implementation evidence (file paths, tests) in the reconciliation report, not inside the canonical document.
 

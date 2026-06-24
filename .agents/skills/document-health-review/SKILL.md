@@ -12,13 +12,13 @@ Review one or more documents and answer a single maintenance question:
 
 > Is this document still useful, accurate, strategically aligned, well-structured, and in the right place?
 
-This skill sits one level above [`document-update`](../document-update/SKILL.md). `document-update` corrects drift by editing a document to match the code. This skill decides the document's **disposition** — whether it should be kept, updated, simplified, merged, split, moved, archived, or deleted — and produces an evidence-backed report.
+This skill decides a document's **disposition** — whether it should be kept, updated, simplified, merged, split, moved, archived, or deleted — and produces an evidence-backed report.
 
 ## Purpose
 
 Produce a practical, findings-first disposition for each reviewed document. The skill defaults to **review only**: it produces a report and, at most, a patch plan. It does **not** edit files unless the user explicitly asks it to.
 
-It reuses the strongest mechanics of `document-update` (claim extraction, implementation inspection, drift ledger, evidence-backed output, canonical alignment) and the spirit of a cross-document coherence review (findings-first report, source-of-truth conflicts, redundancy reduction, severity ordering), but stays deliberately narrower than a general-purpose doc critique. It answers exactly the eight review questions below and nothing more.
+It uses claim extraction, implementation inspection, a drift ledger, evidence-backed output, canonical alignment, and a findings-first cross-document coherence review with source-of-truth conflicts, redundancy reduction, and severity ordering. It stays deliberately narrower than a general-purpose doc critique and answers exactly the eight review questions below and nothing more.
 
 ## Inputs
 
@@ -96,7 +96,7 @@ Recommendation values: `keep`, `update`, `merge`, `archive`, `delete`.
 
 ### B. Implementation drift
 
-Reuse the `document-update` approach: extract concrete claims, inspect source files, tests, schemas, configuration, and runtime entrypoints, then classify each claim.
+Extract concrete claims, inspect source files, tests, schemas, configuration, and runtime entrypoints, then classify each claim.
 
 Classifications: `accurate`, `stale`, `unimplemented`, `partially implemented`, `missing from doc`, `ambiguous`, `out of scope`.
 
@@ -303,7 +303,7 @@ Separate durable system semantics from historical notes, TODOs, migration plans,
 
 ### Phase 3: Check implementation drift
 
-For each implementation claim: search the codebase for named files, classes, functions, commands, routes, settings, schemas, and tests; compare actual behavior to the claim; then classify it as `accurate`, `stale`, `unimplemented`, `partially implemented`, `missing from doc`, `ambiguous`, or `out of scope`. Record concise evidence (file paths, tests) for every non-`accurate` item. This phase reuses `document-update`'s claim extraction, implementation inspection, and drift-ledger construction.
+For each implementation claim: search the codebase for named files, classes, functions, commands, routes, settings, schemas, and tests; compare actual behavior to the claim; then classify it as `accurate`, `stale`, `unimplemented`, `partially implemented`, `missing from doc`, `ambiguous`, or `out of scope`. Record concise evidence (file paths, tests) for every non-`accurate` item.
 
 ### Phase 4: Check strategic alignment and document conflicts
 
