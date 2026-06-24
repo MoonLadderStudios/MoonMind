@@ -16,13 +16,13 @@ def test_code_improvement_proposal_skill_frontmatter_resolves() -> None:
     text = _skill_text()
 
     assert "name: code-improvement-proposal" in text
-    # Frontmatter must parse through the real resolution helper and declare the
-    # capabilities the publishing paths may need.
+    # Frontmatter must parse through the real resolution helper and keep the
+    # default dry-run/GitHub path schedulable without Jira access.
     capabilities = extract_required_capabilities_from_skill_markdown(
         text,
         skill_name="code-improvement-proposal",
     )
-    assert capabilities == ("git", "gh", "jira")
+    assert capabilities == ("git", "gh")
 
 
 def test_code_improvement_proposal_skill_is_proposal_only_not_auto_refactor() -> None:

@@ -5,7 +5,6 @@ metadata:
   required-capabilities:
     - git
     - gh
-    - jira
 ---
 
 # Code Improvement Proposal
