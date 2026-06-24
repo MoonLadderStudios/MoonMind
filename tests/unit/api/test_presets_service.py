@@ -2540,7 +2540,7 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
             assert "stop without changing Jira" in expanded["steps"][25][
                 "instructions"
             ]
-            assert "Code Review" in expanded["steps"][25]["instructions"]
+            assert "status Review" in expanded["steps"][25]["instructions"]
             assert all(
                 step["title"] != "Return Jira orchestration report"
                 for step in expanded["steps"]

@@ -31,14 +31,16 @@ def test_canonical_metadata_header_fields_present() -> None:
         "Related Docs",
         "Related Implementation",
     ):
-        assert field in text, f"missing canonical metadata field: {field}"
+        assert f"**{field}:**" in text, f"missing canonical metadata field: {field}"
 
 
 def test_imperative_plan_header_fields_present() -> None:
     text = _read()
     for field in ("Canonical Target", "Delete/Archive Trigger"):
-        assert field in text, f"missing imperative-plan field: {field}"
-    assert "Imperative plan" in text
+        assert f"**{field}:**" in text, f"missing imperative-plan field: {field}"
+    # The Document Class value uses the canonical MoonSpec Document Model class
+    # name; "plan" is reserved for the concrete type/filename/status, not the class.
+    assert "Imperative working document" in text
 
 
 def test_optional_rationale_section_documented() -> None:
@@ -73,7 +75,9 @@ def test_docs_capitalization_variants_covered() -> None:
 def test_filename_alone_does_not_define_authority() -> None:
     text = _read()
     assert "Filename alone does not define authority" in text
-    assert "index" in text
+    # Authority is established by class, declared Authority, and the precedence
+    # ladder (§7) -- not by a separate documentation index that does not exist.
+    assert "its declared Authority" in text
     # Forbidden patterns.
     assert "Parallel old/new authorities" in text
     assert "contracts/" in text

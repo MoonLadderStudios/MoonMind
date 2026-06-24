@@ -51,6 +51,7 @@ class RecurringWorkflowDefinitionModel(BaseModel):
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     target: dict[str, Any] = Field(default_factory=dict, alias="target")
     policy: dict[str, Any] = Field(default_factory=dict, alias="policy")
+    temporal_schedule_id: Optional[str] = Field(None, alias="temporalScheduleId")
     version: int = Field(..., alias="version")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
@@ -163,6 +164,7 @@ def _serialize_definition(
         scope_ref=definition.scope_ref,
         target=dict(definition.target or {}),
         policy=dict(definition.policy or {}),
+        temporal_schedule_id=definition.temporal_schedule_id,
         version=int(definition.version or 1),
         created_at=definition.created_at,
         updated_at=definition.updated_at,
