@@ -99,7 +99,7 @@ Imperative working documents are **not** part of the canonical Architecture Desc
 | Type | Owns | Does not own | Placement |
 |------|------|--------------|-----------|
 | **Migration Plan** | The sequenced, phased steps to move from a current state to a target state, including cutover and backfill ordering. | The target desired state itself (that belongs in the relevant canonical view) and the day-to-day build steps (Implementation Plan). | `docs/tmp/` or a gitignored handoff path; deleted/archived on completion. |
-| **Implementation Plan** | The concrete build tasks, sequencing, and ownership needed to implement an already-designed capability. | The design intent (System / Feature Design View) and the desired end-state architecture (architecture views). | `docs/tmp/`, run-local `specs/<feature>/`, or a gitignored handoff path. |
+| **Implementation Plan** | The concrete build tasks, sequencing, and ownership needed to implement an already-designed capability. | The design intent (System / Feature Design View) and the desired end-state architecture (architecture views). | `docs/tmp/` or a gitignored handoff path. |
 | **Rollout Plan** | The deployment, enablement, flag-flip, and operational sequencing for releasing a change to environments/users. | The product behavior being rolled out (canonical views) and the build tasks (Implementation Plan). | `docs/tmp/` or a gitignored handoff path. |
 | **Status / Checklist Tracker** | Live status: checkboxes, progress, open items, and who-is-doing-what for in-flight work. | Any durable desired state; it is pure status and never a source of truth for behavior. | `docs/tmp/`, `artifacts/`, or a gitignored handoff path; deleted/archived on completion. |
 
