@@ -4,6 +4,7 @@ Pure unit tests — no Temporal test server needed.
 """
 
 import unittest
+import inspect
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,11 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillSet,
 )
 from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+)
+from moonmind.workflows.temporal.workflows.run import RUN_STEP_EXECUTION_NAMING_PATCH
+from moonmind.workflows.temporal.workflows.run import RUN_SLOT_CONTINUITY_PATCH
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
@@ -58,6 +64,66 @@ class TestAgentKindForId(unittest.TestCase):
             )
 
 class TestSlotContinuityMetadata(unittest.TestCase):
+    def test_profile_runtime_mismatch_guard_is_replay_only(self) -> None:
+        inherited_source = inspect.getsource(
+            MoonMindRunWorkflow._inherited_execution_profile_ref
+        )
+        validated_source = inspect.getsource(
+            MoonMindRunWorkflow._validated_execution_profile_ref
+        )
+
+        self.assertIn("self._workflow_is_replaying()", inherited_source)
+        self.assertIn("self._workflow_is_replaying()", validated_source)
+        self.assertIn("raise ValueError", inherited_source)
+        self.assertIn("raise ValueError", validated_source)
+
+    def test_step_execution_naming_marker_precedes_manifest_marker(self) -> None:
+        source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
+        self.assertEqual(
+            RUN_STEP_EXECUTION_NAMING_PATCH,
+            "run-step-execution-naming-v1",
+        )
+
+        naming_index = source.index(
+            "step_execution_naming_enabled = workflow.patched("
+        )
+        manifest_index = source.index(
+            "step_execution_manifest_enabled = workflow.patched(",
+            naming_index,
+        )
+
+        self.assertLess(naming_index, manifest_index)
+
+    def test_json_artifact_write_complete_is_replay_patch_guarded(self) -> None:
+        source = inspect.getsource(MoonMindRunWorkflow._write_json_artifact)
+        self.assertEqual(
+            RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+            "run-json-artifact-write-complete-v1",
+        )
+
+        guard_index = source.index(
+            "workflow.patched(RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH)"
+        )
+        write_complete_index = source.index(
+            '"artifact.write_complete"',
+            guard_index,
+        )
+
+        self.assertLess(guard_index, write_complete_index)
+
+    def test_slot_continuity_patch_marker_precedes_launch_block_short_circuit(self) -> None:
+        source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
+        self.assertEqual(RUN_SLOT_CONTINUITY_PATCH, "run-slot-continuity-v1")
+        marker_index = source.index(
+            "slot_continuity_enabled = workflow.patched("
+        )
+        launch_block_index = source.index(
+            "if self._is_step_execution_launch_blocked(",
+            marker_index,
+        )
+
+        self.assertLess(marker_index, launch_block_index)
+
     def test_marks_request_when_next_step_uses_same_managed_runtime(self) -> None:
         wf = MoonMindRunWorkflow()
         request = AgentExecutionRequest(
