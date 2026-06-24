@@ -36,7 +36,6 @@ def _definition(**overrides):
         "last_scheduled_for": None,
         "last_dispatch_status": None,
         "last_dispatch_error": None,
-        "temporal_schedule_id": None,
         "owner_user_id": uuid4(),
         "scope_type": RecurringWorkflowScopeType.PERSONAL,
         "scope_ref": None,
@@ -47,6 +46,7 @@ def _definition(**overrides):
             },
         },
         "policy": {},
+        "temporal_schedule_id": None,
         "version": 1,
         "created_at": now,
         "updated_at": now,
@@ -135,7 +135,7 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
 @pytest.mark.asyncio
 async def test_create_recurring_workflow_returns_serialized_definition() -> None:
     service = AsyncMock()
-    definition = _definition(temporal_schedule_id="mm-schedule:daily-demo")
+    definition = _definition(temporal_schedule_id="mm-schedule:test-definition")
     service.create_definition.return_value = definition
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
 
@@ -162,8 +162,8 @@ async def test_create_recurring_workflow_returns_serialized_definition() -> None
 
     assert response.id == definition.id
     assert response.schedule_type == "cron"
-    assert response.temporal_schedule_id == "mm-schedule:daily-demo"
     assert response.scope_type == "personal"
+    assert response.temporal_schedule_id == "mm-schedule:test-definition"
     service.create_definition.assert_awaited_once()
 
 @pytest.mark.asyncio
