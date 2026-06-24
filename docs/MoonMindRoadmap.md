@@ -240,7 +240,7 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - GitHub token permission scoping.
 - PR publishing gated on MoonSpec verification.
 - Deliberately gated exceptional workloads.
-- PentestGPT safety posture — approved-scope artifact requirement, conservative default operation modes, safe runner profile allowlist, external targets disabled by default, telemetry disabled by default, no arbitrary image/host-mount/raw Docker arguments, and report-first artifacts.
+- PentestGPT safety posture — approved-scope artifact requirement, conservative default operation modes, safe runner profile allowlist, manual approval required for external targets by default, telemetry disabled by default, no arbitrary image/host-mount/raw Docker arguments, and report-first artifacts.
 - PentestGPT runner supply-chain gates — provenance labels, tag-drift checks, runner self-test, upstream CLI contract check, and vulnerability threshold gate.
 
 ### Remaining work

@@ -1588,7 +1588,7 @@ class PentestSettings(BaseSettings):
         ),
     )
     allow_external_targets: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_EXTERNAL_TARGETS"),
     )
     telemetry_enabled: bool = Field(
