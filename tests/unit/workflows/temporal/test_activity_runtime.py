@@ -1436,6 +1436,50 @@ async def test_temporal_pentest_provider_lease_manager_acquires_slot_with_update
         )
     ]
 
+async def test_temporal_pentest_provider_lease_manager_uses_runtime_manager_and_autostarts():
+    class _ClientAdapter:
+        def __init__(self) -> None:
+            self.starts: list[dict[str, object]] = []
+            self.updates: list[tuple[str, str, dict[str, object]]] = []
+
+        async def start_workflow(self, **kwargs: object) -> object:
+            self.starts.append(dict(kwargs))
+            return SimpleNamespace(workflow_id=kwargs.get("workflow_id"))
+
+        async def update_workflow(
+            self, workflow_id: str, update_name: str, arg: dict[str, object]
+        ) -> dict[str, object]:
+            self.updates.append((workflow_id, update_name, arg))
+            if len(self.updates) == 1:
+                raise RuntimeError(f"workflow not found for ID: {workflow_id}")
+            return {
+                "profile_id": "codex_openrouter_qwen36_plus",
+                "lease_id": "lease-owner-1",
+            }
+
+    client = _ClientAdapter()
+    manager = TemporalPentestProviderLeaseManager(client)
+
+    lease_id = await manager.acquire(
+        runtime_id="codex_cli",
+        profile_id="codex_openrouter_qwen36_plus",
+        owner="owner-1",
+        metadata={"target_hash": "hash-1"},
+    )
+
+    assert lease_id == "lease-owner-1"
+    assert client.starts == [
+        {
+            "workflow_type": "MoonMind.ProviderProfileManager",
+            "workflow_id": "provider-profile-manager:codex_cli",
+            "input_args": {"runtime_id": "codex_cli"},
+        }
+    ]
+    assert [update[0] for update in client.updates] == [
+        "provider-profile-manager:codex_cli",
+        "provider-profile-manager:codex_cli",
+    ]
+
 async def test_temporal_pentest_provider_lease_manager_fails_closed_without_updates():
     class _ClientAdapter:
         async def signal_workflow(
@@ -2091,6 +2135,98 @@ async def test_security_pentest_execute_acquires_lease_after_scope_validation_be
     }
     assert "https://lab.example.test" not in str(payload["metadata"])
     assert "sk-resolved-provider-value" not in str(result)
+
+async def test_security_pentest_execute_uses_inherited_openrouter_profile_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    lease_manager = _FakePentestLeaseManager()
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_FakePentestArtifactService(
+            {"art_scope_valid": _scope_artifact_bytes()}
+        ),
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+
+    async def _fake_resolver(ref: object, *, field_name: str) -> str:
+        assert ref == {"secret_ref": "env://OPENROUTER_API_KEY"}
+        assert field_name == "OPENROUTER_API_KEY"
+        return "sk-resolved-provider-value"
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.activity_runtime.resolve_managed_api_key_reference",
+        _fake_resolver,
+    )
+
+    payload = _pentest_artifact_activity_payload()
+    payload.setdefault("context", {})["runtime"] = {
+        "targetRuntime": "codex_cli",
+        "executionProfileRef": "codex_openrouter_qwen36_plus",
+        "providerProfile": {
+            "profile_id": "codex_openrouter_qwen36_plus",
+            "runtime_id": "codex_cli",
+            "provider_id": "openrouter",
+            "provider_label": "OpenRouter",
+            "credential_source": "secret_ref",
+            "runtime_materialization_mode": "composite",
+            "enabled": True,
+            "auth_state": "connected",
+            "secret_refs": {"provider_api_key": "env://OPENROUTER_API_KEY"},
+            "env_template": {
+                "OPENROUTER_API_KEY": {"from_secret_ref": "provider_api_key"}
+            },
+            "clear_env_keys": ["OPENAI_API_KEY"],
+            "max_parallel_runs": 1,
+            "cooldown_after_429_seconds": 900,
+            "rate_limit_policy": "backoff",
+            "max_lease_duration_seconds": 7200,
+        },
+    }
+
+    result = await activities.security_pentest_execute(payload)
+
+    assert result["status"] == "completed"
+    assert result["provider_profile"]["profile_id"] == "codex_openrouter_qwen36_plus"
+    assert result["provider_profile"]["runtime_id"] == "codex_cli"
+    assert result["provider_profile"]["env"]["PENTESTGPT_AUTH_MODE"] == "openrouter"
+    assert result["provider_lease"]["runtime_id"] == "codex_cli"
+    assert lease_manager.events[0][1]["profile_id"] == "codex_openrouter_qwen36_plus"
+    assert result["wrapper_invocation"]["envOverrides"]["OPENROUTER_API_KEY"] == (
+        "sk-resolved-provider-value"
+    )
+
+async def test_security_pentest_execute_rejects_inherited_oauth_profile_snapshot():
+    lease_manager = _FakePentestLeaseManager()
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=_FakePentestArtifactService(
+            {"art_scope_valid": _scope_artifact_bytes()}
+        ),
+        workload_launcher=_FakePentestLauncher(),
+        workload_registry=_RecordingPentestRegistry(),
+        pentest_provider_lease_manager=lease_manager,
+    )
+    payload = _pentest_artifact_activity_payload()
+    payload.setdefault("context", {})["runtime"] = {
+        "targetRuntime": "codex_cli",
+        "executionProfileRef": "codex_default",
+        "providerProfile": {
+            "profile_id": "codex_default",
+            "runtime_id": "codex_cli",
+            "provider_id": "openai",
+            "credential_source": "oauth_volume",
+            "runtime_materialization_mode": "oauth_home",
+            "enabled": True,
+            "auth_state": "connected",
+        },
+    }
+
+    result = await activities.security_pentest_execute(payload)
+
+    assert result["status"] == "validation_failed"
+    assert result["diagnostics"]["policy_reason"] == "oauth_profile_unsupported"
+    assert result["terminal_cleanup"]["provider_lease_released"] is False
+    assert lease_manager.events == []
 
 async def test_security_pentest_execute_does_not_acquire_lease_for_invalid_scope():
     lease_manager = _FakePentestLeaseManager()

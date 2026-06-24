@@ -423,6 +423,7 @@ RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
 MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS = frozenset({"reenter_gate"})
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
+RUN_LEGACY_SKILL_RUNTIME_CONTEXT_PATCH = "run-legacy-skill-runtime-context-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
 RUN_DEFER_WORKFLOW_SCOPED_SESSION_UNTIL_SLOT_PATCH = (
     "run-defer-task-scoped-session-until-slot-v1"
@@ -6401,6 +6402,18 @@ class MoonMindRunWorkflow:
                             if isinstance(node.get("options"), Mapping)
                             else {}
                         )
+                        activity_context = {
+                            "namespace": workflow.info().namespace,
+                            "workflow_id": workflow.info().workflow_id,
+                            "run_id": workflow.info().run_id,
+                            "node_id": node_id,
+                        }
+                        if workflow.patched(RUN_LEGACY_SKILL_RUNTIME_CONTEXT_PATCH):
+                            runtime_context = self._legacy_skill_runtime_context(
+                                parameters
+                            )
+                            if runtime_context:
+                                activity_context["runtime"] = runtime_context
                         execute_payload = {
                             "registry_snapshot_ref": snapshot.artifact_ref,
                             "principal": self._principal(),
@@ -6418,12 +6431,7 @@ class MoonMindRunWorkflow:
                                 "inputs": node_inputs,
                                 "options": node_options,
                             },
-                            "context": {
-                                "namespace": workflow.info().namespace,
-                                "workflow_id": workflow.info().workflow_id,
-                                "run_id": workflow.info().run_id,
-                                "node_id": node_id,
-                            },
+                            "context": activity_context,
                             "idempotency_key": step_execution_operation_idempotency_key(
                                 workflow_id=workflow.info().workflow_id,
                                 run_id=workflow.info().run_id,
@@ -11416,6 +11424,39 @@ class MoonMindRunWorkflow:
                     source_label="Inherited",
                 )
         return None
+
+    def _legacy_skill_runtime_context(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Return selected runtime/profile context for activity-backed tools."""
+
+        task_payload = self._mapping_value(parameters, "task") or {}
+        task_runtime_payload = (
+            self._mapping_value(task_payload, "runtime")
+            if isinstance(task_payload, Mapping)
+            else {}
+        ) or {}
+        runtime_context: dict[str, Any] = {}
+        for source in (parameters, task_runtime_payload):
+            runtime_context.update(self._runtime_selection_from_source(source))
+
+        target_runtime = self._coerce_text(
+            runtime_context.get("targetRuntime"),
+            max_chars=160,
+        )
+        execution_profile_ref = self._inherited_execution_profile_ref(
+            parameters,
+            agent_id=target_runtime,
+        )
+        if execution_profile_ref:
+            runtime_context["executionProfileRef"] = execution_profile_ref
+            snapshots = getattr(self, "_profile_snapshots", None)
+            if isinstance(snapshots, Mapping):
+                snapshot = snapshots.get(execution_profile_ref)
+                if isinstance(snapshot, Mapping):
+                    runtime_context["providerProfile"] = dict(snapshot)
+        return runtime_context
 
     def _validated_execution_profile_ref(
         self,

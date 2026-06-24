@@ -239,7 +239,6 @@ async def _run_command(cmd, **kwargs):
 
 logger = getLogger(__name__)
 
-_PENTEST_PROVIDER_MANAGER_WORKFLOW_ID = "provider-profile-manager:pentestgpt"
 _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
@@ -293,6 +292,33 @@ class TemporalPentestProviderLeaseManager:
     def __init__(self, client_adapter: Any) -> None:
         self._client_adapter = client_adapter
 
+    @staticmethod
+    def _workflow_id(runtime_id: str) -> str:
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            workflow_id_for_runtime,
+        )
+
+        return workflow_id_for_runtime(runtime_id)
+
+    async def _ensure_manager(self, runtime_id: str) -> None:
+        start_workflow = getattr(self._client_adapter, "start_workflow", None)
+        if start_workflow is None:
+            return
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
+        )
+
+        await start_workflow(
+            workflow_type=PROVIDER_PROFILE_MANAGER_WF,
+            workflow_id=self._workflow_id(runtime_id),
+            input_args={"runtime_id": runtime_id},
+        )
+
+    @staticmethod
+    def _looks_like_missing_manager(exc: BaseException) -> bool:
+        text = str(exc).lower()
+        return "workflow not found" in text or "not found" in text
+
     async def acquire(
         self,
         *,
@@ -304,16 +330,24 @@ class TemporalPentestProviderLeaseManager:
         update_workflow = getattr(self._client_adapter, "update_workflow", None)
         if update_workflow is None:
             raise RuntimeError("Temporal client adapter does not support workflow updates")
-        await update_workflow(
-            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
-            "AcquireSlot",
-            {
-                "requester_workflow_id": owner,
-                "runtime_id": runtime_id,
-                "execution_profile_ref": profile_id,
-                "metadata": dict(metadata),
-            },
-        )
+        workflow_id = self._workflow_id(runtime_id)
+        payload = {
+            "requester_workflow_id": owner,
+            "runtime_id": runtime_id,
+            "execution_profile_ref": profile_id,
+            "metadata": dict(metadata),
+        }
+        try:
+            result = await update_workflow(workflow_id, "AcquireSlot", payload)
+        except Exception as exc:
+            if not self._looks_like_missing_manager(exc):
+                raise
+            await self._ensure_manager(runtime_id)
+            result = await update_workflow(workflow_id, "AcquireSlot", payload)
+        if isinstance(result, Mapping):
+            lease_id = str(result.get("lease_id") or "").strip()
+            if lease_id:
+                return lease_id
         return owner
 
     async def release(
@@ -325,7 +359,7 @@ class TemporalPentestProviderLeaseManager:
         lease_id: str,
     ) -> None:
         await self._client_adapter.signal_workflow(
-            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            self._workflow_id(runtime_id),
             "release_slot",
             {
                 "requester_workflow_id": owner,
@@ -345,7 +379,7 @@ class TemporalPentestProviderLeaseManager:
         reason: str,
     ) -> None:
         await self._client_adapter.signal_workflow(
-            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            self._workflow_id(runtime_id),
             "report_cooldown",
             {
                 "runtime_id": runtime_id,
