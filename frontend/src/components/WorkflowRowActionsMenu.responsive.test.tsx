@@ -76,15 +76,19 @@ describe('WorkflowRowActionsMenu responsive layout', () => {
 });
 
 describe('Workflow list table dropdown overflow', () => {
-  it('reserves vertical room for table filter and action popovers without disabling horizontal scroll', () => {
+  it('lets table filter and action popovers overflow the table edges instead of clipping them', () => {
+    // `overflow-x: auto` on the wrapper is coerced to `overflow-y: auto` by the
+    // browser, so the wrapper clips popovers. A highly restrictive filter leaves
+    // a short table that cut the filter popover off. While a popover is open the
+    // wrapper must switch to `overflow: visible` so the popover can escape.
     const wrapperBlock = cssRuleBlock(
       `.workflow-list-data-slab .queue-table-wrapper:has(
         .workflow-list-header-filter-popover,
         .td-workflow-actions-popover
       )`,
     );
-    expect(wrapperBlock).toContain('padding-bottom: min(18rem, 45vh);');
-    expect(wrapperBlock).not.toContain('overflow: visible;');
+    expect(wrapperBlock).toContain('overflow: visible;');
+    expect(wrapperBlock).not.toContain('padding-bottom:');
 
     const tableBlock = cssRuleBlock('.queue-table-wrapper table');
     expect(tableBlock).not.toContain('overflow: visible;');

@@ -1115,6 +1115,30 @@ def test_run_memo_updates_remain_compact(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "progress" not in latest_memo
     assert "checks" not in latest_memo
 
+def test_update_search_attributes_status_memo_is_patch_gated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memo_updates = _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._waiting_reason = "dependency_wait"
+    workflow._attention_required = True
+
+    workflow._update_search_attributes()
+
+    assert memo_updates == []
+
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_STATUS_MEMO_UPSERT_PATCH,
+    )
+    workflow._update_search_attributes()
+
+    assert memo_updates[-1] == {
+        "waiting_reason": "dependency_wait",
+        "attention_required": True,
+    }
+
 def test_run_memo_includes_current_step_order_when_step_active(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1869,6 +1893,7 @@ async def test_write_json_artifact_supports_serialized_list_result(
 ) -> None:
     _configure_workflow_runtime(monkeypatch)
     workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
 
     async def fake_execute_activity(
         activity_type: str,
@@ -1884,7 +1909,7 @@ async def test_write_json_artifact_supports_serialized_list_result(
         **_kwargs: Any,
     ) -> None:
         assert activity_type == "artifact.write_complete"
-        assert run_module._get_from_result(payload, "artifact_id") == "art_list_payload"
+        assert payload.artifact_id == "art_list_payload"
         return None
 
     monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)

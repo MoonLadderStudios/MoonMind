@@ -2990,6 +2990,7 @@ class TemporalArtifactActivities:
                     "command_behavior": command_behavior,
                     "billing": billing_metadata or pricing_metadata or {},
                     "default_model": row.default_model,
+                    "default_effort": row.default_effort,
                     "model_overrides": row.model_overrides or {},
                     "max_parallel_runs": row.max_parallel_runs,
                     "cooldown_after_429_seconds": row.cooldown_after_429_seconds,

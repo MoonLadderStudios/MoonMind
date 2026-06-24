@@ -1534,11 +1534,21 @@ tbody tr:hover {
   background: transparent;
 }
 
+/*
+ * While a column filter or row actions popover is open, let the table wrapper
+ * overflow visibly so the popover can extend past the table edges. The wrapper
+ * is normally `overflow-x: auto`, which browsers coerce to `overflow-y: auto`
+ * as well — that turns the wrapper into a clipping box. When a highly
+ * restrictive filter leaves only a few rows, the short table clipped the
+ * popover and made it unreadable. Dropping to `overflow: visible` only while a
+ * popover is present lets it escape into the page (which scrolls) instead of
+ * being cut off, and the fixed-layout table never needs horizontal scrolling.
+ */
 .workflow-list-data-slab .queue-table-wrapper:has(
   .workflow-list-header-filter-popover,
   .td-workflow-actions-popover
 ) {
-  padding-bottom: min(18rem, 45vh);
+  overflow: visible;
 }
 
 .queue-table-wrapper table {
@@ -2724,6 +2734,15 @@ textarea {
   transition: var(--mm-control-transition);
   max-width: 100%;
   min-width: 0;
+}
+
+input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  min-width: 1rem;
+  padding: 0;
+  border-radius: 0.25rem;
+  flex: 0 0 auto;
 }
 
 input:focus-visible,

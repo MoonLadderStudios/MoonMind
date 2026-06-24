@@ -28,6 +28,7 @@ from temporalio.client import Client
 from temporalio.service import RPCError
 
 from api_service.auth_providers import get_current_user
+from api_service.core import sync as execution_sync
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
@@ -9098,13 +9099,31 @@ async def describe_execution_steps(
     response: Response,
     service: TemporalExecutionService = Depends(_get_service),
     user: User = Depends(get_current_user()),
+    session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
 ) -> StepLedgerSnapshotModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
+    if settings.temporal.temporal_authoritative_read_enabled:
+        try:
+            await execution_sync.fetch_and_sync_execution(
+                session,
+                canonical_workflow_id,
+                temporal_client,
+            )
+            await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            logger.warning(
+                "Failed to sync execution %s from Temporal for step ledger: %s",
+                canonical_workflow_id,
+                exc,
+                exc_info=True,
+            )
     record = await _get_owned_execution(
         service=service,
         workflow_id=workflow_id,
         user=user,
+        include_orphaned_projection=True,
     )
     workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
     if workflow_type_value != "MoonMind.UserWorkflow":
@@ -9139,8 +9158,6 @@ async def describe_execution(
 ) -> ExecutionModel:
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
-    from api_service.core.sync import fetch_and_sync_execution
-
     source_is_temporal = source == "temporal"
     use_projection_read = source_is_temporal
     temporal_sync_unavailable = False
@@ -9148,7 +9165,11 @@ async def describe_execution(
     if settings.temporal.temporal_authoritative_read_enabled or source_is_temporal:
         try:
             client = temporal_client
-            await fetch_and_sync_execution(session, canonical_workflow_id, client)
+            await execution_sync.fetch_and_sync_execution(
+                session,
+                canonical_workflow_id,
+                client,
+            )
             await session.commit()
             # Return the synced projection to avoid clobbering it with stale source data.
             use_projection_read = True

@@ -3760,7 +3760,7 @@ describe.skip("Task Create Entrypoint", () => {
         (screen.getByLabelText(/Skill \(optional\)/) as HTMLInputElement).value,
       ).toBe("speckit-implement");
     });
-    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.queryByText("Schedule")).toBeNull();
     expect(screen.getByRole("button", { name: "Save Changes" })).toBeTruthy();
   });
 
@@ -3904,7 +3904,7 @@ describe.skip("Task Create Entrypoint", () => {
         headers: { Accept: "application/json" },
       }),
     );
-    expect(screen.queryByText("Schedule (optional)")).toBeNull();
+    expect(screen.queryByText("Schedule")).toBeNull();
     expect(screen.getByRole("button", { name: "Start New Run" })).toBeTruthy();
   });
 
@@ -4950,7 +4950,11 @@ describe.skip("Task Create Entrypoint", () => {
 
     const objectiveItem = (await screen.findByText("objective.png (1.2 KB)"))
       .closest("li") as HTMLElement;
-    fireEvent.click(within(objectiveItem).getByRole("button", { name: "Remove" }));
+    fireEvent.click(
+      within(objectiveItem).getByRole("button", {
+        name: "Remove objective attachment objective.png",
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -6429,7 +6433,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run the dependent stage." },
     });
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-1" },
     });
 
@@ -7851,7 +7855,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.queryByLabelText("Target Branch (optional)")).toBeNull();
     expect(await screen.findByDisplayValue("3")).not.toBeNull();
     expect(screen.getByText("Task Presets (optional)")).not.toBeNull();
-    expect(screen.getByText("Schedule (optional)")).not.toBeNull();
+    expect(screen.getByText("Schedule")).not.toBeNull();
   });
 
   it("right-aligns Task Presets actions with Apply last", async () => {
@@ -10630,7 +10634,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Add mm:dep-1 first time (selecting the option adds it directly).
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-1" },
     });
 
@@ -10640,7 +10644,9 @@ describe.skip("Task Create Entrypoint", () => {
 
     // After adding, mm:dep-1 should be removed from the dropdown options
     // (filtered out by availableDependencyOptions).
-    const select = screen.getByLabelText("Existing run") as HTMLSelectElement;
+    const select = screen.getByRole("combobox", {
+      name: "Prerequisite",
+    }) as HTMLSelectElement;
     const options = Array.from(select.options).map((o) => o.value);
     expect(options).not.toContain("mm:dep-1");
 
@@ -10650,7 +10656,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(within(list as HTMLElement).getAllByRole("listitem")).toHaveLength(1);
 
     // Add a second dependency to verify the list grows.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-2" },
     });
 
@@ -10668,7 +10674,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     // Add 10 dependencies (each selection adds the chosen prerequisite).
     for (let i = 1; i <= 10; i += 1) {
-      fireEvent.change(screen.getByLabelText("Existing run"), {
+      fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
         target: { value: `mm:dep-${i}` },
       });
     }
@@ -10681,7 +10687,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Try to add an 11th.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-11" },
     });
 
@@ -10757,7 +10763,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
     // Re-selecting the placeholder option is a no-op: nothing is added.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "" },
     });
 
@@ -13563,7 +13569,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(publishModeSelect, { target: { value: "branch" } });
     // Selecting a prerequisite from the dropdown adds it directly; there is no
     // separate "Add dependency" button.
-    fireEvent.change(screen.getByLabelText("Existing run"), {
+    fireEvent.change(screen.getByRole("combobox", { name: "Prerequisite" }), {
       target: { value: "mm:dep-641" },
     });
     await waitFor(() => {
@@ -16677,6 +16683,7 @@ describe("Task Create runtime switch layout stability", () => {
                 profile_id: "profile:codex-default",
                 account_label: "Codex Default",
                 is_default: true,
+                default_effort: "high",
               },
               {
                 profile_id: "profile:codex-secondary",
@@ -16684,6 +16691,12 @@ describe("Task Create runtime switch layout stability", () => {
                 is_default: false,
               },
             ],
+          } as Response);
+        }
+        if (url === "/api/executions") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ workflowId: "mm:workflow-123" }),
           } as Response);
         }
         if (url.startsWith("/api/workflows/skills")) {
@@ -16804,5 +16817,39 @@ describe("Task Create runtime switch layout stability", () => {
     });
     expect(screen.getByRole("option", { name: /Claude Default/ })).toBeTruthy();
     expect(screen.queryByRole("option", { name: /Codex Default/ })).toBeNull();
+  });
+
+  it("omits task effort when the selected provider profile defines a default effort", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const providerProfileSelect = (await screen.findByLabelText(
+      "Provider profile",
+    )) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(providerProfileSelect.value).toBe("profile:codex-default");
+    });
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run the profile default effort task." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const executionCall = fetchSpy.mock.calls
+      .filter(([url]) => String(url) === "/api/executions")
+      .at(-1);
+    const request = JSON.parse(String(executionCall?.[1]?.body));
+
+    expect(request.payload.task.runtime).toMatchObject({
+      mode: "codex_cli",
+      model: "gpt-5.4",
+      profileId: "profile:codex-default",
+    });
+    expect(request.payload.task.runtime).not.toHaveProperty("effort");
   });
 });

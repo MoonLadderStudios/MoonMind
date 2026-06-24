@@ -1623,6 +1623,150 @@ async def test_post_workflow_proposal_skills_preserve_seed_on_invalid_hook_outpu
     assert skill_output_path.read_text(encoding="utf-8") == "{invalid json"
 
 
+def test_proposal_hook_skill_ids_include_code_improvement_only_on_success() -> None:
+    """MM-891: code-improvement-proposal is a success-only hook alongside continuation."""
+
+    success_hooks = CodexWorker._proposal_hook_skill_ids(include_continuation=True)
+    assert success_hooks == (
+        "fix-proposal",
+        "continuation-proposal",
+        "code-improvement-proposal",
+    )
+
+    failure_hooks = CodexWorker._proposal_hook_skill_ids(include_continuation=False)
+    assert "code-improvement-proposal" not in failure_hooks
+    assert failure_hooks == ("fix-proposal",)
+
+
+def test_compose_proposal_instruction_uses_code_improvement_focus(
+    tmp_path: Path,
+) -> None:
+    """MM-891: the code-improvement-proposal hook gets code-focused instructions."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=FakeHandler(
+            WorkerExecutionResult(succeeded=True, summary="ok", error_message=None)
+        ),
+    )  # type: ignore[arg-type]
+
+    canonical_payload = {
+        "repository": "owner/repo",
+        "workflow": {"instructions": "implement the feature"},
+    }
+    task_result = WorkerExecutionResult(
+        succeeded=True, summary="done", error_message=None
+    )
+
+    improvement_instruction = worker._compose_post_workflow_proposal_instruction(
+        canonical_payload=canonical_payload,
+        task_result=task_result,
+        skill_id="code-improvement-proposal",
+        proposal_output_path="/tmp/out.json",
+        task_context_path="/tmp/task_context.json",
+        artifacts_path="/tmp/artifacts",
+    )
+    assert "Skill: code-improvement-proposal" in improvement_instruction
+    assert "improvement to the code worked on in this run" in improvement_instruction
+    assert "broad rewrites" in improvement_instruction
+    # The improvement focus must not collapse into the continuation focus.
+    assert "propose the next concrete phase/task" not in improvement_instruction
+
+    continuation_instruction = worker._compose_post_workflow_proposal_instruction(
+        canonical_payload=canonical_payload,
+        task_result=task_result,
+        skill_id="continuation-proposal",
+        proposal_output_path="/tmp/out.json",
+        task_context_path="/tmp/task_context.json",
+        artifacts_path="/tmp/artifacts",
+    )
+    assert "propose the next concrete phase/task" in continuation_instruction
+    assert (
+        "improvement to the code worked on in this run" not in continuation_instruction
+    )
+    # MM-891: the continuation fallback must not overlap with the dedicated
+    # code-improvement-proposal hook. It no longer offers standalone refactor /
+    # performance follow-ups and instead defers code-quality work to that hook,
+    # so the two success-only hooks cannot emit duplicate or competing proposals.
+    assert "one meaningful refactor" not in continuation_instruction
+    assert "code-improvement-proposal hook" in continuation_instruction
+
+
+async def test_post_workflow_proposal_skills_run_code_improvement_on_success(
+    tmp_path: Path,
+) -> None:
+    """MM-891: a successful run invokes the code-improvement-proposal hook skill."""
+
+    config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        enable_proposals=True,
+    )
+    handler = FakeHandler(
+        WorkerExecutionResult(
+            succeeded=True,
+            summary="proposal skill completed",
+            error_message=None,
+        )
+    )
+    worker = CodexWorker(
+        config=config,
+        queue_client=FakeQueueClient(),
+        codex_exec_handler=handler,
+    )  # type: ignore[arg-type]
+    worker._active_cancel_event = asyncio.Event()
+    prepared = PreparedTaskWorkspace(
+        job_root=tmp_path / "job",
+        repo_dir=tmp_path / "repo",
+        artifacts_dir=tmp_path / "artifacts",
+        prepare_log_path=tmp_path / "prepare.log",
+        execute_log_path=tmp_path / "execute.log",
+        publish_log_path=tmp_path / "publish.log",
+        task_context_path=tmp_path / "artifacts",
+        publish_result_path=tmp_path / "publish-result.log",
+        default_branch="main",
+        starting_branch="main",
+        new_branch=None,
+        working_branch="feature/mm-891",
+        workdir_mode="checkout",
+        repo_command_env=None,
+        publish_command_env=None,
+    )
+    prepared.repo_dir.mkdir(parents=True)
+    prepared.artifacts_dir.mkdir(parents=True)
+
+    await worker._run_post_workflow_proposal_skills(
+        job=ClaimedJob(id=uuid4(), type="task", attempt=1, max_attempts=3, payload={}),
+        canonical_payload={"repository": "MoonLadderStudios/MoonMind", "workflow": {}},
+        source_payload={},
+        runtime_mode="codex",
+        prepared=prepared,
+        task_result=WorkerExecutionResult(
+            succeeded=True,
+            summary="implemented the feature successfully",
+            error_message=None,
+        ),
+        selected_skills=("auto",),
+    )
+
+    assert "codex_skill:fix-proposal:True" in handler.calls
+    assert "codex_skill:continuation-proposal:True" in handler.calls
+    assert "codex_skill:code-improvement-proposal:True" in handler.calls
+
+
 async def test_worker_submission_outcome_preserves_delivery_failure_details() -> None:
     outcome = CodexWorker._proposal_submission_outcome(
         {

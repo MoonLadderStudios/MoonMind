@@ -9,6 +9,7 @@ export interface ProviderProfile {
   provider_id: string;
   provider_label?: string | null;
   default_model?: string | null;
+  default_effort?: string | null;
   model_overrides?: Record<string, string> | null;
   credential_source: string;
   runtime_materialization_mode: string;
@@ -68,6 +69,7 @@ interface ProviderProfileFormState {
   providerId: string;
   providerLabel: string;
   defaultModel: string;
+  defaultEffort: string;
   credentialSource: string;
   runtimeMaterializationMode: string;
   secretRefsText: string;
@@ -91,6 +93,7 @@ interface ProviderProfileSavePayload {
   provider_id: string;
   provider_label: string | null;
   default_model: string | null;
+  default_effort: string | null;
   credential_source: string;
   runtime_materialization_mode: string;
   secret_refs: Record<string, string>;
@@ -178,6 +181,7 @@ export function defaultFormState(): ProviderProfileFormState {
     providerId: '',
     providerLabel: '',
     defaultModel: '',
+    defaultEffort: '',
     credentialSource: 'secret_ref',
     runtimeMaterializationMode: 'api_key_env',
     secretRefsText: '{}',
@@ -203,6 +207,7 @@ export function toFormState(profile: ProviderProfile): ProviderProfileFormState 
     providerId: profile.provider_id,
     providerLabel: profile.provider_label ?? '',
     defaultModel: profile.default_model ?? '',
+    defaultEffort: profile.default_effort ?? '',
     credentialSource: profile.credential_source,
     runtimeMaterializationMode: profile.runtime_materialization_mode,
     secretRefsText: JSON.stringify(profile.secret_refs ?? {}, null, 2),
@@ -575,6 +580,7 @@ function buildSavePayload(form: ProviderProfileFormState): ProviderProfileSavePa
     provider_id: form.providerId.trim(),
     provider_label: form.providerLabel.trim() || null,
     default_model: form.defaultModel.trim() || null,
+    default_effort: form.defaultEffort.trim() || null,
     credential_source: form.credentialSource,
     runtime_materialization_mode: form.runtimeMaterializationMode,
     secret_refs: parseSecretRefs(form.secretRefsText),
@@ -1304,6 +1310,11 @@ export function ProviderProfilesManager({
                           : 'No model (runtime default)'}
                       </div>
                     )}
+                    {profile.default_effort ? (
+                      <div className="text-xs text-slate-500 dark:text-slate-400">
+                        Effort: {profile.default_effort}
+                      </div>
+                    ) : null}
                     {profile.model_overrides && Object.keys(profile.model_overrides).length > 0 ? (
                       <div className="text-xs text-slate-500 dark:text-slate-400">
                         Overrides: {Object.keys(profile.model_overrides).join(', ')}
@@ -1974,7 +1985,7 @@ export function ProviderProfilesManager({
                   Default: {defaultFormValues.runtimeMaterializationMode}
                 </p>
               </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300 xl:col-span-2">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
                 <span>Default model</span>
                 <input
                   className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
@@ -1994,6 +2005,20 @@ export function ProviderProfilesManager({
                     ? ` (${defaultTaskModelByRuntime[form.runtimeId]})`
                     : ''}.
                   Set a value to override.
+                </p>
+              </label>
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>Default effort</span>
+                <input
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={form.defaultEffort}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, defaultEffort: event.target.value }))
+                  }
+                  placeholder="Leave blank to inherit runtime default"
+                />
+                <p className="text-xs text-slate-400 dark:text-slate-500">
+                  Optional runtime effort such as low, medium, high, or xhigh.
                 </p>
               </label>
               <div className="flex gap-4 items-start xl:col-span-1">

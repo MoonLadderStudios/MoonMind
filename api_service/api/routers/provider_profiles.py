@@ -74,6 +74,7 @@ class ProviderProfileCreate(BaseModel):
     provider_id: str = Field(default="unknown", max_length=64)
     provider_label: Optional[str] = None
     default_model: Optional[str] = None
+    default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
     
     credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
@@ -151,6 +152,7 @@ class ProviderProfileUpdate(BaseModel):
     provider_id: Optional[str] = Field(default=None, max_length=64)
     provider_label: Optional[str] = None
     default_model: Optional[str] = None
+    default_effort: Optional[str] = Field(default=None, max_length=64)
     model_overrides: Optional[dict[str, str]] = None
     credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
     runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
@@ -216,6 +218,7 @@ class ProviderProfileResponse(BaseModel):
     provider_id: str
     provider_label: Optional[str]
     default_model: Optional[str] = None
+    default_effort: Optional[str] = None
     model_overrides: dict[str, str] = Field(default_factory=dict)
     credential_source: str
     runtime_materialization_mode: str
@@ -386,6 +389,7 @@ async def create_profile(
         provider_id=body.provider_id,
         provider_label=body.provider_label,
         default_model=body.default_model,
+        default_effort=body.default_effort,
         model_overrides=body.model_overrides,
         credential_source=ProviderCredentialSource(body.credential_source),
         runtime_materialization_mode=RuntimeMaterializationMode(body.runtime_materialization_mode),
@@ -1619,6 +1623,7 @@ def _row_to_dict(
         "provider_id": row.provider_id,
         "provider_label": row.provider_label,
         "default_model": row.default_model,
+        "default_effort": row.default_effort,
         "model_overrides": row.model_overrides or {},
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,

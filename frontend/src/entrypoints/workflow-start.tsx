@@ -453,6 +453,7 @@ interface ProviderProfile {
   provider_id?: string | null;
   provider_label?: string | null;
   default_model?: string | null;
+  default_effort?: string | null;
   is_default?: boolean;
   enabled?: boolean;
   launch_ready?: boolean;
@@ -8802,6 +8803,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
+    const selectedProviderDefaultEffort =
+      selectedProviderProfile?.default_effort?.trim?.() || "";
+    const submittedEffort =
+      providerProfile && selectedProviderDefaultEffort ? "" : effort.trim();
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
@@ -8819,7 +8824,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       runtime: {
         mode: normalizedRuntime,
         ...(model.trim() ? { model: model.trim() } : {}),
-        ...(effort.trim() ? { effort: effort.trim() } : {}),
+        ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
         ...(selectedProviderId
           ? { profileSelector: { providerId: selectedProviderId } }
@@ -10544,7 +10549,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                 </a>
                                 <button
                                   type="button"
-                                  className="button secondary"
+                                  className="queue-step-icon-button destructive"
+                                  aria-label={`Remove objective attachment ${attachment.filename}`}
                                   title={`Remove objective attachment ${attachment.filename}`}
                                   onClick={() =>
                                     removePersistedObjectiveAttachment(
@@ -10552,7 +10558,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                     )
                                   }
                                 >
-                                  Remove
+                                  <CloseIcon />
+                                  <span className="sr-only">{`Remove objective attachment ${attachment.filename}`}</span>
                                 </button>
                               </li>
                             ))}
@@ -10578,7 +10585,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                 </a>
                                 <button
                                   type="button"
-                                  className="button secondary"
+                                  className="queue-step-icon-button destructive"
+                                  aria-label={`Remove Step ${index + 1} attachment ${attachment.filename}`}
                                   title={`Remove Step ${index + 1} attachment ${attachment.filename}`}
                                   onClick={() =>
                                     removePersistedStepAttachment(
@@ -10587,7 +10595,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                     )
                                   }
                                 >
-                                  Remove
+                                  <CloseIcon />
+                                  <span className="sr-only">{`Remove Step ${index + 1} attachment ${attachment.filename}`}</span>
                                 </button>
                               </li>
                             ))}
@@ -10622,14 +10631,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                                 ) : null}
                                 <button
                                   type="button"
-                                  className="secondary"
+                                  className="queue-step-icon-button destructive"
                                   aria-label={`Remove Step ${index + 1} attachment ${file.name}`}
                                   title={`Remove Step ${index + 1} attachment ${file.name}`}
                                   onClick={() =>
                                     removeStepAttachment(step.localId, file)
                                   }
                                 >
-                                  Remove
+                                  <CloseIcon />
+                                  <span className="sr-only">{`Remove Step ${index + 1} attachment ${file.name}`}</span>
                                 </button>
                               </li>
                             ))}
@@ -11025,16 +11035,14 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         </section>
 
         {pageMode.mode === "create" ? (
-        <details
-          className="card"
+        <section
+          className="stack"
           id="schedule-panel"
           data-canonical-create-section="Schedule"
           aria-label="Schedule"
         >
-          <summary>
-            <strong>Schedule (optional)</strong>
-          </summary>
-          <div className="stack" style={{ marginTop: "0.75rem" }}>
+          <strong>Schedule</strong>
+          <div className="stack">
             <label>
               Schedule Mode
               <select
@@ -11128,7 +11136,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               </label>
             </div>
           </div>
-        </details>
+        </section>
         ) : null}
 
         <section
@@ -11177,8 +11185,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               </p>
             </div>
           ) : null}
-          <label>
-            Existing run
+          <label htmlFor="queue-dependency-picker">
+            Prerequisite
             <select
               id="queue-dependency-picker"
               value={selectedDependencyWorkflowId}
@@ -11214,11 +11222,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                     </span>
                     <button
                       type="button"
-                      className="secondary small"
-                      title={`Remove dependency ${workflowId}`}
+                      className="queue-step-icon-button destructive"
+                      aria-label={`Remove prerequisite ${workflowId}`}
+                      title={`Remove prerequisite ${workflowId}`}
                       onClick={() => removeDependency(workflowId)}
                     >
-                      Remove
+                      <CloseIcon />
+                      <span className="sr-only">{`Remove prerequisite ${workflowId}`}</span>
                     </button>
                   </li>
                 );
