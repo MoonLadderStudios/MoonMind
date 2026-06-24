@@ -1109,6 +1109,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "artifacts",
         "execution_record_terminal_state",
     ),
+    "resilience.compile_policy": ("artifacts", "resilience_compile_policy"),
     "execution.notify_completion": ("agent_runtime", "execution_notify_completion"),
     "artifact.list_for_execution": ("artifacts", "artifact_list_for_execution"),
     "artifact.compute_preview": ("artifacts", "artifact_compute_preview"),

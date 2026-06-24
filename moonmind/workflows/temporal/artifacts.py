@@ -2647,6 +2647,130 @@ class TemporalArtifactActivities:
             ),
         }
 
+    async def resilience_compile_policy(
+        self,
+        request: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Compile a versioned ResiliencePolicy envelope for a workflow run (MM-880).
+
+        Captures the resilience values that govern the run once, at run start,
+        into a single deterministic contract: attempts/timeouts/no-progress come
+        from the worker's :class:`SelfHealConfig`, outbound scanning and
+        observability from settings, provider cooldown from the supplied profile
+        snapshot, and cost attribution from the request. Unsupported or missing
+        values fail fast (non-retryable) so the policy is never silently degraded.
+        """
+
+        from datetime import UTC, datetime
+
+        from temporalio.exceptions import ApplicationError
+
+        from moonmind.config.settings import settings as app_settings
+        from moonmind.schemas.agent_runtime_models import ManagedAgentProviderProfile
+        from moonmind.schemas.resilience_policy_models import (
+            ResiliencePolicyError,
+            compile_resilience_policy,
+        )
+        from moonmind.schemas.temporal_activity_models import (
+            ResiliencePolicyCompileInput,
+        )
+        from moonmind.workflows.temporal.runtime.self_heal import SelfHealConfig
+
+        try:
+            model = ResiliencePolicyCompileInput.model_validate(request or {})
+        except Exception as exc:  # pydantic validation -> fail fast
+            raise ApplicationError(
+                f"resilience.compile_policy received invalid input: {exc}",
+                type="INVALID_INPUT",
+                non_retryable=True,
+            ) from exc
+
+        self_heal = SelfHealConfig.from_env()
+
+        compiled_at = datetime.now(UTC)
+        if model.compiled_at:
+            try:
+                compiled_at = datetime.fromisoformat(
+                    model.compiled_at.replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise ApplicationError(
+                    f"resilience.compile_policy received invalid compiledAt: {exc}",
+                    type="INVALID_INPUT",
+                    non_retryable=True,
+                ) from exc
+
+        high_security_mode = bool(app_settings.security.high_security_mode)
+        cooldown_seconds = model.cooldown_after_429_seconds
+        if cooldown_seconds is None:
+            # Default to the provider-profile contract default rather than
+            # inferring from provider-manager state after the fact.
+            cooldown_seconds = ManagedAgentProviderProfile.model_fields[
+                "cooldown_after_429_seconds"
+            ].default
+
+        try:
+            envelope = compile_resilience_policy(
+                compiled_at=compiled_at,
+                policy_version=model.policy_version,
+                workflow_id=model.workflow_id,
+                run_id=model.run_id,
+                attempts={
+                    "stepMaxAttempts": self_heal.step_max_attempts,
+                    "stepNoProgressLimit": self_heal.step_no_progress_limit,
+                    "jobSelfHealMaxResets": self_heal.job_self_heal_max_resets,
+                },
+                timeouts={
+                    "stepTimeoutSeconds": self_heal.step_timeout_seconds,
+                    "stepIdleTimeoutSeconds": self_heal.step_idle_timeout_seconds,
+                },
+                provider_cooldown={
+                    "cooldownAfter429Seconds": cooldown_seconds,
+                    "providerProfileId": model.provider_profile_id,
+                    "rateLimitPolicy": model.rate_limit_policy,
+                    "rateLimitPolicyRef": model.rate_limit_policy_ref,
+                },
+                checkpoints={
+                    "checkpointRequired": True,
+                    "requiredBoundaries": [
+                        "after_prepare",
+                        "before_execution",
+                        "after_execution",
+                    ],
+                },
+                idempotency={
+                    "sideEffectIdempotencyRequired": True,
+                    "keyStrategy": "step_execution_operation",
+                },
+                outbound_scanning={
+                    "highSecurityMode": high_security_mode,
+                    "blockOnFinding": high_security_mode,
+                },
+                observability={
+                    "liveLogsTimelineEnabled": bool(
+                        app_settings.feature_flags.live_logs_session_timeline_enabled
+                    ),
+                    "structuredHistoryEnabled": bool(
+                        app_settings.feature_flags.live_logs_structured_history_enabled
+                    ),
+                },
+                cost_attribution={
+                    "runtimeId": model.runtime_id,
+                    "model": model.model,
+                    "effort": model.effort,
+                    "costCenter": model.cost_center,
+                    "budgetRef": model.budget_ref,
+                },
+            )
+        except ResiliencePolicyError as exc:
+            raise ApplicationError(
+                f"resilience.compile_policy could not compile policy: {exc}",
+                type="INVALID_INPUT",
+                non_retryable=True,
+            ) from exc
+
+        return envelope.model_dump(by_alias=True, mode="json")
+
     async def _write_run_digest_best_effort(self, record: Any) -> None:
         """Index a Plane B run digest without making terminal state recording fail."""
 

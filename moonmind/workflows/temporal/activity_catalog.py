@@ -389,6 +389,19 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=30),
         ),
         TemporalActivityDefinition(
+            activity_type="resilience.compile_policy",
+            family="execution",
+            capability_class="artifacts",
+            task_queue=cfg.activity_artifacts_task_queue,
+            fleet=ARTIFACTS_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(
+                max_attempts=3,
+                max_interval_seconds=30,
+                non_retryable=NON_RETRYABLE_ERRORS,
+            ),
+        ),
+        TemporalActivityDefinition(
             activity_type="execution.notify_completion",
             family="execution",
             capability_class="agent_runtime",

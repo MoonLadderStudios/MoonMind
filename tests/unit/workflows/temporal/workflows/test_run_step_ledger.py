@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from moonmind.schemas.resilience_policy_models import compile_resilience_policy
 from moonmind.schemas.temporal_models import (
     STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
     STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
@@ -149,6 +150,130 @@ def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
     )
 
     assert source.index(guard) < source.index(start_manifest_call)
+
+
+@pytest.mark.asyncio
+async def test_run_compiles_and_records_resilience_policy_before_step_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memo_updates = _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    workflow._target_runtime = "codex_cli"
+    workflow._profile_snapshots = {
+        "prof-1": {
+            "profile_id": "prof-1",
+            "runtime_id": "codex_cli",
+            "status": "ready",
+            "cooldownAfter429Seconds": 321,
+            "rateLimitPolicy": {"strategy": "slot_cooldown"},
+        }
+    }
+    activity_calls: list[dict[str, Any]] = []
+    artifact_writes: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(activity_type: str, payload: Any, **_kwargs: Any):
+        assert activity_type == "resilience.compile_policy"
+        activity_calls.append(dict(payload))
+        return compile_resilience_policy(
+            compiled_at=datetime.fromisoformat(payload["compiledAt"]),
+            workflow_id=payload["workflowId"],
+            run_id=payload["runId"],
+            policy_version=payload["policyVersion"],
+            attempts={
+                "stepMaxAttempts": 3,
+                "stepNoProgressLimit": 2,
+                "jobSelfHealMaxResets": 1,
+            },
+            timeouts={"stepTimeoutSeconds": 900, "stepIdleTimeoutSeconds": 300},
+            provider_cooldown={
+                "cooldownAfter429Seconds": payload["cooldownAfter429Seconds"],
+                "providerProfileId": payload["providerProfileId"],
+                "rateLimitPolicy": payload["rateLimitPolicy"],
+            },
+            checkpoints={
+                "checkpointRequired": True,
+                "requiredBoundaries": [
+                    "after_prepare",
+                    "before_execution",
+                    "after_execution",
+                ],
+            },
+            idempotency={
+                "sideEffectIdempotencyRequired": True,
+                "keyStrategy": "step_execution_operation",
+            },
+            outbound_scanning={"highSecurityMode": False, "blockOnFinding": False},
+            observability={
+                "liveLogsTimelineEnabled": False,
+                "structuredHistoryEnabled": True,
+            },
+            cost_attribution={
+                "runtimeId": payload["runtimeId"],
+                "model": payload["model"],
+                "effort": payload["effort"],
+            },
+        ).model_dump(by_alias=True, mode="json")
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        artifact_writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return "artifact://resilience/policy"
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+
+    await workflow._compile_and_record_resilience_policy(
+        parameters={
+            "executionProfileRef": "prof-1",
+            "model": "gpt-5",
+            "effort": "high",
+        }
+    )
+
+    assert activity_calls == [
+        {
+            "workflowId": "wf-run-1",
+            "runId": "run-1",
+            "policyVersion": 1,
+            "compiledAt": "2026-04-07T12:00:00+00:00",
+            "runtimeId": "codex_cli",
+            "providerProfileId": "prof-1",
+            "cooldownAfter429Seconds": 321,
+            "rateLimitPolicy": {"strategy": "slot_cooldown"},
+            "model": "gpt-5",
+            "effort": "high",
+        }
+    ]
+    assert artifact_writes[0]["name"] == "reports/resilience_policy.json"
+    assert artifact_writes[0]["metadata_json"]["artifact_kind"] == (
+        "resilience_policy_envelope"
+    )
+    assert artifact_writes[0]["payload"]["providerCooldown"][
+        "cooldownAfter429Seconds"
+    ] == 321
+    assert artifact_writes[0]["payload"]["providerCooldown"]["rateLimitPolicy"] == {
+        "strategy": "slot_cooldown"
+    }
+    assert workflow._resilience_policy_ref == {
+        "policyId": artifact_writes[0]["payload"]["policyId"],
+        "policyVersion": 1,
+        "digest": artifact_writes[0]["payload"]["digest"],
+        "contentType": run_module.RESILIENCE_POLICY_CONTENT_TYPE,
+        "envelopeRef": "artifact://resilience/policy",
+    }
+    assert memo_updates[-1]["resilience_policy_ref"] == workflow._resilience_policy_ref
 
 
 @pytest.mark.asyncio
@@ -1023,6 +1148,71 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         "executionOrdinal": 1,
     }
     assert "lineage" not in writes[1]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_step_execution_manifest_includes_compact_resilience_policy_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    workflow._resilience_policy_ref = {
+        "policyId": "resilience-policy-abc123",
+        "policyVersion": 1,
+        "digest": "abc123",
+        "contentType": run_module.RESILIENCE_POLICY_CONTENT_TYPE,
+        "envelopeRef": "artifact://resilience/policy",
+    }
+    writes: list[dict[str, Any]] = []
+
+    async def fake_write_json_artifact(
+        *,
+        name: str,
+        payload: dict[str, Any],
+        content_type: str = "application/json",
+        metadata_json: dict[str, Any] | None = None,
+    ) -> str:
+        writes.append(
+            {
+                "name": name,
+                "payload": payload,
+                "content_type": content_type,
+                "metadata_json": metadata_json,
+            }
+        )
+        return "artifact://step/manifest"
+
+    monkeypatch.setattr(workflow, "_write_json_artifact", fake_write_json_artifact)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "delegate-agent",
+                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "inputs": {"title": "Delegate agent"},
+            }
+        ],
+        dependency_map={"delegate-agent": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "delegate-agent",
+        updated_at=now,
+        summary="Launching child runtime",
+    )
+
+    await workflow._record_step_execution_manifest(
+        "delegate-agent",
+        phase="start",
+        updated_at=now,
+        reason="initial_execution",
+    )
+
+    assert writes[0]["payload"]["execution"]["resiliencePolicyRef"] == (
+        workflow._resilience_policy_ref
+    )
+    assert "attempts" not in writes[0]["payload"]["execution"]["resiliencePolicyRef"]
+    assert "timeouts" not in writes[0]["payload"]["execution"]["resiliencePolicyRef"]
 
 
 @pytest.mark.asyncio
