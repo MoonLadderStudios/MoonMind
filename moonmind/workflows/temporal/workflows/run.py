@@ -490,6 +490,11 @@ RUN_STEP_RESILIENCE_POLICY_PATCH = "run-step-resilience-policy-v1"
 # correlated under one trace id. Gated so in-flight histories that predate the
 # trace-ref stamp / incident-manifest writes keep replaying deterministically.
 RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
+# Replay-stable patch id for the status-only memo update emitted from
+# _update_search_attributes. Histories that already recorded the prior ungated
+# memo command require a reset/versioning cutover; see
+# docs/tmp/RunStatusMemoUpsertCutover.md.
+RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH = "run-json-artifact-write-complete-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
@@ -13305,13 +13310,14 @@ class MoonMindRunWorkflow:
             "waiting_reason": self._waiting_reason,
             "attention_required": self._attention_required,
         }
-        try:
-            workflow.upsert_memo(memo)
-        except Exception as exc:
-            self._get_logger().warning(
-                "Failed to upsert memo",
-                extra={"error": str(exc)},
-            )
+        if workflow.patched(RUN_STATUS_MEMO_UPSERT_PATCH):
+            try:
+                workflow.upsert_memo(memo)
+            except Exception as exc:
+                self._get_logger().warning(
+                    "Failed to upsert memo",
+                    extra={"error": str(exc)},
+                )
 
         pairs = [
             SearchAttributePair(
