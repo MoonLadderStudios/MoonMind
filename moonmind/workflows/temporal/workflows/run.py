@@ -7424,6 +7424,9 @@ class MoonMindRunWorkflow:
             provider_failure.get("retry_recommendation"),
         )
         reason = _first_text(
+            # MM-882: canonical sanitized summary; ``reason`` is read only as an
+            # in-flight fallback for run histories that predate the envelope.
+            provider_failure.get("sanitizedSummary"),
             provider_failure.get("reason"),
             outputs.get("summary"),
             self._get_from_result(result, "summary"),

@@ -58,8 +58,12 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.provider_failures import (
+        build_provider_failure_event,
         classify_provider_failure,
         provider_error_requires_cooldown,
+        provider_failure_event_from_metadata,
+        provider_failure_event_requires_cooldown,
+        resolve_provider_cooldown_seconds,
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
@@ -153,6 +157,13 @@ RUNTIME_SELECTION_PROFILE_CLEAR_PATCH_ID = (
     "agent-run-runtime-selection-profile-clear-v1"
 )
 AGENT_RUN_RESILIENCY_POLICY_PATCH_ID = "agent-run-resiliency-policy-v1"
+# Prefer the canonical structured provider failure event (retry_after_seconds /
+# reset_at / quota_scope / provider_error_class) when deciding profile cooldowns,
+# falling back to text-marker classification only when the structured fields are
+# absent. Gated so in-flight runs keep their recorded marker-based decision.
+AGENT_RUN_STRUCTURED_PROVIDER_FAILURE_PATCH_ID = (
+    "agent-run-structured-provider-failure-cooldown-v1"
+)
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
@@ -1199,12 +1210,11 @@ class MoonMindAgentRun:
                 by_alias=True,
             )
         classification = classify_provider_failure(summary)
-        if classification is not None:
-            metadata["providerFailure"] = {
-                "providerErrorCode": classification.provider_error_code,
-                "retryRecommendation": classification.retry_recommendation,
-                "reason": classification.reason,
-            }
+        provider_failure_event = build_provider_failure_event(
+            classification=classification,
+        )
+        if provider_failure_event is not None:
+            metadata["providerFailure"] = provider_failure_event.to_metadata()
         return AgentRunResult(
             summary=summary,
             failureClass=(
@@ -3594,18 +3604,52 @@ class MoonMindAgentRun:
                                     }
                                 )
 
-                if (
-                    request.agent_kind == "managed"
-                    and manager_handle
-                    and provider_error_requires_cooldown(
+                # Prefer the canonical structured provider failure event for the
+                # cooldown decision when present; fall back to text-marker codes.
+                prefer_structured_failure = workflow.patched(
+                    AGENT_RUN_STRUCTURED_PROVIDER_FAILURE_PATCH_ID
+                )
+                provider_failure_event = (
+                    provider_failure_event_from_metadata(
+                        self.final_result.metadata.get("providerFailure")
+                    )
+                    if self.final_result is not None
+                    else None
+                )
+                if prefer_structured_failure and provider_failure_event is not None:
+                    requires_provider_cooldown = (
+                        provider_failure_event_requires_cooldown(
+                            provider_failure_event
+                        )
+                    )
+                elif self.final_result is not None:
+                    requires_provider_cooldown = provider_error_requires_cooldown(
                         provider_error_code=self.final_result.provider_error_code,
                         retry_recommendation=self.final_result.retry_recommendation,
                     )
+                else:
+                    requires_provider_cooldown = False
+
+                if (
+                    request.agent_kind == "managed"
+                    and manager_handle
+                    and requires_provider_cooldown
                 ):
                     if workflow.patched("gemini-429-cooldown-retry-signal"):
                         runtime_id = self._managed_runtime_id(request.agent_id)
                         profile_id = str(request.execution_profile_ref or self._assigned_profile_id or "").strip() or None
                         cooldown_seconds = self._cooldown_seconds_for_profile(profile_id)
+                        if (
+                            prefer_structured_failure
+                            and provider_failure_event is not None
+                        ):
+                            # Prefer retry_after_seconds / reset_at from the
+                            # structured event over the profile default.
+                            cooldown_seconds = resolve_provider_cooldown_seconds(
+                                provider_failure_event,
+                                now=workflow.now(),
+                                default_seconds=cooldown_seconds,
+                            )
                         waiting_reason = self._build_managed_rate_limit_waiting_reason(
                             runtime_id=runtime_id,
                             profile_id=profile_id,

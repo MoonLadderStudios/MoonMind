@@ -2022,7 +2022,14 @@ async def test_start_classifies_codex_provider_capacity_failure_and_publishes_ar
         "artifact:session-summary",
         "artifact:session-checkpoint",
     ]
-    assert result.metadata["providerFailure"]["providerErrorCode"] == "provider_capacity"
+    provider_failure = result.metadata["providerFailure"]
+    assert provider_failure["providerErrorCode"] == "provider_capacity"
+    # MM-882: the adapter emits the canonical structured failure envelope with a
+    # distinct sanitized summary and no raw provider text ("high demand").
+    assert provider_failure["providerErrorClass"] == "capacity"
+    assert provider_failure["retryRecommendation"] == "retry_after_cooldown"
+    assert "high demand" not in provider_failure["sanitizedSummary"].lower()
+    assert "reason" not in provider_failure
     assert result.metadata["profileId"] == "codex-default"
 
     persisted_record = run_store.load(binding.agent_run_id)
@@ -2180,7 +2187,12 @@ async def test_start_classifies_codex_auth_failure_as_user_error(
     assert result.failure_class == "user_error"
     assert result.provider_error_code == "401"
     assert result.retry_recommendation == "reauthenticate"
-    assert result.metadata["providerFailure"]["providerErrorCode"] == "401"
+    provider_failure = result.metadata["providerFailure"]
+    assert provider_failure["providerErrorCode"] == "401"
+    # MM-882: canonical auth failure class with a distinct sanitized summary.
+    assert provider_failure["providerErrorClass"] == "auth"
+    assert "reason" not in provider_failure
+    assert "authentication" in provider_failure["sanitizedSummary"].lower()
     assert result.metadata["profileId"] == "codex-default"
 
     persisted_record = run_store.load(binding.agent_run_id)
