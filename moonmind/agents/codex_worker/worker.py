@@ -152,6 +152,7 @@ _MOONMIND_SIGNAL_TAGS = frozenset(
 )
 _FIX_PROPOSAL_SKILL_ID = "fix-proposal"
 _CONTINUATION_PROPOSAL_SKILL_ID = "continuation-proposal"
+_CODE_IMPROVEMENT_PROPOSAL_SKILL_ID = "code-improvement-proposal"
 _PR_RESOLVER_SKILL_ID = "pr-resolver"
 _RUN_QUALITY_LOOP_PATTERN = re.compile(
     r"\b(?:loop(?:ing|ed)?|stuck|no progress|repeated output|duplicate output)\b",
@@ -8545,10 +8546,19 @@ class CodexWorker:
 
     @staticmethod
     def _proposal_hook_skill_ids(*, include_continuation: bool) -> tuple[str, ...]:
-        """Return ordered post-run proposal hook skills."""
+        """Return ordered post-run proposal hook skills.
+
+        ``code-improvement-proposal`` is, like ``continuation-proposal``, a
+        success-only hook: it proposes concrete improvements to the code that
+        was produced, so it only runs when the task completed successfully.
+        """
 
         if include_continuation:
-            return (_FIX_PROPOSAL_SKILL_ID, _CONTINUATION_PROPOSAL_SKILL_ID)
+            return (
+                _FIX_PROPOSAL_SKILL_ID,
+                _CONTINUATION_PROPOSAL_SKILL_ID,
+                _CODE_IMPROVEMENT_PROPOSAL_SKILL_ID,
+            )
         return (_FIX_PROPOSAL_SKILL_ID,)
 
     def _build_proposal_task_request_template(
@@ -8617,6 +8627,15 @@ class CodexWorker:
                 "Analyze MoonMind execution quality issues and propose one high-value fix. "
                 "Prioritize access/auth failures, unclear instructions, retries, loops, "
                 "duplicate/repetitive output, missing references, conflicting instructions, and artifact gaps."
+            )
+        elif skill_id == _CODE_IMPROVEMENT_PROPOSAL_SKILL_ID:
+            focus_text = (
+                "Propose one high-value, well-scoped improvement to the code worked on in this run. "
+                "Look at the changed files and their immediate surroundings, and prioritize refactors "
+                "that reduce duplication or complexity, dead/unreachable code removal, missing or weak "
+                "test coverage, readability and naming, error handling and validation gaps, type safety, "
+                "and tightly-scoped, evidence-backed performance gains. "
+                "Do not propose broad rewrites or work unrelated to the code touched in this run."
             )
         else:
             focus_text = (
