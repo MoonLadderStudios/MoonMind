@@ -1,18 +1,20 @@
 from __future__ import annotations  # Ensure this is at the very top
 
 from collections.abc import AsyncGenerator  # Use collections.abc for Python 3.9+
+from contextlib import asynccontextmanager
 
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from moonmind.config.settings import settings
 
 DATABASE_URL = settings.database.POSTGRES_URL
 
-engine = create_async_engine(DATABASE_URL)
-async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+def create_application_engine(database_url: str) -> AsyncEngine:
+    return create_async_engine(database_url, pool_pre_ping=True)
 
-from contextlib import asynccontextmanager
+engine = create_application_engine(DATABASE_URL)
+async_session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_maker() as session:

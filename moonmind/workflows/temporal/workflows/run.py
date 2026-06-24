@@ -176,6 +176,7 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
 )
 DEPENDENCY_RECONCILE_INTERVAL = timedelta(seconds=30)
 _TERMINAL_LAST_ERROR_UNSET = object()
+JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS = 3
 
 DEFAULT_ACTIVITY_CATALOG = build_default_activity_catalog()
 
@@ -383,6 +384,9 @@ RUN_BLOCKED_OUTCOME_SHORT_CIRCUIT_PATCH = "run-blocked-outcome-short-circuit-v1"
 RUN_JIRA_BLOCKER_RECHECK_PATCH = "run-jira-blocker-recheck-v1"
 RUN_FAILED_RESULT_BLOCKER_PATCH = "run-failed-result-blocker-v1"
 RUN_JIRA_BLOCKER_WAIT_COALESCING_PATCH = "run-jira-blocker-wait-coalescing-v1"
+RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH = (
+    "run-jira-blocker-recheck-retry-floor-v1"
+)
 # Replay-stable patch id for the v2 workflow-scoped Codex termination path. The
 # identifier says "update" for in-flight history continuity, but current
 # Temporal external workflow handles expose the session control surface by signal.
@@ -1089,6 +1093,40 @@ class MoonMindRunWorkflow:
                 seconds=route.timeouts.heartbeat_timeout_seconds
             )
         return kwargs
+
+    def _jira_blocker_recheck_retry_attempts_override(
+        self,
+        *,
+        route: TemporalActivityRoute,
+        execute_payload: Mapping[str, Any],
+        step_retry_overrides_enabled: bool,
+    ) -> int | None:
+        if step_retry_overrides_enabled:
+            invocation_payload = execute_payload.get("invocation_payload")
+            if isinstance(invocation_payload, Mapping):
+                invocation_inputs = invocation_payload.get("inputs")
+                invocation_options = invocation_payload.get("options")
+                explicit_override = self._step_retry_attempts_override(
+                    node_inputs=(
+                        invocation_inputs
+                        if isinstance(invocation_inputs, Mapping)
+                        else None
+                    ),
+                    node_options=(
+                        invocation_options
+                        if isinstance(invocation_options, Mapping)
+                        else None
+                    ),
+                )
+                if explicit_override is not None:
+                    return explicit_override
+
+        if (
+            workflow.patched(RUN_JIRA_BLOCKER_RECHECK_RETRY_FLOOR_PATCH)
+            and route.retries.max_attempts < JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS
+        ):
+            return JIRA_BLOCKER_RECHECK_MIN_ACTIVITY_ATTEMPTS
+        return None
 
     def _decode_json_payload(
         self,
@@ -8225,24 +8263,13 @@ class MoonMindRunWorkflow:
                     raise ValueError(
                         "skill Jira blocker recheck requires activity context"
                     )
-                max_attempts_override = None
-                if step_retry_overrides_enabled:
-                    invocation_payload = execute_payload.get("invocation_payload")
-                    if isinstance(invocation_payload, Mapping):
-                        invocation_inputs = invocation_payload.get("inputs")
-                        invocation_options = invocation_payload.get("options")
-                        max_attempts_override = self._step_retry_attempts_override(
-                            node_inputs=(
-                                invocation_inputs
-                                if isinstance(invocation_inputs, Mapping)
-                                else None
-                            ),
-                            node_options=(
-                                invocation_options
-                                if isinstance(invocation_options, Mapping)
-                                else None
-                            ),
-                        )
+                max_attempts_override = (
+                    self._jira_blocker_recheck_retry_attempts_override(
+                        route=route,
+                        execute_payload=execute_payload,
+                        step_retry_overrides_enabled=step_retry_overrides_enabled,
+                    )
+                )
                 if coalesce_wait:
                     recheck_payload = self._compact_jira_blocker_recheck_payload(
                         execute_payload
