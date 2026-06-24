@@ -2030,6 +2030,7 @@ class ManagedAgentProviderProfile(Base):
     provider_id: Mapped[str] = mapped_column(String(64), nullable=False, default="unknown", server_default=text("'unknown'"))
     provider_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     default_model: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    default_effort: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     model_overrides: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     
     credential_source: Mapped[ProviderCredentialSource] = mapped_column(

@@ -453,6 +453,7 @@ interface ProviderProfile {
   provider_id?: string | null;
   provider_label?: string | null;
   default_model?: string | null;
+  default_effort?: string | null;
   is_default?: boolean;
   enabled?: boolean;
   launch_ready?: boolean;
@@ -8802,6 +8803,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           (profile) => profile.profile_id === providerProfile,
         );
     const selectedProviderId = selectedProviderProfile?.provider_id?.trim?.() || "";
+    const selectedProviderDefaultEffort =
+      selectedProviderProfile?.default_effort?.trim?.() || "";
+    const submittedEffort =
+      providerProfile && selectedProviderDefaultEffort ? "" : effort.trim();
 
     const taskPayload: Record<string, unknown> = {
       instructions: objectiveInstructionsForSubmit,
@@ -8819,7 +8824,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       runtime: {
         mode: normalizedRuntime,
         ...(model.trim() ? { model: model.trim() } : {}),
-        ...(effort.trim() ? { effort: effort.trim() } : {}),
+        ...(submittedEffort ? { effort: submittedEffort } : {}),
         ...(providerProfile ? { profileId: providerProfile } : {}),
         ...(selectedProviderId
           ? { profileSelector: { providerId: selectedProviderId } }
