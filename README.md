@@ -9,6 +9,8 @@
 
 MoonMind is an open-source framework that makes Claude Code and Codex CLI **safer**, more **resilient**, and more **observable** by wrapping agent CLI runs in Docker containers, using Temporal-based durable workflows, and providing a powerful UI dashboard.
 
+For now, MoonMind is focused on software engineering use cases.
+
 ## Quick Start
 
 1. [Install Docker Desktop](https://docs.docker.com/get-started/get-docker/)
@@ -84,13 +86,13 @@ Where this is headed: end-to-end OpenTelemetry tracing from API request through 
 
 Other platforms make you rebuild agents in their SDK. MoonMind operates at a higher level of abstraction, running state-of-the-art CLI agents inside a durable operational envelope:
 
-- **Managed sessions and managed runs.** MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys. Codex CLI is the live first-class workflow-scoped managed-session runtime; Claude Code is a first-class managed-runtime target with Claude-specific session design models on the path to the same live session controller. Gemini CLI can adopt the same session pattern where its adapter supports it.
+- **Managed sessions and managed runs.** MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys.
 - **Step-based context management.** Agents perform better on small, focused tasks. MoonMind injects the right context into each step and clears it between steps to prevent context-window pollution.
 - **Personal-use friendly defaults.** A fresh local install boots with `docker compose up -d`; enter a few secrets in Mission Control and go — no enterprise secret infrastructure required up front.
 
 ### 🔓 Free Yourself from Vendor Lock-In
 
-MoonMind supports multiple agent runtimes with multiple model providers behind them, and is adding more.
+MoonMind supports multiple agent runtimes with the ability to configure multiple model providers for each runtime.
 
 * **Open-source.** MoonMind is 100% free and open-source software.
 * **Workflow portability.** Swap between proprietary cloud models and local open-source models with a single configuration change. Use expensive models only for the steps that need them.
