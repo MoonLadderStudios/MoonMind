@@ -1863,6 +1863,43 @@ async def test_write_step_execution_manifest_requires_real_artifact_id(
         )
 
 
+@pytest.mark.asyncio
+async def test_write_json_artifact_supports_serialized_list_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    workflow = MoonMindRunWorkflow()
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> list[dict[str, str]]:
+        assert activity_type == "artifact.create"
+        return [{"artifact_id": "art_list_payload"}, {"upload_url": "unused"}]
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> None:
+        assert activity_type == "artifact.write_complete"
+        assert run_module._get_from_result(payload, "artifact_id") == "art_list_payload"
+        return None
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_module, "execute_typed_activity", fake_execute_typed_activity)
+
+    assert (
+        await workflow._write_json_artifact(
+            name="step-execution-manifest.json",
+            payload={"schemaVersion": "v1"},
+            content_type=STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
+        )
+        == "art_list_payload"
+    )
+
+
 def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

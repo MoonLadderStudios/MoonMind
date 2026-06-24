@@ -1099,8 +1099,8 @@ class MoonMindRunWorkflow:
             create_payload,
             **self._execute_kwargs_for_route(artifact_create_route),
         )
-        if isinstance(artifact_create_result, tuple) and artifact_create_result:
-            artifact_ref = artifact_create_result[0]
+        if isinstance(artifact_create_result, (list, tuple)):
+            artifact_ref = artifact_create_result[0] if artifact_create_result else None
         else:
             artifact_ref = artifact_create_result
         artifact_id = (
