@@ -3,7 +3,7 @@ title: Jira Implement
 description: Move a Jira issue through implementation by first assessing the current
   state of the branch against the issue. If the issue is already fully implemented,
   advance it directly to Done. Otherwise, finish any partial work, create a PR, and
-  advance the issue to Code Review. When PR merge automation is enabled the issue
+  advance the issue to Review. When PR merge automation is enabled the issue
   advances to Done automatically after merge.
 scope: global
 version: 1.1.0
@@ -222,11 +222,11 @@ steps:
 
 
     - Otherwise (the initial verdict was PARTIALLY_IMPLEMENTED or NOT_IMPLEMENTED),
-    transition Jira issue {{ inputs.jira_issue_key }} to status Code Review only after
+    transition Jira issue {{ inputs.jira_issue_key }} to status Review only after
     the pull request exists. Read the previous pull request creation result or artifacts/jira-implement-pr.json
     and verify it contains a non-empty pull_request_url for {{ inputs.jira_issue_key
     }}. If no confirmed pull request URL is available, stop without changing Jira
-    and report that Code Review is blocked until PR creation succeeds. Add or preserve
+    and report that Review is blocked until PR creation succeeds. Add or preserve
     a Jira-visible reference to the pull request when supported by the trusted tools.
 
 
@@ -237,10 +237,10 @@ steps:
 
 
     Note: when this task was submitted with PR merge automation enabled and the work
-    followed the Code Review path, the parent workflow will transition Jira issue
+    followed the Review path, the parent workflow will transition Jira issue
     {{ inputs.jira_issue_key }} to Done automatically after the pull request merges.
     This in-task step only owns the explicit Done transition for the already-implemented
-    case and the Code Review transition for the freshly-implemented case.'
+    case and the Review transition for the freshly-implemented case.'
   skill:
     id: jira-issue-updater
     requiredCapabilities:

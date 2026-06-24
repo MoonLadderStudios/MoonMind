@@ -196,13 +196,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         code_review_step = next(
             step
             for step in jira_orchestrate_template.latest_version.steps
-            if step["title"] == "Move Jira issue to Code Review"
+            if step["title"] == "Move Jira issue to Review"
         )
         assert code_review_step == jira_orchestrate_template.latest_version.steps[-1]
         assert code_review_step["annotations"] == {
             "jiraOrchestrateRole": "code-review-handoff"
         }
-        assert "Code Review" in code_review_step["instructions"]
+        assert "status Review" in code_review_step["instructions"]
         assert "pull_request_url" in code_review_step["instructions"]
 
         result = await session.execute(
@@ -331,7 +331,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert implement_finalize_step["title"] == "Finalize Jira status"
         assert implement_finalize_step["skill"]["id"] == "jira-issue-updater"
         assert "Done" in implement_finalize_step["instructions"]
-        assert "Code Review" in implement_finalize_step["instructions"]
+        assert "status Review" in implement_finalize_step["instructions"]
         assert "pull_request_url" in implement_finalize_step["instructions"]
         assert (
             "FULLY_IMPLEMENTED" in implement_finalize_step["instructions"]

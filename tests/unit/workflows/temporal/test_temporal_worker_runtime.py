@@ -1936,7 +1936,7 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["steps"][23]["title"] == "Reconcile declarative docs"
     assert task["steps"][23]["skill"]["id"] == "moonspec-doc-reconcile"
     assert task["steps"][24]["title"] == "Create pull request"
-    assert task["steps"][25]["title"] == "Move Jira issue to Code Review"
+    assert task["steps"][25]["title"] == "Move Jira issue to Review"
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert len(task["appliedStepTemplates"][0]["stepIds"]) == 26
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
