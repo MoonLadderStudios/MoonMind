@@ -43,6 +43,9 @@ with workflow.unsafe.imports_passed_through():
         RESILIENCE_POLICY_CONTENT_TYPE,
         ResiliencePolicyEnvelope,
     )
+    from moonmind.schemas.incident_reconstruction_models import (
+        INCIDENT_RECONSTRUCTION_CONTENT_TYPE,
+    )
     from moonmind.workflows.temporal.jules_bundle import (
         build_bundle_spec,
         eligible_for_bundle,
@@ -133,6 +136,10 @@ from moonmind.workflows.temporal.step_executions import (
 )
 from moonmind.workflows.temporal.recovery_manifest import (
     build_failed_run_recovery_manifest,
+)
+from moonmind.workflows.temporal.incident_reconstruction import (
+    build_incident_reconstruction_manifest,
+    build_incident_trace_ref,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
@@ -472,6 +479,13 @@ RUN_RESILIENCE_POLICY_PATCH = "run-resilience-policy-v1"
 # profile, so that step's manifest references the cooldown/rate-limit values that
 # actually governed its child runtime instead of the run-level policy.
 RUN_STEP_RESILIENCE_POLICY_PATCH = "run-step-resilience-policy-v1"
+# MM-884: stamp a stable correlation (trace) ref onto step-execution manifests
+# and emit a single incident reconstruction manifest before terminal failure so
+# policy, provider/profile/credential source, failed step, progress, workspace
+# changes, side effects, checkpoint, cost, trace spans, logs, and artifacts are
+# correlated under one trace id. Gated so in-flight histories that predate the
+# trace-ref stamp / incident-manifest writes keep replaying deterministically.
+RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
 _MANAGED_AGENT_IDS = frozenset(
@@ -843,6 +857,11 @@ class MoonMindRunWorkflow:
         self._run_resilience_profile_id: Optional[str] = None
         self._step_resilience_policy_refs: dict[str, dict[str, Any]] = {}
         self._resilience_policy_refs_by_profile: dict[str, dict[str, Any]] = {}
+        # MM-884: cost-attribution settings (runtime/model/effort/costCenter/
+        # budgetRef) captured from the run-level resilience policy envelope, so
+        # the incident reconstruction manifest can name the cost dimensions that
+        # governed the run alongside observed cost where available.
+        self._cost_attribution_settings: dict[str, Any] | None = None
         self._declared_dependencies: list[str] = []
         self._dependency_wait_occurred: bool = False
         self._dependency_wait_duration_ms: int = 0
@@ -880,6 +899,21 @@ class MoonMindRunWorkflow:
         # terminal failure is reported (MM-881).
         self._recovery_manifest_ref: str | None = None
         self._recovery_manifest_summary: dict[str, Any] | None = None
+        # MM-884: the built failed-run recovery manifest model, reused by the
+        # incident reconstruction path so side-effect dispositions and the
+        # checkpoint restore candidate are not recomputed or duplicated.
+        self._recovery_manifest_model: Any = None
+        # MM-884: compact reference + summary for the incident reconstruction
+        # manifest correlating policy, provider, failed step, progress, changes,
+        # side effects, checkpoint, cost, trace spans, logs, and artifacts.
+        self._incident_reconstruction_ref: str | None = None
+        self._incident_reconstruction_summary: dict[str, Any] | None = None
+        # MM-884: sanitized provider failure envelope and observed cost captured
+        # at the failure boundary (first failure wins) so the incident manifest
+        # can correlate the provider/credential source and per-run cost where the
+        # runtime reported it.
+        self._provider_failure_envelope: dict[str, Any] | None = None
+        self._observed_cost: dict[str, Any] | None = None
         self._prepared_artifact_refs: list[str] = []
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
@@ -1180,6 +1214,20 @@ class MoonMindRunWorkflow:
             execution_payload.setdefault(
                 "resiliencePolicyRef",
                 dict(policy_ref),
+            )
+        # MM-884: stamp a stable correlation (trace) ref so this step execution
+        # can be joined to the run's incident reconstruction and to its
+        # trace/log slice through the same trace id.
+        if workflow.patched(RUN_INCIDENT_RECONSTRUCTION_PATCH):
+            trace_ref = build_incident_trace_ref(
+                workflow_id=identity.workflow_id,
+                run_id=identity.run_id,
+                logical_step_id=identity.logical_step_id,
+                execution_ordinal=identity.execution_ordinal,
+            )
+            execution_payload.setdefault(
+                "traceRef",
+                trace_ref.model_dump(by_alias=True, mode="json", exclude_none=True),
             )
         side_effects_payload: dict[str, Any] = {}
         side_effect_records: list[Mapping[str, Any]] = []
@@ -5810,6 +5858,14 @@ class MoonMindRunWorkflow:
             envelope_payload = envelope_payload[0]
         envelope = ResiliencePolicyEnvelope.model_validate(envelope_payload)
 
+        # MM-884: capture the run-level cost-attribution settings once (the
+        # run-level policy is compiled first) so the incident reconstruction
+        # manifest can name the cost dimensions that governed the run.
+        if self._cost_attribution_settings is None:
+            self._cost_attribution_settings = envelope.cost_attribution.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
+
         envelope_ref = await self._write_json_artifact(
             name=artifact_name,
             payload=envelope.model_dump(by_alias=True, mode="json"),
@@ -6594,6 +6650,11 @@ class MoonMindRunWorkflow:
                                 child_workflow_id=child_workflow_id,
                                 diagnostics_ref=diagnostics_ref,
                             )
+                            # MM-884: capture the sanitized provider failure
+                            # envelope and observed cost (first failure wins) so
+                            # the incident reconstruction manifest can correlate
+                            # the provider/credential source and per-run cost.
+                            self._capture_incident_failure_evidence(outputs)
                         self._mark_step_terminal(
                             node_id,
                             status="failed",
@@ -7509,6 +7570,102 @@ class MoonMindRunWorkflow:
         if retry_recommendation:
             summary = f"{summary} (retryRecommendation: {retry_recommendation})"
         return summary
+
+    def _capture_incident_failure_evidence(self, outputs: Any) -> None:
+        """Capture sanitized provider failure + observed cost for incident review.
+
+        First failure wins, mirroring ``_failure_diagnostic``. Only the canonical
+        structured provider failure fields (MM-882) are retained -- the legacy
+        raw ``reason`` text is deliberately dropped so no raw provider payload is
+        carried into the incident manifest. Observed token/cost is captured only
+        ``where available`` from the agent result.
+        """
+
+        if not workflow.patched(RUN_INCIDENT_RECONSTRUCTION_PATCH):
+            return
+        if not isinstance(outputs, Mapping):
+            return
+
+        if self._provider_failure_envelope is None:
+            envelope = outputs.get("providerFailure")
+            if isinstance(envelope, Mapping):
+                # Retain only sanitized / structured fields; never the raw
+                # provider ``reason`` text.
+                sanitized_keys = (
+                    "providerErrorClass",
+                    "providerErrorCode",
+                    "retryRecommendation",
+                    "retryAfterSeconds",
+                    "resetAt",
+                    "quotaScope",
+                    "credentialScope",
+                    "providerRequestId",
+                    "rawErrorRef",
+                    "sanitizedSummary",
+                )
+                sanitized = {
+                    key: envelope[key]
+                    for key in sanitized_keys
+                    if envelope.get(key) is not None
+                }
+                if sanitized:
+                    self._provider_failure_envelope = sanitized
+
+        if self._observed_cost is None:
+            observed = self._extract_observed_cost(outputs)
+            if observed:
+                self._observed_cost = observed
+
+    @staticmethod
+    def _extract_observed_cost(outputs: Mapping[str, Any]) -> dict[str, Any]:
+        """Extract observed token/cost values from agent result outputs.
+
+        Searches the result outputs and any ``turnMetadata`` for the canonical
+        token/cost key names (mirrors ``ModelCostEstimate.to_metadata``). Returns
+        an empty mapping when the runtime did not report usage -- observed cost is
+        only ever populated ``where available``.
+        """
+
+        sources: list[Mapping[str, Any]] = [outputs]
+        turn_metadata = outputs.get("turnMetadata")
+        if isinstance(turn_metadata, Mapping):
+            sources.append(turn_metadata)
+        usage = outputs.get("usage")
+        if isinstance(usage, Mapping):
+            sources.append(usage)
+
+        observed: dict[str, Any] = {}
+        token_keys = (
+            "inputTokens",
+            "input_tokens",
+            "promptTokens",
+            "prompt_tokens",
+            "outputTokens",
+            "output_tokens",
+            "completionTokens",
+            "completion_tokens",
+            "totalTokens",
+            "total_tokens",
+        )
+        cost_keys = (
+            "costEstimateUsd",
+            "cost_estimate_usd",
+            "estimatedCostUsd",
+            "estimated_cost_usd",
+            "costUsd",
+            "cost_usd",
+            "totalCostUsd",
+            "total_cost_usd",
+        )
+        pricing_keys = ("pricingSource", "pricing_source")
+        for source in sources:
+            for key in (*token_keys, *cost_keys, *pricing_keys):
+                if key in observed:
+                    continue
+                value = source.get(key)
+                if value is not None:
+                    observed[key] = value
+        return observed
 
     @staticmethod
     def _is_blocked_outcome_value(value: Any) -> bool:
@@ -12414,6 +12571,9 @@ class MoonMindRunWorkflow:
             )
             return None, None
 
+        # MM-884: keep the built model so the incident reconstruction path reuses
+        # its side-effect dispositions and checkpoint restore candidate.
+        self._recovery_manifest_model = manifest
         manifest_payload = manifest.model_dump(by_alias=True, mode="json")
         manifest_ref: str | None = None
         try:
@@ -12452,6 +12612,166 @@ class MoonMindRunWorkflow:
             summary["manifestRef"] = manifest_ref
         self._recovery_manifest_ref = manifest_ref
         self._recovery_manifest_summary = summary
+        return summary, manifest_ref
+
+    def _incident_progress_projection(self) -> dict[str, Any]:
+        """Return a bounded progress projection for the incident manifest."""
+
+        snapshot = self._progress_snapshot or {}
+        keys = (
+            "total",
+            "pending",
+            "ready",
+            "running",
+            "reviewing",
+            "succeeded",
+            "failed",
+            "skipped",
+            "canceled",
+            "currentStepTitle",
+            "updatedAt",
+        )
+        projection: dict[str, Any] = {}
+        for key in keys:
+            value = snapshot.get(key)
+            if value is None:
+                continue
+            if key == "currentStepTitle":
+                projection[key] = str(value)[:200]
+            else:
+                projection[key] = value
+        return projection
+
+    def _incident_workspace_changes(self) -> list[dict[str, Any]]:
+        """Return bounded per-step workspace-change refs for the incident manifest."""
+
+        changes: list[dict[str, Any]] = []
+        for row in self._step_ledger_rows:
+            if not isinstance(row, Mapping):
+                continue
+            disposition = self._step_terminal_dispositions.get(
+                str(row.get("logicalStepId") or "")
+            ) or row.get("terminalDisposition")
+            refs = row.get("refs")
+            git_disposition: Any = None
+            if isinstance(refs, Mapping):
+                git_disposition = refs.get("gitDisposition") or refs.get("git_disposition")
+            if not disposition and not git_disposition:
+                continue
+            entry: dict[str, Any] = {
+                "logicalStepId": str(row.get("logicalStepId") or "")[:200],
+            }
+            if disposition:
+                entry["terminalDisposition"] = str(disposition)[:120]
+            if git_disposition:
+                entry["gitDisposition"] = str(git_disposition)[:120]
+            changes.append(entry)
+        return changes
+
+    def _incident_artifact_refs(self) -> dict[str, str]:
+        """Collect durable artifact refs the incident manifest links (not copies)."""
+
+        refs: dict[str, str] = {}
+        if self._recovery_manifest_ref:
+            refs["recoveryManifest"] = self._recovery_manifest_ref
+        if isinstance(self._resilience_policy_ref, Mapping):
+            envelope_ref = self._resilience_policy_ref.get("envelopeRef")
+            if isinstance(envelope_ref, str) and envelope_ref.strip():
+                refs["resiliencePolicyEnvelope"] = envelope_ref.strip()
+        if self._logs_ref:
+            refs["logs"] = self._logs_ref
+        if self._plan_ref:
+            refs["plan"] = self._plan_ref
+        if self._input_ref:
+            refs["taskInput"] = self._input_ref
+        if isinstance(self._failure_diagnostic, Mapping):
+            diagnostics_ref = self._failure_diagnostic.get("diagnosticsRef")
+            if isinstance(diagnostics_ref, str) and diagnostics_ref.strip():
+                refs["diagnostics"] = diagnostics_ref.strip()
+        elif self._last_diagnostics_ref:
+            refs["diagnostics"] = self._last_diagnostics_ref
+        return refs
+
+    async def _emit_incident_reconstruction_manifest(
+        self,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Build and persist the incident reconstruction manifest (MM-884).
+
+        Correlates policy, provider/profile/credential source, failed step,
+        progress, workspace changes, accepted/blocked side effects, the
+        checkpoint restore candidate, cost (settings + observed where available),
+        trace spans across every boundary, logs, and artifacts under one stable
+        trace id. Returns ``(compact_summary, manifest_artifact_ref)``. The
+        manifest links durable evidence (recovery manifest, policy envelope,
+        logs) rather than duplicating it, and redacts/refs raw provider payloads.
+        """
+
+        if not workflow.patched(RUN_INCIDENT_RECONSTRUCTION_PATCH):
+            return None, None
+        try:
+            manifest = build_incident_reconstruction_manifest(
+                workflow_id=workflow.info().workflow_id,
+                run_id=workflow.info().run_id,
+                created_at=workflow.now(),
+                external_correlation_id=self._correlation_id,
+                policy_ref=self._resilience_policy_ref,
+                provider_profile_id=self._run_resilience_profile_id,
+                runtime_id=self._target_runtime,
+                provider_failure=self._provider_failure_envelope,
+                cost_attribution_settings=self._cost_attribution_settings,
+                observed_cost=self._observed_cost,
+                recovery_manifest=self._recovery_manifest_model,
+                recovery_manifest_ref=self._recovery_manifest_ref,
+                failure_diagnostic=self._failure_diagnostic,
+                progress_summary=self._incident_progress_projection(),
+                workspace_changes=self._incident_workspace_changes(),
+                logs_ref=self._logs_ref,
+                artifact_refs=self._incident_artifact_refs(),
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to build incident reconstruction manifest: %s", exc
+            )
+            return None, None
+
+        manifest_payload = manifest.model_dump(
+            by_alias=True, mode="json", exclude_none=True
+        )
+        manifest_ref: str | None = None
+        try:
+            manifest_ref = await self._write_json_artifact(
+                name="reports/incident_reconstruction.json",
+                payload=manifest_payload,
+                content_type=INCIDENT_RECONSTRUCTION_CONTENT_TYPE,
+                metadata_json={
+                    "artifact_kind": "incident_reconstruction_manifest",
+                    "traceId": manifest.trace.trace_id,
+                    "failedLogicalStepId": manifest.failed_logical_step_id or "",
+                },
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to persist incident reconstruction manifest artifact: %s",
+                exc,
+            )
+
+        present_kinds = [item.kind for item in manifest.evidence if item.present]
+        summary: dict[str, Any] = {
+            "schemaVersion": manifest.schema_version,
+            "contentType": manifest.content_type,
+            "traceId": manifest.trace.trace_id,
+            "failedLogicalStepId": manifest.failed_logical_step_id,
+            "evidencePresent": present_kinds,
+            "traceBoundaries": [span.boundary for span in manifest.trace_spans],
+        }
+        if manifest.cost is not None:
+            summary["costObserved"] = manifest.cost.observed_available
+        if manifest.provider is not None and manifest.provider.provider_error_class:
+            summary["providerErrorClass"] = manifest.provider.provider_error_class
+        if manifest_ref:
+            summary["manifestRef"] = manifest_ref
+        self._incident_reconstruction_ref = manifest_ref
+        self._incident_reconstruction_summary = summary
         return summary, manifest_ref
 
     async def _run_finalizing_stage(
@@ -12641,6 +12961,17 @@ class MoonMindRunWorkflow:
                 manifest_summary, _ = await self._emit_failed_run_recovery_manifest()
                 if manifest_summary:
                     finish_summary["recoveryManifest"] = manifest_summary
+                # MM-884: emit the single incident reconstruction manifest
+                # (durable artifact + compact reference) correlating policy,
+                # provider, failed step, progress, changes, side effects,
+                # checkpoint, cost, trace spans, logs, and artifacts before
+                # terminal failure is reported. Built after the recovery manifest
+                # so it can reuse the recovery side-effect/checkpoint evidence.
+                incident_summary, _ = (
+                    await self._emit_incident_reconstruction_manifest()
+                )
+                if incident_summary:
+                    finish_summary["incidentReconstruction"] = incident_summary
 
             self._finish_summary = finish_summary
 
@@ -13041,6 +13372,11 @@ class MoonMindRunWorkflow:
         # review. Only populated once the policy has been compiled for the run.
         if self._resilience_policy_ref:
             memo_dict["resilience_policy_ref"] = dict(self._resilience_policy_ref)
+        # MM-884: link the durable incident reconstruction manifest for failed
+        # runs so Mission Control/report surfaces reach correlated evidence
+        # without duplicating it in workflow history.
+        if self._incident_reconstruction_ref:
+            memo_dict["incident_reconstruction_ref"] = self._incident_reconstruction_ref
         if self._pull_request_url:
             memo_dict["pull_request_url"] = self._pull_request_url
         merge_automation_summary = self._merge_automation_summary_from_context()

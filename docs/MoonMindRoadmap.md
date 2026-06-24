@@ -296,16 +296,20 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - Token cost estimates and pricing-aware routing metadata.
 - Live Logs desired-state contract for a session-aware merged timeline, ANSI parsing, virtualized rendering, artifact-backed replay, and rollout gates.
 - Mission Control viewer pieces for structured observability history, session snapshots, EventSource live follow, ANSI rendering, and virtualized timelines are present behind feature/config rollout.
+- Incident reconstruction path (MM-884): every failed run emits a durable `reports/incident_reconstruction.json` manifest correlating the resilience policy, provider/profile/credential source, sanitized provider failure event, failed step, progress, workspace changes, accepted/blocked side effects, checkpoint restore candidate, cost-attribution settings + observed cost (where available), trace spans across every boundary, logs, and artifacts under one stable, replay-safe correlation (trace) id. The same trace id is stamped onto each step-execution manifest as a compact `traceRef`, and Mission Control/report surfaces link to the durable manifest (`incident_reconstruction_ref`) rather than duplicating its evidence.
 
 ### Remaining work
 - [ ] **14.1** OpenTelemetry instrumentation — FastAPI middleware, Temporal client/worker interceptors, and activity-layer spans with provider/model/token attributes.
   *Done means:* API→workflow→activity→provider spans correlated end-to-end with bounded metric labels.
+  *Substrate shipped (MM-884):* a stable per-run correlation id now propagates through the step manifests and the incident reconstruction trace-span enumeration; native OTel emission/export remains.
 - [ ] **14.2** Per-step token/cost attribution in Mission Control — cost primitives exist but are not attributed and displayed per step.
   *Done means:* per-step cost visible in workflow detail and reconcilable with billing/routing estimates.
+  *Contract shipped (MM-884):* the incident reconstruction manifest carries the cost-attribution settings and observed per-step token/cost where the runtime reports it; the Mission Control workflow-detail display remains.
 - [ ] **14.3** Session-aware live-log timeline rollout — complete the LiveLogs.md rollout: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process transport as authoritative path, artifact-backed replay, and "live-stream failure never fails run" behavior.
   *Done means:* live timeline plus replay are available for target managed runtimes without relying on SSE success.
 - [ ] **14.4** Trace/log deep links from workflow detail — jump from a step in Mission Control to its correlated trace and log slice.
   *Done means:* every step row links to its trace and log slice via correlation IDs.
+  *Substrate shipped (MM-884):* each step manifest now carries a `traceRef` (trace id + per-step span id) and the incident manifest links the durable log/artifact refs; the Mission Control deep-link UI remains.
 
 ---
 
