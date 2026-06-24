@@ -350,6 +350,26 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
     },
   });
 
+  const pauseResumeMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const response = await fetch(updateEndpoint, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
+      }
+      return ScheduleSchema.parse(await response.json());
+    },
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(['schedule-detail', definitionId, detailEndpoint], updated);
+      setEditForm(editFormFromSchedule(updated));
+      await refreshDetail();
+    },
+  });
+
   const schedule = detailQuery.data;
   const runs = runsQuery.data?.items || [];
   const currentForm = editForm || (schedule ? editFormFromSchedule(schedule) : null);
@@ -421,6 +441,16 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
           >
             {runNowMutation.isPending ? 'Running' : 'Run now'}
           </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
+            disabled={pauseResumeMutation.isPending}
+          >
+            {pauseResumeMutation.isPending
+              ? (schedule.enabled ? 'Pausing' : 'Resuming')
+              : (schedule.enabled ? 'Pause schedule' : 'Resume schedule')}
+          </button>
         </div>
       </header>
 
@@ -432,6 +462,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       {runNowMutation.isError && (
         <div className="schedules-error" role="alert">
           {errorMessage(runNowMutation.error, 'Failed to run schedule')}
+        </div>
+      )}
+      {pauseResumeMutation.isError && (
+        <div className="schedules-error" role="alert">
+          {errorMessage(pauseResumeMutation.error, schedule.enabled ? 'Failed to pause schedule' : 'Failed to resume schedule')}
         </div>
       )}
 
