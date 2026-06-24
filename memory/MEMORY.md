@@ -1,2 +1,1 @@
 - [Pre-existing test_executions failures](pre-existing-test-executions-failures.md) — describe_execution IllegalStateChangeError reproduces on main; not a regression
-- [Pre-existing temporal worker runtime failures](pre-existing-temporal-worker-runtime-failures.md) — runtime_planner KeyError tests fail on clean tree; not a regression
