@@ -5,7 +5,7 @@
 **Audience:** Anyone authoring, classifying, reviewing, or reorganizing durable documentation in a MoonSpec project
 **Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses, the authority rules that resolve conflicts between canonical documents of the same class, and where design rationale must live — so that anyone classifying, writing, or reconciling a doc has one authoritative vocabulary, one set of viewpoints, one precedence ladder, and one module-boundary policy to apply.
 
-> **Traceability:** This standard is authored under source design **MM-900** ("Implement MoonSpec Documentation Architecture Standard"). The core taxonomy (document classes, viewpoints, module boundaries, and contract ownership) is delivered by **MM-902**, covering DESIGN-REQ-001 through DESIGN-REQ-007 and DESIGN-REQ-013. The canonical-vs-canonical precedence ladder and the embedded design-rationale policy are delivered by **MM-903**, covering DESIGN-REQ-008 (canonical-vs-canonical precedence) and DESIGN-REQ-009 (embedded design-rationale policy). The **authoring conventions** — metadata headers, the preferred-filename naming set, and the incremental adoption policy (§§11–13) — are delivered by **MM-904**. Integration, templates, migration, and validation are split into further dependent stories and are intentionally out of scope here.
+> **Traceability:** This standard is authored under source design **MM-900** ("Implement MoonSpec Documentation Architecture Standard"). The core taxonomy (document classes, viewpoints, module boundaries, and contract ownership) is delivered by **MM-902**, covering DESIGN-REQ-001 through DESIGN-REQ-007 and DESIGN-REQ-013. The canonical-vs-canonical precedence ladder and the embedded design-rationale policy are delivered by **MM-903**, covering DESIGN-REQ-008 (canonical-vs-canonical precedence) and DESIGN-REQ-009 (embedded design-rationale policy). The **authoring conventions** — metadata headers, the preferred-filename naming set, and the incremental adoption policy (§§11–13) — are delivered by **MM-904**. The reusable **viewpoint templates** (§14) are delivered by **MM-906**. Integration, migration, and validation are split into further dependent stories and are intentionally out of scope here.
 
 ---
 
@@ -370,3 +370,17 @@ This standard is adopted **incrementally**. It does **not** require a large retr
 ### 13.1 Downstream MoonSpec projects
 
 Downstream MoonSpec projects may apply **minor local adjustments** to these conventions — for example, `Docs/` capitalization, an additional locally-meaningful filename suffix, or project-specific header fields — **while preserving the MoonSpec document classes and authority rules**. The document classes (canonical declarative, temporary execution artifact, imperative working document), the classification rule, the precedence rule, and the "filename alone does not define authority" rule are not negotiable; the cosmetic and additive details around them are.
+
+---
+
+## 14. Viewpoint Templates
+
+Copy the matching template to start a new document. Each template embeds the correct metadata header (§11) and a concise section skeleton drawn from this standard. Templates are starting points, not a heavyweight process: delete sections that do not apply.
+
+The four canonical-viewpoint templates embed the **Canonical metadata header** form (§11.1, the `Document Class: Canonical declarative` shape) and carry a `Viewpoint:` field naming the viewpoint they conform to. The Migration / Implementation Plan template embeds the **Imperative-plan header** form (§11.2, the `Document Class: Imperative working document` shape with `Location policy:` and `Tracks:` fields), so it can never be mistaken for canonical desired state.
+
+- [System Architecture View](./_viewpoints/SystemArchitectureView.template.md) — canonical (§3.1)
+- [Module Architecture View](./_viewpoints/ModuleArchitectureView.template.md) — canonical (§3.2)
+- [System / Feature Design View](./_viewpoints/SystemFeatureDesignView.template.md) — canonical (§3.3)
+- [Module Contract Specification](./_viewpoints/ModuleContractSpecification.template.md) — canonical (§3.4)
+- [Migration / Implementation Plan](./_viewpoints/MigrationImplementationPlan.template.md) — imperative working document (§4)
