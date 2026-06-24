@@ -189,6 +189,120 @@ def test_build_merge_gate_start_payload_carries_workflow_keyed_jira_key() -> Non
     assert payload["mergeAutomationConfig"]["postMergeJira"]["enabled"] is True
 
 
+def test_merge_automation_uses_structured_jira_issue_over_source_traceability() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(
+        {
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "workflow": {
+                "title": (
+                    "Run Jira Implement for MM-904: Define authoring conventions"
+                ),
+                "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+                "inputs": {
+                    "jira_issue": {
+                        "key": "MM-904",
+                        "summary": "Define authoring conventions",
+                        "url": "https://moonladder.atlassian.net/browse/MM-904",
+                    },
+                    "constraints": "Preserve source issue MM-900 traceability.",
+                },
+                "taskTemplate": {
+                    "slug": "jira-implement",
+                    "version": "1.1.0",
+                    "scope": "global",
+                },
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.1.0",
+                        "inputs": {
+                            "jira_issue_key": "MM-904",
+                            "jira_issue": {
+                                "key": "MM-904",
+                                "summary": "Define authoring conventions",
+                                "url": "https://moonladder.atlassian.net/browse/MM-904",
+                            },
+                            "constraints": "Preserve source issue MM-900 traceability.",
+                        },
+                    }
+                ],
+                "steps": [
+                    {
+                        "title": "Finalize Jira status",
+                        "instructions": (
+                            "Transition Jira issue MM-904 to Code Review. "
+                            "Preserve source issue MM-900 traceability."
+                        ),
+                    }
+                ],
+            },
+        }
+    )
+
+    assert request is not None
+    assert request["jiraIssueKey"] == "MM-904"
+    assert request["postMergeJira"]["enabled"] is True
+    assert request["postMergeJira"]["required"] is True
+
+
+def test_build_merge_gate_start_payload_carries_structured_jira_issue_key() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = (
+        "run-jira-implement-for-mm-904-define-authoring"
+    )
+    workflow._publish_context["baseRef"] = "main"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "workflow": {
+                "title": "Run Jira Implement for MM-904.",
+                "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+                "inputs": {
+                    "jira_issue": {
+                        "key": "MM-904",
+                        "summary": "Define authoring conventions",
+                    },
+                    "constraints": "Preserve source issue MM-900 traceability.",
+                },
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.1.0",
+                        "inputs": {
+                            "jira_issue_key": "MM-904",
+                            "constraints": "Preserve source issue MM-900 traceability.",
+                        },
+                    }
+                ],
+                "steps": [
+                    {
+                        "title": "Finalize Jira status",
+                        "instructions": (
+                            "Transition Jira issue MM-904 to Code Review. "
+                            "Preserve source issue MM-900 traceability."
+                        ),
+                    }
+                ],
+            },
+        },
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/2653",
+        head_sha="5d8f11673fac6c346ae0b0a378748ce631435201",
+        parent_workflow_id="mm:f4edab93",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    assert payload["jiraIssueKey"] == "MM-904"
+    assert payload["mergeAutomationConfig"]["gate"]["jira"]["issueKey"] == "MM-904"
+    assert payload["mergeAutomationConfig"]["postMergeJira"]["enabled"] is True
+
+
 def test_merge_automation_request_does_not_guess_ambiguous_jira_issue_key() -> None:
     workflow = MoonMindRunWorkflow()
 
