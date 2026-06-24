@@ -37,6 +37,7 @@ const detailSchedule = {
     overlap: { mode: "skip" },
     catchup: { mode: "latest" },
   },
+  temporalScheduleId: "temporal-schedule-alpha",
   version: 1,
   createdAt: "2026-06-20T00:00:00Z",
   updatedAt: "2026-06-24T00:00:00Z",
@@ -288,6 +289,8 @@ describe("SchedulesPage", () => {
 
     expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Temporal Schedule ID")).not.toBeNull();
+    expect(screen.getByText("temporal-schedule-alpha")).not.toBeNull();
     expect(screen.getByText("MoonLadderStudios/MoonMind")).not.toBeNull();
     expect(screen.getByText("Started")).not.toBeNull();
     expect(screen.getByRole("link", { name: "workflow-from-schedule" }).getAttribute("href")).toBe(
@@ -396,6 +399,20 @@ describe("SchedulesPage", () => {
 
     expect(await screen.findByText("Failed to update schedule: Update rejected")).not.toBeNull();
     expect(await screen.findByText("Failed to run schedule: Run rejected")).not.toBeNull();
+  });
+
+  it("renders non-Error schedule detail failures without unsafe casts", async () => {
+    fetchSpy.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: true, json: async () => detailRuns } as Response;
+      }
+      throw "schedule unavailable";
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("schedule unavailable");
   });
 
   it("runs schedules from the same routed definition id and leaves run links on workflow detail routes", async () => {

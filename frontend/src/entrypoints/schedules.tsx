@@ -22,6 +22,7 @@ const ScheduleSchema = z.object({
   scopeRef: z.string().nullable().optional(),
   target: z.record(z.string(), z.unknown()).optional(),
   policy: z.record(z.string(), z.unknown()).optional(),
+  temporalScheduleId: z.string().nullable().optional(),
   updatedAt: z.string().optional(),
 }).passthrough();
 
@@ -169,7 +170,7 @@ function displayValue(value: string | null | undefined): string {
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
+  return error instanceof Error ? error.message : String(error || fallback);
 }
 
 function titleCaseLabel(value: string): string {
@@ -570,6 +571,10 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             <div>
               <dt>Definition ID</dt>
               <dd title={definitionId}>{definitionId}</dd>
+            </div>
+            <div>
+              <dt>Temporal Schedule ID</dt>
+              <dd>{displayValue(schedule.temporalScheduleId)}</dd>
             </div>
             <div>
               <dt>Scope</dt>
