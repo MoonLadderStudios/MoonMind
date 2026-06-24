@@ -787,7 +787,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Validate Claude Oauth Profile */
+        /**
+         * Validate Claude Oauth Profile
+         * @description Validate an OAuth-backed provider profile against its auth volume.
+         *
+         *     Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+         *     handler name is retained for OpenAPI operation-id stability.
+         */
         post: operations["validate_claude_oauth_profile_api_v1_provider_profiles__profile_id__oauth_validate_post"];
         delete?: never;
         options?: never;
@@ -804,7 +810,13 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Disconnect Claude Oauth Profile */
+        /**
+         * Disconnect Claude Oauth Profile
+         * @description Disconnect an OAuth-backed provider profile and clear its volume fields.
+         *
+         *     Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+         *     handler name is retained for OpenAPI operation-id stability.
+         */
         post: operations["disconnect_claude_oauth_profile_api_v1_provider_profiles__profile_id__oauth_disconnect_post"];
         delete?: never;
         options?: never;
