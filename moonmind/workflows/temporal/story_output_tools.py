@@ -521,7 +521,12 @@ def _has_explicit_empty_story_list(value: Any) -> bool:
         for key in ("stories", "userStories", "user_stories", "items", "issues"):
             if key not in value:
                 continue
-            return not _list(value.get(key))
+            stories_value = value.get(key)
+            return (
+                isinstance(stories_value, Sequence)
+                and not isinstance(stories_value, (str, bytes, bytearray))
+                and len(stories_value) == 0
+            )
         return False
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return len(value) == 0

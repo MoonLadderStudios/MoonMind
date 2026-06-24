@@ -666,6 +666,73 @@ async def test_create_jira_issues_noops_for_empty_previous_story_artifact():
     assert fetch_calls == []
     assert service.requests == []
 
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        ({"stories": []}, True),
+        ({"userStories": []}, True),
+        ([], True),
+        ({"stories": None}, False),
+        ({"stories": "some description string"}, False),
+        ({"stories": {"summary": "Not a list"}}, False),
+        ({"stories": 1}, False),
+        ('{"stories": []}', True),
+        ('{"stories": "some description string"}', False),
+        ("not json", False),
+    ],
+)
+def test_has_explicit_empty_story_list_requires_empty_sequence(
+    payload: Any,
+    expected: bool,
+):
+    assert story_tools._has_explicit_empty_story_list(payload) is expected
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "breakdown",
+    [
+        {"stories": None},
+        {"stories": "some description string"},
+        {"stories": {"summary": "Not a list"}},
+        {"stories": 1},
+    ],
+)
+async def test_create_jira_issues_rejects_malformed_empty_story_artifact_payload(
+    breakdown: dict[str, Any],
+):
+    service = _FakeJiraService()
+    artifact_reads: list[str] = []
+
+    async def artifact_reader(ref: str) -> bytes:
+        artifact_reads.append(ref)
+        return json.dumps(breakdown).encode("utf-8")
+
+    with pytest.raises(ValueError, match="No stories were available"):
+        await create_jira_issues_from_stories(
+            {
+                "storyOutput": {
+                    "mode": "jira",
+                    "fallback": "fail",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeName": "Story",
+                    },
+                },
+            },
+            {
+                "previousOutputs": {
+                    "storyOutput": {
+                        "storyBreakdownArtifactRef": "art_malformed_story_breakdown",
+                    }
+                }
+            },
+            jira_service_factory=lambda: service,
+            artifact_reader=artifact_reader,
+        )
+
+    assert artifact_reads == ["art_malformed_story_breakdown"]
+    assert service.requests == []
+
 @pytest.mark.asyncio
 async def test_create_jira_issues_reads_previous_outputs_from_tool_inputs():
     service = _FakeJiraService()
