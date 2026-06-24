@@ -453,6 +453,7 @@ interface ProviderProfile {
   provider_id?: string | null;
   provider_label?: string | null;
   default_model?: string | null;
+  default_effort?: string | null;
   is_default?: boolean;
   enabled?: boolean;
   launch_ready?: boolean;
