@@ -163,6 +163,32 @@ def test_classifies_credential_scope_forbidden_as_distinct_class() -> None:
     assert result.failure_class == "user_error"
     assert result.retry_recommendation == EXPAND_CREDENTIAL_SCOPE_RECOMMENDATION
 
+def test_bare_permission_denied_is_not_credential_scope_failure() -> None:
+    """Ordinary shell/git permission errors must not classify as provider 403.
+
+    A bare ``permission denied`` appears in shell/git/filesystem failures (for
+    example ``bash: ./script: Permission denied`` or
+    ``remote: Permission denied``). These are execution errors, not provider
+    credential-scope failures, so the marker classifier must return ``None`` and
+    the phrase must not be a credential-scope search marker.
+    """
+
+    for shell_error in (
+        "bash: ./script: Permission denied",
+        "remote: Permission denied (publickey).",
+        "OSError: [Errno 13] Permission denied: '/work/output'",
+    ):
+        assert classify_provider_failure(shell_error) is None
+
+    markers = provider_failure_search_markers()
+    assert "permission denied" not in markers
+    # Explicit credential-scope wording must still be classifiable.
+    scoped = classify_provider_failure(
+        "HTTP 403 Forbidden: insufficient scope for this operation"
+    )
+    assert scoped is not None
+    assert scoped.provider_error_class == PROVIDER_ERROR_CLASS_CREDENTIAL_SCOPE
+
 def test_build_event_from_structured_fields_prefers_explicit_values() -> None:
     event = build_provider_failure_event(
         provider_error_class=PROVIDER_ERROR_CLASS_RATE_LIMIT,

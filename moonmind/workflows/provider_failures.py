@@ -83,6 +83,12 @@ _AUTH_FAILURE_MARKERS = (
     "please run /login",
 )
 
+# Credential-scope markers are deliberately scoped to HTTP 403 wording or
+# explicit credential/scope phrasing. A bare ``permission denied`` is omitted on
+# purpose: it also appears in ordinary shell/git/filesystem errors (for example
+# ``bash: ./script: Permission denied`` or ``remote: Permission denied``) that
+# ``provider_failure_search_markers()`` would otherwise surface from recovery log
+# scans and misclassify as a provider ``403``/``credential_scope`` failure.
 _CREDENTIAL_SCOPE_MARKERS = (
     "http 403",
     "status 403",
@@ -95,7 +101,6 @@ _CREDENTIAL_SCOPE_MARKERS = (
     "missing scope",
     "missing required scope",
     "requires the following scopes",
-    "permission denied",
 )
 
 # Distinct sanitized operator summaries per canonical class. These intentionally
