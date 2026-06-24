@@ -6619,6 +6619,8 @@ export interface components {
             provider_label?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Default Effort */
+            default_effort?: string | null;
             /** Model Overrides */
             model_overrides?: {
                 [key: string]: string;
@@ -6732,6 +6734,8 @@ export interface components {
             provider_label: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Default Effort */
+            default_effort?: string | null;
             /** Model Overrides */
             model_overrides?: {
                 [key: string]: string;
@@ -6836,6 +6840,8 @@ export interface components {
             provider_label?: string | null;
             /** Default Model */
             default_model?: string | null;
+            /** Default Effort */
+            default_effort?: string | null;
             /** Model Overrides */
             model_overrides?: {
                 [key: string]: string;
