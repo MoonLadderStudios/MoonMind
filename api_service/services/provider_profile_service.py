@@ -107,6 +107,7 @@ def _manager_profile_payload(
         "provider_id": row.provider_id,
         "provider_label": row.provider_label,
         "default_model": row.default_model,
+        "default_effort": row.default_effort,
         "model_overrides": row.model_overrides or {},
         "credential_source": row.credential_source.value if row.credential_source else None,
         "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,

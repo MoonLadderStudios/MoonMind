@@ -114,6 +114,7 @@ describe('defaultFormState', () => {
     expect(state.priority).toBe('');
     expect(state.clearEnvKeysText).toBe('');
     expect(state.accountLabel).toBe('');
+    expect(state.defaultEffort).toBe('');
     expect(state.isDefault).toBe(false);
   });
 
@@ -149,6 +150,7 @@ describe('toFormState', () => {
     ...minimalProfile,
     provider_label: 'OpenAI Prod',
     default_model: 'gpt-4o',
+    default_effort: 'high',
     volume_ref: 'openai-config',
     volume_mount_path: '/root/.openai',
     secret_refs: { OPENAI_API_KEY: 'db://OPENAI_API_KEY' },
@@ -181,6 +183,7 @@ describe('toFormState', () => {
     expect(state.priority).toBe('200');
     expect(state.clearEnvKeysText).toBe('OPENAI_API_KEY\nOPENAI_BASE_URL');
     expect(state.accountLabel).toBe('team-prod');
+    expect(state.defaultEffort).toBe('high');
     expect(state.isDefault).toBe(true);
   });
 
@@ -192,6 +195,7 @@ describe('toFormState', () => {
     expect(state.providerId).toBe('openai');
     expect(state.providerLabel).toBe('OpenAI Prod');
     expect(state.defaultModel).toBe('gpt-4o');
+    expect(state.defaultEffort).toBe('high');
     expect(state.secretRefsText).toBe(
       JSON.stringify({ OPENAI_API_KEY: 'db://OPENAI_API_KEY' }, null, 2),
     );
@@ -207,6 +211,7 @@ describe('toFormState', () => {
       ...minimalProfile,
       provider_label: null,
       default_model: null,
+      default_effort: null,
       volume_ref: null,
       volume_mount_path: null,
     };
@@ -215,6 +220,7 @@ describe('toFormState', () => {
 
     expect(state.providerLabel).toBe('');
     expect(state.defaultModel).toBe('');
+    expect(state.defaultEffort).toBe('');
     expect(state.volumeRef).toBe('');
     expect(state.volumeMountPath).toBe('');
   });
@@ -520,6 +526,35 @@ describe('ProviderProfilesManager form controls', () => {
       expect(rows[1]?.textContent).not.toContain('Runtime default');
       expect(rows[2]?.textContent).toContain('Runtime default');
     });
+  });
+
+  it('sends default effort changes when updating an edited profile', async () => {
+    const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...profile, default_effort: 'high' }),
+    } as Response);
+
+    renderProviderProfilesManager([profile]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const defaultEffort = screen.getByLabelText(/Default effort/) as HTMLInputElement;
+    expect(defaultEffort.value).toBe('');
+
+    fireEvent.change(defaultEffort, { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update provider profile' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/v1/provider-profiles/codex-default',
+        expect.objectContaining({
+          method: 'PATCH',
+        }),
+      );
+    });
+
+    const [, requestInit] = fetchSpy.mock.calls[0] ?? [];
+    const payload = JSON.parse(String((requestInit as RequestInit).body));
+    expect(payload.default_effort).toBe('high');
   });
 
   it('reports form validation failures through the save mutation', async () => {
