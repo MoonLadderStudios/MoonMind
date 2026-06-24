@@ -296,7 +296,6 @@ async def test_incident_manifest_linked_in_memo(
 
 def test_step_manifest_stamps_trace_ref(monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, patched=True)
-    workflow = MoonMindRunWorkflow()
     ref = run_module.build_incident_trace_ref(
         workflow_id="wf-run-1",
         run_id="run-1",
