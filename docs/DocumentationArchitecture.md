@@ -3,9 +3,9 @@
 **Status:** Current standard and target direction
 **Updated:** 2026-06-24
 **Audience:** Anyone authoring, classifying, reviewing, or reorganizing durable documentation in a MoonSpec project
-**Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses — so that anyone classifying or writing a doc has one authoritative vocabulary, one set of viewpoints, and one module-boundary policy to apply.
+**Purpose:** Establish the single canonical taxonomy that names the document types a MoonSpec durable docs tree uses, the authority rules that resolve conflicts between canonical documents of the same class, and where design rationale must live — so that anyone classifying, writing, or reconciling a doc has one authoritative vocabulary, one set of viewpoints, one precedence ladder, and one module-boundary policy to apply.
 
-> **Traceability:** This standard is the core deliverable of **MM-902** (source design **MM-900**, "Implement MoonSpec Documentation Architecture Standard"). It covers DESIGN-REQ-001 through DESIGN-REQ-007 and DESIGN-REQ-013. Precedence/rationale, metadata/naming, integration, templates, migration, and validation are split into dependent stories and are intentionally out of scope here.
+> **Traceability:** This standard is authored under source design **MM-900** ("Implement MoonSpec Documentation Architecture Standard"). The core taxonomy (document classes, viewpoints, module boundaries, and contract ownership) is delivered by **MM-902**, covering DESIGN-REQ-001 through DESIGN-REQ-007 and DESIGN-REQ-013. The canonical-vs-canonical precedence ladder and the embedded design-rationale policy are delivered by **MM-903**, covering DESIGN-REQ-008 (canonical-vs-canonical precedence) and DESIGN-REQ-009 (embedded design-rationale policy). Metadata/naming, integration, templates, migration, and validation are split into dependent stories and are intentionally out of scope here.
 
 ---
 
@@ -15,7 +15,7 @@ This document is a **MoonSpec-level strategy**: it describes the desired-state s
 
 **It extends, and does not replace, [`docs/Workflows/MoonSpecDocumentModel.md`](Workflows/MoonSpecDocumentModel.md).**
 
-The Document Model is the foundation. It defines the three operative **document classes** (canonical declarative documents, temporary execution artifacts, imperative working documents), the **classification rule** (declarative vs. imperative by primary framing), the **precedence rule** (canonical wins; derived artifacts never self-resolve conflicts), and the **reconciliation expectation** (canonical docs are realigned with verified implementation through doc reconciliation). Those rules remain authoritative and are not restated or overridden here.
+The Document Model is the foundation. It defines the three operative **document classes** (canonical declarative documents, temporary execution artifacts, imperative working documents), the **classification rule** (declarative vs. imperative by primary framing), the **cross-class precedence rule** (canonical wins; derived artifacts never self-resolve conflicts), and the **reconciliation expectation** (canonical docs are realigned with verified implementation through doc reconciliation). Those rules remain authoritative and are not restated or overridden here. This standard adds the **same-class precedence** rule on top of them (§7): which canonical declarative document controls when two of them disagree.
 
 This standard layers a finer-grained **architectural taxonomy** on top of that base:
 
@@ -23,8 +23,9 @@ This standard layers a finer-grained **architectural taxonomy** on top of that b
 - It enumerates the **canonical declarative viewpoints** that subdivide the Document Model's "canonical declarative documents" class.
 - It names the **imperative working document types** that subdivide the Document Model's "imperative working documents" class.
 - It defines the **module boundary policy** and the **module-owned contract** document type.
+- It defines the **canonical-vs-canonical precedence ladder** and the **embedded design-rationale policy** that govern how those canonical documents relate to one another.
 
-Where this standard and the Document Model could appear to disagree, the Document Model governs the underlying class, precedence, and reconciliation rules; this standard governs only the finer vocabulary and viewpoint taxonomy built on top of them. New terms introduced here are additive refinements of the base classes, never substitutes for them.
+Where this standard and the Document Model could appear to disagree, the Document Model governs the underlying class, cross-class precedence, and reconciliation rules; this standard governs only the finer vocabulary, viewpoint taxonomy, same-class precedence, and rationale placement built on top of them. New terms introduced here are additive refinements of the base classes, never substitutes for them.
 
 ---
 
@@ -152,11 +153,76 @@ When a contract is *consumed* by other modules:
 
 ---
 
-## 7. Adaptable Examples for Downstream Projects
+## 7. Canonical-vs-Canonical Precedence
+
+The Document Model and the Constitution define **cross-class** precedence: canonical declarative documents win over derived and imperative artifacts, and derived artifacts never self-resolve conflicts (the *Docs-First Development and Traceability* and *Canonical Documentation Separates Desired State from Migration Backlog* principles in `.specify/memory/constitution.md`, and `docs/Workflows/MoonSpecDocumentModel.md`). This section adds the **same-class** rule: which canonical declarative document controls when two of them disagree.
+
+Two canonical declarative documents can disagree about the same claim — for example, a system view and a module view describing dependency direction differently, or a design view and a contract specification describing a DTO shape differently. When they do, the conflict is resolved **by authority scope, not by file age, edit recency, word count, or which document is more convenient to change.** The document whose scope *owns* the kind of claim in question is authoritative; the other document is the one that must be corrected.
+
+### 7.1 Precedence ladder
+
+Canonical declarative documents rank by the breadth of authority their scope carries. Higher levels govern broader, more foundational desired state; lower levels specialize within the bounds the higher levels set. When two documents make conflicting claims, the document at the higher level wins **for claims within its scope**, and the lower-level document is reconciled to match.
+
+1. **Constitution / Document Model** — `.specify/memory/constitution.md` and `docs/Workflows/MoonSpecDocumentModel.md`. Non-negotiable principles, document classification, and the cross-class precedence rule. Governs everything below.
+2. **Documentation Architecture Standard** — this document. Governs how canonical documents relate to one another: same-class precedence, conflict handling, and where rationale lives.
+3. **System Architecture View** — the top-level system architecture (e.g. `docs/MoonMindArchitecture.md`). Owns system-wide structure, the orchestration model, and cross-module boundaries and dependency direction.
+4. **Cross-Cutting Concept View** — concepts that span modules (security, observability, artifact model, skill runtime, Temporal determinism). Owns the system-wide semantics of a concern wherever it appears.
+5. **Module Architecture View** — the internal architecture of a single module or subsystem. Owns that module's internal structure within the boundaries the system view sets.
+6. **Module Contract Specification** — the interface a module exposes (DTO shapes, payload schemas, activity/signal/update signatures, API surfaces). Owns the exact shape and semantics of what crosses a module boundary.
+7. **System/Feature Design View** — how a feature is realized using the modules and contracts above. Owns feature-level composition and behavior, bounded by the contracts it consumes.
+8. **Migration / Implementation / Rollout / Status documents** — sequencing, phased plans, cutover notes, and status (canonically confined to `docs/tmp/` and gitignored handoffs per the *Canonical Documentation Separates Desired State from Migration Backlog* principle). These describe *how and when* desired state is reached. **They never govern desired state itself** and never win a conflict against any level above them; a migration document that contradicts the target architecture is wrong about the target by definition.
+
+A higher-level document is only authoritative for claims **within its scope**. A system view does not override a contract specification on the exact byte layout of a DTO, because DTO shape is the contract specification's scope (level 6); the system view governs whether that module is *allowed to depend on* another module (level 3). Authority is by ownership of the claim type, applied along this ladder — not blanket dominance of higher levels over all content of lower ones.
+
+### 7.2 Conflict-handling procedure
+
+When two canonical documents disagree, resolve it deterministically:
+
+1. **Identify the claim type.** What is actually in conflict — a dependency direction, a DTO/payload shape, a cross-cutting semantic, a feature behavior, a piece of rationale, or a sequencing/status statement?
+2. **Identify the owning authority scope.** Map the claim type to the level on the ladder whose scope owns it (e.g. cross-module dependency direction → System Architecture View; DTO shape → Module Contract Specification).
+3. **Treat the owner as authoritative.** The owning document's statement is the desired state. The non-owning document is the one that is wrong and must be changed — regardless of which file was edited more recently or is easier to touch.
+4. **Reconcile in the same PR when feasible.** Update the non-owning document to agree with the owner in the same change that surfaced the conflict, so canonical documentation never knowingly ships self-contradictory. This operationalizes the reconciliation expectation in the Document Model.
+5. **Escalate when the conflict is foundational.** If the conflict implicates the Constitution, the Document Model, this standard, or a published contract — or if reconciling in place would change non-negotiable principles or break a contract other documents depend on — do not resolve it unilaterally. Open a Jira issue and escalate, as required for constitution/architecture-direction conflicts by the *Docs-First Development and Traceability* principle and the Document Model reconciliation rules.
+
+### 7.3 Worked examples
+
+These conflicts are resolved purely by authority scope:
+
+- **Module view vs system view — dependency direction.** A module architecture view states the module calls into another module; the system architecture view forbids that dependency direction. *Resolution:* cross-module dependency direction is owned by the **System Architecture View** (level 3). The system view wins; the module view is corrected to respect the allowed boundary. File age and which document was written first are irrelevant.
+- **Design view vs contract spec — DTO shape.** A feature design view shows a payload with one field set; the module contract specification defines a different field set for the same DTO. *Resolution:* DTO/payload shape is owned by the **Module Contract Specification** (level 6). The contract wins; the design view is reconciled to consume the contract's actual shape. A design view never redefines a contract it depends on.
+- **Rationale vs normative rule.** A "why" explanation embedded in one document is read as if it loosened a normative rule stated elsewhere (e.g. rationale says "for performance we sometimes inline" read as permission to violate a layering rule). *Resolution:* rationale explains and justifies; it does not grant exceptions. The **normative rule** in the owning document controls; the rationale is clarified so it cannot be misread as overriding the rule. Rationale never outranks the requirement it accompanies.
+- **Migration "support both paths" vs target architecture.** A migration/rollout document says the system "supports both the old and new path"; the target architecture describes only the new path as desired state. *Resolution:* migration/status documents are **level 8** and never govern desired state. The target architecture wins. "Support both paths" is at most a time-bound transitional note belonging in `docs/tmp/` (the *Canonical Documentation Separates Desired State from Migration Backlog* principle); it does not make dual-path support part of the canonical desired state, and per the *Pre-Release Velocity: Delete, Don't Deprecate* principle it is removed once the migration completes.
+
+---
+
+## 8. Embedded Design-Rationale Policy
+
+Rationale — *why* the desired state is shaped the way it is — is part of the canonical record, not a separate artifact. A reader resolving a conflict or evaluating a change must be able to understand both the rule and its justification **from the same canonical document that owns the rule**, without consulting any separate log.
+
+Significant design rationale **MUST be embedded in the owning architecture, design, or contract document** — the same document that, on the precedence ladder, owns the claim the rationale justifies. Rationale for a system boundary lives in the System Architecture View; rationale for a DTO's shape lives in its Module Contract Specification; rationale for a feature's composition lives in its System/Feature Design View. Rationale follows its rule.
+
+Two placement forms are recommended:
+
+- **`## Design Rationale`** — a top-level section in a document, collecting the document-wide "why" behind its most significant or cross-cutting decisions. Use this when a document has several material decisions that benefit from being explained together (the Constitution's per-principle `Rationale:` lines and `docs/Workflows/MoonSpecDocumentModel.md`'s "Reconciliation Expectation" framing are existing examples of embedded, document-local rationale).
+- **`### Rationale`** — a localized subsection placed immediately after the specific rule, contract clause, or structural decision it explains. Use this when the "why" is tightly scoped to one rule and is most useful read alongside it.
+
+Both forms keep rationale inside the canonical document so it cannot drift from the rule it justifies and so it is reconciled in the same PR when the rule changes. Rationale is explanatory, not normative: it justifies a rule but never loosens, overrides, or creates an exception to it (see the rationale-vs-normative-rule example in §7.3).
+
+### 8.1 No separate design-decision logs, ADRs, or `decisions/` directories
+
+This policy governs **durable design rationale and architecture-decision records** — the *why* behind canonical desired state. For that rationale, MoonMind **does not** maintain Architecture Decision Records (ADRs), a standalone design-decision log, or a `decisions/` directory, and this standard imposes no requirement or recommendation to create any. There is no obligation — and contributors **MUST NOT** introduce one — to record *design* decisions in a parallel artifact outside the owning canonical document.
+
+This ban is scoped to durable design rationale. It does **not** prohibit operational or execution decision logs that exist as time-bound *run evidence* rather than as a competing source of canonical desired state — for example, the remediation decision log defined in `docs/Workflows/WorkflowRemediation.md`, which records per-run repair decisions as execution evidence. Those operational logs capture *what happened during a run*, not the canonical *why* behind the architecture, and are governed by their owning workflow documents and the temporary-execution-artifact class of the Document Model.
+
+A reader **MUST NOT** be required to consult a separate document to understand the current desired state or the *design* rationale behind it: the owning architecture, design, or contract document is the single place where both the decision and its justification live. A standalone design-decision log would be a second source of truth that drifts from the canonical document, contradicting the *Docs-First Development and Traceability*, *Canonical Documentation Separates Desired State from Migration Backlog*, and *Pre-Release Velocity: Delete, Don't Deprecate* principles. Time-bound design decisions made during a migration belong with the migration material under `docs/tmp/` and are deleted when the work completes; they are never promoted into a durable design-decision-log surface.
+
+---
+
+## 9. Adaptable Examples for Downstream Projects
 
 Downstream MoonSpec projects inherit this standard with **minor local adjustments** — most commonly the capitalization of the docs root directory. The taxonomy is identical regardless of capitalization; only the path prefix changes. Both forms below are valid; pick the one matching the project's existing tree.
 
-### 7.1 `docs/` form (lowercase root)
+### 9.1 `docs/` form (lowercase root)
 
 ```
 docs/
@@ -173,7 +239,7 @@ docs/
     <Feature>RolloutPlan.md                # Rollout Plan
 ```
 
-### 7.2 `Docs/` form (capitalized root)
+### 9.2 `Docs/` form (capitalized root)
 
 ```
 Docs/
@@ -195,12 +261,14 @@ In both forms: the five viewpoints classify every canonical declarative document
 
 ---
 
-## 8. How to Apply This Standard
+## 10. How to Apply This Standard
 
 1. **Classify before you write.** Decide whether the document is a canonical declarative view (one of the five viewpoints) or an imperative working document (one of the four types). If imperative, place it under `docs/tmp/` or a gitignored handoff path.
 2. **Pick the viewpoint.** For canonical work, choose System Architecture, Module Architecture, System / Feature Design, Module Contract Specification, or Cross-Cutting Concept — and follow that viewpoint's owns/naming guidance.
 3. **Place contracts with their owner.** Document a contract inside the providing module's doc set; have consumers link, not copy.
 4. **Apply the boundary test before saying "Bounded Context."** Default to architectural boundary / ownership surface; reserve Bounded Context for true domain boundaries that pass all three tests.
 5. **Promote finished designs.** When a System / Feature Design View is `Implemented`, promote its settled substance into an architecture view and supersede the design.
+6. **Resolve same-class conflicts by authority scope.** When two canonical documents disagree, use the precedence ladder (§7.1) and the conflict-handling procedure (§7.2) to determine which document owns the claim; reconcile the non-owning document, and escalate foundational conflicts rather than resolving them unilaterally.
+7. **Keep rationale with its rule.** Embed significant design rationale in the owning canonical document (§8); do not create separate ADRs or design-decision logs.
 
-This standard is the foundation; precedence/rationale, metadata/naming conventions, integration with tooling, document templates, migration guidance, and validation are defined in dependent stories that build on this taxonomy.
+This standard is the foundation; metadata/naming conventions, integration with tooling, document templates, migration guidance, and validation are defined in dependent stories that build on this taxonomy.
