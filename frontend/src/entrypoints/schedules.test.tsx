@@ -279,7 +279,7 @@ describe("SchedulesPage", () => {
     ]);
   });
 
-  it("normalizes legacy id placeholders and keeps controls available when run history fails", async () => {
+  it("keeps controls available when run history fails", async () => {
     fetchSpy.mockImplementation((url) => {
       if (String(url) === "/console/schedules/schedule-2") {
         return Promise.resolve({
@@ -317,10 +317,10 @@ describe("SchedulesPage", () => {
             initialPath: "/schedules/schedule-2",
             sources: {
               schedules: {
-                detail: "/console/schedules/{id}",
-                update: "/console/schedules/{id}",
-                runNow: "/console/schedules/{id}/run",
-                runs: "/console/schedules/{id}/runs",
+                detail: "/console/schedules/{definitionId}",
+                update: "/console/schedules/{definitionId}",
+                runNow: "/console/schedules/{definitionId}/run",
+                runs: "/console/schedules/{definitionId}/runs",
               },
             },
           },
@@ -371,7 +371,7 @@ describe("SchedulesPage", () => {
           json: async () => ({
             id: "schedule-1",
             name: "Daily repository sweep updated",
-            description: "Updated",
+            description: "",
             enabled: true,
             scheduleType: "cron",
             cron: "5 9 * * *",
@@ -388,7 +388,7 @@ describe("SchedulesPage", () => {
           json: async () => ({
             id: "schedule-1",
             name: "Daily repository sweep",
-            description: "",
+            description: "Runs every morning",
             enabled: true,
             scheduleType: "cron",
             cron: "0 9 * * *",
@@ -417,13 +417,17 @@ describe("SchedulesPage", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Edit schedule" }));
     fireEvent.change(screen.getByLabelText("Cron"), { target: { value: "5 9 * * *" } });
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       const patchCall = fetchSpy.mock.calls.find(([, init]) => String(init?.method || "").toUpperCase() === "PATCH");
       expect(patchCall).toBeTruthy();
       expect(patchCall?.[0]).toBe("/api/recurring-workflows/schedule-1");
-      expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({ cron: "5 9 * * *" });
+      expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
+        cron: "5 9 * * *",
+        description: "",
+      });
     });
   });
 });

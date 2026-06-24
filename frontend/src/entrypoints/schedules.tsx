@@ -132,7 +132,7 @@ function definitionIdFromPath(payload: BootPayload): string | null {
 function endpointFromTemplate(template: string | undefined, definitionId: string, fallback: string): string {
   const source = template || fallback;
   const encoded = encodeURIComponent(definitionId);
-  return source.replaceAll('{definitionId}', encoded).replaceAll('{id}', encoded);
+  return source.replaceAll('{definitionId}', encoded);
 }
 
 async function fetchJson<T>(endpoint: string, schema: z.ZodType<T>): Promise<T> {
@@ -382,10 +382,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   });
 
   const invalidateSchedule = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'detail', detailEndpoint] }),
-      queryClient.invalidateQueries({ queryKey: ['schedules', 'runs', runsEndpoint] }),
-    ]);
+    await queryClient.invalidateQueries({ queryKey: ['schedules'] });
   };
 
   const updateMutation = useMutation({
@@ -471,7 +468,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
     }
     updateMutation.mutate({
       name: form.name,
-      description: form.description || null,
+      description: form.description,
       enabled: form.enabled,
       cron: form.cron,
       timezone: form.timezone,
