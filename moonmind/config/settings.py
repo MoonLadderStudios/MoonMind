@@ -1512,6 +1512,57 @@ class PentestSettings(BaseSettings):
             "MOONMIND_PENTEST_NETWORK_ATTACHMENT_REQUIRED_FOR_VPN"
         ),
     )
+    allow_claude_oauth_profile: bool = Field(
+        False,
+        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_CLAUDE_OAUTH_PROFILE"),
+        description=(
+            "Enable the Claude Code OAuth subscription runner/provider profiles for "
+            "PentestGPT. Disabled by default; the backing OAuth volume must be "
+            "provisioned out of band via MoonMind.OAuthSession."
+        ),
+    )
+    claude_oauth_runner_profile_id: str = Field(
+        "pentestgpt-claude-oauth",
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID"
+        ),
+    )
+    claude_oauth_provider_profile_id: str = Field(
+        "pentestgpt_claude_oauth",
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_CLAUDE_OAUTH_PROVIDER_PROFILE_ID"
+        ),
+    )
+    claude_oauth_volume: str = Field(
+        "claude_auth_volume",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_CLAUDE_OAUTH_VOLUME"),
+        description="Durable Claude Code OAuth subscription volume mounted for PentestGPT.",
+    )
+    claude_oauth_mount_path: str = Field(
+        "/home/pentester/.claude",
+        validation_alias=AliasChoices("MOONMIND_PENTEST_CLAUDE_OAUTH_MOUNT_PATH"),
+        description="In-container Claude config home the PentestGPT runner authenticates against.",
+    )
+    claude_oauth_credential_profile_ref: str | None = Field(
+        None,
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_CLAUDE_OAUTH_CREDENTIAL_PROFILE_REF"
+        ),
+        description=(
+            "Optional canonical Claude provider profile id the PentestGPT OAuth "
+            "profile shares its backing credential lease with."
+        ),
+    )
+    claude_oauth_seed_per_run_home: bool = Field(
+        True,
+        validation_alias=AliasChoices(
+            "MOONMIND_PENTEST_CLAUDE_OAUTH_SEED_PER_RUN_HOME"
+        ),
+        description=(
+            "Seed a writable per-run Claude home from the read-only durable OAuth "
+            "volume instead of mutating the durable volume in place."
+        ),
+    )
     default_provider_profile: str | None = Field(
         None,
         validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_PROVIDER_PROFILE"),
@@ -1632,6 +1683,7 @@ class PentestSettings(BaseSettings):
         "provider_profiles_file",
         "anthropic_secret_id",
         "openrouter_secret_id",
+        "claude_oauth_credential_profile_ref",
         "provider_lease_seconds",
         mode="before",
     )
