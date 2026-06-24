@@ -574,7 +574,41 @@ Codex-specific behavior belongs in Codex-managed-session docs. Claude Code, Gemi
 
 ---
 
-## 12. Required invariants
+## 12. Cross-runtime managed-session conformance
+
+Runtime resilience capabilities must be truthful, uniform, and regression-tested before Mission Control surfaces a runtime as session-capable. A shared, runtime-neutral conformance suite defines and enforces this.
+
+### 12.1 Conformance expectations
+
+The suite defines one canonical set of required managed-session behaviors that every session-capable runtime must satisfy:
+
+- `launch`
+- `turn_control`
+- `interrupt`
+- `reset_epoch`
+- `resume`
+- `terminate`
+- `rate_limit`
+- `no_progress`
+- `checkpoint`
+- `outbound_scan`
+- `correlation`
+
+`checkpoint`, `outbound_scan`, and `correlation` (observability) are evaluated uniformly across runtimes, not as runtime-specific concerns.
+
+### 12.2 Capability metadata at the adapter boundary
+
+Each session-capable runtime adapter exposes bounded, runtime-neutral capability metadata describing, per behavior, whether it is supported, the invocation contract used at the adapter boundary, and the trace/artifact correlation surfaces that evidence it. The conformance suite consumes this metadata so it evaluates the same contract the runtime advertises. Boundary-level tests assert that the declared invocation shapes and correlation surfaces match the runtime's real behavior.
+
+### 12.3 Truthful, binary determination
+
+Conformance determination is binary: a runtime is session-capable only when every required behavior conforms. There is intentionally no "partially session-capable" state. Any missing or unsupported behavior produces an actionable capability gap and forces the determination to not-session-capable.
+
+A runtime with no canonical managed-session runtime id must never be determined session-capable, even if it declares every behavior. A runtime that claims session capability it cannot back with conforming behaviors fails the suite, preventing unsupported runtimes from being surfaced as session-capable.
+
+Codex CLI is the only runtime that currently conforms. Claude Code, Gemini CLI, and future runtimes are reported as not-session-capable with explicit capability gaps until they implement their own session planes and pass the suite.
+
+## 13. Required invariants
 
 The following invariants must hold across managed session planes:
 
@@ -591,7 +625,7 @@ The following invariants must hold across managed session planes:
 
 ---
 
-## 13. Document relationship
+## 14. Document relationship
 
 Use the managed-agent docs as follows:
 
