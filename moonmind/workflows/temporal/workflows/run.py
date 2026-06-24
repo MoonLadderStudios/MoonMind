@@ -6256,7 +6256,7 @@ class MoonMindRunWorkflow:
 
                     if (
                         tool_type != "agent_runtime"
-                        and step_execution_manifest_enabled
+                        and workflow.patched(RUN_STEP_EXECUTION_MANIFEST_PATCH)
                     ):
                         await self._record_step_execution_manifest(
                             node_id,
@@ -9404,6 +9404,62 @@ class MoonMindRunWorkflow:
             "jira_noop",
         }
 
+    @staticmethod
+    def _trusted_jira_output_summary(outputs: Mapping[str, Any]) -> str | None:
+        story_output = outputs.get("storyOutput") or outputs.get("story_output")
+        if isinstance(story_output, Mapping):
+            status = str(story_output.get("status") or "").strip()
+            created_count = story_output.get("createdCount")
+            story_count = story_output.get("storyCount")
+            eligible_count = story_output.get("eligibleStoryCount")
+            dependency_mode = str(story_output.get("dependencyMode") or "").strip()
+            if status in {"jira_created", "jira_partial", "jira_noop"}:
+                verb = "Created" if status != "jira_noop" else "Created no"
+                parts = [f"{verb} Jira issues"]
+                if isinstance(created_count, int):
+                    parts.append(f"created={created_count}")
+                if isinstance(eligible_count, int):
+                    parts.append(f"eligible={eligible_count}")
+                if isinstance(story_count, int):
+                    parts.append(f"stories={story_count}")
+                if dependency_mode:
+                    parts.append(f"dependencyMode={dependency_mode}")
+                return "; ".join(parts) + "."
+            reason = str(story_output.get("reason") or "").strip()
+            if status:
+                return f"Jira story output finished with status {status}: {reason}".strip()
+
+        orchestration = outputs.get("jiraOrchestration") or outputs.get(
+            "jira_orchestration"
+        )
+        if isinstance(orchestration, Mapping):
+            status = str(orchestration.get("status") or "").strip()
+            created_count = orchestration.get("createdTaskCount")
+            story_count = orchestration.get("storyCount")
+            dependency_count = orchestration.get("dependencyCount")
+            parts = []
+            if isinstance(created_count, int):
+                parts.append(f"createdTasks={created_count}")
+            if isinstance(story_count, int):
+                parts.append(f"stories={story_count}")
+            if isinstance(dependency_count, int):
+                parts.append(f"dependencies={dependency_count}")
+            failures = orchestration.get("failures")
+            if isinstance(failures, list) and failures:
+                first_failure = failures[0] if isinstance(failures[0], Mapping) else {}
+                message = str(first_failure.get("message") or "").strip()
+                error_code = str(first_failure.get("errorCode") or "").strip()
+                if error_code or message:
+                    message = message.rstrip(".")
+                    parts.append(
+                        "firstFailure="
+                        + ": ".join(part for part in (error_code, message) if part)
+                    )
+            if status:
+                suffix = f" ({'; '.join(parts)})" if parts else ""
+                return f"Jira downstream task creation {status}{suffix}."
+        return None
+
     def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:
         outputs = self._get_from_result(execution_result, "outputs")
         if not isinstance(outputs, Mapping):
@@ -9421,12 +9477,21 @@ class MoonMindRunWorkflow:
             if operator_summary and not is_generic_completion_summary(operator_summary)
             else None
         )
+        trusted_jira_summary = self._trusted_jira_output_summary(outputs)
         if meaningful_operator_summary:
             self._operator_summary = operator_summary
+        elif trusted_jira_summary:
+            self._operator_summary = self._sanitize_operator_summary(
+                self._coerce_text(trusted_jira_summary, max_chars=1600)
+            )
 
-        step_summary = meaningful_operator_summary or self._coerce_text(
-            outputs.get("summary") or outputs.get("message"),
-            max_chars=1600,
+        step_summary = (
+            meaningful_operator_summary
+            or trusted_jira_summary
+            or self._coerce_text(
+                outputs.get("summary") or outputs.get("message"),
+                max_chars=1600,
+            )
         )
         self._last_step_summary = self._sanitize_operator_summary(
             step_summary

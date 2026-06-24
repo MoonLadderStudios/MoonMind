@@ -2242,6 +2242,38 @@ def test_record_execution_context_resets_last_step_fields_when_current_node_has_
     assert mock_run_workflow._last_step_summary is None
     assert mock_run_workflow._last_diagnostics_ref is None
 
+def test_record_execution_context_summarizes_trusted_jira_downstream_outputs(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="create-implement-tasks",
+        execution_result={
+            "outputs": {
+                "jiraOrchestration": {
+                    "status": "no_downstream_tasks",
+                    "storyCount": 7,
+                    "createdTaskCount": 0,
+                    "dependencyCount": 0,
+                    "failures": [
+                        {
+                            "errorCode": "task_creation_failed",
+                            "message": "Missing required template input 'jira_issue_key'.",
+                        }
+                    ],
+                }
+            }
+        },
+    )
+
+    assert mock_run_workflow._last_step_id == "create-implement-tasks"
+    assert mock_run_workflow._last_step_summary == (
+        "Jira downstream task creation no_downstream_tasks "
+        "(createdTasks=0; stories=7; dependencies=0; "
+        "firstFailure=task_creation_failed: Missing required template input "
+        "'jira_issue_key')."
+    )
+    assert mock_run_workflow._operator_summary == mock_run_workflow._last_step_summary
+
 def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_commit_count(
     mock_run_workflow: MoonMindRunWorkflow,
 ) -> None:

@@ -46,11 +46,13 @@ _DOWNSTREAM_PRESET_IMPLEMENT = "implement"
 _DOWNSTREAM_PRESETS: dict[str, dict[str, str]] = {
     _DOWNSTREAM_PRESET_ORCHESTRATE: {
         "slug": "jira-orchestrate",
+        "version": "1.0.0",
         "label": "Jira Orchestrate",
         "idempotencyPrefix": "jira-orchestrate",
     },
     _DOWNSTREAM_PRESET_IMPLEMENT: {
         "slug": "jira-implement",
+        "version": "1.1.0",
         "label": "Jira Implement",
         "idempotencyPrefix": "jira-implement",
     },
@@ -1155,6 +1157,7 @@ def _downstream_task_payload(
     preset = _DOWNSTREAM_PRESETS[target_preset]
     preset_label = preset["label"]
     preset_slug = preset["slug"]
+    preset_version = preset["version"]
     issue_key = _string(mapping.get("issueKey") or mapping.get("issue_key"))
     story_id = _string(mapping.get("storyId") or mapping.get("story_id"))
     summary = _string(mapping.get("summary")) or issue_key
@@ -1213,7 +1216,7 @@ def _downstream_task_payload(
         },
         "taskTemplate": {
             "slug": preset_slug,
-            "version": "1.0.0",
+            "version": preset_version,
         },
     }
     if runtime:
