@@ -487,7 +487,9 @@ RUN_STEP_RESILIENCE_POLICY_PATCH = "run-step-resilience-policy-v1"
 # trace-ref stamp / incident-manifest writes keep replaying deterministically.
 RUN_INCIDENT_RECONSTRUCTION_PATCH = "run-incident-reconstruction-v1"
 # Replay-stable patch id for the status-only memo update emitted from
-# _update_search_attributes. Older histories scheduled activities at this point.
+# _update_search_attributes. Histories that already recorded the prior ungated
+# memo command require a reset/versioning cutover; see
+# docs/tmp/RunStatusMemoUpsertCutover.md.
 RUN_STATUS_MEMO_UPSERT_PATCH = "run-status-memo-upsert-v1"
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
 _PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "gemini_cli")
