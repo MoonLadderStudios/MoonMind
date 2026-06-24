@@ -1,11 +1,18 @@
 import logging
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
-from api_service.db.models import ManagedAgentProviderProfile, ManagedSecret
+from api_service.db.models import (
+    ManagedAgentProviderProfile,
+    ManagedSecret,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
+)
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
@@ -246,3 +253,182 @@ async def _managed_secret_statuses_for_profiles(
         row.slug: row.status.value if row.status else ""
         for row in result.scalars().all()
     }
+
+
+# ---------------------------------------------------------------------------
+# First-party OAuth lifecycle helpers
+#
+# OAuth finalization, validation, and disconnect are generalized across the
+# big-three first-party runtimes (Claude, Codex, Gemini). These helpers hold
+# the per-runtime metadata and the canonical command_behavior shaping so the
+# OAuth session finalize path and the provider-profile lifecycle endpoints
+# produce identical, transport-neutral profile state.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FirstPartyOAuthProfile:
+    """Per-runtime metadata for a first-party OAuth-backed provider profile."""
+
+    runtime_id: str
+    provider_id: str
+    label_prefix: str
+    auth_strategy: str
+    home_path_keys: tuple[str, ...]
+
+
+FIRST_PARTY_OAUTH_PROFILES: dict[tuple[str, str], FirstPartyOAuthProfile] = {
+    ("claude_code", "anthropic"): FirstPartyOAuthProfile(
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        label_prefix="Claude",
+        auth_strategy="claude_credential_methods",
+        home_path_keys=("CLAUDE_HOME",),
+    ),
+    ("codex_cli", "openai"): FirstPartyOAuthProfile(
+        runtime_id="codex_cli",
+        provider_id="openai",
+        label_prefix="Codex",
+        auth_strategy="codex_credential_methods",
+        home_path_keys=("CODEX_HOME",),
+    ),
+    ("gemini_cli", "google"): FirstPartyOAuthProfile(
+        runtime_id="gemini_cli",
+        provider_id="google",
+        label_prefix="Gemini",
+        auth_strategy="gemini_credential_methods",
+        home_path_keys=("GEMINI_HOME", "GEMINI_CLI_HOME"),
+    ),
+}
+
+
+def get_first_party_oauth_profile(
+    runtime_id: str | None,
+    provider_id: str | None,
+) -> FirstPartyOAuthProfile | None:
+    """Return the first-party OAuth mapping for a runtime/provider pair."""
+    return FIRST_PARTY_OAUTH_PROFILES.get((runtime_id or "", provider_id or ""))
+
+
+def oauth_auth_actions_for_profile(
+    profile: ManagedAgentProviderProfile,
+) -> list[str]:
+    """Compute the credential-method actions surfaced for an OAuth profile."""
+    actions = ["use_api_key"]
+    if profile.volume_ref or profile.volume_mount_path:
+        actions.insert(0, "connect_oauth")
+        actions.extend(["validate_oauth", "disconnect_oauth"])
+    return actions
+
+
+def update_oauth_command_behavior(
+    profile: ManagedAgentProviderProfile,
+    *,
+    mapping: FirstPartyOAuthProfile | None,
+    auth_state: str,
+    status_label: str,
+    readiness: dict[str, Any],
+) -> None:
+    """Merge canonical OAuth credential-method metadata into command_behavior."""
+    behavior = dict(profile.command_behavior or {})
+    update: dict[str, Any] = {
+        "auth_state": auth_state,
+        "auth_actions": oauth_auth_actions_for_profile(profile),
+        "auth_status_label": status_label,
+        "auth_readiness": readiness,
+    }
+    if mapping is not None:
+        update["auth_strategy"] = mapping.auth_strategy
+    behavior.update(update)
+    profile.command_behavior = behavior
+
+
+def oauth_home_path_overrides(
+    mapping: FirstPartyOAuthProfile,
+    volume_mount_path: str | None,
+) -> dict[str, str]:
+    """Documented home-path env overrides for an OAuth-after-setup profile."""
+    mount_path = str(volume_mount_path or "").strip()
+    if not mount_path:
+        return {}
+    return {key: mount_path for key in mapping.home_path_keys}
+
+
+def clear_oauth_home_path_overrides(
+    profile: ManagedAgentProviderProfile,
+    *,
+    mapping: FirstPartyOAuthProfile | None,
+) -> None:
+    """Remove persisted OAuth home env overrides when leaving OAuth auth mode."""
+    if mapping is None or not profile.home_path_overrides:
+        return
+    profile.home_path_overrides = {
+        key: value
+        for key, value in profile.home_path_overrides.items()
+        if key not in mapping.home_path_keys
+    }
+
+
+def apply_oauth_connected_state(
+    profile: ManagedAgentProviderProfile,
+    *,
+    mapping: FirstPartyOAuthProfile | None,
+    validated_at: datetime,
+) -> None:
+    """Stamp connected command_behavior + home overrides after OAuth success."""
+    if mapping is not None:
+        profile.home_path_overrides = {
+            **(profile.home_path_overrides or {}),
+            **oauth_home_path_overrides(mapping, profile.volume_mount_path),
+        }
+    update_oauth_command_behavior(
+        profile,
+        mapping=mapping,
+        auth_state="connected",
+        status_label=(
+            f"{mapping.label_prefix} OAuth ready" if mapping else "OAuth ready"
+        ),
+        readiness={
+            "connected": True,
+            "last_validated_at": validated_at.isoformat(),
+            "backing_secret_exists": True,
+            "launch_ready": True,
+        },
+    )
+
+
+def apply_oauth_validation_failure(
+    profile: ManagedAgentProviderProfile,
+    *,
+    mapping: FirstPartyOAuthProfile | None,
+    reason: str | None,
+    failed_at: datetime,
+) -> None:
+    """Leave a profile visibly disabled after failed OAuth verification.
+
+    Sets the canonical ``auth_state=validation_failed`` /
+    ``disabled_reason=auth_invalid`` row state (not just session or
+    command_behavior metadata) so the profile remains visible in Settings
+    with diagnostics and a retry action.
+    """
+    profile.enabled = False
+    profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+    profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+    profile.last_validated_at = failed_at
+    update_oauth_command_behavior(
+        profile,
+        mapping=mapping,
+        auth_state="validation_failed",
+        status_label=(
+            f"{mapping.label_prefix} OAuth validation failed"
+            if mapping
+            else "OAuth validation failed"
+        ),
+        readiness={
+            "connected": False,
+            "last_validated_at": failed_at.isoformat(),
+            "backing_secret_exists": False,
+            "launch_ready": False,
+            "failure_reason": redact_sensitive_payload(str(reason or "unknown")),
+        },
+    )

@@ -65,6 +65,19 @@ def _module_db(tmp_path_factory):
 def client_app(_module_db) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
 
+
+@pytest.fixture(autouse=True)
+def _reset_dependency_overrides():
+    """Prevent ``_override_current_user`` overrides from leaking across modules.
+
+    These tests mutate the shared ``app.dependency_overrides`` to inject a
+    current user. Without cleanup, the last override leaks into sibling test
+    modules (e.g. the settings API tests) and changes their authenticated
+    principal, causing spurious 403s.
+    """
+    yield
+    app.dependency_overrides.clear()
+
 def _override_current_user(
     *,
     user_id=None,
@@ -1507,7 +1520,17 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
                     is_default=False,
                 )
             )
-            await session.commit()
+            await session.flush()
+            existing = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert existing is not None
+        existing.home_path_overrides = {
+            "CLAUDE_HOME": "/oauth/claude",
+            "CODEX_HOME": "/oauth/codex",
+            "GEMINI_HOME": "/oauth/gemini",
+            "GEMINI_CLI_HOME": "/oauth/gemini",
+            "CUSTOM_HOME": "/custom/home",
+        }
+        await session.commit()
 
     async with client_app as client:
         response = await client.post(
@@ -1548,6 +1571,21 @@ async def test_provider_api_key_setup_stores_secret_ref_mappings_only(
         "CUSTOM_ENV": {"from_secret_ref": "custom_tool"},
         env_key: {"from_secret_ref": secret_role},
     }
+    expected_home_path_overrides = {
+        "CLAUDE_HOME": "/oauth/claude",
+        "CODEX_HOME": "/oauth/codex",
+        "GEMINI_HOME": "/oauth/gemini",
+        "GEMINI_CLI_HOME": "/oauth/gemini",
+        "CUSTOM_HOME": "/custom/home",
+    }
+    if runtime_id == "claude_code":
+        expected_home_path_overrides.pop("CLAUDE_HOME")
+    elif runtime_id == "codex_cli":
+        expected_home_path_overrides.pop("CODEX_HOME")
+    elif runtime_id == "gemini_cli":
+        expected_home_path_overrides.pop("GEMINI_HOME")
+        expected_home_path_overrides.pop("GEMINI_CLI_HOME")
+    assert profile_payload["home_path_overrides"] == expected_home_path_overrides
     assert clear_env_key in profile_payload["clear_env_keys"]
     assert profile_payload["account_label"] == "MM-875 route test"
     assert profile_payload["enabled"] is True
@@ -2164,3 +2202,252 @@ async def test_claude_oauth_validate_failure_redacts_secret_like_reason(
         assert raw_secret not in str(readiness)
         assert raw_path not in str(readiness)
         assert readiness["failure_reason"] == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
+
+
+@pytest.mark.asyncio
+async def test_claude_oauth_validate_failure_uses_unknown_reason_fallback(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _override_current_user()
+    profile_id = "claude-oauth-missing-failure-reason"
+
+    async def _fake_verify(
+        *,
+        runtime_id: str,
+        volume_ref: str,
+        volume_mount_path: str | None,
+    ) -> dict[str, object]:
+        return {"verified": False}
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _fake_verify,
+    )
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="claude_code",
+                provider_id="anthropic",
+                provider_label="Anthropic",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/validate"
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Claude OAuth validation failed: unknown"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "profile_id",
+        "runtime_id",
+        "provider_id",
+        "volume_ref",
+        "mount_path",
+        "label_prefix",
+        "auth_strategy",
+        "expected_home_overrides",
+    ),
+    [
+        (
+            "codex-openai-oauth-lifecycle",
+            "codex_cli",
+            "openai",
+            "codex_auth_volume",
+            "/home/app/.codex",
+            "Codex",
+            "codex_credential_methods",
+            {"CODEX_HOME": "/home/app/.codex"},
+        ),
+        (
+            "gemini-google-oauth-lifecycle",
+            "gemini_cli",
+            "google",
+            "gemini_auth_volume",
+            "/var/lib/gemini-auth",
+            "Gemini",
+            "gemini_credential_methods",
+            {
+                "GEMINI_HOME": "/var/lib/gemini-auth",
+                "GEMINI_CLI_HOME": "/var/lib/gemini-auth",
+            },
+        ),
+    ],
+)
+async def test_first_party_oauth_lifecycle_generalized_across_runtimes(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+    profile_id: str,
+    runtime_id: str,
+    provider_id: str,
+    volume_ref: str,
+    mount_path: str,
+    label_prefix: str,
+    auth_strategy: str,
+    expected_home_overrides: dict[str, str],
+) -> None:
+    """validate + disconnect work for Codex and Gemini, not only Claude."""
+    _override_current_user()
+    synced_runtimes: list[str] = []
+
+    async def _fake_verify(
+        *,
+        runtime_id: str,
+        volume_ref: str,
+        volume_mount_path: str | None,
+    ) -> dict[str, object]:
+        return {"verified": True}
+
+    async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
+        synced_runtimes.append(runtime_id)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _fake_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.provider_profiles.sync_provider_profile_manager",
+        _fake_sync,
+    )
+
+    async with db_base.async_session_maker() as session:
+        if await session.get(ManagedAgentProviderProfile, profile_id) is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id=runtime_id,
+                    provider_id=provider_id,
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref=volume_ref,
+                    volume_mount_path=mount_path,
+                    enabled=True,
+                )
+            )
+            await session.flush()
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        profile.credential_source = ProviderCredentialSource.OAUTH_VOLUME
+        profile.runtime_materialization_mode = RuntimeMaterializationMode.OAUTH_HOME
+        profile.volume_ref = volume_ref
+        profile.volume_mount_path = mount_path
+        profile.home_path_overrides = {"CUSTOM_HOME": "/custom/home"}
+        profile.enabled = True
+        await session.commit()
+
+    async with client_app as client:
+        validate_response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/validate"
+        )
+        connected_payload = (
+            await client.get(f"/api/v1/provider-profiles/{profile_id}")
+        ).json()
+        disconnect_response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/disconnect"
+        )
+        disconnected_payload = (
+            await client.get(f"/api/v1/provider-profiles/{profile_id}")
+        ).json()
+
+    assert validate_response.status_code == 200
+    assert validate_response.json()["status"] == "ready"
+    assert validate_response.json()["status_label"] == f"{label_prefix} OAuth ready"
+
+    assert connected_payload["enabled"] is True
+    assert connected_payload["auth_state"] == "connected"
+    assert connected_payload["disabled_reason"] is None
+    assert connected_payload["last_auth_method"] == "oauth_volume"
+    assert connected_payload["home_path_overrides"] == {
+        "CUSTOM_HOME": "/custom/home",
+        **expected_home_overrides,
+    }
+    behavior = connected_payload["command_behavior"]
+    assert behavior["auth_strategy"] == auth_strategy
+    assert behavior["auth_status_label"] == f"{label_prefix} OAuth ready"
+    assert behavior["auth_readiness"]["connected"] is True
+
+    assert disconnect_response.status_code == 200
+    assert disconnect_response.json()["status"] == "disconnected"
+    assert (
+        disconnect_response.json()["status_label"]
+        == f"{label_prefix} OAuth disconnected"
+    )
+    assert disconnected_payload["credential_source"] == "none"
+    assert disconnected_payload["volume_ref"] is None
+    assert disconnected_payload["volume_mount_path"] is None
+    assert disconnected_payload["home_path_overrides"] == {
+        "CUSTOM_HOME": "/custom/home"
+    }
+    assert disconnected_payload["auth_state"] == "disconnected"
+    assert disconnected_payload["disabled_reason"] == "disconnected"
+    assert disconnected_payload["enabled"] is False
+    assert disconnected_payload["command_behavior"]["auth_actions"] == ["use_api_key"]
+    assert synced_runtimes == [runtime_id, runtime_id]
+
+
+@pytest.mark.asyncio
+async def test_oauth_lifecycle_rejects_non_first_party_profile(
+    client_app: AsyncClient,
+    _module_db,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OAuth validate/disconnect are only available to first-party profiles."""
+    _override_current_user()
+    profile_id = "thirdparty-oauth-not-supported"
+
+    async def _unexpected_verify(**_kwargs):
+        raise AssertionError("non-first-party profiles must fail before verification")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _unexpected_verify,
+    )
+
+    async with db_base.async_session_maker() as session:
+        if await session.get(ManagedAgentProviderProfile, profile_id) is None:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id=profile_id,
+                    runtime_id="custom_runtime",
+                    provider_id="acme",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="acme_auth_volume",
+                    volume_mount_path="/home/app/.acme",
+                    enabled=True,
+                )
+            )
+            await session.commit()
+
+    async with client_app as client:
+        validate_response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/validate"
+        )
+        disconnect_response = await client.post(
+            f"/api/v1/provider-profiles/{profile_id}/oauth/disconnect"
+        )
+
+    expected_detail = (
+        "OAuth lifecycle actions are only supported for first-party "
+        "Claude, Codex, and Gemini provider profiles."
+    )
+    assert validate_response.status_code == 422
+    assert validate_response.json()["detail"] == expected_detail
+    assert disconnect_response.status_code == 422
+    assert disconnect_response.json()["detail"] == expected_detail

@@ -20,7 +20,13 @@ from api_service.api.schemas_oauth_sessions import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session, get_async_session_context
-from api_service.services.provider_profile_service import sync_provider_profile_manager
+from api_service.services.provider_profile_service import (
+    apply_oauth_connected_state,
+    apply_oauth_validation_failure,
+    get_first_party_oauth_profile,
+    normalize_runtime_default_profile,
+    sync_provider_profile_manager,
+)
 from api_service.db.models import (
     ManagedAgentOAuthSession,
     OAuthSessionStatus,
@@ -707,6 +713,12 @@ async def finalize_oauth_session(
                     "Volume verification failed: "
                     f"{verification.get('reason', 'unknown')}"
                 )
+                await _disable_profile_after_failed_verification(
+                    db,
+                    session_obj,
+                    reason=verification.get("reason"),
+                    current_user=current_user,
+                )
                 await db.commit()
                 await _stop_oauth_auth_runner(session_obj)
                 await _fail_oauth_session_workflow(
@@ -830,6 +842,17 @@ async def finalize_oauth_session(
         db.add(new_profile)
         profile_obj = new_profile
 
+    # Stamp the documented OAuth-after-setup metadata (home_path_overrides and
+    # connected credential-method readiness) for first-party Claude/Codex/Gemini
+    # profiles so the persisted row matches the canonical OAuth profile shape.
+    apply_oauth_connected_state(
+        profile_obj,
+        mapping=get_first_party_oauth_profile(
+            profile_obj.runtime_id, profile_obj.provider_id
+        ),
+        validated_at=connected_at,
+    )
+
     await db.commit()
 
     await sync_provider_profile_manager(session=db, runtime_id=session_obj.runtime_id)
@@ -843,6 +866,45 @@ async def finalize_oauth_session(
     await _complete_oauth_session_workflow(session_obj.session_id)
 
     return _oauth_session_response(session_obj, profile=profile_obj)
+
+async def _disable_profile_after_failed_verification(
+    db: AsyncSession,
+    session_obj: ManagedAgentOAuthSession,
+    *,
+    reason: str | None,
+    current_user: User,
+) -> None:
+    """Leave the OAuth profile visibly disabled after failed verification.
+
+    The OAuth session is failed independently, but the user-visible Provider
+    Profile must also be marked ``auth_state=validation_failed`` /
+    ``disabled_reason=auth_invalid`` (not only session/command_behavior
+    metadata) so it stays visible in Settings with a retry action. Applies to
+    any first-party OAuth profile (Claude, Codex, Gemini) flowing through
+    finalize, not just the Claude-only validate endpoint.
+    """
+    if not session_obj.profile_id:
+        return
+    profile = await db.get(ManagedAgentProviderProfile, session_obj.profile_id)
+    if profile is None:
+        return
+    if (
+        profile.owner_user_id is not None
+        and str(profile.owner_user_id) != str(current_user.id)
+    ):
+        return
+    apply_oauth_validation_failure(
+        profile,
+        mapping=get_first_party_oauth_profile(profile.runtime_id, profile.provider_id),
+        reason=reason,
+        failed_at=datetime.now(timezone.utc),
+    )
+    await normalize_runtime_default_profile(
+        session=db,
+        runtime_id=profile.runtime_id,
+    )
+    await sync_provider_profile_manager(session=db, runtime_id=profile.runtime_id)
+
 
 async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None:
     if not session_obj.container_name:
