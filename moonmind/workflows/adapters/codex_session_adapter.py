@@ -62,7 +62,10 @@ from moonmind.workflows.agent_skills.selection import selected_agent_skill
 from moonmind.workflows.codex_session_timeouts import (
     MAX_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
 )
-from moonmind.workflows.provider_failures import classify_provider_failure
+from moonmind.workflows.provider_failures import (
+    build_provider_failure_event,
+    classify_provider_failure,
+)
 from moonmind.workflows.executions.runtime_defaults import resolve_runtime_defaults
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
@@ -1824,12 +1827,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             metadata["turnMetadata"] = dict(turn_metadata)
         if session_artifacts is not None:
             metadata["sessionArtifacts"] = dict(session_artifacts)
-        if classification is not None:
-            metadata["providerFailure"] = {
-                "providerErrorCode": classification.provider_error_code,
-                "retryRecommendation": classification.retry_recommendation,
-                "reason": summary_text,
-            }
+        provider_failure_event = build_provider_failure_event(
+            classification=classification,
+        )
+        if provider_failure_event is not None:
+            metadata["providerFailure"] = provider_failure_event.to_metadata()
         failure_result = AgentRunResult(
             outputRefs=list(output_refs),
             summary=summary_text,

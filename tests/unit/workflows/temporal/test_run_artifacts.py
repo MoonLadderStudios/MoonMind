@@ -3148,7 +3148,7 @@ def test_activity_result_provider_failure_summary_reads_profile_from_failure() -
                 "providerFailure": {
                     "providerErrorCode": "401",
                     "profileId": "codex_default",
-                    "reason": "http 401",
+                    "sanitizedSummary": "http 401",
                     "retryRecommendation": "reauthenticate",
                 },
             },
@@ -3354,7 +3354,7 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
                 "providerFailure": {
                     "providerErrorCode": "401",
                     "retryRecommendation": "reauthenticate",
-                    "reason": "http 401",
+                    "sanitizedSummary": "http 401",
                 },
             },
         )
