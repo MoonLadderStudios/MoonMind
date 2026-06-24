@@ -354,6 +354,21 @@ def oauth_home_path_overrides(
     return {key: mount_path for key in mapping.home_path_keys}
 
 
+def clear_oauth_home_path_overrides(
+    profile: ManagedAgentProviderProfile,
+    *,
+    mapping: FirstPartyOAuthProfile | None,
+) -> None:
+    """Remove persisted OAuth home env overrides when leaving OAuth auth mode."""
+    if mapping is None or not profile.home_path_overrides:
+        return
+    profile.home_path_overrides = {
+        key: value
+        for key, value in profile.home_path_overrides.items()
+        if key not in mapping.home_path_keys
+    }
+
+
 def apply_oauth_connected_state(
     profile: ManagedAgentProviderProfile,
     *,

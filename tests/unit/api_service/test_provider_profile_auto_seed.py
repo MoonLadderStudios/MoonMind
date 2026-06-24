@@ -652,7 +652,7 @@ async def test_auto_seed_first_party_stubs_have_default_readiness_labels(
 
     expected_command_behavior = {
         "supported_auth_methods": ["oauth_volume", "secret_ref"],
-        "auth_actions": ["connect_oauth", "add_api_key"],
+        "auth_actions": ["connect_oauth", "use_api_key"],
         "auth_status_label": "Not connected",
         "auth_readiness": {
             "connected": False,
@@ -669,3 +669,9 @@ async def test_auto_seed_first_party_stubs_have_default_readiness_labels(
         assert profile.command_behavior == expected_command_behavior, profile_id
         # Stubs stay pre-OAuth: no home_path_overrides until setup succeeds.
         assert not profile.home_path_overrides
+
+    readiness_ids = {
+        id(profiles[profile_id].command_behavior["auth_readiness"])
+        for profile_id in FIRST_PARTY_SETUP_PROFILE_IDS
+    }
+    assert len(readiness_ids) == len(FIRST_PARTY_SETUP_PROFILE_IDS)

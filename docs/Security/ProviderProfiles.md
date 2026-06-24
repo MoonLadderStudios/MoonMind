@@ -526,7 +526,7 @@ Examples:
 
 - `suppress_cli_model_flag_when_env_model_present: true`
 - `default_codex_profile_name: "m27"`
-- `auth_actions: ["connect_oauth", "add_api_key"]`
+- `auth_actions: ["connect_oauth", "use_api_key"]`
 - `auth_readiness: {"connected": false, "launch_ready": false}`
 
 #### `max_lease_duration_seconds`
@@ -608,7 +608,7 @@ command_behavior:
   supported_auth_methods: ["oauth_volume", "secret_ref"]
   auth_actions:
     - connect_oauth
-    - add_api_key
+    - use_api_key
   auth_status_label: "Not connected"
   auth_readiness:
     connected: false
@@ -760,7 +760,7 @@ Recommended behavior:
 def may_enable_profile(profile, *, action, readiness, policy) -> bool:
     if policy.blocks_launch(profile):
         return False
-    if action in {"connect_oauth", "reconnect_oauth", "add_api_key", "rotate_api_key"}:
+    if action in {"connect_oauth", "reconnect_oauth", "use_api_key", "rotate_api_key"}:
         return readiness.credentials_verified
     if profile.disabled_reason == "user_disabled":
         return False
@@ -1407,7 +1407,7 @@ home_path_overrides: {}
 
 command_behavior:
   supported_auth_methods: ["oauth_volume", "secret_ref"]
-  auth_actions: ["connect_oauth", "add_api_key"]
+  auth_actions: ["connect_oauth", "use_api_key"]
   auth_status_label: "Not connected"
   auth_readiness:
     connected: false

@@ -21,6 +21,7 @@ from api_service.db.models import (
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
     RuntimeMaterializationMode,
 )
 from api_service.main import app
@@ -870,18 +871,59 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     session_id = "oas_verifyfailed1"
+    profile_id = "codex-cli-failed-verify"
+    fallback_profile_id = "codex-cli-failed-verify-fallback"
+    synced_runtimes: list[str] = []
 
     async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == "codex_cli"
+            )
+        )
+        for row in result.scalars():
+            row.is_default = False
+        await session.flush()
         session.add(
             ManagedAgentOAuthSession(
                 session_id=session_id,
                 runtime_id="codex_cli",
-                profile_id="codex-cli-failed-verify",
+                profile_id=profile_id,
                 volume_ref="codex_auth_volume",
                 volume_mount_path="/home/app/.codex",
                 status=OAuthSessionStatus.AWAITING_USER,
                 requested_by_user_id="None",
                 account_label="codex account",
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                enabled=True,
+                is_default=True,
+                priority=10_100,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=fallback_profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=True,
+                is_default=False,
+                priority=10_000,
+                auth_state=ProviderProfileAuthState.CONNECTED,
             )
         )
         await session.commit()
@@ -900,6 +942,9 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
         failed_signal["session_id"] = session_id
         failed_signal["reason"] = reason
 
+    async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
+        synced_runtimes.append(runtime_id)
+
     monkeypatch.setattr(
         "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
         _failed_verify,
@@ -911,6 +956,10 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
     monkeypatch.setattr(
         "api_service.api.routers.oauth_sessions._fail_oauth_session_workflow",
         _capture_fail_signal,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _fake_sync,
     )
 
     async with db_base.async_session_maker() as session:
@@ -930,6 +979,15 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
         assert row is not None
         assert row.status == OAuthSessionStatus.FAILED
         assert row.failure_reason == "Volume verification failed: no_credentials_found"
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is False
+        assert profile.is_default is False
+        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+        assert profile.disabled_reason == ProviderProfileDisabledReason.AUTH_INVALID
+        fallback = await session.get(ManagedAgentProviderProfile, fallback_profile_id)
+        assert fallback is not None
+        assert fallback.is_default is True
     assert stopped == {
         "session_id": session_id,
         "container_name": "moonmind_auth_oas_verifyfailed1",
@@ -938,6 +996,7 @@ async def test_finalize_oauth_session_rejects_failed_volume_verification(
         "session_id": session_id,
         "reason": "Volume verification failed: no_credentials_found",
     }
+    assert synced_runtimes == ["codex_cli"]
 
 @pytest.mark.asyncio
 async def test_finalize_oauth_session_registers_oauth_home_codex_profile(

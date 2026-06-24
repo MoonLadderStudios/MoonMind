@@ -11,6 +11,7 @@ import os  # For path operations
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 # Now proceed with other imports
 from uuid import uuid4
@@ -678,15 +679,16 @@ async def _auto_seed_provider_profiles() -> list[str]:
     # Documented default readiness labels for first-party setup stubs
     # (docs/Security/ProviderProfiles.md §7.2 / §15.1). The stubs are visible
     # but disabled until first OAuth or API-key setup succeeds.
-    _FIRST_PARTY_SETUP_COMMAND_BEHAVIOR = {
-        "supported_auth_methods": ["oauth_volume", "secret_ref"],
-        "auth_actions": ["connect_oauth", "add_api_key"],
-        "auth_status_label": "Not connected",
-        "auth_readiness": {
-            "connected": False,
-            "launch_ready": False,
-        },
-    }
+    def _make_first_party_setup_command_behavior() -> dict[str, Any]:
+        return {
+            "supported_auth_methods": ["oauth_volume", "secret_ref"],
+            "auth_actions": ["connect_oauth", "use_api_key"],
+            "auth_status_label": "Not connected",
+            "auth_readiness": {
+                "connected": False,
+                "launch_ready": False,
+            },
+        }
 
     # Well-known runtime defaults matching docker-compose.yaml conventions.
     _DEFAULT_PROFILES = [
@@ -706,7 +708,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
             "tags": ["setup-required", "first-party"],
-            "command_behavior": dict(_FIRST_PARTY_SETUP_COMMAND_BEHAVIOR),
+            "command_behavior": _make_first_party_setup_command_behavior(),
         },
         {
             "profile_id": "gemini_default",
@@ -729,7 +731,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
             "tags": ["setup-required", "first-party"],
-            "command_behavior": dict(_FIRST_PARTY_SETUP_COMMAND_BEHAVIOR),
+            "command_behavior": _make_first_party_setup_command_behavior(),
         },
         {
             "profile_id": "codex_openai_default",
@@ -747,7 +749,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
             "tags": ["setup-required", "first-party"],
-            "command_behavior": dict(_FIRST_PARTY_SETUP_COMMAND_BEHAVIOR),
+            "command_behavior": _make_first_party_setup_command_behavior(),
         },
         {
             "profile_id": "codex_default",
@@ -772,7 +774,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
             "tags": ["setup-required", "first-party"],
-            "command_behavior": dict(_FIRST_PARTY_SETUP_COMMAND_BEHAVIOR),
+            "command_behavior": _make_first_party_setup_command_behavior(),
         },
         {
             "profile_id": "claude_anthropic_default",
@@ -795,7 +797,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
             "tags": ["setup-required", "first-party"],
-            "command_behavior": dict(_FIRST_PARTY_SETUP_COMMAND_BEHAVIOR),
+            "command_behavior": _make_first_party_setup_command_behavior(),
         },
         {
             "profile_id": "claude_anthropic",
@@ -820,7 +822,7 @@ async def _auto_seed_provider_profiles() -> list[str]:
             "auth_state": ProviderProfileAuthState.NOT_CONFIGURED,
             "disabled_reason": ProviderProfileDisabledReason.MISSING_CREDENTIALS,
             "tags": ["setup-required", "first-party"],
-            "command_behavior": dict(_FIRST_PARTY_SETUP_COMMAND_BEHAVIOR),
+            "command_behavior": _make_first_party_setup_command_behavior(),
         },
 
     ]

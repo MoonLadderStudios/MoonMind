@@ -24,6 +24,7 @@ from api_service.services.provider_profile_service import (
     apply_oauth_connected_state,
     apply_oauth_validation_failure,
     get_first_party_oauth_profile,
+    normalize_runtime_default_profile,
     sync_provider_profile_manager,
 )
 from api_service.db.models import (
@@ -898,6 +899,11 @@ async def _disable_profile_after_failed_verification(
         reason=reason,
         failed_at=datetime.now(timezone.utc),
     )
+    await normalize_runtime_default_profile(
+        session=db,
+        runtime_id=profile.runtime_id,
+    )
+    await sync_provider_profile_manager(session=db, runtime_id=profile.runtime_id)
 
 
 async def _stop_oauth_auth_runner(session_obj: ManagedAgentOAuthSession) -> None:

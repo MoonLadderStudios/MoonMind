@@ -798,7 +798,7 @@ async def validate_claude_oauth_profile(
             profile.command_behavior.get("auth_readiness", {}).get("failure_reason")
             if isinstance(profile.command_behavior, dict)
             else None
-        )
+        ) or "unknown"
         raise HTTPException(
             status_code=400,
             detail=f"{mapping.label_prefix} OAuth validation failed: {reason}",
@@ -852,6 +852,7 @@ async def disconnect_claude_oauth_profile(
         profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
     profile.volume_ref = None
     profile.volume_mount_path = None
+    clear_oauth_home_path_overrides(profile, mapping=mapping)
     disconnected_at = datetime.now(UTC)
     profile.enabled = False
     profile.auth_state = ProviderProfileAuthState.DISCONNECTED
@@ -1069,6 +1070,10 @@ def _apply_api_key_setup_to_profile(
 ) -> None:
     row.credential_source = ProviderCredentialSource.SECRET_REF
     row.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
+    clear_oauth_home_path_overrides(
+        row,
+        mapping=get_first_party_oauth_profile(row.runtime_id, row.provider_id),
+    )
     row.secret_refs = {
         **(row.secret_refs or {}),
         mapping.secret_role: secret_ref,
@@ -1665,6 +1670,7 @@ from api_service.services.provider_profile_service import (
     FirstPartyOAuthProfile,
     apply_oauth_connected_state,
     apply_oauth_validation_failure,
+    clear_oauth_home_path_overrides,
     get_first_party_oauth_profile,
     normalize_runtime_default_profile,
     oauth_auth_actions_for_profile,
