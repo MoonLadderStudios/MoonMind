@@ -90,8 +90,14 @@ def test_document_health_review_severity_and_failure_modes() -> None:
     assert "classify the claim as `ambiguous`, not `stale`" in text
 
 
-def test_document_health_review_reuses_document_update_mechanics() -> None:
+def test_document_health_review_is_self_contained() -> None:
     text = _skill_text()
 
-    assert "document-update" in text
+    # The skill must not depend on the external ``document-update`` skill. When
+    # ``document-health-review`` is selected alone, the resolver materializes
+    # only this skill (plus its ``required-skills`` closure), so any reference
+    # to ``../document-update/SKILL.md`` would dangle in the active projection.
+    # The dependency was removed so the skill stands alone.
+    assert "document-update" not in text
+    # It still inlines the drift-analysis mechanics it relies on.
     assert "drift" in text.lower()
