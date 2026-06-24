@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Owner:** MoonMind Engineering
-**Last Updated:** 2026-06-23
+**Last Updated:** 2026-06-24
 **Audience:** UI developers, backend developers, operators
 
 ## 1. Purpose
@@ -25,8 +25,8 @@ The design intent is simple: a recurring schedule detail page should feel like a
 2. Clicking a recurring schedule opens the recurring schedule detail page for that schedule.
 3. The recurring schedule detail page should reuse the normal workflow detail page composition as much as practical.
 4. The detail page must support editing the schedule.
-5. The detail page must support deleting the schedule.
-6. Schedule deletion must remove or disable future dispatch and then navigate the user back to the recurring schedule list.
+5. The detail page should be designed for deleting the schedule once the backend delete contract is available.
+6. Schedule deletion, when implemented, must remove or disable future dispatch and then navigate the user back to the recurring schedule list.
 
 ---
 
@@ -43,7 +43,7 @@ Navigation rules:
 
 - The primary schedule name in each `/schedules` row is a link to `/schedules/{definitionId}`.
 - New recurring schedule creation redirects to `/schedules/{definitionId}`.
-- After deletion, the UI redirects to `/schedules` and shows a success toast or banner.
+- After deletion is available and succeeds, the UI redirects to `/schedules` and shows a success toast or banner.
 - Run-history rows link to the spawned workflow execution detail route, `/workflows/{workflowId}?source=temporal`.
 
 ---
@@ -71,7 +71,7 @@ Minimal differences:
 | Steps tab | Omitted by default; schedules do not have execution steps |
 | Artifacts tab | Omitted by default; artifacts belong to spawned workflow runs |
 | Runs tab | Schedule run history, linking each spawned run to workflow detail |
-| Workflow actions | Schedule actions: edit, pause/resume, run now, delete |
+| Workflow actions | Schedule actions: edit, pause/resume, run now, and delete when the backend delete contract is available |
 
 The page should not invent a completely separate visual language. Users should understand that a recurring schedule is a control plane object that repeatedly creates normal workflow executions.
 
@@ -101,7 +101,7 @@ Suggested layout:
 Default tab behavior:
 
 - **Overview** shows the schedule summary, next run, cadence, timezone, target, policy, and latest dispatch status.
-- **Runs** shows recent and historical runs from `/api/recurring-workflows/{id}/runs`; each run links to its workflow detail page.
+- **Runs** shows recent and historical runs from `/api/recurring-workflows/{definitionId}/runs`; each run links to its workflow detail page.
 - **Configuration** shows editable schedule fields in read-only form until the user chooses Edit.
 - **Activity** is optional and can show audit events, reconciliation warnings, and last Temporal describe metadata when available.
 
@@ -129,15 +129,15 @@ The page needs the following schedule data:
 | `temporalScheduleId` | Advanced/debug fact when available |
 | `updatedAt` | Metadata and freshness display |
 
-The page uses the existing schedule endpoints plus a delete endpoint:
+The page uses the existing schedule endpoints. Delete is a planned contract and should not be surfaced in the UI until the backend route and runtime-config source are available.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/recurring-workflows/{id}` | Load schedule detail |
-| `PATCH` | `/api/recurring-workflows/{id}` | Save schedule edits |
-| `DELETE` | `/api/recurring-workflows/{id}` | Delete schedule and stop future dispatch |
-| `POST` | `/api/recurring-workflows/{id}/run` | Trigger immediate manual run |
-| `GET` | `/api/recurring-workflows/{id}/runs` | Load run history |
+| `GET` | `/api/recurring-workflows/{definitionId}` | Load schedule detail |
+| `PATCH` | `/api/recurring-workflows/{definitionId}` | Save schedule edits |
+| `POST` | `/api/recurring-workflows/{definitionId}/run` | Trigger immediate manual run |
+| `GET` | `/api/recurring-workflows/{definitionId}/runs` | Load run history |
+| `DELETE` | `/api/recurring-workflows/{definitionId}` | Planned: delete schedule and stop future dispatch |
 
 Runtime config should expose matching endpoint templates under `sources.schedules`:
 
@@ -147,15 +147,16 @@ Runtime config should expose matching endpoint templates under `sources.schedule
     "schedules": {
       "list": "/api/recurring-workflows?scope=personal",
       "create": "/api/recurring-workflows",
-      "detail": "/api/recurring-workflows/{id}",
-      "update": "/api/recurring-workflows/{id}",
-      "delete": "/api/recurring-workflows/{id}",
-      "runNow": "/api/recurring-workflows/{id}/run",
-      "runs": "/api/recurring-workflows/{id}/runs?limit=200"
+      "detail": "/api/recurring-workflows/{definitionId}",
+      "update": "/api/recurring-workflows/{definitionId}",
+      "runNow": "/api/recurring-workflows/{definitionId}/run",
+      "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200"
     }
   }
 }
 ```
+
+`sources.schedules.delete` should be added only when `DELETE /api/recurring-workflows/{definitionId}` is implemented by the backend.
 
 ---
 
@@ -184,7 +185,7 @@ Editable fields:
 Save behavior:
 
 1. Validate cron and timezone client-side for immediate feedback.
-2. Submit a `PATCH /api/recurring-workflows/{id}` request containing only changed fields when practical.
+2. Submit a `PATCH /api/recurring-workflows/{definitionId}` request containing only changed fields when practical.
 3. Keep the user on `/schedules/{definitionId}` after a successful save.
 4. Refetch detail and run-history data after save.
 5. Show validation and reconciliation errors inline without leaving the page.
@@ -193,15 +194,15 @@ The edit surface should not require users to return to `/workflows/new` to adjus
 
 ---
 
-## 9. Delete Behavior
+## 9. Planned Delete Behavior
 
-The delete action is destructive and should live in the detail page action area, visually separated from routine actions.
+The delete action is destructive and should live in the detail page action area, visually separated from routine actions, once the backend delete route and `sources.schedules.delete` runtime-config template exist.
 
 Required behavior:
 
 1. The user chooses **Delete schedule** from `/schedules/{definitionId}`.
 2. The UI shows a destructive confirmation dialog naming the schedule.
-3. On confirmation, the client calls `DELETE /api/recurring-workflows/{id}`.
+3. On confirmation, the client calls `DELETE /api/recurring-workflows/{definitionId}`.
 4. The backend deletes or soft-deletes the MoonMind definition and deletes or pauses the corresponding Temporal Schedule so no future runs are dispatched.
 5. Existing workflow executions spawned by the schedule are not deleted; they remain available under `/workflows/{workflowId}`.
 6. On success, the UI redirects to `/schedules` and confirms the deletion.
@@ -230,9 +231,10 @@ This keeps the recurring schedule page focused on controlling the cadence and re
 
 - If the schedule no longer exists, show a not-found state with a link back to `/schedules`.
 - If the detail request succeeds but run history fails, keep the schedule controls available and show a localized runs-panel error.
-- If update or delete fails because reconciliation with Temporal failed, present the MoonMind API error and leave the page state unchanged.
+- If update fails because reconciliation with Temporal failed, present the MoonMind API error and leave the page state unchanged.
+- If delete is unavailable because the backend contract has not been implemented, do not render the delete action.
 - If the schedule is disabled, the page should show it as paused/disabled rather than failed.
-- If `lastDispatchStatus` or `lastDispatchError` indicates failure, the page should show an attention state but still allow edit, run now, and delete actions when authorized.
+- If `lastDispatchStatus` or `lastDispatchError` indicates failure, the page should show an attention state but still allow edit, run now, and available destructive actions when authorized.
 
 ---
 
@@ -241,8 +243,9 @@ This keeps the recurring schedule page focused on controlling the cadence and re
 Authorization should match recurring schedule ownership rules:
 
 - Personal schedules can be viewed, edited, and deleted by their owner.
-- Global schedules can be viewed by allowed operators and edited/deleted only by users with operator privileges.
-- Users without edit permission may still view the detail page if they have read permission, but edit/delete actions must be hidden or disabled with a clear explanation.
+- Global schedules currently require operator privileges for detail access, including read-only `GET` requests.
+- Users without detail access should see the normal unauthorized or not-found state instead of a read-only global schedule page.
+- Users with detail access but without edit permission may still view the detail page, but edit/delete actions must be hidden or disabled with a clear explanation.
 
 ---
 
