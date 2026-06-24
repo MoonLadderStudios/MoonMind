@@ -124,8 +124,12 @@ function scheduleRouteDefinitionId(payload: BootPayload): string | null {
   if (!match) {
     return null;
   }
-  const definitionId = decodeURIComponent(match[1] || '').trim();
-  return definitionId && definitionId.toLowerCase() !== 'new' ? definitionId : null;
+  try {
+    const definitionId = decodeURIComponent(match[1] || '').trim();
+    return definitionId && definitionId.toLowerCase() !== 'new' ? definitionId : null;
+  } catch {
+    return null;
+  }
 }
 
 function scheduleEndpoint(
@@ -162,6 +166,10 @@ function compactId(id: string): string {
 function displayValue(value: string | null | undefined): string {
   const normalized = String(value || '').trim();
   return normalized || '-';
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function titleCaseLabel(value: string): string {
@@ -307,7 +315,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: form.name,
-          description: form.description || null,
+          description: form.description,
           enabled: form.enabled,
           cron: form.cron,
           timezone: form.timezone,
@@ -365,7 +373,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
     return (
       <div className="schedules-page stack">
         <a href="/schedules" className="secondary">Back to schedules</a>
-        <div className="schedules-error" role="alert">{(detailQuery.error as Error)?.message || 'Schedule not found'}</div>
+        <div className="schedules-error" role="alert">{errorMessage(detailQuery.error, 'Schedule not found')}</div>
       </div>
     );
   }
@@ -416,9 +424,14 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         </div>
       </header>
 
-      {(updateMutation.isError || runNowMutation.isError) && (
+      {updateMutation.isError && (
         <div className="schedules-error" role="alert">
-          {((updateMutation.error || runNowMutation.error) as Error).message}
+          {errorMessage(updateMutation.error, 'Failed to update schedule')}
+        </div>
+      )}
+      {runNowMutation.isError && (
+        <div className="schedules-error" role="alert">
+          {errorMessage(runNowMutation.error, 'Failed to run schedule')}
         </div>
       )}
 
@@ -452,7 +465,10 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                 <span>Name</span>
                 <input
                   value={currentForm.name}
-                  onChange={(event) => setEditForm({ ...currentForm, name: event.currentTarget.value })}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, name: value } : null);
+                  }}
                   required
                 />
               </label>
@@ -460,7 +476,10 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                 <span>Description</span>
                 <textarea
                   value={currentForm.description}
-                  onChange={(event) => setEditForm({ ...currentForm, description: event.currentTarget.value })}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, description: value } : null);
+                  }}
                   rows={3}
                 />
               </label>
@@ -468,7 +487,10 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                 <span>Cron</span>
                 <input
                   value={currentForm.cron}
-                  onChange={(event) => setEditForm({ ...currentForm, cron: event.currentTarget.value })}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, cron: value } : null);
+                  }}
                   required
                 />
               </label>
@@ -476,7 +498,10 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                 <span>Timezone</span>
                 <input
                   value={currentForm.timezone}
-                  onChange={(event) => setEditForm({ ...currentForm, timezone: event.currentTarget.value })}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, timezone: value } : null);
+                  }}
                   required
                 />
               </label>
@@ -484,7 +509,10 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                 <input
                   type="checkbox"
                   checked={currentForm.enabled}
-                  onChange={(event) => setEditForm({ ...currentForm, enabled: event.currentTarget.checked })}
+                  onChange={(event) => {
+                    const value = event.currentTarget.checked;
+                    setEditForm((previous) => previous ? { ...previous, enabled: value } : null);
+                  }}
                 />
                 <span>Enabled</span>
               </label>
@@ -564,7 +592,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
           <h3>Runs</h3>
         </div>
         {runsQuery.isError ? (
-          <div className="schedules-error" role="alert">{(runsQuery.error as Error).message}</div>
+          <div className="schedules-error" role="alert">{errorMessage(runsQuery.error, 'Failed to fetch schedule runs')}</div>
         ) : (
           <DataTable
             data={runs}
@@ -682,7 +710,7 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
         {isLoading ? (
           <p className="loading">Loading recurring schedules...</p>
         ) : isError ? (
-          <div className="schedules-error" role="alert">{(error as Error).message}</div>
+          <div className="schedules-error" role="alert">{errorMessage(error, 'Failed to fetch schedules')}</div>
         ) : (
           <DataTable
             data={schedules}

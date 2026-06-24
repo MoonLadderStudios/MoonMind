@@ -298,6 +298,34 @@ describe("SchedulesPage", () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
   });
 
+  it("ignores malformed schedule route ids instead of throwing during render", async () => {
+    fetchSpy.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ items: [] }),
+    } as Response);
+
+    renderWithClient(
+      <SchedulesPage
+        payload={{
+          ...detailPayload,
+          initialData: {
+            dashboardConfig: {
+              initialPath: "/schedules/%",
+              sources: {
+                schedules: {
+                  list: "/console/schedules?scope=personal",
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("No recurring schedules yet. Create one from the workflow page.")).not.toBeNull();
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe("/console/schedules?scope=personal");
+  });
+
   it("keeps update requests keyed by the route definition id", async () => {
     mockScheduleDetailFetch(fetchSpy);
 
@@ -318,6 +346,56 @@ describe("SchedulesPage", () => {
       ).toBe(true);
     });
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("sends an empty description when the edit form clears an existing description", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    await waitFor(() => {
+      const updateCall = fetchSpy.mock.calls.find(([url, init]) => (
+        String(url) === "/console/schedules/schedule-alpha"
+        && String(init?.method || "GET").toUpperCase() === "PATCH"
+      ));
+      expect(updateCall).toBeDefined();
+      expect(JSON.parse(String(updateCall?.[1]?.body || "{}")).description).toBe("");
+    });
+  });
+
+  it("reports update and run failures separately", async () => {
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/console/schedules/schedule-alpha" && method === "PATCH") {
+        return { ok: false, statusText: "Update rejected", json: async () => ({}) } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha/run" && method === "POST") {
+        return { ok: false, statusText: "Run rejected", json: async () => ({}) } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: true, json: async () => detailRuns } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha") {
+        return { ok: true, json: async () => detailSchedule } as Response;
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    expect(await screen.findByText("Failed to update schedule: Update rejected")).not.toBeNull();
+    expect(await screen.findByText("Failed to run schedule: Run rejected")).not.toBeNull();
   });
 
   it("runs schedules from the same routed definition id and leaves run links on workflow detail routes", async () => {
