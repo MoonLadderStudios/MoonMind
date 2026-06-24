@@ -79,6 +79,7 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
         DependencyResolvedSignalPayload,
         ExecutionProgressModel,
+        FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
         STEP_EXECUTION_MANIFEST_CONTENT_TYPE,
         StepExecutionIdentityModel,
         StepExecutionManifestModel,
@@ -129,6 +130,9 @@ from moonmind.workflows.temporal.step_executions import (
     side_effect_record,
     step_execution_operation_idempotency_key,
     workspace_policy_metadata,
+)
+from moonmind.workflows.temporal.recovery_manifest import (
+    build_failed_run_recovery_manifest,
 )
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
@@ -439,6 +443,10 @@ RUN_WORKFLOW_SCOPED_SESSION_TERMINATION_ACTIVITY_SIGNAL_PATCH = (
     "run-task-scoped-session-termination-v4"
 )
 RUN_TERMINAL_STATE_ACTIVITY_PATCH = "run-terminal-state-activity-v1"
+# Replay-stable patch id for emitting a failed-run recovery manifest before
+# terminal failure is reported (MM-881). Gated so in-flight histories that
+# predate the manifest artifact writes keep replaying deterministically.
+RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH = "run-failed-run-recovery-manifest-v1"
 RUN_PAUSE_SAFE_BOUNDARIES_PATCH = "run-pause-safe-boundaries-v1"
 # Replay-stable patch id for stamping mm_started_at when real work begins.
 RUN_REAL_STARTED_AT_PATCH = "run-real-started-at-v1"
@@ -863,6 +871,15 @@ class MoonMindRunWorkflow:
         self._recovery_failed_step_id: str | None = None
         self._recovery_workspace: dict[str, Any] = {}
         self._recovery_workspace_restored_ref: str | None = None
+        # Compact record of a resume-path checkpoint validation/restoration
+        # failure (failureCode + checkpointRef), captured before the failure is
+        # raised so the failed-run recovery manifest reports the real degraded
+        # checkpoint outcome and blocks resume instead of silently full-rerunning.
+        self._recovery_checkpoint_validation_failure: dict[str, Any] | None = None
+        # Compact reference to the failed-run recovery manifest emitted before
+        # terminal failure is reported (MM-881).
+        self._recovery_manifest_ref: str | None = None
+        self._recovery_manifest_summary: dict[str, Any] | None = None
         self._prepared_artifact_refs: list[str] = []
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
@@ -2618,6 +2635,10 @@ class MoonMindRunWorkflow:
             failure_code = "invalid_checkpoint"
             if isinstance(validation, Mapping):
                 failure_code = str(validation.get("failureCode") or failure_code)
+            self._recovery_checkpoint_validation_failure = {
+                "failureCode": failure_code,
+                "checkpointRef": checkpoint_ref,
+            }
             raise ValueError(
                 f"recovery checkpoint validation failed: {failure_code}"
             )
@@ -2654,6 +2675,10 @@ class MoonMindRunWorkflow:
             failure_code = "policy_incompatible"
             if isinstance(policy, Mapping):
                 failure_code = str(policy.get("failureCode") or failure_code)
+            self._recovery_checkpoint_validation_failure = {
+                "failureCode": failure_code,
+                "checkpointRef": checkpoint_ref,
+            }
             raise ValueError(
                 f"recovery workspace policy application failed: {failure_code}"
             )
@@ -12348,6 +12373,84 @@ class MoonMindRunWorkflow:
             compact["headSha"] = head_sha
         return compact
 
+    async def _emit_failed_run_recovery_manifest(
+        self,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Build and persist the failed-run recovery manifest (MM-881).
+
+        Returns ``(compact_summary, manifest_artifact_ref)``. When the patch is
+        active a compact, ref-only summary is always returned so the recovery
+        evidence is carried in the execution-linked finish summary even if the
+        durable artifact write fails; the artifact ref is returned when the
+        durable write succeeds. The manifest is fail-closed: it never reports
+        resume as allowed unless validated checkpoint evidence is present, so a
+        failed run cannot silently degrade into a full rerun presented as
+        resume.
+        """
+
+        if not workflow.patched(RUN_FAILED_RUN_RECOVERY_MANIFEST_PATCH):
+            return None, None
+        try:
+            manifest = build_failed_run_recovery_manifest(
+                workflow_id=workflow.info().workflow_id,
+                run_id=workflow.info().run_id,
+                created_at=workflow.now(),
+                step_ledger_rows=self._step_ledger_rows,
+                terminal_dispositions=self._step_terminal_dispositions,
+                checkpoint_refs_by_boundary=self._step_checkpoint_refs_by_boundary,
+                side_effect_records=self._step_side_effect_records,
+                failure_diagnostic=self._failure_diagnostic,
+                recovery_failed_step_id=self._recovery_failed_step_id,
+                checkpoint_validation_failure=(
+                    self._recovery_checkpoint_validation_failure
+                ),
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to build failed-run recovery manifest: %s", exc
+            )
+            return None, None
+
+        manifest_payload = manifest.model_dump(by_alias=True, mode="json")
+        manifest_ref: str | None = None
+        try:
+            manifest_ref = await self._write_json_artifact(
+                name="reports/recovery_manifest.json",
+                payload=manifest_payload,
+                content_type=FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE,
+                metadata_json={
+                    "artifact_kind": "failed_run_recovery_manifest",
+                    "resumeAllowed": manifest.resume_allowed,
+                    "failedLogicalStepId": manifest.failed_logical_step_id or "",
+                },
+            )
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to persist failed-run recovery manifest artifact: %s", exc
+            )
+
+        summary: dict[str, Any] = {
+            "schemaVersion": manifest.schema_version,
+            "contentType": manifest.content_type,
+            "resumeAllowed": manifest.resume_allowed,
+            "failedLogicalStepId": manifest.failed_logical_step_id,
+            "failedExecutionOrdinal": manifest.failed_execution_ordinal,
+            "validationResult": manifest.validation.result,
+        }
+        if manifest.last_accepted_step is not None:
+            summary["lastAcceptedStepId"] = (
+                manifest.last_accepted_step.logical_step_id
+            )
+        if manifest.validation.checkpoint_ref:
+            summary["checkpointRef"] = manifest.validation.checkpoint_ref
+        if manifest.blocked_reason:
+            summary["blockedReason"] = manifest.blocked_reason
+        if manifest_ref:
+            summary["manifestRef"] = manifest_ref
+        self._recovery_manifest_ref = manifest_ref
+        self._recovery_manifest_summary = summary
+        return summary, manifest_ref
+
     async def _run_finalizing_stage(
         self, *, parameters: dict[str, Any], status: str, error: Optional[str] = None
     ) -> None:
@@ -12527,6 +12630,14 @@ class MoonMindRunWorkflow:
 
             if status == "failed" and isinstance(self._failure_diagnostic, dict):
                 finish_summary["failure"] = dict(self._failure_diagnostic)
+
+            if status == "failed":
+                # Checkpoint-backed recovery is the default failed-run path: emit
+                # a recovery manifest (durable artifact + compact reference)
+                # before the terminal failure is reported (MM-881).
+                manifest_summary, _ = await self._emit_failed_run_recovery_manifest()
+                if manifest_summary:
+                    finish_summary["recoveryManifest"] = manifest_summary
 
             self._finish_summary = finish_summary
 

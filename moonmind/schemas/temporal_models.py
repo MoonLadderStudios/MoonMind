@@ -423,6 +423,221 @@ WorkspacePolicyApplyStatus = Literal[
     "unsupported",
     "unsafe",
 ]
+
+# --- Failed-run recovery manifest (MM-881) -------------------------------
+# Every failed run emits one of these before terminal failure is reported so
+# operators can resume from the last valid checkpoint or understand exactly why
+# resume is blocked, without ever silently degrading a blocked or unvalidated
+# checkpoint into a full rerun presented as resume.
+FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE = (
+    "application/vnd.moonmind.failed-run-recovery+json;version=1"
+)
+RecoveryCheckpointValidationOutcome = Literal[
+    "valid",
+    "missing",
+    "corrupted",
+    "unauthorized",
+    "incompatible",
+    "invalid",
+    "not_evaluated",
+]
+RecoverySideEffectDisposition = Literal[
+    "accepted",
+    "discarded",
+    "blocked",
+    "needs_compensation",
+]
+
+
+class RecoveryCheckpointValidationModel(BaseModel):
+    """Checkpoint validation outcome recorded for a failed-run recovery decision.
+
+    ``valid`` means a resumable checkpoint is present and passed structural
+    capture-time validation; restore-time re-validation still runs (fail-closed)
+    when a resume is actually attempted. Every non-``valid`` outcome blocks
+    resume so a failed run cannot silently degrade into a full rerun.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    result: RecoveryCheckpointValidationOutcome
+    # Bounded diagnostic code (typically a StepCheckpointValidationFailureCode);
+    # kept as a string so the manifest tolerates newly introduced or unknown
+    # provider validation codes while still failing closed on resume.
+    failure_code: str | None = Field(None, alias="failureCode", max_length=120)
+    checkpoint_ref: str | None = Field(None, alias="checkpointRef", max_length=500)
+    boundary: str | None = Field(None, max_length=100)
+    summary: str | None = Field(None, max_length=500)
+
+    @field_validator("failure_code", "checkpoint_ref", "boundary", "summary", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("summary")
+    @classmethod
+    def _reject_raw_summary(cls, value: str | None) -> str | None:
+        return _reject_forbidden_recovery_evidence_text(value)
+
+    @model_validator(mode="after")
+    def _validate_outcome(self) -> "RecoveryCheckpointValidationModel":
+        if self.result == "valid" and not self.checkpoint_ref:
+            raise ValueError("valid checkpoint validation requires a checkpointRef")
+        if (
+            self.result in {"corrupted", "unauthorized", "incompatible", "invalid"}
+            and not self.failure_code
+        ):
+            raise ValueError(
+                "failed checkpoint validation requires a failureCode"
+            )
+        return self
+
+
+class RecoverySideEffectDispositionModel(BaseModel):
+    """Classification of one observed side effect before resume is allowed."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    effect_class: str = Field(..., alias="class", min_length=1, max_length=120)
+    operation: str = Field(..., min_length=1, max_length=200)
+    disposition: RecoverySideEffectDisposition
+    target: str | None = Field(None, max_length=300)
+    reason: str | None = Field(None, max_length=300)
+    idempotency_key: str | None = Field(None, alias="idempotencyKey", max_length=300)
+    compensation_ref: str | None = Field(None, alias="compensationRef", max_length=500)
+
+    @field_validator(
+        "effect_class",
+        "operation",
+        "target",
+        "reason",
+        "idempotency_key",
+        "compensation_ref",
+        mode="before",
+    )
+    @classmethod
+    def _strip_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("target", "reason")
+    @classmethod
+    def _reject_raw_text(cls, value: str | None) -> str | None:
+        return _reject_forbidden_recovery_evidence_text(value)
+
+
+class RecoveryStepRefModel(BaseModel):
+    """Compact reference to a logical step execution in the recovery manifest."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    logical_step_id: str = Field(..., alias="logicalStepId", min_length=1, max_length=200)
+    execution_ordinal: int | None = Field(None, alias="executionOrdinal", ge=1)
+    terminal_disposition: str | None = Field(
+        None, alias="terminalDisposition", max_length=120
+    )
+    title: str | None = Field(None, max_length=200)
+
+    @field_validator("title", "terminal_disposition", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+
+class FailedRunRecoveryManifestModel(BaseModel):
+    """Recovery manifest emitted for every failed run before terminal failure.
+
+    Names the last accepted step, the failed logical step and its execution
+    ordinal, checkpoint refs, the checkpoint validation result, side-effect
+    dispositions, resume allowance, and the blocked reason when resume is not
+    allowed. The contract is fail-closed: ``resumeAllowed`` can be ``True`` only
+    when checkpoint validation is ``valid`` and a checkpoint ref is present, so a
+    failed run can never silently degrade a blocked or unvalidated checkpoint
+    into a full rerun presented as resume.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    content_type: Literal[FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE] = Field(
+        FAILED_RUN_RECOVERY_MANIFEST_CONTENT_TYPE, alias="contentType"
+    )
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    run_id: str = Field(..., alias="runId", min_length=1)
+    failure_stage: str | None = Field(None, alias="failureStage", max_length=120)
+    failure_category: str | None = Field(None, alias="failureCategory", max_length=120)
+    failed_logical_step_id: str | None = Field(
+        None, alias="failedLogicalStepId", max_length=200
+    )
+    failed_execution_ordinal: int | None = Field(
+        None, alias="failedExecutionOrdinal", ge=1
+    )
+    last_accepted_step: RecoveryStepRefModel | None = Field(
+        None, alias="lastAcceptedStep"
+    )
+    checkpoint_refs: list[EvidenceRefStatusModel] = Field(
+        default_factory=list, alias="checkpointRefs"
+    )
+    validation: RecoveryCheckpointValidationModel
+    side_effect_dispositions: list[RecoverySideEffectDispositionModel] = Field(
+        default_factory=list, alias="sideEffectDispositions"
+    )
+    resume_allowed: bool = Field(..., alias="resumeAllowed")
+    blocked_reason: str | None = Field(None, alias="blockedReason", max_length=300)
+    recovery_eligibility: RecoveryEligibilityDiagnosticModel = Field(
+        ..., alias="recoveryEligibility"
+    )
+    created_at: datetime = Field(..., alias="createdAt")
+
+    @field_validator("failure_stage", "failure_category", "blocked_reason", mode="before")
+    @classmethod
+    def _strip_optional_text(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("blocked_reason")
+    @classmethod
+    def _reject_raw_blocked_reason(cls, value: str | None) -> str | None:
+        return _reject_forbidden_recovery_evidence_text(value)
+
+    @model_validator(mode="after")
+    def _validate_resume_decision(self) -> "FailedRunRecoveryManifestModel":
+        if self.resume_allowed != self.recovery_eligibility.eligible:
+            raise ValueError(
+                "resumeAllowed must match recoveryEligibility.eligible"
+            )
+        if self.resume_allowed:
+            if self.validation.result != "valid":
+                raise ValueError(
+                    "resume cannot be allowed unless checkpoint validation is valid"
+                )
+            if not self.validation.checkpoint_ref:
+                raise ValueError(
+                    "resume cannot be allowed without a validated checkpoint ref"
+                )
+            if not self.failed_logical_step_id:
+                raise ValueError(
+                    "resume cannot be allowed without a failed logical step"
+                )
+            if self.blocked_reason:
+                raise ValueError(
+                    "resume-allowed recovery manifest must not carry a blockedReason"
+                )
+        elif not self.blocked_reason:
+            raise ValueError("blocked recovery manifest requires a blockedReason")
+        return self
+
+
 PullAuthMode = Literal["authenticated", "anonymous", "unavailable"]
 _STEP_EXECUTION_INLINE_EVIDENCE_KEYS = {
     "content",
