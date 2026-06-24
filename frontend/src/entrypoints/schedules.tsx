@@ -244,16 +244,232 @@ type ScheduleEditForm = {
   enabled: boolean;
   cron: string;
   timezone: string;
+  overlapMode: string;
+  catchupMode: string;
+  jitterSeconds: string;
+  targetJson: string;
 };
 
+const SUPPORTED_CATCHUP_MODES = new Set(['none', 'last', 'all']);
+
 function editFormFromSchedule(schedule: Schedule): ScheduleEditForm {
+  const overlap = schedule.policy?.overlap;
+  const catchup = schedule.policy?.catchup;
+  const jitterSeconds = schedule.policy?.jitterSeconds;
+  const catchupMode = catchup && typeof catchup === 'object' && 'mode' in catchup
+    ? String((catchup as { mode?: unknown }).mode || 'last')
+    : 'last';
   return {
     name: schedule.name,
     description: schedule.description || '',
     enabled: schedule.enabled,
     cron: schedule.cron,
     timezone: schedule.timezone,
+    overlapMode: overlap && typeof overlap === 'object' && 'mode' in overlap
+      ? String((overlap as { mode?: unknown }).mode || 'skip')
+      : 'skip',
+    catchupMode,
+    jitterSeconds: typeof jitterSeconds === 'number' || typeof jitterSeconds === 'string'
+      ? String(jitterSeconds)
+      : '0',
+    targetJson: JSON.stringify(schedule.target || {}, null, 2),
   };
+}
+
+type ScheduleEditErrors = Partial<Record<keyof ScheduleEditForm, string | undefined>>;
+
+function parseCronField(
+  raw: string,
+  min: number,
+  max: number,
+  fieldName: string,
+  allowSundaySeven = false,
+): string | null {
+  for (const part of raw.split(',')) {
+    const segment = part.trim();
+    if (!segment) {
+      return `${fieldName} contains an empty segment`;
+    }
+    const [rangePart, stepPart] = segment.split('/');
+    if (!rangePart || segment.split('/').length > 2) {
+      return `${fieldName} contains an invalid step`;
+    }
+    if (stepPart !== undefined) {
+      const step = Number(stepPart);
+      if (!Number.isInteger(step) || step <= 0) {
+        return `${fieldName} step must be a positive integer`;
+      }
+    }
+    const bounds = rangePart === '*' ? [String(min), String(max)] : rangePart.split('-');
+    if (bounds.length > 2 || !bounds[0] || !bounds[bounds.length - 1]) {
+      return `${fieldName} contains an invalid range`;
+    }
+    const start = Number(bounds[0]);
+    const end = Number(bounds[bounds.length - 1]);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start > end) {
+      return `${fieldName} contains an invalid value`;
+    }
+    const normalizedStart = allowSundaySeven && start === 7 ? 0 : start;
+    const normalizedEnd = allowSundaySeven && end === 7 ? 0 : end;
+    if (
+      normalizedStart < min
+      || normalizedStart > max
+      || normalizedEnd < min
+      || normalizedEnd > max
+    ) {
+      return `${fieldName} value is out of range`;
+    }
+  }
+  return null;
+}
+
+function validateCronExpression(value: string): string | null {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length !== 5) {
+    return 'Cron must contain exactly 5 fields.';
+  }
+  return parseCronField(parts[0] || '', 0, 59, 'Minute')
+    || parseCronField(parts[1] || '', 0, 23, 'Hour')
+    || parseCronField(parts[2] || '', 1, 31, 'Day')
+    || parseCronField(parts[3] || '', 1, 12, 'Month')
+    || parseCronField(parts[4] || '', 0, 6, 'Weekday', true);
+}
+
+function validateTimezone(value: string): string | null {
+  const timezone = value.trim();
+  if (!timezone) {
+    return 'Timezone is required.';
+  }
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
+    return null;
+  } catch {
+    return `Timezone '${timezone}' is invalid.`;
+  }
+}
+
+function parseTargetJson(value: string): { value?: Record<string, unknown>; error?: string } {
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { error: 'Target must be a JSON object.' };
+    }
+    return { value: parsed as Record<string, unknown> };
+  } catch {
+    return { error: 'Target must be valid JSON.' };
+  }
+}
+
+function validateScheduleEditForm(form: ScheduleEditForm): ScheduleEditErrors {
+  const errors: ScheduleEditErrors = {};
+  if (!form.name.trim()) {
+    errors.name = 'Name is required.';
+  }
+  const cronError = validateCronExpression(form.cron);
+  if (cronError) {
+    errors.cron = cronError;
+  }
+  const timezoneError = validateTimezone(form.timezone);
+  if (timezoneError) {
+    errors.timezone = timezoneError;
+  }
+  const jitter = Number(form.jitterSeconds);
+  if (!Number.isInteger(jitter) || jitter < 0) {
+    errors.jitterSeconds = 'Jitter seconds must be a non-negative integer.';
+  }
+  if (!SUPPORTED_CATCHUP_MODES.has(form.catchupMode)) {
+    errors.catchupMode = `Catchup policy '${form.catchupMode}' is not supported for editing.`;
+  }
+  const targetResult = parseTargetJson(form.targetJson);
+  if (targetResult.error) {
+    errors.targetJson = targetResult.error;
+  }
+  return errors;
+}
+
+function hasFormErrors(errors: ScheduleEditErrors): boolean {
+  return Object.values(errors).some(Boolean);
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_, candidate) => {
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      return Object.keys(candidate as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((result, key) => {
+          result[key] = (candidate as Record<string, unknown>)[key];
+          return result;
+        }, {});
+    }
+    return candidate;
+  });
+}
+
+function buildPolicyPayload(schedule: Schedule, form: ScheduleEditForm): Record<string, unknown> {
+  const policy = { ...(schedule.policy || {}) };
+  const overlap = policy.overlap && typeof policy.overlap === 'object'
+    ? { ...(policy.overlap as Record<string, unknown>) }
+    : {};
+  overlap.mode = form.overlapMode;
+  policy.overlap = overlap;
+  const catchup = policy.catchup && typeof policy.catchup === 'object'
+    ? { ...(policy.catchup as Record<string, unknown>) }
+    : {};
+  catchup.mode = form.catchupMode;
+  policy.catchup = catchup;
+  policy.jitterSeconds = Number(form.jitterSeconds);
+  return policy;
+}
+
+function buildSchedulePatchPayload(schedule: Schedule, form: ScheduleEditForm): Record<string, unknown> {
+  const payload: Record<string, unknown> = {};
+  if (form.name !== schedule.name) {
+    payload.name = form.name;
+  }
+  if (form.description !== (schedule.description || '')) {
+    payload.description = form.description;
+  }
+  if (form.enabled !== schedule.enabled) {
+    payload.enabled = form.enabled;
+  }
+  if (form.cron !== schedule.cron) {
+    payload.cron = form.cron;
+  }
+  if (form.timezone !== schedule.timezone) {
+    payload.timezone = form.timezone;
+  }
+  const initialForm = editFormFromSchedule(schedule);
+  if (
+    form.overlapMode !== initialForm.overlapMode
+    || form.catchupMode !== initialForm.catchupMode
+    || form.jitterSeconds !== initialForm.jitterSeconds
+  ) {
+    payload.policy = buildPolicyPayload(schedule, form);
+  }
+  const target = parseTargetJson(form.targetJson).value || {};
+  if (stableJson(target) !== stableJson(schedule.target || {})) {
+    payload.target = target;
+  }
+  return payload;
+}
+
+async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = await response.json();
+    const detail = body?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail;
+    }
+    if (detail && typeof detail === 'object') {
+      const message = detail.message || detail.error;
+      if (typeof message === 'string' && message.trim()) {
+        return message;
+      }
+    }
+  } catch {
+    // Ignore malformed error bodies and use the status text below.
+  }
+  return `${fallback}: ${response.statusText}`;
 }
 
 function isDueSoon(schedule: Schedule, now: number): boolean {
@@ -268,6 +484,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
+  const [submitErrors, setSubmitErrors] = useState<ScheduleEditErrors>({});
   const detailEndpoint = useMemo(() => scheduleEndpoint(payload, 'detail', definitionId), [payload, definitionId]);
   const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
   const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
@@ -309,27 +526,22 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   };
 
   const updateMutation = useMutation({
-    mutationFn: async (form: ScheduleEditForm) => {
+    mutationFn: async ({ patchPayload }: { patchPayload: Record<string, unknown> }) => {
       const response = await fetch(updateEndpoint, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: form.name,
-          description: form.description,
-          enabled: form.enabled,
-          cron: form.cron,
-          timezone: form.timezone,
-        }),
+        body: JSON.stringify(patchPayload),
       });
       if (!response.ok) {
-        throw new Error(`Failed to update schedule: ${response.statusText}`);
+        throw new Error(await responseErrorMessage(response, 'Failed to update schedule'));
       }
       return ScheduleSchema.parse(await response.json());
     },
     onSuccess: async (updated) => {
       queryClient.setQueryData(['schedule-detail', definitionId, detailEndpoint], updated);
       setEditForm(editFormFromSchedule(updated));
+      setSubmitErrors({});
       setIsEditing(false);
       await refreshDetail();
     },
@@ -342,7 +554,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         credentials: 'include',
       });
       if (!response.ok) {
-        throw new Error(`Failed to run schedule: ${response.statusText}`);
+        throw new Error(await responseErrorMessage(response, 'Failed to run schedule'));
       }
       return ScheduleRunSchema.parse(await response.json());
     },
@@ -354,11 +566,22 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const schedule = detailQuery.data;
   const runs = runsQuery.data?.items || [];
   const currentForm = editForm || (schedule ? editFormFromSchedule(schedule) : null);
+  const visibleFormErrors = submitErrors;
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (currentForm) {
-      updateMutation.mutate(currentForm);
+    if (currentForm && schedule) {
+      const errors = validateScheduleEditForm(currentForm);
+      setSubmitErrors(errors);
+      if (hasFormErrors(errors)) {
+        return;
+      }
+      const patchPayload = buildSchedulePatchPayload(schedule, currentForm);
+      if (Object.keys(patchPayload).length === 0) {
+        setIsEditing(false);
+        return;
+      }
+      updateMutation.mutate({ patchPayload });
     }
   };
 
@@ -409,6 +632,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             className="secondary"
             onClick={() => {
               setEditForm(editFormFromSchedule(schedule));
+              setSubmitErrors({});
               setIsEditing((value) => !value);
             }}
           >
@@ -472,6 +696,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                   }}
                   required
                 />
+                {visibleFormErrors.name && <span className="schedules-field-error">{visibleFormErrors.name}</span>}
               </label>
               <label>
                 <span>Description</span>
@@ -491,9 +716,12 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                   onChange={(event) => {
                     const value = event.currentTarget.value;
                     setEditForm((previous) => previous ? { ...previous, cron: value } : null);
+                    setSubmitErrors((previous) => ({ ...previous, cron: undefined }));
                   }}
                   required
+                  aria-invalid={Boolean(visibleFormErrors.cron)}
                 />
+                {visibleFormErrors.cron && <span className="schedules-field-error">{visibleFormErrors.cron}</span>}
               </label>
               <label>
                 <span>Timezone</span>
@@ -502,9 +730,75 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                   onChange={(event) => {
                     const value = event.currentTarget.value;
                     setEditForm((previous) => previous ? { ...previous, timezone: value } : null);
+                    setSubmitErrors((previous) => ({ ...previous, timezone: undefined }));
                   }}
                   required
+                  aria-invalid={Boolean(visibleFormErrors.timezone)}
                 />
+                {visibleFormErrors.timezone && <span className="schedules-field-error">{visibleFormErrors.timezone}</span>}
+              </label>
+              <label>
+                <span>Overlap Policy</span>
+                <select
+                  value={currentForm.overlapMode}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, overlapMode: value } : null);
+                  }}
+                >
+                  <option value="skip">Skip overlapping run</option>
+                  <option value="allow">Allow overlapping runs</option>
+                  <option value="buffer_one">Buffer one run</option>
+                  <option value="cancel_previous">Cancel previous run</option>
+                </select>
+              </label>
+              <label>
+                <span>Catchup Policy</span>
+                <select
+                  value={currentForm.catchupMode}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, catchupMode: value } : null);
+                    setSubmitErrors((previous) => ({ ...previous, catchupMode: undefined }));
+                  }}
+                  aria-invalid={Boolean(visibleFormErrors.catchupMode)}
+                >
+                  <option value="none">Do not catch up</option>
+                  <option value="last">Run latest missed occurrence</option>
+                  <option value="all">Run all missed occurrences</option>
+                </select>
+                {visibleFormErrors.catchupMode && <span className="schedules-field-error">{visibleFormErrors.catchupMode}</span>}
+              </label>
+              <label>
+                <span>Jitter Seconds</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={currentForm.jitterSeconds}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, jitterSeconds: value } : null);
+                    setSubmitErrors((previous) => ({ ...previous, jitterSeconds: undefined }));
+                  }}
+                  aria-invalid={Boolean(visibleFormErrors.jitterSeconds)}
+                />
+                {visibleFormErrors.jitterSeconds && <span className="schedules-field-error">{visibleFormErrors.jitterSeconds}</span>}
+              </label>
+              <label>
+                <span>Target Workflow Parameters</span>
+                <textarea
+                  value={currentForm.targetJson}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setEditForm((previous) => previous ? { ...previous, targetJson: value } : null);
+                    setSubmitErrors((previous) => ({ ...previous, targetJson: undefined }));
+                  }}
+                  rows={9}
+                  spellCheck={false}
+                  aria-invalid={Boolean(visibleFormErrors.targetJson)}
+                />
+                {visibleFormErrors.targetJson && <span className="schedules-field-error">{visibleFormErrors.targetJson}</span>}
               </label>
               <label className="schedules-checkbox-label">
                 <input
@@ -526,6 +820,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                   className="secondary"
                   onClick={() => {
                     setEditForm(editFormFromSchedule(schedule));
+                    setSubmitErrors({});
                     setIsEditing(false);
                   }}
                 >

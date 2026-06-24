@@ -1453,6 +1453,7 @@ h1 {
 }
 
 .schedules-edit-form input,
+.schedules-edit-form select,
 .schedules-edit-form textarea {
   width: 100%;
   border: 1px solid rgb(var(--mm-border));
@@ -1460,6 +1461,17 @@ h1 {
   background: rgb(var(--mm-panel));
   color: rgb(var(--mm-ink));
   font: inherit;
+}
+
+.schedules-edit-form input[aria-invalid="true"],
+.schedules-edit-form textarea[aria-invalid="true"] {
+  border-color: rgb(var(--mm-danger) / 0.78);
+}
+
+.schedules-field-error {
+  color: color-mix(in srgb, rgb(var(--mm-danger)) 76%, rgb(var(--mm-ink)) 24%);
+  font-size: 0.78rem;
+  font-weight: 640;
 }
 
 .schedules-checkbox-label {
