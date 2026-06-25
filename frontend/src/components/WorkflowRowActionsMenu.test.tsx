@@ -131,7 +131,7 @@ describe('WorkflowRowActionsMenu', () => {
       expect(JSON.parse(String((cancelCall?.[1] as RequestInit).body))).toMatchObject({
         action: 'cancel',
         graceful: false,
-        reason: 'Force canceled by operator from Mission Control.',
+        reason: 'Force canceled by operator from the dashboard.',
       });
     });
     confirmSpy.mockRestore();

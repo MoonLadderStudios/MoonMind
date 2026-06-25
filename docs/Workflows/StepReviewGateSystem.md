@@ -23,7 +23,7 @@ The feature is designed as a **toggle** — when enabled, the system automatical
 - **LLM-powered review**: A dedicated review activity evaluates step outputs against step inputs/aims using an LLM.
 - **Retry with feedback**: Failed reviews feed structured diagnostics back to the step, allowing it to self-correct.
 - **Bounded retries**: Configurable max review attempts per step to prevent runaway cost.
-- **Observable**: Review verdicts, retries, and feedback are visible in Mission Control and workflow history.
+- **Observable**: Review verdicts, retries, and feedback are visible in the dashboard and workflow history.
 - **Composable with existing policy**: Works alongside `failure_mode` (`FAIL_FAST` / `CONTINUE`), approval gates, and `MoonMind.AgentRun`.
 
 ### Non-Goals
@@ -362,7 +362,7 @@ The `initialParameters` payload when starting a `MoonMind.UserWorkflow` can incl
 
 `MOONMIND_APPROVAL_POLICY_DEFAULT_ENABLED=false` — sets the system-wide default when neither plan nor workflow-level configuration is present. Off by default.
 
-### 7.4 Mission Control UI Toggle
+### 7.4 MoonMind dashboard Toggle
 
 The workflow creation form gains a toggle:
 
@@ -387,7 +387,7 @@ This memo update is a compact execution summary only. The canonical per-step rev
 
 ### 8.2 Search Attributes
 
-Add `mm_approval_policy_active` (bool) search attribute for filtering in Temporal Visibility and Mission Control.
+Add `mm_approval_policy_active` (bool) search attribute for filtering in Temporal Visibility and the dashboard.
 
 ### 8.3 Step ledger `checks[]`
 
@@ -410,7 +410,7 @@ Rules:
 - review state must be visible without parsing logs
 - verdict summaries should be bounded and operator-safe
 - large review feedback and issue detail belong in the linked artifact
-- Mission Control should render review evidence inside the expanded step row, not as a terminal-widget-only affordance
+- The dashboard should render review evidence inside the expanded step row, not as a terminal-widget-only affordance
 
 ### 8.4 Finish Summary Integration
 

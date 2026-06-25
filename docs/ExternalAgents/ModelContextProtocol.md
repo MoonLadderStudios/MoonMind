@@ -189,7 +189,7 @@ Field names match the Pydantic models in [`moonmind/mcp/tool_registry.py`](../mo
 **What is registered today**
 
 - **Temporal executable tools** — The discovery response includes governed
-  workflow-submission tools such as **`security.pentest.run`** so Mission Control can
+  workflow-submission tools such as **`security.pentest.run`** so the dashboard can
   offer them in the Create page Tool picker. These tools execute through the
   Temporal task/plan path, not as immediate `/mcp/tools/call` RPCs; direct calls
   return `execution_tool_requires_task_submission`.

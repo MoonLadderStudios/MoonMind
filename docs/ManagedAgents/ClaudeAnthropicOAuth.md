@@ -1,7 +1,7 @@
 # Claude Anthropic OAuth in Settings
 
 **Status:** Desired state  
-**Scope:** Mission Control Settings -> Providers & Secrets -> Provider Profiles  
+**Scope:** Dashboard Settings -> Providers & Secrets -> Provider Profiles  
 **Target OAuth profile:** `claude_anthropic`
 
 This document defines the OAuth-backed Claude Code authentication path for
@@ -92,7 +92,7 @@ specific. Codex OAuth behavior remains available for `codex_default`.
 
 ### 3.3 OAuth Terminal Flow
 
-When the operator chooses `Connect with Claude OAuth`, Mission Control opens an
+When the operator chooses `Connect with Claude OAuth`, the dashboard opens an
 OAuth terminal session anchored to the provider profile row:
 
 ```text

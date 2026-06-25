@@ -122,7 +122,7 @@ class RagQdrantClient:
             )
 
     def index_health(self, *, freshness_sample_limit: int = 256) -> IndexHealthSummary:
-        """Return read-only collection health for Mission Control index monitoring."""
+        """Return read-only collection health for dashboard index monitoring."""
 
         generated_at = datetime.now(timezone.utc).isoformat()
         response = self._client.get_collections()

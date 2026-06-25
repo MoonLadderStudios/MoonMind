@@ -205,7 +205,7 @@ async def test_create_jira_issues_narrows_partially_implemented_story_to_remaini
                     ],
                     "remainingWork": {
                         "summary": "Complete report bundle download UX",
-                        "description": "Add the missing Mission Control link.",
+                        "description": "Add the missing dashboard link.",
                         "acceptanceCriteria": ["Bundle download link is visible."],
                         "requirements": ["Expose bundle URL in the workflow details UI."],
                     },
@@ -229,7 +229,7 @@ async def test_create_jira_issues_narrows_partially_implemented_story_to_remaini
     assert len(service.requests) == 1
     request = service.requests[0]
     assert request.summary == "Complete report bundle download UX"
-    assert "Add the missing Mission Control link." in request.description
+    assert "Add the missing dashboard link." in request.description
     assert "Already Implemented Evidence" in request.description
     assert "Report artifacts already persist." in request.description
     assert "Original Story Scope" in request.description

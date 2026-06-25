@@ -1,4 +1,4 @@
-"""Mission Control HTML routes return 503 when Vite assets cannot be resolved."""
+"""Dashboard HTML routes return 503 when Vite assets cannot be resolved."""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ def test_tasks_list_returns_503_when_manifest_entry_missing(
         response = client.get("/workflows")
 
     assert response.status_code == 503
-    assert "Mission Control UI unavailable" in response.text
-    assert "shared Mission Control entrypoint" in response.text
-    assert "mission-control" in response.text
+    assert "MoonMind dashboard UI unavailable" in response.text
+    assert "shared dashboard entrypoint" in response.text
+    assert "dashboard" in response.text
     assert "workflow-list" in response.text
 
 def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
@@ -38,15 +38,15 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
     (manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
                 },
             }
         ),
         encoding="utf-8",
     )
-    (assets_dir / "mission-control.js").write_text(
-        "console.log('mission-control');", encoding="utf-8"
+    (assets_dir / "dashboard.js").write_text(
+        "console.log('dashboard');", encoding="utf-8"
     )
 
     monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
@@ -62,7 +62,7 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_missing(
         response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert "/static/workflow_console/dist/assets/mission-control.js" in response.text
+    assert "/static/workflow_console/dist/assets/dashboard.js" in response.text
 
 def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -94,15 +94,15 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_stale(
     (bundled_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
                 },
             }
         ),
         encoding="utf-8",
     )
-    (bundled_assets_dir / "mission-control.js").write_text(
-        "console.log('mission-control');", encoding="utf-8"
+    (bundled_assets_dir / "dashboard.js").write_text(
+        "console.log('dashboard');", encoding="utf-8"
     )
 
     monkeypatch.delenv("VITE_MANIFEST_PATH", raising=False)
@@ -114,4 +114,4 @@ def test_tasks_list_uses_bundled_manifest_fallback_when_repo_dist_is_stale(
         response = client.get("/workflows")
 
     assert response.status_code == 200
-    assert "/static/workflow_console/dist/assets/mission-control.js" in response.text
+    assert "/static/workflow_console/dist/assets/dashboard.js" in response.text

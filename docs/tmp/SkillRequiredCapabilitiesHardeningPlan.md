@@ -87,7 +87,7 @@ The coarse names should continue to work until the platform has a stable scoped 
 
 ### Phase 2 — Direct Skill selection merge
 
-- Expose declared Skill capabilities through the Skill catalog / selector data used by Mission Control.
+- Expose declared Skill capabilities through the Skill catalog / selector data used by the dashboard.
 - When a user selects a Skill directly at the task level, merge that Skill's declared capabilities into the existing task Skill capability list before calling `deriveRequiredCapabilities`.
 - When a user selects a Skill directly on a step, merge that Skill's declared capabilities into the existing step Skill capability list.
 - Keep Advanced Mode capability entries additive and visible; do not duplicate values when the selected Skill already declares them.

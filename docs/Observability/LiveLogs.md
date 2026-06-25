@@ -24,14 +24,14 @@ For managed agent runs, live visibility should be based on:
 - structured diagnostics
 - durable session continuity and control-boundary artifacts when the runtime exposes a managed session plane
 - bounded workflow metadata
-- optional MoonMind-owned live streaming to Mission Control
+- optional MoonMind-owned live streaming to the dashboard
 - explicit intervention controls that remain separate from logging
 
 With this design:
 - **OAuth** continues to use `xterm.js` plus a MoonMind PTY/WebSocket bridge because OAuth is an interactive terminal flow
 - **managed run logs** do **not** use `xterm.js` and do **not** depend on terminal embedding
 - **managed sessions** surface session continuity events such as epoch boundaries, thread changes, turn lifecycle, approvals, and reset boundaries inside the same operator-visible observability timeline
-- Mission Control shows logs through a MoonMind-native React viewer backed by MoonMind APIs and artifacts, implemented with `react-virtuoso` for virtualized rendering, `anser` for ANSI parsing, TanStack Query for retrieval state, and SSE via `EventSource` for live follow mode
+- The dashboard shows logs through a MoonMind-native React viewer backed by MoonMind APIs and artifacts, implemented with `react-virtuoso` for virtualized rendering, `anser` for ANSI parsing, TanStack Query for retrieval state, and SSE via `EventSource` for live follow mode
 
 This keeps observability deterministic, persistent, auditable, and independent from interactive terminal transport while still preserving continuity visibility for the shared managed session plane.
 
@@ -50,7 +50,7 @@ The older tmate-oriented design no longer fits because it assumed that observabi
 The first Live Logs redesign correctly replaced that with an artifact-first model, but its center of gravity was still mostly **run-centric** and **line-centric**:
 - a run emits `stdout` and `stderr`
 - MoonMind adds a few `system` annotations
-- Mission Control shows a merged tail and optionally follows live SSE
+- The dashboard shows a merged tail and optionally follows live SSE
 
 That is no longer sufficient for the shared managed session plane.
 
@@ -238,7 +238,7 @@ Components:
 - continuity artifact publisher
 - structured observability event writer
 - live log stream publisher
-- Mission Control observability APIs
+- Dashboard observability APIs
 - artifact-backed log retrieval
 
 ## 6.2 Control plane
@@ -613,7 +613,7 @@ MoonMind must not transform managed-agent `stdout` or `stderr` into framework-ow
 
 ### 10.2 Frontend viewer foundation
 
-The Mission Control Live Logs panel should be implemented as a native React component using:
+The dashboard Live Logs panel should be implemented as a native React component using:
 - `react-virtuoso` for virtualized rendering of long and growing timelines
 - `anser` for ANSI parsing into styled spans
 - browser `EventSource` for SSE live follow mode
@@ -707,7 +707,7 @@ Expected HTTP behavior:
 
 ## 11.3 Reconnect behavior
 
-Mission Control should reconnect using the last known `sequence`.
+The dashboard should reconnect using the last known `sequence`.
 
 For the live SSE path, the canonical resume cursor is the run-global `sequence` shared across all streams and event kinds.
 
@@ -904,7 +904,7 @@ Deprecation rules:
 
 ---
 
-## 14. Mission Control UI behavior
+## 14. MoonMind dashboard behavior
 
 ## 14.1 Default collapsed state
 
@@ -1054,7 +1054,7 @@ If MoonMind later supports a debug session for managed runs, it must be:
 - **FR-011**: The feature must support an operator-visible disable switch such as `logStreamingEnabled`, with the default configuration enabled.
 - **FR-012**: The observability system must continue to function when live streaming is unavailable by falling back to durable retrieval.
 - **FR-013**: The launcher must not wrap managed agent runs in tmate for log visibility.
-- **FR-014**: Logging and intervention must be modeled separately in both backend APIs and Mission Control UI.
+- **FR-014**: Logging and intervention must be modeled separately in both backend APIs and the MoonMind dashboard.
 - **FR-015**: The live-stream transport must be cross-process; an API-local in-memory singleton is not compliant.
 - **FR-016**: Ended runs must never trigger a live-stream connection attempt.
 - **FR-017**: Stream errors must transition the viewer to fallback mode, not leave the panel blank.
@@ -1094,7 +1094,7 @@ If MoonMind later supports a debug session for managed runs, it must be:
 - **SC-005**: Ended runs still show useful logs, diagnostics, and continuity boundaries without requiring any saved terminal transcript.
 - **SC-006**: Managed-run observability works identically whether or not any terminal transport exists elsewhere in the system.
 - **SC-007**: Stream errors do not erase visible history; the panel degrades to durable retrieval.
-- **SC-008**: Mission Control can fully observe a completed run without having ever had a live-stream connection.
+- **SC-008**: The dashboard can fully observe a completed run without having ever had a live-stream connection.
 - **SC-009**: Operators can clearly see when a session epoch changed and why.
 - **SC-010**: `clear_session` creates an explicit, operator-visible epoch boundary in both historical and live views.
 - **SC-011**: A refreshed workflow detail page can reconstruct the latest session-aware observability view from durable artifacts and bounded metadata alone.

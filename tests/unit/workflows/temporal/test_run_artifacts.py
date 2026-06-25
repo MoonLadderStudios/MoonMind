@@ -3151,7 +3151,7 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
                             },
                             "inputs": {
                                 "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
-                                "instructions": "Tighten the Mission Control title size.",
+                                "instructions": "Tighten the dashboard title size.",
                                 "targetBranch": "planned-title-branch",
                             },
                             "options": {},
@@ -3326,7 +3326,7 @@ async def test_skipped_jira_blocker_wait_restores_executing_state(
     ) -> None:
         assert predicate() is False
         workflow._bypass_dependencies(
-            {"payload": {"reason": "Operator override from Mission Control."}}
+            {"payload": {"reason": "Operator override from the dashboard."}}
         )
         assert predicate() is True
 

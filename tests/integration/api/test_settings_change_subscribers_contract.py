@@ -1,7 +1,7 @@
 """Integration coverage for the SettingsChangePublisher and its four default
 subscribers (MM-710).
 
-These tests drive the same Settings PATCH endpoint that Mission Control uses,
+These tests drive the same Settings PATCH endpoint that the dashboard uses,
 then assert observable side effects on the per-family subscriber instances.
 The publisher is isolated per test by resetting the process-wide singleton and
 registering a fresh set of default subscribers against it.

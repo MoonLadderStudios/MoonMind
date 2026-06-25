@@ -808,9 +808,9 @@ Those belong to the OAuth session subsystem or to provider-owned credential stor
 
 At a high level, an OAuth-backed profile is created or updated through the following flow:
 
-1. Mission Control starts an OAuth session from Settings.
+1. The dashboard starts an OAuth session from Settings.
 2. MoonMind creates a short-lived auth container and mounts the target auth volume.
-3. Mission Control attaches through the MoonMind PTY/WebSocket bridge, where required.
+3. The dashboard attaches through the MoonMind PTY/WebSocket bridge, where required.
 4. The runtime CLI drives the interactive login flow.
 5. MoonMind verifies that valid credential state now exists in the mounted auth volume.
 6. MoonMind creates or updates the Provider Profile.
@@ -1021,7 +1021,7 @@ This can route a generic request to an alternative provider if:
 To prevent unintentional cross-provider routing, one or more of the following should be true:
 
 1. **Explicit provider in request**
-   - Recommended default for Mission Control UI flows.
+   - Recommended default for MoonMind dashboard flows.
 
 2. **Default tag convention**
    - Only the primary provider’s launch-ready profiles carry `default`, and the request includes `tags_all: ["default"]`.

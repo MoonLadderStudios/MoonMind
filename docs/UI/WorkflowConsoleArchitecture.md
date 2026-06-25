@@ -8,9 +8,9 @@ Last updated: 2026-06-10
 
 ## 1. Purpose
 
-Define the concrete architecture for the MoonMind Mission Control UI: route model, source model, runtime config, Temporal integration, action mapping, artifact flows, and workflow-oriented presentation rules.
+Define the concrete architecture for the MoonMind dashboard: route model, source model, runtime config, Temporal integration, action mapping, artifact flows, and workflow-oriented presentation rules.
 
-Mission Control is MoonMind's **Workflow Execution console**. The product surface and the durable substrate are both workflow-oriented: the canonical product entity is the **Workflow Execution**, identified by `workflowId`, exactly as defined in `docs/Temporal/WorkflowExecutionProductModel.md`.
+The dashboard is MoonMind's **Workflow Execution console**. The product surface and the durable substrate are both workflow-oriented: the canonical product entity is the **Workflow Execution**, identified by `workflowId`, exactly as defined in `docs/Temporal/WorkflowExecutionProductModel.md`.
 
 This document covers:
 
@@ -38,14 +38,14 @@ Detailed backend contracts live in the Temporal docs. This document defines the 
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
 - `docs/ManagedAgents/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
 - `docs/Steps/SkillSystem.md`
-- `docs/UI/MissionControlDesignSystem.md`
+- `docs/UI/DashboardDesignSystem.md`
 - `docs/UI/TypeScriptSystem.md`
 
 ---
 
 ## 3. Product stance
 
-Mission Control is the operator and user console for MoonMind Workflow Executions.
+The dashboard is the operator and user console for MoonMind Workflow Executions.
 
 The primary UX posture is:
 
@@ -67,7 +67,7 @@ Important distinctions:
 
 ## 4. Implementation snapshot
 
-Mission Control is a **server-hosted React/Vite UI**:
+The dashboard is a **server-hosted React/Vite UI**:
 
 - FastAPI serves the HTML shell and owns canonical routes
 - FastAPI can optionally load page modules from a configured Vite dev server during local development
@@ -80,9 +80,9 @@ Representative pieces:
 
 - HTML shell: `api_service/templates/react_dashboard.html`
 - navigation partials: `api_service/templates/_navigation.html`
-- shared entrypoint: `frontend/src/entrypoints/mission-control.tsx`
+- shared entrypoint: `frontend/src/entrypoints/dashboard.tsx`
 - lazy-loaded page modules: `frontend/src/entrypoints/*.tsx` (for example `workflow-list.tsx`, `workflow-start.tsx`, `workflow-detail.tsx`, `proposals.tsx`, `schedules.tsx`, `manifests.tsx`, `skills.tsx`, `settings.tsx`, `oauth-terminal.tsx`, `index-health.tsx`)
-- shared stylesheet source: `frontend/src/styles/mission-control.css`
+- shared stylesheet source: `frontend/src/styles/dashboard.css`
 - generated JS/CSS bundles: `api_service/static/workflow_console/dist/`
 - React/Vite build output: `api_service/static/workflow_console/dist/`
 - runtime config builder: `api_service/api/routers/workflow_console_view_model.py`
@@ -104,12 +104,12 @@ Tailwind must scan all sources that can contain utility classes, including:
 
 ## 5.2 Build posture
 
-Mission Control relies on two generated outputs with different ownership:
+The dashboard relies on two generated outputs with different ownership:
 
 - Vite `dist/` bundles (JS plus extracted CSS) under `api_service/static/workflow_console/dist/`
 - `frontend/src/generated/openapi.ts`
 
-The shared Mission Control stylesheet is emitted as part of the Vite build from `frontend/src/styles/mission-control.css`. The Vite `dist/` tree is runtime build output only and is built from source in local verification, CI, and Docker; it is not committed to git. Frontend-consumed API types remain the checked-in generated artifact.
+The shared dashboard stylesheet is emitted as part of the Vite build from `frontend/src/styles/dashboard.css`. The Vite `dist/` tree is runtime build output only and is built from source in local verification, CI, and Docker; it is not committed to git. Frontend-consumed API types remain the checked-in generated artifact.
 
 The canonical local commands are:
 
@@ -194,7 +194,7 @@ Rules:
 
 ## 8. Source model
 
-Mission Control navigation may still span multiple product areas, but the main workflow list/detail flow behaves as a **Temporal-native workflow surface**.
+Dashboard navigation may still span multiple product areas, but the main workflow list/detail flow behaves as a **Temporal-native workflow surface**.
 
 ## 8.1 Runtime-config sources
 
@@ -237,7 +237,7 @@ Rules:
 
 ## 9. Workflow-oriented information hierarchy
 
-Mission Control should use a strong hierarchy between list and detail.
+The dashboard should use a strong hierarchy between list and detail.
 
 ## 9.1 List pages are for scanning
 
@@ -276,7 +276,7 @@ The detail page is the right place for:
 
 ## 9.3 Preset provenance on workflow surfaces
 
-Mission Control may explain preset-derived work in the workflow list, workflow detail, and edit/rerun reconstruction surfaces, but **Preset provenance** is explanatory metadata, not a runtime execution model.
+The dashboard may explain preset-derived work in the workflow list, workflow detail, and edit/rerun reconstruction surfaces, but **Preset provenance** is explanatory metadata, not a runtime execution model.
 
 Rules:
 
@@ -305,7 +305,7 @@ Examples:
 
 ## 10.1 `sources.temporal`
 
-The runtime config exposes a `sources.temporal` block for Mission Control.
+The runtime config exposes a `sources.temporal` block for the dashboard.
 
 Representative shape (current live endpoint templates from `moonmind/config/settings.py`):
 
@@ -351,7 +351,7 @@ The client may contain a fallback compatibility state map, but server-supplied n
 
 ## 10.3 Feature flags
 
-Mission Control should use feature flags to stage rollout.
+The dashboard should use feature flags to stage rollout.
 
 Representative areas:
 
@@ -384,7 +384,7 @@ The canonical product detail route is:
 
 ## 11.2 Source resolution order
 
-Mission Control should resolve detail routes in this order:
+The dashboard should resolve detail routes in this order:
 
 1. canonical server-side source mapping / execution index
 2. explicit `?source=temporal` override when present
@@ -494,7 +494,7 @@ Rules:
 
 * the default Steps view is for the latest/current run only
 * the default task detail UX is a single flat, ordered step list with inline dependency metadata
-* Mission Control should not render a separate always-visible DAG/grid for the same step ledger; dependency information belongs in the primary step row/list presentation unless a future explicit product design introduces an optional advanced graph view
+* The dashboard should not render a separate always-visible DAG/grid for the same step ledger; dependency information belongs in the primary step row/list presentation unless a future explicit product design introduces an optional advanced graph view
 * the plan artifact is the canonical planned-step source; the step-ledger API is the canonical live-state source
 * step rows may carry `childWorkflowId`, `childRunId`, and `agentRunId` (the `agentRunId` ref slot renames to an agent-run identifier in the hard switch)
 * when a step has a `agentRunId` ref, the Logs & Diagnostics area should embed or deep-link the existing `/api/agent-runs/*` observability surfaces for that step
@@ -507,7 +507,7 @@ The workflow detail page must include a dedicated **Observability** area for man
 * **Stdout** — artifact-backed stdout viewer with tail, download, copy, and line-wrap
 * **Stderr** — artifact-backed stderr viewer with tail, download, copy, and line-wrap
 * **Diagnostics** — structured run metadata (exit code, failure class, duration, artifact refs, parsed errors)
-* **Artifacts** — full execution artifact listing (consistent with the rest of Mission Control)
+* **Artifacts** — full execution artifact listing (consistent with the rest of the dashboard)
 
 Rules:
 
@@ -613,7 +613,7 @@ When an execution is blocked:
 
 ## 13.1 Product posture
 
-`/workflows` is the primary Mission Control workflow console surface.
+`/workflows` is the primary dashboard workflow console surface.
 
 Rules:
 
@@ -869,7 +869,7 @@ Console implications:
 
 ## 17.2 Required artifact behaviors
 
-Mission Control should support:
+The dashboard should support:
 
 * create artifact placeholder
 * upload content directly or through presigned multipart flows

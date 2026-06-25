@@ -84,7 +84,7 @@ def test_roadmap_milestones_are_evidence_aligned_and_gated() -> None:
     assert "checkpoint restore logic exists but is not yet the primary operator flow" in text
     assert "- [ ] **3.2** Automatic RAG context injection per step" in text
     assert "- [ ] **5.3** Context pack assembly wired into agent runs" in text
-    assert "- [ ] **13.3** Mission Control remediation panels" in text
+    assert "- [ ] **13.3** Dashboard remediation panels" in text
     assert "- [ ] **7.7** Remediation panels - Tracked with 13.3" in text
     assert "- [ ] **13.4** Autonomous remediation supervisor" in text
     assert "Gated on:** 12.1" in text

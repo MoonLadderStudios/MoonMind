@@ -1238,9 +1238,9 @@ The runtime must not mutate the active Skill bundle to change policy or record s
 
 ---
 
-## 19. Observability and Mission Control
+## 19. Observability and Dashboard
 
-Mission Control should treat Skill context as first-class execution context.
+The dashboard should treat Skill context as first-class execution context.
 
 ### 19.1 Submit-Time Visibility
 
@@ -1405,7 +1405,7 @@ with new design decisions.
 17. Reruns reuse the original resolved snapshot by default.
 18. Explicit re-resolution creates a new snapshot.
 19. Full Skill bodies, manifests, prompt indexes, and materialization bundles live outside workflow history.
-20. Mission Control surfaces Skill selection, resolution, provenance, and materialization as first-class execution context.
+20. The dashboard surfaces Skill selection, resolution, provenance, and materialization as first-class execution context.
 
 ---
 

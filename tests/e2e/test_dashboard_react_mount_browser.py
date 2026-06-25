@@ -68,6 +68,6 @@ def test_react_page_shows_app_content(server, path: str, expected_text: str) -> 
     with sync_playwright() as p:
         with _playwright_page(p) as page:
             page.goto(f"http://127.0.0.1:8012{path}", wait_until="domcontentloaded")
-            root = page.locator("#mission-control-root")
+            root = page.locator("#dashboard-app-root")
             expect(root).to_be_visible()
             expect(root).to_contain_text(expected_text, timeout=15_000)

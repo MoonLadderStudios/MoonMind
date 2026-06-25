@@ -252,7 +252,7 @@ def test_api_service_runs_with_container_init():
 
 
 def test_api_service_mounts_agent_runtime_workspace_volume():
-    """Mission Control observability must read managed-run records from agent_workspaces."""
+    """Dashboard observability must read managed-run records from agent_workspaces."""
     compose_path = Path("docker-compose.yaml")
     assert (
         compose_path.exists()

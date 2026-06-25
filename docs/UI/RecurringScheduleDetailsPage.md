@@ -7,7 +7,7 @@
 
 ## 1. Purpose
 
-This document defines the Mission Control detail page for recurring schedules. It complements the canonical scheduling docs by specifying what happens after a user selects a schedule from the recurring schedule list.
+This document defines the dashboard detail page for recurring schedules. It complements the canonical scheduling docs by specifying what happens after a user selects a schedule from the recurring schedule list.
 
 The design intent is simple: a recurring schedule detail page should feel like a close derivative of the normal workflow detail page, with only the differences required by the fact that the primary entity is a schedule definition rather than a single workflow execution.
 
@@ -15,7 +15,7 @@ The design intent is simple: a recurring schedule detail page should feel like a
 
 - `docs/Temporal/WorkflowSchedulingGuide.md` — scheduling flows, API contracts, and runtime config
 - `docs/Temporal/TemporalScheduling.md` — Temporal-native scheduling desired state
-- `docs/UI/WorkflowConsoleArchitecture.md` — Mission Control route model and workflow detail conventions
+- `docs/UI/WorkflowConsoleArchitecture.md` — dashboard route model and workflow detail conventions
 
 ---
 

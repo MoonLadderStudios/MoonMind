@@ -51,7 +51,7 @@ This document narrows several open items from those docs so frontend and backend
 - Memo registry for list/detail presentation
 - canonical list/detail field model for Temporal-backed rows
 - allowed filters, sort order, recency rules, pagination, and counts
-- mapping into Mission Control workflow grouping semantics
+- mapping into the dashboard workflow grouping semantics
 - rules for adapter APIs and unified workflow surfaces
 
 ## 3.2 Out of scope
@@ -431,7 +431,7 @@ Implementation guidance:
 
 ---
 
-## 10. Compatibility status mapping for Mission Control
+## 10. Compatibility status mapping for the dashboard
 
 The current dashboard uses broad normalized workflow statuses such as:
 

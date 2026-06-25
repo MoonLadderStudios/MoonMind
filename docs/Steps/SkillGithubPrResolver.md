@@ -6,7 +6,7 @@ Last Updated: 2026-04-04
 
 ## 1. Purpose
 
-The **PR Resolver** skill is invoked from Mission Control (via Temporal `AgentTaskWorkflow`) to:
+The **PR Resolver** skill is invoked from the dashboard (via Temporal `AgentTaskWorkflow`) to:
 
 1. **Resolve target PR** (defaults to the PR associated with the current branch).
 2. **Fetch PR metadata + CI status + comments**.
@@ -181,7 +181,7 @@ Execution: `gh pr merge <pr> --<mergeMethod>`
 
 ---
 
-## 9. Mission Control integration
+## 9. Dashboard integration
 
 ### 9.1 Example `AgentTaskWorkflow` payload
 
@@ -273,4 +273,4 @@ You are the Master orchestrator for finishing Pull Requests. You diagnose the PR
 ## 13. Verification
 
 - Skill assets live under `.agents/skills/pr-resolver/`; snapshot logic is exercised by `tests/unit/test_pr_resolver_tools.py` (loads `pr_resolve_snapshot.py` from the skill tree).
-- Mission Control submit flows reference `pr-resolver` in the React workflow-start surface and its focused entrypoint tests.
+- The dashboard submit flows reference `pr-resolver` in the React workflow-start surface and its focused entrypoint tests.

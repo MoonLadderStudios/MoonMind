@@ -1583,7 +1583,7 @@ class WorkflowProposalService:
 
     @staticmethod
     def _promoted_execution_url(execution_id: str | None) -> str | None:
-        """Render the Mission Control link for a promoted execution id."""
+        """Render the dashboard link for a promoted execution id."""
 
         cleaned = str(execution_id or "").strip()
         if not cleaned:

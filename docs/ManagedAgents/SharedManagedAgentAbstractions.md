@@ -1,7 +1,7 @@
 # Shared Managed Agent Abstractions
 
 - **Status:** Desired state
-- **Audience:** Runtime authors, workflow authors, adapter authors, and Mission Control authors
+- **Audience:** Runtime authors, workflow authors, adapter authors, and dashboard authors
 - **Purpose:** Runtime-neutral contract layer underneath the managed-agent architecture entrypoint
 - **Last updated:** 2026-04-14
 
@@ -51,7 +51,7 @@ The shared managed-agent layer owns the runtime-neutral vocabulary and payload s
 - reconciliation semantics,
 - compatibility and replacement signaling.
 
-Workflow code, Mission Control, and cross-runtime orchestration should depend on these shared surfaces first.
+Workflow code, the dashboard, and cross-runtime orchestration should depend on these shared surfaces first.
 
 ### 2.2 Managed session planes own
 
@@ -576,7 +576,7 @@ Codex-specific behavior belongs in Codex-managed-session docs. Claude Code, Gemi
 
 ## 12. Cross-runtime managed-session conformance
 
-Runtime resilience capabilities must be truthful, uniform, and regression-tested before Mission Control surfaces a runtime as session-capable. A shared, runtime-neutral conformance suite defines and enforces this.
+Runtime resilience capabilities must be truthful, uniform, and regression-tested before the dashboard surfaces a runtime as session-capable. A shared, runtime-neutral conformance suite defines and enforces this.
 
 ### 12.1 Conformance expectations
 

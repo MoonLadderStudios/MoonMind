@@ -11,7 +11,7 @@ Related: `README.md`, `api_service/static/workflow_console/`, `docs/Workflows/Wo
 
 ## 1. Summary
 
-MoonMind Mission Control has outgrown the “single static page with a little JavaScript” stage. The frontend now needs stronger contracts, safer refactors, clearer module boundaries, and a path to continue growing without forcing a full frontend-platform rewrite.
+The MoonMind dashboard has outgrown the “single static page with a little JavaScript” stage. The frontend now needs stronger contracts, safer refactors, clearer module boundaries, and a path to continue growing without forcing a full frontend-platform rewrite.
 
 This document defines the **TypeScript tooling and frontend strategy** for MoonMind while **keeping FastAPI-owned server rendering for now**.
 
@@ -20,7 +20,7 @@ The core decision is:
 - **Keep FastAPI as the owner of routes, auth, and HTML page delivery.**
 - **Adopt TypeScript for all new frontend code.**
 - **Use a modern frontend build pipeline for typed client code and componentized UI.**
-- **Evolve page by page** instead of rewriting Mission Control in one step (see tracker for sequencing).
+- **Evolve page by page** instead of rewriting the dashboard in one step (see tracker for sequencing).
 
 This is intentionally **not** a move to a separately deployed SPA. It is a move to a **typed, componentized, server-rendered frontend system**.
 
@@ -30,7 +30,7 @@ This is intentionally **not** a move to a separately deployed SPA. It is a move 
 
 ### 2.1 Primary Goals
 
-1. Add strong typing to Mission Control frontend code.
+1. Add strong typing to the dashboard frontend code.
 2. Keep the current server-rendered deployment model and FastAPI route ownership.
 3. Replace the growing monolithic dashboard JavaScript with a modular frontend architecture.
 4. Improve safety when working with API responses, forms, page state, polling, and mutations.
@@ -53,7 +53,7 @@ The following are explicitly **out of scope** for this system:
 1. Replacing FastAPI/Jinja with Next.js, Remix, or another full-stack frontend framework.
 2. Introducing a separately deployed frontend service.
 3. Requiring Node-based SSR in production.
-4. Converting every existing Mission Control page in one PR.
+4. Converting every existing dashboard page in one PR.
 5. Adding a client-side router as the primary routing authority.
 6. Creating a shared cross-language type system that removes all backend/frontend duplication.
 
@@ -160,7 +160,7 @@ The current pain is not just typing. It is also:
 - repeated mutation and refresh logic
 - a growing need for reusable view primitives
 
-React is the most pragmatic choice for modularizing Mission Control without inventing a custom component system around manual DOM updates.
+React is the most pragmatic choice for modularizing the dashboard without inventing a custom component system around manual DOM updates.
 
 ## 6.3 Why Vite
 
@@ -175,7 +175,7 @@ Vite fits MoonMind well because it provides:
 
 ## 6.4 Why TanStack Query
 
-Mission Control is primarily a **server-state UI**:
+The dashboard is primarily a **server-state UI**:
 
 - lists
 - details
@@ -201,7 +201,7 @@ frontend/
  parseBootPayload.ts
  mountPage.tsx
  entrypoints/
- mission-control.tsx
+ dashboard.tsx
  workflows-home.tsx
  workflow-list.tsx
  workflow-detail.tsx
@@ -235,7 +235,7 @@ frontend/
  generated/
  openapi.ts
  styles/
- mission-control.css
+ dashboard.css
  types/
  boot.ts
  ui.ts
@@ -264,7 +264,7 @@ Server-rendered templates remain in the backend template area, for example:
 api_service/templates/
 ```
 
-If Mission Control templates are split by page, they should remain server-owned.
+If the dashboard templates are split by page, they should remain server-owned.
 
 ---
 
@@ -288,14 +288,14 @@ Vite should build with a manifest enabled.
 FastAPI should use a small asset helper that:
 
 1. reads the Vite manifest in production
-2. resolves the correct JS and CSS files for the shared Mission Control entrypoint
+2. resolves the correct JS and CSS files for the shared dashboard entrypoint
 3. injects those assets into the rendered template
 4. switches to Vite dev-server module URLs when `MOONMIND_UI_DEV_SERVER_URL` is configured for FastAPI-backed local development
 5. **fails loudly** (HTTP 503 with a clear HTML page) when the manifest is missing, the entrypoint key is absent, or referenced files are missing — never a silent blank region under the shell
 
 For local experiments without a built `dist/`, set **`MOONMIND_LENIENT_UI_ASSETS=1`** so the helper emits HTML comments instead of errors.
 
-CI validates the shared Mission Control manifest entry in `frontend/vite.config.ts` via **`python tools/verify_vite_manifest.py`** (`npm run ui:verify-manifest`) after a **clean** rebuild (`npm run ui:clean-dist` then `npm run ui:build`).
+CI validates the shared dashboard manifest entry in `frontend/vite.config.ts` via **`python tools/verify_vite_manifest.py`** (`npm run ui:verify-manifest`) after a **clean** rebuild (`npm run ui:clean-dist` then `npm run ui:build`).
 
 A small backend utility module should own this lookup, for example:
 
@@ -320,7 +320,7 @@ This mode requires **two processes running simultaneously**:
 2. **FastAPI with `MOONMIND_UI_DEV_SERVER_URL` set** — for example:
  `MOONMIND_UI_DEV_SERVER_URL=http://127.0.0.1:5173 <fastapi-start-command>`.
 
-When `MOONMIND_UI_DEV_SERVER_URL` is set, `ui_assets()` bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and `/entrypoints/mission-control.tsx` directly from the Vite dev server. The shared entrypoint then reads `payload.page` to lazy-load the requested page module. **Without this env var, FastAPI serves the built `dist/` bundle and live changes from Vite will not appear.**
+When `MOONMIND_UI_DEV_SERVER_URL` is set, `ui_assets()` bypasses the manifest entirely and injects `<script type="module">` tags for `@vite/client` and `/entrypoints/dashboard.tsx` directly from the Vite dev server. The shared entrypoint then reads `payload.page` to lazy-load the requested page module. **Without this env var, FastAPI serves the built `dist/` bundle and live changes from Vite will not appear.**
 
 This preserves server-rendered pages while still giving fast frontend iteration against the real backend routes.
 
@@ -345,15 +345,15 @@ Recommended scripts:
 
 ## 8.5 Source of truth, CI, Docker, and runtime `dist/`
 
-**Canonical inputs:** TypeScript/React source under `frontend/`, `frontend/vite.config.ts`, and the root npm lockfile are the source of truth for Mission Control UI bundles.
+**Canonical inputs:** TypeScript/React source under `frontend/`, `frontend/vite.config.ts`, and the root npm lockfile are the source of truth for MoonMind dashboard bundles.
 
 **Generated output:** `api_service/static/workflow_console/dist/` (including `.vite/manifest.json`) is generated output only. Do not treat it as hand-maintained source.
 
 ### Authoritative builds (correctness)
 
-- **CI** runs **`npm run frontend:ci`** once for the deterministic frontend path (typecheck, lint, unit tests, build, manifest verification). Generated API types are checked separately with **`npm run contracts:check`** only when backend/OpenAPI-affecting files change. The workflow may upload **`mission-control-dist`** as an artifact.
+- **CI** runs **`npm run frontend:ci`** once for the deterministic frontend path (typecheck, lint, unit tests, build, manifest verification). Generated API types are checked separately with **`npm run contracts:check`** only when backend/OpenAPI-affecting files change. The workflow may upload **`dashboard-dist`** as an artifact.
 - **Docker / release:** the **`frontend-builder`** stage in `api_service/Dockerfile` removes any pre-existing `dist/`, runs `npm ci`, `npm run ui:build`, and **`python3 tools/verify_vite_manifest.py`**. The runtime image copies **only** that freshly built tree. **Production correctness does not depend** on whatever `dist/` was last committed to git.
-- **Shared Mission Control CSS:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** plus the shared React shell templates so the frontend-owned stylesheet imported from `frontend/src/styles/mission-control.css` emits the utilities used by React routes even when **`dist/` does not exist yet**. Do not rely on scanning Vite output alone. See [`docs/UI/WorkflowConsoleArchitecture.md`](WorkflowConsoleArchitecture.md) §5.
+- **Shared dashboard CSS:** Tailwind scans **`frontend/src/**/*.{js,jsx,ts,tsx}`** plus the shared React shell templates so the frontend-owned stylesheet imported from `frontend/src/styles/dashboard.css` emits the utilities used by React routes even when **`dist/` does not exist yet**. Do not rely on scanning Vite output alone. See [`docs/UI/WorkflowConsoleArchitecture.md`](WorkflowConsoleArchitecture.md) §5.
 - **Runtime:** misconfiguration or a bad deploy still returns **503** with explicit HTML from the workflow console router instead of an empty content area.
 
 ### Runtime `dist/`
@@ -376,13 +376,13 @@ Each server-rendered page should provide:
 Example:
 
 ```html
-<div id="mission-control-root" data-page="workflow-list"></div>
+<div id="dashboard-app-root" data-page="workflow-list"></div>
 <script id="moonmind-ui-boot" type="application/json">
  {"page":"workflow-list","apiBase":"/api","features":{"oauth":true}}
 </script>
 ```
 
-The HTML shell does not need one script tag per page. FastAPI serves the shared Mission Control bundle once, and the bundle reads `page` from the boot payload to choose the page module.
+The HTML shell does not need one script tag per page. FastAPI serves the shared dashboard bundle once, and the bundle reads `page` from the boot payload to choose the page module.
 
 ## 9.2 Boot Payload Rules
 
@@ -467,7 +467,7 @@ Canonical flow:
 
 This reduces backend/frontend drift for core payloads.
 
-`npm run contracts:check` is the canonical verification path used by CI to ensure `frontend/src/generated/openapi.ts` stays synchronized with its backend schema source when OpenAPI-affecting files change. Mission Control `dist/` output is verified by `npm run frontend:ci` and produced from source in CI and Docker.
+`npm run contracts:check` is the canonical verification path used by CI to ensure `frontend/src/generated/openapi.ts` stays synchronized with its backend schema source when OpenAPI-affecting files change. The dashboard `dist/` output is verified by `npm run frontend:ci` and produced from source in CI and Docker.
 
 ## 10.4 Domain Types vs Generated Types
 
@@ -501,7 +501,7 @@ For unstable, external, or especially important boundaries, use **Zod** validato
 
 ## 11.1 Page Model
 
-Mission Control should move to **page-level entrypoints** rather than one permanently growing frontend script.
+The dashboard should move to **page-level entrypoints** rather than one permanently growing frontend script.
 
 Each migrated page gets:
 
@@ -658,7 +658,7 @@ If multiple pages need boot payloads, add a small backend helper layer so payloa
 
 ## 15. Incremental adoption
 
-Mission Control now runs on **Vite + React + TypeScript** under FastAPI-owned routes. Historical migration sequencing and completion status live in .
+The dashboard now runs on **Vite + React + TypeScript** under FastAPI-owned routes. Historical migration sequencing and completion status live in .
 
 ---
 
@@ -761,17 +761,17 @@ This design should be considered successfully implemented when all of the follow
 
 1. A dedicated `frontend/` TypeScript source tree exists.
 2. FastAPI can serve Vite-built assets in production.
-3. At least one real Mission Control page is fully migrated to the new TS system.
+3. At least one real dashboard page is fully migrated to the new TS system.
 4. The CI pipeline performs UI typechecking, linting, testing, and building.
 5. New frontend feature work defaults to TypeScript.
 6. The server still owns routes and page delivery.
-7. Mission Control is still deployable as a single backend-served application.
+7. The dashboard is still deployable as a single backend-served application.
 
 ---
 
 ## 20. Future Evolution
 
-This design keeps the door open for a later decision to move further toward a richer client application if Mission Control outgrows page-level enhancement.
+This design keeps the door open for a later decision to move further toward a richer client application if the dashboard outgrows page-level enhancement.
 
 That future decision should be revisited only if one or more of the following become true:
 

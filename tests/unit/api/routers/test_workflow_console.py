@@ -69,12 +69,12 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
             "css": ["assets/mountPage.css"],
         }
     }
-    manifest["entrypoints/mission-control.tsx"] = {
-        "file": "assets/mission-control.js",
+    manifest["entrypoints/dashboard.tsx"] = {
+        "file": "assets/dashboard.js",
         "imports": [shared_key],
     }
-    (assets_dir / "mission-control.js").write_text(
-        "console.log('mission-control');",
+    (assets_dir / "dashboard.js").write_text(
+        "console.log('dashboard');",
         encoding="utf-8",
     )
 
@@ -205,7 +205,7 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "MOONMIND OPERATIONS" not in response.text
         assert "workflow-console-config" not in response.text
         assert "/static/workflow_console/dashboard.js" not in response.text
-        assert 'id="mission-control-root"' in response.text
+        assert 'id="dashboard-app-root"' in response.text
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
@@ -222,7 +222,7 @@ def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
         assert "moonmind-ui-boot" in response.text
         assert 'type="module"' in response.text
         assert "/static/workflow_console/dist/assets/" in response.text
-        assert 'id="mission-control-root"' in response.text
+        assert 'id="dashboard-app-root"' in response.text
         assert 'id="dashboard-alerts-root"' not in response.text
         assert "marked.min.js" not in response.text
         assert "__moonmind_customElementsDefineGuard" not in response.text
@@ -235,7 +235,7 @@ def test_index_health_route_uses_index_health_boot_payload(client: TestClient) -
     assert boot_payload["page"] == "index-health"
     assert boot_payload["initialData"]["layout"]["dataWidePanel"] is True
 
-def test_mission_control_logo_asset_exists() -> None:
+def test_dashboard_logo_asset_exists() -> None:
     asset_path = Path("api_service/static/workflow_console/moonmindlogo.webp")
 
     assert asset_path.read_bytes().startswith(b"RIFF")
@@ -334,12 +334,12 @@ def test_react_shell_wraps_navigation_in_centered_masthead_slot(
     assert response.status_code == 200
     assert '<div class="masthead-nav">' in response.text
     assert response.text.index('<div class="masthead-nav">') < response.text.index(
-        'id="mission-control-nav"'
+        'id="dashboard-nav"'
     )
 
     title_meta_marker = '<div class="masthead-title-meta">'
     if title_meta_marker in response.text:
-        assert response.text.index('id="mission-control-nav"') < response.text.index(
+        assert response.text.index('id="dashboard-nav"') < response.text.index(
             title_meta_marker
         )
 
@@ -360,7 +360,7 @@ def test_react_shell_uses_vite_dev_server_assets_when_configured(
 
     assert response.status_code == 200
     assert response.text.count('src="http://127.0.0.1:5173/@vite/client"') == 1
-    assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in response.text
+    assert 'src="http://127.0.0.1:5173/entrypoints/dashboard.tsx"' in response.text
     assert "/static/workflow_console/dist/assets/" not in response.text
 
 def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
@@ -407,7 +407,7 @@ def test_top_level_detail_deep_links_render_react_shell(client: TestClient) -> N
         assert payload["page"] == entrypoint
 
 
-def test_proposal_review_routes_are_not_mission_control_surfaces(client: TestClient) -> None:
+def test_proposal_review_routes_are_not_dashboard_surfaces(client: TestClient) -> None:
     for path in (
         "/proposals",
         "/proposals/123e4567-e89b-12d3-a456-426614174000",

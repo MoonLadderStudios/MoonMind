@@ -62,7 +62,7 @@ await client.start_workflow(
 **MoonMind behavior:**
 - The execution record is created with `mm_state=scheduled` and `mm_scheduled_for` set.
 - `mm_state` transitions to `initializing` when the delay elapses and the workflow task dispatches.
-- Mission Control shows a "Scheduled for {time}" banner on the detail page.
+- The dashboard shows a "Scheduled for {time}" banner on the detail page.
 
 ### 4.2 Constraint: start_delay Is Immutable
 
@@ -375,7 +375,7 @@ With Temporal Schedules as the execution backend, MoonMind removes the following
 
 ```mermaid
 flowchart TD
- subgraph "Mission Control UI"
+ subgraph "MoonMind dashboard"
  UI_SCHEDULE["Schedule panel<br/>(create/edit/pause)"]
  UI_DEFERRED["Deferred submit<br/>(schedule for later)"]
  end

@@ -1,4 +1,4 @@
-"""Strict vs lenient behavior for Mission Control Vite asset resolution."""
+"""Strict vs lenient behavior for dashboard Vite asset resolution."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from api_service.ui_assets import (
     AssetFileMissingError,
     EntrypointMissingError,
     ManifestNotFoundError,
-    resolve_mission_control_dist_root,
+    resolve_dashboard_dist_root,
     ui_assets,
 )
 
@@ -27,7 +27,7 @@ def test_ui_assets_strict_raises_when_manifest_missing(
     monkeypatch.setenv("VITE_MANIFEST_PATH", str(missing))
     monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
     with pytest.raises(ManifestNotFoundError):
-        ui_assets("mission-control")
+        ui_assets("dashboard")
 
 def test_ui_assets_lenient_returns_comment_when_manifest_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -35,7 +35,7 @@ def test_ui_assets_lenient_returns_comment_when_manifest_missing(
     missing = tmp_path / "no-manifest.json"
     monkeypatch.setenv("VITE_MANIFEST_PATH", str(missing))
     monkeypatch.setenv("MOONMIND_LENIENT_UI_ASSETS", "1")
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
     assert "Vite manifest not found" in html
 
 def test_ui_assets_strict_raises_when_entrypoint_key_missing(
@@ -46,7 +46,7 @@ def test_ui_assets_strict_raises_when_entrypoint_key_missing(
     monkeypatch.setenv("VITE_MANIFEST_PATH", str(manifest))
     monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
     with pytest.raises(EntrypointMissingError):
-        ui_assets("mission-control")
+        ui_assets("dashboard")
 
 def test_ui_assets_lenient_returns_comment_when_entrypoint_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -55,7 +55,7 @@ def test_ui_assets_lenient_returns_comment_when_entrypoint_missing(
     manifest.write_text(json.dumps({}), encoding="utf-8")
     monkeypatch.setenv("VITE_MANIFEST_PATH", str(manifest))
     monkeypatch.setenv("MOONMIND_LENIENT_UI_ASSETS", "1")
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
     assert "manifest entry not found" in html
 
 def test_ui_assets_includes_css_from_imported_chunks(
@@ -71,8 +71,8 @@ def test_ui_assets_includes_css_from_imported_chunks(
     manifest.write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
                     "imports": ["_mountPage-shared.js"],
                 },
                 "_mountPage-shared.js": {
@@ -84,7 +84,7 @@ def test_ui_assets_includes_css_from_imported_chunks(
         encoding="utf-8",
     )
 
-    (assets_dir / "mission-control.js").write_text(
+    (assets_dir / "dashboard.js").write_text(
         "console.log('entry');", encoding="utf-8"
     )
     (assets_dir / "mountPage.js").write_text("console.log('shared');", encoding="utf-8")
@@ -93,9 +93,9 @@ def test_ui_assets_includes_css_from_imported_chunks(
     monkeypatch.setenv("VITE_MANIFEST_PATH", str(manifest))
     monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
 
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
 
-    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
+    assert 'src="/static/workflow_console/dist/assets/dashboard.js"' in html
     assert 'href="/static/workflow_console/dist/assets/mountPage.css"' in html
 
 def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
@@ -111,14 +111,14 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
     manifest.write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
                 }
             }
         ),
         encoding="utf-8",
     )
-    (assets_dir / "mission-control.js").write_text(
+    (assets_dir / "dashboard.js").write_text(
         "console.log('entry');", encoding="utf-8"
     )
 
@@ -131,10 +131,10 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_missing(
         lambda: tmp_path / "missing-local-dist",
     )
 
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
 
-    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
-    assert resolve_mission_control_dist_root() == dist_root
+    assert 'src="/static/workflow_console/dist/assets/dashboard.js"' in html
+    assert resolve_dashboard_dist_root() == dist_root
 
 def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -166,14 +166,14 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
     (bundled_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
                 }
             }
         ),
         encoding="utf-8",
     )
-    (bundled_assets_dir / "mission-control.js").write_text(
+    (bundled_assets_dir / "dashboard.js").write_text(
         "console.log('bundled dist');", encoding="utf-8"
     )
 
@@ -182,10 +182,10 @@ def test_ui_assets_falls_back_to_bundled_dist_when_local_manifest_is_stale(
     monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(bundled_dist_root))
     monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
 
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
 
-    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
-    assert resolve_mission_control_dist_root() == bundled_dist_root
+    assert 'src="/static/workflow_console/dist/assets/dashboard.js"' in html
+    assert resolve_dashboard_dist_root() == bundled_dist_root
 
 def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -198,18 +198,18 @@ def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     (local_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
-                    "css": ["assets/mission-control.css"],
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
+                    "css": ["assets/dashboard.css"],
                 }
             }
         ),
         encoding="utf-8",
     )
-    (local_assets_dir / "mission-control.js").write_text(
+    (local_assets_dir / "dashboard.js").write_text(
         "console.log('older local dist');", encoding="utf-8"
     )
-    (local_assets_dir / "mission-control.css").write_text(
+    (local_assets_dir / "dashboard.css").write_text(
         "body { color: red; }", encoding="utf-8"
     )
 
@@ -221,18 +221,18 @@ def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     (bundled_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
-                    "css": ["assets/mission-control.css"],
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
+                    "css": ["assets/dashboard.css"],
                 }
             }
         ),
         encoding="utf-8",
     )
-    (bundled_assets_dir / "mission-control.js").write_text(
+    (bundled_assets_dir / "dashboard.js").write_text(
         "console.log('newer bundled dist');", encoding="utf-8"
     )
-    (bundled_assets_dir / "mission-control.css").write_text(
+    (bundled_assets_dir / "dashboard.css").write_text(
         "body { color: blue; }", encoding="utf-8"
     )
 
@@ -248,11 +248,11 @@ def test_ui_assets_prefers_newer_usable_bundled_dist_over_older_local_dist(
     monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(bundled_dist_root))
     monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
 
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
 
-    assert 'src="/static/workflow_console/dist/assets/mission-control.js"' in html
-    assert 'href="/static/workflow_console/dist/assets/mission-control.css"' in html
-    assert resolve_mission_control_dist_root() == bundled_dist_root
+    assert 'src="/static/workflow_console/dist/assets/dashboard.js"' in html
+    assert 'href="/static/workflow_console/dist/assets/dashboard.css"' in html
+    assert resolve_dashboard_dist_root() == bundled_dist_root
 
 def test_ui_assets_prefers_bundled_dist_over_newer_local_dist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -265,14 +265,14 @@ def test_ui_assets_prefers_bundled_dist_over_newer_local_dist(
     (local_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/local-mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/local-dashboard.js",
                 }
             }
         ),
         encoding="utf-8",
     )
-    (local_assets_dir / "local-mission-control.js").write_text(
+    (local_assets_dir / "local-dashboard.js").write_text(
         "console.log('newer local dist');", encoding="utf-8"
     )
 
@@ -284,14 +284,14 @@ def test_ui_assets_prefers_bundled_dist_over_newer_local_dist(
     (bundled_manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/bundled-mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/bundled-dashboard.js",
                 }
             }
         ),
         encoding="utf-8",
     )
-    (bundled_assets_dir / "bundled-mission-control.js").write_text(
+    (bundled_assets_dir / "bundled-dashboard.js").write_text(
         "console.log('bundled dist');", encoding="utf-8"
     )
 
@@ -305,13 +305,13 @@ def test_ui_assets_prefers_bundled_dist_over_newer_local_dist(
     monkeypatch.setenv("MOONMIND_BUNDLED_UI_DIST_ROOT", str(bundled_dist_root))
     monkeypatch.setattr(ui_assets_module, "local_ui_dist_root", lambda: local_dist_root)
 
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
 
-    assert 'src="/static/workflow_console/dist/assets/bundled-mission-control.js"' in html
-    assert "local-mission-control.js" not in html
-    assert resolve_mission_control_dist_root() == bundled_dist_root
+    assert 'src="/static/workflow_console/dist/assets/bundled-dashboard.js"' in html
+    assert "local-dashboard.js" not in html
+    assert resolve_dashboard_dist_root() == bundled_dist_root
 
-def test_resolve_mission_control_dist_root_returns_after_bundled_usable_candidate(
+def test_resolve_dashboard_dist_root_returns_after_bundled_usable_candidate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     local_dist_root = tmp_path / "local-dist"
@@ -345,7 +345,7 @@ def test_resolve_mission_control_dist_root_returns_after_bundled_usable_candidat
         fake_manifest_tree_is_usable,
     )
 
-    assert resolve_mission_control_dist_root() == bundled_dist_root
+    assert resolve_dashboard_dist_root() == bundled_dist_root
     assert checked_candidates == [bundled_dist_root]
 
 def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
@@ -359,14 +359,14 @@ def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
     (manifest_dir / "manifest.json").write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
                 }
             }
         ),
         encoding="utf-8",
     )
-    (assets_dir / "mission-control.js").write_text(
+    (assets_dir / "dashboard.js").write_text(
         "console.log('bundled');", encoding="utf-8"
     )
 
@@ -383,13 +383,13 @@ def test_bundled_dist_root_can_serve_static_assets_when_repo_dist_is_missing(
     empty_static.mkdir()
     app.mount(
         "/static/workflow_console/dist",
-        StaticFiles(directory=str(resolve_mission_control_dist_root())),
+        StaticFiles(directory=str(resolve_dashboard_dist_root())),
         name="workflow-console-dist",
     )
     app.mount("/static", StaticFiles(directory=str(empty_static)), name="static")
 
     with TestClient(app) as client:
-        response = client.get("/static/workflow_console/dist/assets/mission-control.js")
+        response = client.get("/static/workflow_console/dist/assets/dashboard.js")
 
     assert response.status_code == 200
     assert "bundled" in response.text
@@ -407,8 +407,8 @@ def test_ui_assets_strict_raises_when_imported_chunk_file_missing(
     manifest.write_text(
         json.dumps(
             {
-                "entrypoints/mission-control.tsx": {
-                    "file": "assets/mission-control.js",
+                "entrypoints/dashboard.tsx": {
+                    "file": "assets/dashboard.js",
                     "imports": ["_mountPage-shared.js"],
                 },
                 "_mountPage-shared.js": {
@@ -420,7 +420,7 @@ def test_ui_assets_strict_raises_when_imported_chunk_file_missing(
         encoding="utf-8",
     )
 
-    (assets_dir / "mission-control.js").write_text(
+    (assets_dir / "dashboard.js").write_text(
         "console.log('entry');", encoding="utf-8"
     )
     (assets_dir / "mountPage.css").write_text("body { color: red; }", encoding="utf-8")
@@ -429,4 +429,4 @@ def test_ui_assets_strict_raises_when_imported_chunk_file_missing(
     monkeypatch.delenv("MOONMIND_LENIENT_UI_ASSETS", raising=False)
 
     with pytest.raises(AssetFileMissingError):
-        ui_assets("mission-control")
+        ui_assets("dashboard")

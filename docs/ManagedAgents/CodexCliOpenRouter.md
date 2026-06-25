@@ -27,7 +27,7 @@ That means MoonMind should launch the existing managed Codex runtime with a prov
 
 The end-state UX is:
 
-- Mission Control can target `codex_cli` + `openrouter` by exact `execution_profile_ref` or `profile_selector.provider_id`.
+- The dashboard can target `codex_cli` + `openrouter` by exact `execution_profile_ref` or `profile_selector.provider_id`.
 - Workers do **not** require a pre-existing user-global `~/.codex/config.toml`.
 - The OpenRouter API key is resolved **only at launch time**.
 - Codex gets a per-run, provider-specific config bundle that selects OpenRouter and defaults to Qwen 3.6 Plus.
@@ -478,7 +478,7 @@ Add a convenient bootstrap path for local/dev deployments.
    - `default_model = qwen/qwen3.6-plus`
    - `secret_refs.provider_api_key = env://OPENROUTER_API_KEY`
 
-2. Also support creating/editing the profile through Mission Control / REST so production deployments can use `db_encrypted`, `vault://...`, or other secret backends.
+2. Also support creating/editing the profile through the dashboard / REST so production deployments can use `db_encrypted`, `vault://...`, or other secret backends.
 
 3. Keep the auto-seeded profile separate from any OpenAI-backed Codex profile.
 
@@ -504,7 +504,7 @@ This already produces a working managed OpenRouter profile for Codex.
 The fuller target state is:
 
 - provider profiles persisted in the richer schema from `docs/Security/ProviderProfiles.md`
-- first-class Mission Control UI for `runtime_id + provider_id + secret source + model`
+- first-class MoonMind dashboard for `runtime_id + provider_id + secret source + model`
 - generic path-aware file materialization reusable by other config-bundle runtimes
 - uniform provider-aware selection and cooldown behavior across all runtimes
 
@@ -598,7 +598,7 @@ When credentials are present in a non-CI environment, run a smoke test against t
 
 ### Phase 2 — dynamic routing and polish
 
-- enable Mission Control creation/editing for OpenRouter Codex profiles
+- enable the dashboard creation/editing for OpenRouter Codex profiles
 - verify `profile_selector.provider_id = openrouter`
 - add strategy support for suppressing redundant default `-m`
 - add integration coverage for cooldown and slot behavior

@@ -496,7 +496,7 @@ This is especially important for OAuth-backed accounts and provider-rate-limited
 
 For runtimes that authenticate through interactive CLI login flows, MoonMind should use a dedicated OAuth architecture:
 
-- Mission Control renders `xterm.js`,
+- The dashboard renders `xterm.js`,
 - MoonMind exposes a PTY/WebSocket bridge,
 - a short-lived auth container runs the login CLI,
 - a dedicated auth volume is mounted at the runtime-appropriate path,

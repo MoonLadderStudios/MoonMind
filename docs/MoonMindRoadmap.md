@@ -26,7 +26,7 @@ The README is framed around three headline value propositions — **Safety** (Mi
 
 ### Current snapshot
 
-MoonMind is now a usable local control plane with Codex CLI as the first live workflow-scoped managed-session runtime, Mission Control as the operator UI, Temporal-backed durable workflows, artifact-first logs/evidence, provider profiles, RAG/memory foundations, and conservative Docker workload boundaries.
+MoonMind is now a usable local control plane with Codex CLI as the first live workflow-scoped managed-session runtime, the dashboard as the operator UI, Temporal-backed durable workflows, artifact-first logs/evidence, provider profiles, RAG/memory foundations, and conservative Docker workload boundaries.
 
 The highest-impact remaining gaps against the README promise are:
 
@@ -36,7 +36,7 @@ The highest-impact remaining gaps against the README promise are:
 4. **Deep observability rollout** — structured logs, live-log transport, session-aware viewer pieces, and cost primitives exist, but end-to-end OTel, per-step cost, and complete trace/log deep links are still pending.
 
 Recent main-branch changes since the prior roadmap snapshot:
-- MM-831 / PR #2541 completed the expanded Step Execution history UI in Mission Control.
+- MM-831 / PR #2541 completed the expanded Step Execution history UI in the dashboard.
 - MM-839 / PR #2538 and MM-845 / PR #2539 hardened the curated `security.pentest.run` workload, added production rollout gates, and made discovery default-on while preserving conservative execution policy.
 - PR #2531 surfaces workflow priority through API schemas and workflow detail.
 - PR #2528 made “PR with Merge Automation” the single operator-facing publish mode.
@@ -55,7 +55,7 @@ Recent main-branch changes since the prior roadmap snapshot:
 - Codex, Gemini, and Claude Temporal activity workers (`codex-worker`, `gemini-worker`, `claude-worker`).
 - Runtime adapter pattern (`moonmind/agents/`, `moonmind/workflows/temporal/runtime/`).
 - Codex CLI workflow-scoped managed sessions with per-session sidecar Docker daemon.
-- Provider profile management UI in Mission Control; auto-seeding of default provider profiles on startup.
+- Provider profile management UI in the dashboard; auto-seeding of default provider profiles on startup.
 - Worker health checks and readiness probes; per-worker shard health view (MM-775).
 - Graceful worker pause/unpause API and Settings Operations surface.
 - MoonMind-native xterm.js OAuth terminal for provider login (spec 306), superseding the older Tmate-based design.
@@ -90,14 +90,14 @@ Recent main-branch changes since the prior roadmap snapshot:
 - Target-aware prepared inputs per step — prepared-input manifests selected at the runtime prompt boundary.
 - Preset-driven scheduling — goal-only submissions mapped to seeded presets (MM-747).
 - Schema-driven capability inputs and Create-page authoring validation.
-- Workflow priority is persisted/surfaced through API and Mission Control detail (#2531).
+- Workflow priority is persisted/surfaced through API and the dashboard workflow detail (#2531).
 - PR publishing and merge automation are represented as a single operator-facing publish mode (#2528).
 
 ### Remaining work
 - [x] **3.1** Tracker-native proposal delivery/review.
 - [ ] **3.2** Automatic RAG context injection per step — target-aware prepared file context is wired, but retrieval-backed context packs (`rag/context_pack.py`) are not yet injected into Temporal step execution (pairs with 5.3).
 - [x] **3.3** Context clearing between steps.
-- [x] **3.4** Multi-step workflow visualization in Mission Control.
+- [x] **3.4** Multi-step workflow visualization in the dashboard.
 - [x] **3.5 / 3.6** Preset-driven scheduling and schedules UI overhaul.
 
 ---
@@ -126,7 +126,7 @@ Recent main-branch changes since the prior roadmap snapshot:
 ### What's shipped
 - LlamaIndex + Qdrant pipeline; GitHub/Jira/Confluence/Drive/local indexers; manifest schema, CLI, and Temporal ingest workflow.
 - Retrieval quality validation with golden smoke dataset (`hitRate@10` / `ndcg@10`).
-- Index health monitoring in Mission Control (MM-758) and federated multi-collection retrieval.
+- Index health monitoring in the dashboard (MM-758) and federated multi-collection retrieval.
 - End-to-end manifest ingest integration test (MM-754).
 - Retrieval transport separation and retrieval evidence guardrails.
 
@@ -145,7 +145,7 @@ All six items shipped: run digests, fix patterns/error signatures, Mem0 long-ter
 
 ---
 
-## Milestone 7 — Mission Control Dashboard 🔧
+## Milestone 7 — Dashboard 🔧
 
 **README claim:** *"Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI."*
 
@@ -153,14 +153,14 @@ All six items shipped: run digests, fix patterns/error signatures, Mem0 long-ter
 - Workflow console with live SSE status, workflow editing/cancel/resubmit, runtime/model/effort/priority display, and provider-profile summaries.
 - Execution history/audit view (`/workflows/{workflowId}/runs`) and workflow detail subroute tabs.
 - Intervention request monitoring via `intervention_requested` state.
-- Settings unified into Mission Control with sparse overrides, server-side validation, settings backup, migrations, and MM-713 guardrail suite.
+- Settings unified into the dashboard with sparse overrides, server-side validation, settings backup, migrations, and MM-713 guardrail suite.
 - Attachment upload/binding UX with recovery diagnostics by target; column filter popovers; mobile/accessibility stability.
 - Worker fleet health dashboard (MM-775).
 - Multi-step step DAG visualization.
 - Expanded Step Execution history UI (MM-831 / PR #2541), including execution ordinal, lineage, reason, runtime child refs, context bundle ref, workspace policy, git disposition, gate verdict, output/diff refs, diagnostics refs, side effects, and terminal disposition.
 
 ### Remaining work
-- [x] **7.1** Settings migrated to Mission Control.
+- [x] **7.1** Settings migrated to the dashboard.
 - [ ] **7.2** Artifact browsing UI — API exists (`temporal_artifacts.py`); dashboard browsing of files/logs/patches is still partial.
 - [ ] **7.5** Side-by-side comparison view — comparison runs preserve lineage, but no side-by-side UI.
 - [x] **7.6** Multi-step / step DAG visualization.
@@ -249,7 +249,7 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - [ ] **12.2** Governance telemetry — durable record of privileged agent actions with export sinks.
   *Done means:* privileged actions recorded with actor/action/target/decision and exportable, with boundary tests.
 - [ ] **12.3** Secret lifecycle audit surface — who created/rotated/deleted a secret, which profiles reference it, and which launches resolved it.
-  *Done means:* those questions answerable from Mission Control without exposing secret values.
+  *Done means:* those questions answerable from the dashboard without exposing secret values.
 - [ ] **12.4** Outbound scan coverage at all publish boundaries — adopt the MM-811 contract at GitHub PR/issue comments, remaining commit/push paths, artifact publication, and external tool calls under high-security mode.
   *Done means:* every send/post/push/publish boundary invokes the scan in high-security mode, with block-on-match tests per boundary.
 - [ ] **12.5** Risk-gated action review policy — classify risky actions before execution and route them through deterministic policy, optional second-model review, or human approval. This must cover generic risky actions plus PentestGPT `full_authorized` and external-target enablement.
@@ -271,14 +271,14 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - Durable step ledger & checkpoints — step state, attempts, evidence refs, and latest-attempt evidence refs surfaced in the default ledger row.
 - Resume foundations — distinct full-retry vs recovery actions, checkpoint-evidence gating, editable full retry, and resume-from-last-failed-step.
 - Step Execution evidence manifests and checkpoint contracts are documented as the canonical substrate for semantic re-execution, checkpointed side effects, gated iteration, failed-step recovery, and autonomous story loops.
-- Step Execution history is now visible in expanded Mission Control step rows (MM-831 / PR #2541).
+- Step Execution history is now visible in expanded dashboard step rows (MM-831 / PR #2541).
 
 ### Remaining work
 - [ ] **13.1** Resume-from-checkpoint as the default recovery path — checkpoint restore logic exists but is not yet the primary operator flow for failed runs.
   *Done means:* a failed run's default operator flow offers evidence-gated checkpoint resume with replay-safe cutover.
 - [ ] **13.2** Queryable remediation audit events — publish remediation lifecycle audit through the control-event mechanism.
   *Done means:* remediation lifecycle events queryable per target run.
-- [ ] **13.3** Mission Control remediation panels — operator-facing remediation status/action surfaces.
+- [ ] **13.3** Dashboard remediation panels — operator-facing remediation status/action surfaces.
   *Done means:* operators can view remediation state and trigger typed actions from workflow detail.
 - [ ] **13.4** Autonomous remediation supervisor — scheduled/triggered remediation that diagnoses and repairs failed runs without an operator prompt.
   **Gated on:** 12.1, 12.2, 12.3, and 14.1/14.3/14.4. Autonomous repair must not outrun the safety, audit, and post-hoc forensics substrate it depends on.
@@ -291,25 +291,25 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 
 ### What's shipped
 - Artifact-first durable run outputs — large content stored as immutable, content-addressed artifacts referenced from compact workflow payloads.
-- Live-log spool transport with SSE delivery to Mission Control.
+- Live-log spool transport with SSE delivery to the dashboard.
 - Structured JSON logs with run/worker correlation context.
 - Token cost estimates and pricing-aware routing metadata.
 - Live Logs desired-state contract for a session-aware merged timeline, ANSI parsing, virtualized rendering, artifact-backed replay, and rollout gates.
-- Mission Control viewer pieces for structured observability history, session snapshots, EventSource live follow, ANSI rendering, and virtualized timelines are present behind feature/config rollout.
-- Incident reconstruction path (MM-884): every failed run emits a durable `reports/incident_reconstruction.json` manifest correlating the resilience policy, provider/profile/credential source, sanitized provider failure event, failed step, progress, workspace changes, accepted/blocked side effects, checkpoint restore candidate, cost-attribution settings + observed cost (where available), trace spans across every boundary, logs, and artifacts under one stable, replay-safe correlation (trace) id. The same trace id is stamped onto each step-execution manifest as a compact `traceRef`, and Mission Control/report surfaces link to the durable manifest (`incident_reconstruction_ref`) rather than duplicating its evidence.
+- Dashboard viewer pieces for structured observability history, session snapshots, EventSource live follow, ANSI rendering, and virtualized timelines are present behind feature/config rollout.
+- Incident reconstruction path (MM-884): every failed run emits a durable `reports/incident_reconstruction.json` manifest correlating the resilience policy, provider/profile/credential source, sanitized provider failure event, failed step, progress, workspace changes, accepted/blocked side effects, checkpoint restore candidate, cost-attribution settings + observed cost (where available), trace spans across every boundary, logs, and artifacts under one stable, replay-safe correlation (trace) id. The same trace id is stamped onto each step-execution manifest as a compact `traceRef`, and dashboard/report surfaces link to the durable manifest (`incident_reconstruction_ref`) rather than duplicating its evidence.
 
 ### Remaining work
 - [ ] **14.1** OpenTelemetry instrumentation — FastAPI middleware, Temporal client/worker interceptors, and activity-layer spans with provider/model/token attributes.
   *Done means:* API→workflow→activity→provider spans correlated end-to-end with bounded metric labels.
   *Substrate shipped (MM-884):* a stable per-run correlation id now propagates through the step manifests and the incident reconstruction trace-span enumeration; native OTel emission/export remains.
-- [ ] **14.2** Per-step token/cost attribution in Mission Control — cost primitives exist but are not attributed and displayed per step.
+- [ ] **14.2** Per-step token/cost attribution in the dashboard — cost primitives exist but are not attributed and displayed per step.
   *Done means:* per-step cost visible in workflow detail and reconcilable with billing/routing estimates.
-  *Contract shipped (MM-884):* the incident reconstruction manifest carries the cost-attribution settings and observed per-step token/cost where the runtime reports it; the Mission Control workflow-detail display remains.
+  *Contract shipped (MM-884):* the incident reconstruction manifest carries the cost-attribution settings and observed per-step token/cost where the runtime reports it; the dashboard workflow-detail display remains.
 - [ ] **14.3** Session-aware live-log timeline rollout — complete the LiveLogs.md rollout: merged stdout/stderr/system/session timeline, session epoch/reset markers, shared cross-process transport as authoritative path, artifact-backed replay, and "live-stream failure never fails run" behavior.
   *Done means:* live timeline plus replay are available for target managed runtimes without relying on SSE success.
-- [ ] **14.4** Trace/log deep links from workflow detail — jump from a step in Mission Control to its correlated trace and log slice.
+- [ ] **14.4** Trace/log deep links from workflow detail — jump from a step in the dashboard to its correlated trace and log slice.
   *Done means:* every step row links to its trace and log slice via correlation IDs.
-  *Substrate shipped (MM-884):* each step manifest now carries a `traceRef` (trace id + per-step span id) and the incident manifest links the durable log/artifact refs; the Mission Control deep-link UI remains.
+  *Substrate shipped (MM-884):* each step manifest now carries a `traceRef` (trace id + per-step span id) and the incident manifest links the durable log/artifact refs; the dashboard deep-link UI remains.
 
 ---
 
@@ -335,7 +335,7 @@ Milestones are ordered by **impact on delivering the README promise** (highest f
 | 🟠 P1 | **14 — Deep Observability (OTel, cost, live logs)** | 🔧 Partial | 4 items |
 | 🟠 P1 (gated) | **13.4 — Autonomous remediation supervisor** | 📐 Designed | Gated on 12.1–12.3, 14.1/14.3/14.4 |
 | 🟠 P1 | **3 — Multi-Step Planning & Context** | 🔧 Partial | 1 item |
-| 🟠 P1 | **7 — Mission Control Dashboard** | 🔧 Partial | 3 items |
+| 🟠 P1 | **7 — Dashboard** | 🔧 Partial | 3 items |
 | 🟡 P2 | **5 — RAG & Document Retrieval** | 🔧 Partial | 2 items |
 | 🟡 P2 | **8 — Universal Integration (MCP & APIs)** | 🔧 Partial | 1 item |
 | 🟡 P2 | **H — Housekeeping (H.6 metadata hygiene)** | 🔧 Partial | 1 item |

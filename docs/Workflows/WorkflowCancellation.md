@@ -11,7 +11,7 @@ This document outlines **Workflow Cancellation** in MoonMind so that:
 * Workflow Executions can be cancelled while **queued** (pending execution).
 * Workflow Executions can be cancelled while **running natively as Temporal Workflows** (via Temporal Cancellation Requests).
 * Cancellation is exposed through:
-  * **Mission Control UI** (thin dashboard over REST)
+  * **MoonMind dashboard** (thin dashboard over REST)
   * **REST API endpoint(s)** (under `/api/queue`)
   * **MCP tool call** (under `/mcp/tools/call`)
 
@@ -37,7 +37,7 @@ This document outlines **Workflow Cancellation** in MoonMind so that:
 
 MoonMind Workflow runs are durably orchestrated by Temporal Workflows (e.g., `MoonMind.UserWorkflow`). The cancellation flow mirrors standard Temporal patterns.
 
-* Mission Control UI issues a cancel command to the Control Plane API (`POST /api/queue/jobs/{job_id}/cancel`).
+* The MoonMind dashboard issues a cancel command to the Control Plane API (`POST /api/queue/jobs/{job_id}/cancel`).
 * If the Workflow Execution is purely queued in the database and hasn't started a workflow, the API marks it `cancelled` in Postgres directly.
 * If a Temporal Workflow Execution `MoonMind.UserWorkflow` is currently active for this run, the API sends a standard **Temporal Cancellation Request** to the workflow via the Temporal Client.
 

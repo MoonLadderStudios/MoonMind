@@ -5426,7 +5426,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     if (!window.confirm('Bypass dependency waiting for this task?')) return;
     signalMutation.mutate({
       signalName: 'BypassDependencies',
-      payload: { reason: 'Dependency wait bypassed by operator from Mission Control.' },
+      payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
     });
   };
 
@@ -5442,7 +5442,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     cancelMutation.mutate({
       action: 'cancel',
       graceful: false,
-      reason: 'Force canceled by operator from Mission Control.',
+      reason: 'Force canceled by operator from the dashboard.',
     });
   };
 

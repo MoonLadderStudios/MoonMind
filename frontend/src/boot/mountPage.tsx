@@ -8,11 +8,11 @@ import '@fontsource/ibm-plex-sans/latin-600.css';
 import '@fontsource/ibm-plex-sans/latin-700.css';
 import '@fontsource/ibm-plex-mono/latin-400.css';
 import '@fontsource/ibm-plex-mono/latin-700.css';
-import '../styles/mission-control.css';
+import '../styles/dashboard.css';
 
 const queryClient = new QueryClient();
 
-export function mountPage(App: React.ComponentType<{ payload: ReturnType<typeof parseBootPayload> }>, rootId = 'mission-control-root') {
+export function mountPage(App: React.ComponentType<{ payload: ReturnType<typeof parseBootPayload> }>, rootId = 'dashboard-app-root') {
   const rootElement = document.getElementById(rootId);
   if (!rootElement) {
     console.error(`Root element #${rootId} not found. Cannot mount app.`);

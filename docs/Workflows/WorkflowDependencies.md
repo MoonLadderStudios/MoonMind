@@ -364,11 +364,11 @@ While the workflow is active and a prerequisite is currently failed, the per-dep
 
 ---
 
-## 6. Mission Control Expectations
+## 6. Dashboard Expectations
 
 ### 6.1 Create flow
 
-Mission Control should expose dependency configuration on `/workflows/new`.
+The dashboard should expose dependency configuration on `/workflows/new`.
 
 The create UX should provide:
 

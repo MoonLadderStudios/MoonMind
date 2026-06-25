@@ -184,7 +184,7 @@ OAuth flows instead of external terminal handoff services.
 The desired OAuth terminal architecture is:
 
 ```text
-Settings / Mission Control UI
+Settings / MoonMind dashboard
   -> OAuth Session API
   -> MoonMind.OAuthSession workflow
   -> short-lived auth runner container
@@ -396,7 +396,7 @@ or raw auth-volume listings.
 
 For Codex OAuth enrollment:
 
-1. The operator starts a Codex OAuth session from Settings, Mission Control, or
+1. The operator starts a Codex OAuth session from Settings, the dashboard, or
    an operator helper.
 2. MoonMind opens the launched provider terminal page for that session.
 3. MoonMind creates or reuses the selected `codex_auth_volume`.

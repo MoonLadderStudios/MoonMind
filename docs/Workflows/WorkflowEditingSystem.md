@@ -24,7 +24,7 @@ This keeps create, edit, and rerun on one form while making Temporal the source 
 This design applies to:
 
 - the shared Workflow Execution submit page at `/workflows/new`
-- Temporal-backed Workflow detail surfaces in Mission Control
+- Temporal-backed Workflow detail surfaces in the dashboard
 - Temporal-backed list or card surfaces that may expose edit or rerun entry points
 - input reconstruction from Temporal execution details and referenced artifacts
 - submission through Temporal execution updates

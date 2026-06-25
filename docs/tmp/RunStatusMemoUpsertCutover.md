@@ -19,7 +19,7 @@ where the history contains `ActivityTaskScheduled`.
 New histories use the patch marker `run-status-memo-upsert-v1` before emitting
 the status-only memo update. Histories that do not contain the marker skip that
 status-only memo update and continue with the existing search-attribute upsert.
-Mission Control still receives owner, state, and title visibility through search
+The dashboard still receives owner, state, and title visibility through search
 attributes and can fall back to stored projections for step reads.
 
 ## In-Flight Compatibility Boundary

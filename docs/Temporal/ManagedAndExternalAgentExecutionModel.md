@@ -682,7 +682,7 @@ If live streaming is unavailable or degraded:
 
 * managed run execution continues normally
 * artifacts and final diagnostics still define the authoritative run record
-* Mission Control must be able to observe completed runs without ever having had a live stream connection
+* The dashboard must be able to observe completed runs without ever having had a live stream connection
 * live streaming failure is never a root cause of run failure
 
 ---
@@ -765,7 +765,7 @@ Specifically:
 * `AgentRunResult.output_refs[]` contains durable output artifact refs for the workflow result
 * `AgentRunResult.diagnostics_ref` is the final diagnostics artifact for the run
 * live log events, artifact-backed tails, and per-stream retrieval are served through observability APIs, not through workflow payloads or `AgentRunResult`
-* Mission Control uses the observability APIs for workflow detail live/tailed observation, not the workflow result surface
+* The dashboard uses the observability APIs for workflow detail live/tailed observation, not the workflow result surface
 * the parent step ledger should carry only bounded refs back to that observability surface, not duplicate managed-run log state
 
 ## 10.2 Observability metadata expectations for managed runs
@@ -910,7 +910,7 @@ Ongoing or pending work includes:
 * resolved skill snapshot propagation and materialization work
 * elimination of legacy contract-shape compatibility glue where replay-safe
 * live log stream producer-to-API plumbing (supervisor must emit into shared cross-process transport)
-* Mission Control observability panel implementation (artifact-backed tail + live-follow)
+* Dashboard observability panel implementation (artifact-backed tail + live-follow)
 
 ### 13.4 Legacy session-based observability
 

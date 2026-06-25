@@ -565,7 +565,7 @@ The exact configuration surface may evolve, but the current retrieval settings i
 | `RAG_LATENCY_BUDGET_MS` | Retrieval latency budget |
 | `MOONMIND_RAG_AUTO_CONTEXT` | Automatic initial retrieval enablement |
 
-Mission Control UI exposure for these settings is a separate concern from the retrieval contract itself.
+MoonMind dashboard exposure for these settings is a separate concern from the retrieval contract itself.
 
 ---
 

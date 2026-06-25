@@ -1,7 +1,7 @@
 # Step Ledger and Progress Model
 
 Status: Normative  
-Owners: MoonMind Platform + Mission Control  
+Owners: MoonMind Platform + Dashboard  
 Last updated: 2026-06-13
 
 ## 1. Purpose
@@ -416,7 +416,7 @@ The authoritative sources for step data are:
 
 A derived read model such as `execution_step_projection` is allowed for:
 
-- fast Mission Control reads
+- fast dashboard reads
 - compatibility joins
 - degraded mode when the query path is impaired
 - future run-history surfaces
@@ -459,7 +459,7 @@ Rules:
 
 ## 14. UI and telemetry posture
 
-Mission Control workflow detail should treat the **Steps** section as the primary operator comprehension surface, positioned above generic timeline and artifact views.
+The dashboard workflow detail should treat the **Steps** section as the primary operator comprehension surface, positioned above generic timeline and artifact views.
 
 Step row expansion should group:
 

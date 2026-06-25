@@ -6,7 +6,7 @@ Jira: MM-734
 
 ## 1. Purpose
 
-MoonMind uses `lucide-react` as the default icon library for Mission Control and other React UI surfaces.
+MoonMind uses `lucide-react` as the default icon library for the dashboard and other React UI surfaces.
 
 MoonMind's frontend is a Vite + React + TypeScript + Tailwind application. Existing UI icons are commonly hand-authored inline SVGs using a 24x24 view box, `currentColor`, rounded strokes, and `strokeWidth="2"`. A clean outline SVG component library fits that visual language better than an icon font or mixed icon pack.
 
@@ -78,7 +78,7 @@ Do not use broad dynamic icon registries or all-icon imports:
 import * as Icons from 'lucide-react';
 ```
 
-Do not build CMS-style dynamic icon lookup unless the registry is deliberately small, curated, and reviewed for bundle impact. Mission Control already uses route-level lazy loading, so direct imports in page and route components keep icon code naturally scoped to the chunks that need it.
+Do not build CMS-style dynamic icon lookup unless the registry is deliberately small, curated, and reviewed for bundle impact. The dashboard already uses route-level lazy loading, so direct imports in page and route components keep icon code naturally scoped to the chunks that need it.
 
 ## 6. Adoption Guidance
 

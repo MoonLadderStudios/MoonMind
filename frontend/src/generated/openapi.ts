@@ -4583,7 +4583,7 @@ export interface components {
         };
         /**
          * ExecutionMetricsResponse
-         * @description Operational run metrics for Mission Control dashboards.
+         * @description Operational run metrics for MoonMind dashboards.
          */
         ExecutionMetricsResponse: {
             /**

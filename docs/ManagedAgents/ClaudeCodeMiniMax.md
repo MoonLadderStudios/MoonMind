@@ -63,11 +63,11 @@ The simplest path: add one line to your `.env` and `docker compose up`.
 
 ## 4. Manual Profile Setup (via Dashboard or API)
 
-If auto-seeding has already run, create the profile through Mission Control or the REST API.
+If auto-seeding has already run, create the profile through the dashboard or the REST API.
 
 ### Dashboard
 
-1. Open Mission Control and navigate to **Settings → Provider Profiles → Create Profile**.
+1. Open the dashboard and navigate to **Settings → Provider Profiles → Create Profile**.
 2. Fill in:
    - **Profile ID**: `claude_minimax`
    - **Runtime**: `claude_code`
@@ -139,7 +139,7 @@ The `ProviderProfileManager` Temporal workflow for `claude_code` automatically m
 
 ## 6. Running a Workflow with MiniMax
 
-When creating a workflow in Mission Control:
+When creating a workflow in the dashboard:
 
 1. Select **Claude Code** as the runtime.
 2. Set **Execution Profile** to `claude_minimax`.

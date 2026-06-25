@@ -1853,7 +1853,7 @@ def _serialize_execution(
             or _coerce_temporal_scalar(task_runtime_payload.get("requested_model"))
         ) or None
     # Ensure model and resolved_model are populated whenever any model
-    # signal is available so the Mission Control workflow detail page
+    # signal is available so the dashboard workflow detail page
     # consistently surfaces a Model fact instead of intermittently
     # hiding it for executions whose params omit one of the aliases.
     effective_model = param_model or param_resolved_model or param_requested_model

@@ -1,10 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
-import { missionControlViteBase } from './src/vite-base';
+import { dashboardViteBase } from './src/vite-base';
 
 export default defineConfig(({ command, mode }) => ({
-  base: missionControlViteBase(command),
+  base: dashboardViteBase(command),
   plugins: [react()],
   root: mode === 'test' ? undefined : resolve(__dirname, 'src'),
   resolve: {
@@ -16,7 +16,7 @@ export default defineConfig(({ command, mode }) => ({
     manifest: true,
     rollupOptions: {
       input: {
-        'mission-control': resolve(__dirname, 'src/entrypoints/mission-control.tsx'),
+        'dashboard': resolve(__dirname, 'src/entrypoints/dashboard.tsx'),
       },
     },
   },
@@ -25,7 +25,7 @@ export default defineConfig(({ command, mode }) => ({
     globals: true,
     include: ['frontend/src/**/*.test.{ts,tsx}'],
     css: {
-      include: /mission-control\.css$/,
+      include: /dashboard\.css$/,
     },
   },
 }));

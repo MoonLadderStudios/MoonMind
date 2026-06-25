@@ -8,7 +8,7 @@ Last updated: 2026-05-06
 
 This document defines the high-level desired-state control-plane architecture for MoonMind Workflow Executions.
 
-It maps how the control plane translates user intent from Mission Control — including:
+It maps how the control plane translates user intent from the dashboard — including:
 
 - Workflow objective text
 - step-authored instructions
@@ -27,7 +27,7 @@ Required execution capability declaration, normalization, and pre-launch blockin
 
 ## 2. System snapshot
 
-MoonMind uses a Temporal-backed execution model in which Mission Control acts as the control plane.
+MoonMind uses a Temporal-backed execution model in which the dashboard acts as the control plane.
 
 The control plane already centers on these product objects:
 
@@ -116,7 +116,7 @@ Rules:
 
 ```mermaid
 flowchart LR
-    U[Authenticated User] --> UI[Mission Control Create Page]
+    U[Authenticated User] --> UI[Dashboard Create Page]
 
     subgraph Control Plane
         UI --> API[Executions API]

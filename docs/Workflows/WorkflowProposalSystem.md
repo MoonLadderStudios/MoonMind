@@ -52,7 +52,7 @@ These rules are fixed:
 3. Promotion creates a new `MoonMind.UserWorkflow` execution.
 4. Human review is required before any proposal becomes durable running work.
 5. Human review occurs in GitHub Issues.
-6. Mission Control may link to proposal GitHub Issues, but it does not host a proposal queue, proposal decision page, or browser-side proposal review controls.
+6. The dashboard may link to proposal GitHub Issues, but it does not host a proposal queue, proposal decision page, or browser-side proposal review controls.
 7. The GitHub Issue body is a rendered review artifact, not an executable payload.
 8. Proposal generation is best-effort and must never compromise the correctness of the parent run result.
 9. Proposal payloads must conform to the canonical Temporal submit contract used by `/api/executions`.
@@ -123,7 +123,7 @@ The proposal system uses this lifecycle vocabulary consistently across:
 
 1. workflow state
 2. execution API responses
-3. Mission Control status mapping
+3. dashboard status mapping
 4. finish summaries
 5. GitHub Issue comments and status labels
 6. related documentation
@@ -476,18 +476,18 @@ These decisions do not mutate the stored executable snapshot.
 
 ---
 
-## 9. Mission Control Surfaces
+## 9. Dashboard Surfaces
 
-Mission Control is not the proposal review surface.
+The dashboard is not the proposal review surface.
 
-Mission Control surfaces proposal outcomes only as links and status context:
+The dashboard surfaces proposal outcomes only as links and status context:
 
 1. workflow detail pages show generated proposal GitHub Issue links
 2. finish summaries show GitHub Issue links and delivery status
 3. run artifacts include proposal counts, GitHub links, and sanitized delivery errors
 4. administrative diagnostics may expose delivery-record health without enabling browser-side proposal review actions
 
-Mission Control must not provide:
+The dashboard must not provide:
 
 1. a proposal queue page
 2. proposal promote buttons
@@ -568,6 +568,6 @@ Required coverage includes:
 12. promotion from stored snapshot with bounded runtime, priority, and max-attempt overrides
 13. rejection of replacement executable payloads from GitHub issue text or comments
 14. workflow finish summaries containing GitHub Issue links
-15. Mission Control routes not exposing proposal review controls
+15. dashboard routes not exposing proposal review controls
 
 The acceptance standard is: generated proposals are discoverable and reviewable in the correct GitHub repository, but executable follow-up work starts only through verified GitHub approval of the stored MoonMind proposal snapshot.

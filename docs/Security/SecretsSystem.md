@@ -25,7 +25,7 @@ The Secrets System must therefore support both:
 The baseline personal-use path must be simple:
 
 - a user can launch `docker compose` successfully without creating or editing `.env`,
-- open Mission Control after startup,
+- open the dashboard after startup,
 - enter a small number of secrets such as a provider API key and GitHub PAT through the UI or API, and
 - run useful agent workloads without first setting up Vault, cloud KMS, or other heavyweight infrastructure.
 
@@ -499,7 +499,7 @@ MoonMind should give operators a simple mental model:
 The expected first-run onboarding flow is:
 
 1. start MoonMind with `docker compose up -d` and no required `.env` editing,
-2. open Mission Control,
+2. open the dashboard,
 3. add a small number of secrets such as a model-provider API key and GitHub PAT,
 4. bind those secrets to provider profiles or workflow settings through normal UI flows, and
 5. launch workloads successfully without external secret-manager setup.

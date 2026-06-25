@@ -8,14 +8,14 @@ Last Updated: 2026-05-08
 
 > [!NOTE]
 > This document supersedes `docs/UI/SettingsTab.md` and should live at `docs/UI/SettingsPage.md`.
-> It defines the Mission Control UI contract for the Settings page.
+> It defines the MoonMind dashboard contract for the Settings page.
 > The security, persistence, resolution, validation, and authorization contract remains owned by [SettingsSystem.md](../Security/SettingsSystem.md).
 
 ---
 
 ## 1. Purpose
 
-The Mission Control **Settings** page is the human-facing configuration plane for user, workspace, provider, secret, and operational configuration.
+The dashboard **Settings** page is the human-facing configuration plane for user, workspace, provider, secret, and operational configuration.
 
 Settings keeps the main product surface focused on workflow executions, workflow details, proposals, schedules, runs, and other workflow-adjacent surfaces. Configuration that shapes those workflows belongs under one coherent Settings page rather than being split across unrelated top-level destinations.
 
@@ -120,14 +120,14 @@ Unknown descriptor fields must not break the Settings page. Unsupported editable
 
 ## 4. Information Architecture
 
-The desired top-level Mission Control navigation model is:
+The desired top-level dashboard navigation model is:
 
 ```text
 Workflows and workflow-adjacent product surfaces
 Settings
 ```
 
-Within **Settings**, Mission Control exposes section navigation rather than separate top-level tabs.
+Within **Settings**, the dashboard exposes section navigation rather than separate top-level tabs.
 
 ```text
 Settings
@@ -501,7 +501,7 @@ The payload should include changed keys, expected versions, and an optional reas
     "workflow.default_publish_mode": 3,
     "skills.canary_percent": 1
   },
-  "reason": "Updated from Mission Control Settings."
+  "reason": "Updated from Settings."
 }
 ```
 
@@ -1005,7 +1005,7 @@ The Settings page design is satisfied when all of the following are true:
 
 ## 20. Migration from `SettingsTab.md`
 
-The old document name implies a narrower tab-level IA artifact. The updated design should use `SettingsPage.md` because Settings is now a full Mission Control page and configuration plane.
+The old document name implies a narrower tab-level IA artifact. The updated design should use `SettingsPage.md` because Settings is now a full dashboard page and configuration plane.
 
 Recommended migration:
 

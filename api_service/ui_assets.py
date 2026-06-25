@@ -5,22 +5,22 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlsplit, urlunsplit
 
-class MissionControlUIAssetsError(Exception):
-    """Mission Control cannot resolve Vite assets (strict mode; see MOONMIND_LENIENT_UI_ASSETS)."""
+class DashboardUIAssetsError(Exception):
+    """The dashboard cannot resolve Vite assets (strict mode; see MOONMIND_LENIENT_UI_ASSETS)."""
 
-class ManifestNotFoundError(MissionControlUIAssetsError):
+class ManifestNotFoundError(DashboardUIAssetsError):
     pass
 
-class ManifestInvalidJsonError(MissionControlUIAssetsError):
+class ManifestInvalidJsonError(DashboardUIAssetsError):
     pass
 
-class EntrypointMissingError(MissionControlUIAssetsError):
+class EntrypointMissingError(DashboardUIAssetsError):
     pass
 
-class AssetFileMissingError(MissionControlUIAssetsError):
+class AssetFileMissingError(DashboardUIAssetsError):
     pass
 
-class InvalidDevServerUrlError(MissionControlUIAssetsError):
+class InvalidDevServerUrlError(DashboardUIAssetsError):
     pass
 
 def local_ui_dist_root() -> Path:
@@ -44,12 +44,12 @@ def _configured_manifest_path() -> str | None:
 def _manifest_entry_key(entrypoint: str) -> str:
     return f"entrypoints/{entrypoint}.tsx"
 
-def _default_manifest_path(entrypoint: str = "mission-control") -> str:
+def _default_manifest_path(entrypoint: str = "dashboard") -> str:
     configured_path = _configured_manifest_path()
     if configured_path:
         return configured_path
 
-    return str(_manifest_path_for_dist_root(resolve_mission_control_dist_root(entrypoint)))
+    return str(_manifest_path_for_dist_root(resolve_dashboard_dist_root(entrypoint)))
 
 def _lenient_ui_assets() -> bool:
     return os.environ.get("MOONMIND_LENIENT_UI_ASSETS", "").lower() in (
@@ -163,7 +163,7 @@ def _dist_root_manifest_mtime_ns(dist_root: Path) -> int:
     except OSError:
         return -1
 
-def resolve_mission_control_dist_root(entrypoint: str = "mission-control") -> Path:
+def resolve_dashboard_dist_root(entrypoint: str = "dashboard") -> Path:
     configured_manifest_path = _configured_manifest_path()
     if configured_manifest_path:
         return _dist_root_for_manifest(configured_manifest_path)
@@ -274,12 +274,12 @@ def _vite_dev_server_assets(entrypoint: str, dev_server_url: str) -> str:
     )
 
 def ui_assets(entrypoint: str) -> str:
-    """Return HTML tags to load the Vite bundle for a Mission Control entrypoint.
+    """Return HTML tags to load the Vite bundle for a dashboard entrypoint.
 
     Set MOONMIND_UI_DEV_SERVER_URL to an absolute Vite dev-server URL to inject
     FastAPI-backed development assets with HMR instead of reading the built manifest.
 
-    By default (strict), raises MissionControlUIAssetsError if the manifest or files
+    By default (strict), raises DashboardUIAssetsError if the manifest or files
     are missing so operators never get a blank content region without explanation.
 
     Set MOONMIND_LENIENT_UI_ASSETS=1 for local experiments without a built dist.

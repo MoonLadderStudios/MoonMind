@@ -73,7 +73,7 @@ from api_service.api.websockets import router as websockets_router
 from api_service.api.schemas import UserProfileUpdate
 from api_service.db.base import get_async_session_context
 from api_service.services.presets.catalog import PresetCatalogService
-from api_service.ui_assets import resolve_mission_control_dist_root
+from api_service.ui_assets import resolve_dashboard_dist_root
 
 # Auth imports
 from api_service.auth import (
@@ -377,16 +377,16 @@ app = FastAPI(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-MISSION_CONTROL_STATIC_DIST_DIR = resolve_mission_control_dist_root()
+DASHBOARD_STATIC_DIST_DIR = resolve_dashboard_dist_root()
 
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-# Mount Mission Control's Vite output separately so compose bind mounts of
+# Mount the dashboard's Vite output separately so compose bind mounts of
 # /app/api_service do not hide the image-baked fallback bundle.
-if MISSION_CONTROL_STATIC_DIST_DIR.is_dir():
+if DASHBOARD_STATIC_DIST_DIR.is_dir():
     app.mount(
         "/static/workflow_console/dist",
-        StaticFiles(directory=str(MISSION_CONTROL_STATIC_DIST_DIR)),
+        StaticFiles(directory=str(DASHBOARD_STATIC_DIST_DIR)),
         name="workflow-console-dist",
     )
 

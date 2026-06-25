@@ -109,7 +109,7 @@ const SETTINGS_SECTIONS: ReadonlyArray<{
     id: 'user-workspace',
     label: 'User / Workspace',
     description:
-      'Hold user-scoped and workspace-scoped settings as Mission Control exposes more of the broader configuration model.',
+      'Hold user-scoped and workspace-scoped settings as the dashboard exposes more of the broader configuration model.',
     Icon: UserWorkspaceIcon,
   },
   {
@@ -239,7 +239,7 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       <header className="rounded-[2rem] border border-mm-border/80 bg-transparent px-6 py-6 shadow-sm">
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">
-            Mission Control Settings
+            Dashboard Settings
           </p>
           <h2 className="text-3xl font-semibold tracking-tight text-slate-950 dark:text-white">Settings</h2>
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">{currentSection.description}</p>

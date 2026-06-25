@@ -9,7 +9,7 @@ Related: `docs/UI/SettingsTab.md`, `docs/Workflows/SkillAndPlanContracts.md`, `d
 
 ## 1. Purpose
 
-This document defines MoonMind's desired-state design for updating a Docker Compose-managed MoonMind deployment from Mission Control.
+This document defines MoonMind's desired-state design for updating a Docker Compose-managed MoonMind deployment from the dashboard.
 
 The system gives an administrator a simple **Settings → Operations** surface where they choose the target MoonMind image reference, start an audited update operation, watch progress, and inspect the resulting before/after deployment state.
 
@@ -28,7 +28,7 @@ The system uses a dedicated deployment-control worker or an ephemeral updater co
 
 The desired-state model is:
 
-1. Mission Control exposes a **Deployment Update** card under **Settings → Operations**.
+1. The dashboard exposes a **Deployment Update** card under **Settings → Operations**.
 2. The operator chooses a target Docker image tag or digest from an allowlisted MoonMind image repository.
 3. The backend creates an audited deployment-update run.
 4. The run invokes a typed executable tool, `deployment.update_compose_stack`.
@@ -93,7 +93,7 @@ A trusted worker or maintenance runtime with the capability to access the host D
 
 The Docker Compose deployment update system must:
 
-1. let an administrator update MoonMind from Mission Control without SSHing into the host
+1. let an administrator update MoonMind from the dashboard without SSHing into the host
 2. expose the target MoonMind image tag or digest as the main operator choice
 3. keep the updater runner image internal and deployment-controlled
 4. perform updates through a typed executable tool contract
@@ -144,7 +144,7 @@ The following rules are fixed.
 
 ## 6.1 Placement
 
-Mission Control exposes the deployment update surface under:
+The dashboard exposes the deployment update surface under:
 
 ```text
 Settings → Operations
@@ -1000,7 +1000,7 @@ Update MoonMind Deployment
 
 ## 19. Observability
 
-The deployment update workflow should expose progress states suitable for Mission Control:
+The deployment update workflow should expose progress states suitable for the dashboard:
 
 ```text
 QUEUED

@@ -452,7 +452,7 @@ Important:
 
 - do not materialize these values into the agent's general environment
 - resolve these values inside the Jira tool handler only
-- if Mission Control surfaces the binding, show only presence/health, never secret values
+- if the dashboard surfaces the binding, show only presence/health, never secret values
 
 ---
 

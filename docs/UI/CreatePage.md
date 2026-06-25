@@ -549,4 +549,4 @@ For the Jira example:
 - `docs/Workflows/WorkflowPublishing.md`
 - `docs/Workflows/PrMergeAutomation.md`
 - `docs/UI/WorkflowConsoleArchitecture.md`
-- `docs/UI/MissionControlDesignSystem.md`
+- `docs/UI/DashboardDesignSystem.md`

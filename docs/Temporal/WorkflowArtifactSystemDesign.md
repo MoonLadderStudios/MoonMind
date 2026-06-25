@@ -388,7 +388,7 @@ Representative rules:
 
 Client rule:
 
-* Mission Control must not derive latest step evidence locally by sorting execution-wide artifacts in the browser
+* The dashboard must not derive latest step evidence locally by sorting execution-wide artifacts in the browser
 * server-side grouping determines the canonical latest artifact for a step execution and link type
 
 Not all link types are intended as “outputs.”

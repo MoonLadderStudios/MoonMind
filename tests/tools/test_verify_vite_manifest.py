@@ -20,7 +20,7 @@ def _load_verify_module():
 def test_expected_entrypoints_matches_vite_config() -> None:
     mod = _load_verify_module()
     names = mod.expected_entrypoints()
-    assert names == ["mission-control"]
+    assert names == ["dashboard"]
 
 def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
     tmp_path, monkeypatch
@@ -43,7 +43,7 @@ def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
                   build: {
                 rollupOptions: {
                   input: {
-                    'mission-control': resolve(__dirname, 'src/entrypoints/mission-control.tsx'),
+                    'dashboard': resolve(__dirname, 'src/entrypoints/dashboard.tsx'),
                   },
                 },
               },
@@ -58,8 +58,8 @@ def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
         textwrap.dedent(
             """
             {
-              "entrypoints/mission-control.tsx": {
-                "file": "assets/mission-control.js",
+              "entrypoints/dashboard.tsx": {
+                "file": "assets/dashboard.js",
                 "css": ["assets/shared.css"]
               }
             }
@@ -69,8 +69,8 @@ def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
         encoding="utf-8",
     )
 
-    (assets_dir / "mission-control.js").write_text(
-        "console.log('mission-control');\n",
+    (assets_dir / "dashboard.js").write_text(
+        "console.log('dashboard');\n",
         encoding="utf-8",
     )
     (assets_dir / "shared.css").write_text("body { color: black; }\n", encoding="utf-8")

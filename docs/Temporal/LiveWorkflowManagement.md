@@ -18,7 +18,7 @@ Last Updated: 2026-03-28
 
 Operators need real-time visibility into running Workflow Executions. This document defines two complementary capabilities:
 
-1. **Live Log Tailing** — An on-demand, read-only view of the most recent terminal output from a running Workflow Execution, rendered in the Mission Control Workflow Execution detail page (artifact-backed; see [LiveLogs.md](../ManagedAgents/LiveLogs.md)).
+1. **Live Log Tailing** — An on-demand, read-only view of the most recent terminal output from a running Workflow Execution, rendered in the dashboard Workflow Execution detail page (artifact-backed; see [LiveLogs.md](../ManagedAgents/LiveLogs.md)).
 2. **Live Terminal Handoff** — Interactive operator controls (pause/resume, grants, messages) layered on the same run, without requiring a third-party terminal relay in the managed runtime image.
 
 Implementation detail: the managed launcher runs agents as a plain subprocess with piped streams; live output is not produced by wrapping the agent in an external terminal multiplexer.
@@ -28,7 +28,7 @@ Implementation detail: the managed launcher runs agents as a plain subprocess wi
 ## 2. Goals
 
 1. Show operators what the agent is doing right now — without requiring a separate terminal client.
-2. Provide a rolling window of recent terminal output (last ~200 lines) in the Mission Control UI.
+2. Provide a rolling window of recent terminal output (last ~200 lines) in the MoonMind dashboard.
 3. Allow operators to escalate from passive observation to active intervention when needed.
 4. Default to secure behavior: read-only first, time-bound write grants, revocation, and audit trails.
 5. Minimize new surface area: prefer first-party artifact and API contracts over embedding external terminal viewers.
@@ -81,7 +81,7 @@ Runtime images should include `openssh-client` and `ca-certificates` for Git and
 
 ### 5.1 Concept
 
-The Mission Control Workflow Execution detail page includes a collapsible **Live Output** panel. When the operator toggles it open:
+The dashboard Workflow Execution detail page includes a collapsible **Live Output** panel. When the operator toggles it open:
 
 1. The UI fetches the most recent ~200 lines of terminal output from the running session.
 2. New lines stream in continuously, pushing older lines off the top of the buffer.
@@ -91,7 +91,7 @@ When the panel is collapsed or the tab is backgrounded, polling stops.
 
 ### 5.2 Data Source
 
-The UI reads recent terminal output from **artifact-backed log APIs** (or equivalent streaming endpoints) rather than embedding a third-party terminal web viewer. Scrollback and rendering use Mission Control components; see [LiveLogs.md](../ManagedAgents/LiveLogs.md).
+The UI reads recent terminal output from **artifact-backed log APIs** (or equivalent streaming endpoints) rather than embedding a third-party terminal web viewer. Scrollback and rendering use dashboard components; see [LiveLogs.md](../ManagedAgents/LiveLogs.md).
 
 ### 5.3 UI Behavior
 

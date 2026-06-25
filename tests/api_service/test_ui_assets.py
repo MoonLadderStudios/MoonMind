@@ -34,10 +34,10 @@ def test_ui_assets_uses_vite_dev_server_when_configured(monkeypatch: pytest.Monk
     monkeypatch.setenv("MOONMIND_UI_DEV_SERVER_URL", "http://127.0.0.1:5173/")
     monkeypatch.setenv("VITE_MANIFEST_PATH", "non-existent-manifest.json")
 
-    html = ui_assets("mission-control")
+    html = ui_assets("dashboard")
 
     assert 'src="http://127.0.0.1:5173/@vite/client"' in html
-    assert 'src="http://127.0.0.1:5173/entrypoints/mission-control.tsx"' in html
+    assert 'src="http://127.0.0.1:5173/entrypoints/dashboard.tsx"' in html
     assert "/static/workflow_console/dist/" not in html
 
 def test_ui_assets_rejects_invalid_vite_dev_server_url(
