@@ -4924,7 +4924,7 @@ def _invalid_workflow_request(message: str) -> HTTPException:
         },
     )
 
-def _reject_preset_version_identity(task_payload: Mapping[str, Any]) -> None:
+def _reject_submit_version_identity(task_payload: Mapping[str, Any]) -> None:
     task_template = task_payload.get("taskTemplate") or task_payload.get(
         "task_template"
     )
@@ -4948,6 +4948,13 @@ def _reject_preset_version_identity(task_payload: Mapping[str, Any]) -> None:
                     "payload.workflow.appliedStepTemplates"
                     f"[{index}] uses slug/scope only; remove version or presetVersion."
                 )
+
+    for field_name in ("tool", "skill"):
+        selected = task_payload.get(field_name)
+        if isinstance(selected, Mapping) and selected.get("version") is not None:
+            raise _invalid_workflow_request(
+                f"payload.workflow.{field_name} uses name-only identity; remove version."
+            )
 
 def _validation_error_code(message: str) -> str:
     if message.startswith("Dependency not found:"):
@@ -6034,11 +6041,9 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     name = str(selected_payload.get("name") or selected_payload.get("id") or "").strip()
     if not name:
         return None
-    version = str(selected_payload.get("version") or "").strip() or "1.0"
     normalized: dict[str, Any] = {
         "type": "skill",
         "name": name,
-        "version": version,
     }
 
     inline_inputs = selected_payload.get("inputs")
@@ -7044,7 +7049,7 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             f"{shape_name} Temporal submit requests require {required_field}."
         )
-    _reject_preset_version_identity(task_payload)
+    _reject_submit_version_identity(task_payload)
 
     # Resolve child-agent runtime inheritance before downstream normalization
     # consumes targetRuntime / task.runtime fields.  When inheritance applies,
@@ -7126,7 +7131,7 @@ async def _create_execution_from_workflow_request(
             session=session,
             user_id=user.id,
         )
-        _reject_preset_version_identity(task_payload)
+        _reject_submit_version_identity(task_payload)
 
     (
         objective_attachment_refs,
@@ -7237,7 +7242,6 @@ async def _create_execution_from_workflow_request(
         # Keep legacy shape for compatibility while tool is canonical.
         normalized_task_for_planner["skill"] = {
             "name": normalized_tool["name"],
-            "version": normalized_tool["version"],
         }
         if isinstance(normalized_tool.get("inputs"), dict):
             normalized_task_for_planner["inputs"] = dict(normalized_tool["inputs"])
