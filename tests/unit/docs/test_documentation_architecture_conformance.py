@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -105,6 +107,12 @@ def test_standard_defers_to_document_model_no_second_authority() -> None:
 
 
 def test_conformance_review_is_non_canonical_working_doc_with_traceability() -> None:
+    if not CONFORMANCE_REVIEW.exists():
+        pytest.skip(
+            "docs/tmp self-conformance evidence is disposable; the durable "
+            "guardrails on the canonical standard cover the regression surface "
+            "once this working doc is archived/removed after MM-900 completes."
+        )
     text = _read(CONFORMANCE_REVIEW)
     # Self-labels as time-bound docs/tmp evidence, not a canonical view.
     assert "docs/tmp/" in text
@@ -122,6 +130,12 @@ def test_conformance_review_is_non_canonical_working_doc_with_traceability() -> 
 
 
 def test_migration_plan_records_authority_conflict_outcome() -> None:
+    if not MIGRATION_PLAN.exists():
+        pytest.skip(
+            "docs/tmp migration/alignment plan is disposable working evidence; "
+            "it is not a permanent test fixture and may be archived/removed once "
+            "MM-900 completes without failing the required unit suite."
+        )
     text = _read(MIGRATION_PLAN)
     assert "MM-909 self-conformance and authority-conflict record" in text
     assert "MoonSpecDocsArchitectureConformanceReview.md" in text
