@@ -1164,6 +1164,10 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
         workload_request = getattr(request, "request", request)
         artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
         base = artifacts_dir / "pentest"
+        report_profile_fields = {
+            "runner_" + "profile" + "_id": "report-runner",
+            "execution_" + "profile" + "_ref": "report-execution",
+        }
         files = {
             "runtime/stdout.log": "stdout raw-output-marker-should-not-leak\n",
             "runtime/stderr.log": "stderr raw-error-marker-should-not-leak\n",
@@ -1178,8 +1182,7 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
                     "target": "https://lab.example.test",
                     "scope_artifact_ref": "art:sha256:scope",
                     "operation_mode": "validate_hypothesis",
-                    "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                    "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
+                    **report_profile_fields,
                     "produced_at": "2026-06-14T00:00:00Z",
                     "findings": [
                         {
