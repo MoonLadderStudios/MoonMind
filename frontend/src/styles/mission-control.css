@@ -1974,13 +1974,13 @@ tbody tr:hover {
 }
 
 .provider-profile-status-details > summary::before {
-  content: '▸';
+  content: '\25b8';
   font-size: 0.65rem;
   line-height: 1;
 }
 
 .provider-profile-status-details[open] > summary::before {
-  content: '▾';
+  content: '\25be';
 }
 
 @media (max-width: 720px) {

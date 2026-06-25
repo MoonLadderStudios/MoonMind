@@ -1288,7 +1288,7 @@ export function ProviderProfilesManager({
                 const claudeReadiness =
                   authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
                 const hasStatusDetails = Boolean(
-                  activationLabel ||
+                  (activationLabel && activationLabel !== 'Connected') ||
                     profile.disabled_reason ||
                     profile.last_validated_at ||
                     profile.readiness ||
