@@ -2227,7 +2227,9 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
     assert authored["includeTreeSummary"] == [
         {
             "presetSlug": "jira-orchestrate",
+            "presetDigest": None,
             "includedSlug": "jira-fetch",
+            "includedDigest": None,
         }
     ]
     assert authored["perStepProvenance"] == [
