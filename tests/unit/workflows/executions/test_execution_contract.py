@@ -11,6 +11,7 @@ from moonmind.workflows.executions.execution_contract import (
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
     resolve_publish_mode_for_skill,
+    strip_workflow_capability_identity_versions,
     WorkflowContractError,
     WorkflowExecutionSpec,
     WorkflowRecoveryProvenance,
@@ -50,15 +51,18 @@ def test_task_skills_accepts_valid_properties() -> None:
     assert spec.skills.exclude == ["legacy"]
     assert spec.skills.materialization_mode == "hybrid"
 
-def test_task_skills_rejects_semantic_version_fields() -> None:
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        WorkflowExecutionSpec.model_validate(
-            {
-                "repository": "test/repo",
-                "instructions": "execute",
-                "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
-            }
-        )
+def test_task_skills_strip_semantic_version_fields() -> None:
+    spec = WorkflowExecutionSpec.model_validate(
+        {
+            "repository": "test/repo",
+            "instructions": "execute",
+            "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
+        }
+    )
+
+    assert spec.skills is not None
+    assert spec.skills.include is not None
+    assert spec.skills.include[0].name == "test-skill"
 
     with pytest.raises(ValidationError, match="semantic versions"):
         WorkflowExecutionSpec.model_validate(
@@ -68,6 +72,41 @@ def test_task_skills_rejects_semantic_version_fields() -> None:
                 "skills": {"include": [{"name": "test-skill:1.0.0"}]},
             }
         )
+
+
+def test_workflow_capability_identity_sanitizer_strips_nested_skill_versions() -> None:
+    payload = {
+        "skills": {
+            "include": [
+                {"name": "pr-resolver", "version": "1.0.0", "skillVersion": "1.0.0"},
+            ],
+            "exclude": [
+                {"name": "legacy", "version": "0.1.0"},
+                "old-skill",
+            ],
+        },
+        "steps": [
+            {
+                "instructions": "Run targeted skill.",
+                "skills": {
+                    "include": [
+                        {
+                            "name": "fix-ci",
+                            "version": "2.0.0",
+                            "skillVersion": "2.0.0",
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+
+    sanitized = strip_workflow_capability_identity_versions(payload)
+
+    assert sanitized["skills"]["include"] == [{"name": "pr-resolver"}]
+    assert sanitized["skills"]["exclude"] == [{"name": "legacy"}, "old-skill"]
+    assert sanitized["steps"][0]["skills"]["include"] == [{"name": "fix-ci"}]
+
 
 def test_mm842_authoritative_snapshot_omits_authored_step_graph_metadata() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
@@ -551,6 +590,7 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
                 "authoredPresets": [
                     {
                         "presetId": "runtime-quality-followup",
+                        "presetVersion": "1.0.0",
                     }
                 ],
                 "steps": [
@@ -561,6 +601,7 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
                         "source": {
                             "kind": "preset-derived",
                             "presetId": "runtime-quality-followup",
+                            "version": "1.0.0",
                         },
                     }
                 ],
@@ -606,6 +647,7 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
                     "instructions": "Implement issue.",
                     "skill": {
                         "id": "moonspec-implement",
+                        "skillVersion": "1.0.0",
                         "args": {"issueKey": "MM-559"},
                     },
                 },
@@ -617,7 +659,10 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
         step.model_dump(by_alias=True, exclude_none=True) for step in spec.steps
     ]
     assert dumped_steps[0]["type"] == "tool"
-    assert dumped_steps[0]["tool"]["id"] == "jira.get_issue"
+    assert dumped_steps[0]["tool"] == {
+        "id": "jira.get_issue",
+        "inputs": {"issueKey": "MM-559"},
+    }
     assert dumped_steps[0]["source"] == {
         "kind": "preset-derived",
         "presetId": "jira-flow",
@@ -625,7 +670,10 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
         "originalStepId": "fetch-jira-issue",
     }
     assert dumped_steps[1]["type"] == "skill"
-    assert dumped_steps[1]["skill"]["id"] == "moonspec-implement"
+    assert dumped_steps[1]["skill"] == {
+        "id": "moonspec-implement",
+        "args": {"issueKey": "MM-559"},
+    }
 
 @pytest.mark.parametrize(
     "source",
@@ -1106,6 +1154,78 @@ def test_codex_skill_payload_defaults_self_managed_publish_to_none(
     )
 
     assert result["workflow"]["publish"]["mode"] == "none"
+
+
+def test_canonical_workflow_view_strips_capability_identity_versions() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "task": {
+                "instructions": "Run pr-resolver for PR 2680.",
+                "skill": {
+                    "id": "pr-resolver",
+                    "skillVersion": "1.0.0",
+                    "args": {"pr": "2680"},
+                },
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                    "version": "1.0.0",
+                    "inputs": {"pr": "2680"},
+                },
+                "skills": {
+                    "include": [
+                        {"name": "pr-resolver", "version": "1.0.0"},
+                    ],
+                },
+                "authoredPresets": [
+                    {
+                        "presetSlug": "jira-implement",
+                        "presetVersion": "1.0.0",
+                    },
+                ],
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                    },
+                ],
+                "steps": [
+                    {
+                        "type": "tool",
+                        "instructions": "Fetch issue.",
+                        "tool": {
+                            "id": "jira.get_issue",
+                            "toolVersion": "1.0.0",
+                            "inputs": {"issueKey": "MM-559"},
+                        },
+                    },
+                ],
+            },
+        },
+    )
+
+    workflow = result["workflow"]
+    assert workflow["skill"]["id"] == "pr-resolver"
+    assert workflow["skill"]["args"] == {"pr": "2680"}
+    assert "skillVersion" not in workflow["skill"]
+    assert "version" not in workflow["skill"]
+    assert workflow["tool"] == {
+        "type": "skill",
+        "name": "pr-resolver",
+        "inputs": {"pr": "2680"},
+    }
+    assert workflow["skills"]["include"] == [{"name": "pr-resolver"}]
+    assert "version" not in workflow["skills"]["include"][0]
+    assert workflow["authoredPresets"][0]["presetSlug"] == "jira-implement"
+    assert "presetVersion" not in workflow["authoredPresets"][0]
+    assert "version" not in workflow["authoredPresets"][0]
+    assert workflow["appliedStepTemplates"] == [{"slug": "jira-implement"}]
+    assert workflow["steps"][0]["tool"] == {
+        "id": "jira.get_issue",
+        "inputs": {"issueKey": "MM-559"},
+    }
 
 
 def test_jira_issue_updater_allows_explicit_repository_publish_modes() -> None:

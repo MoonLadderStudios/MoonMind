@@ -384,10 +384,9 @@ def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
         raise PresetValidationError(
             f"Step {index} Tool step requires a tool payload object."
         )
-    if raw_tool.get("version") is not None or raw_tool.get("toolVersion") is not None:
-        raise PresetValidationError(
-            f"Step {index} Tool steps use tool names only; remove version or toolVersion."
-        )
+    raw_tool = dict(raw_tool)
+    raw_tool.pop("version", None)
+    raw_tool.pop("toolVersion", None)
     tool_id = str(raw_tool.get("id") or raw_tool.get("name") or "").strip()
     if not tool_id:
         raise PresetValidationError(
@@ -479,6 +478,9 @@ def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
             message="Preset steps require a preset payload object.",
             code="required",
         )
+    raw_preset = dict(raw_preset)
+    raw_preset.pop("version", None)
+    raw_preset.pop("presetVersion", None)
     preset_slug = str(raw_preset.get("slug") or raw_preset.get("id") or "").strip()
     if not preset_slug:
         raise _step_validation_error(
@@ -486,14 +488,6 @@ def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
             path="preset.slug",
             message="Preset steps require preset.slug or preset.id.",
             code="required",
-        )
-    if raw_preset.get("version") is not None or raw_preset.get("presetVersion") is not None:
-        raise _step_validation_error(
-            index=index,
-            path="preset.version",
-            message="Preset steps use slug/scope only; remove preset.version or presetVersion.",
-            code="preset_version_not_supported",
-            recoverable=False,
         )
     inputs = raw_preset.get("inputs", raw_preset.get("inputMapping", {}))
     if inputs is None:
@@ -1545,6 +1539,9 @@ class PresetCatalogService:
                 raise PresetValidationError(
                     f"Step {index} must be an object with instructions and optional skill."
                 )
+            raw_step = dict(raw_step)
+            raw_step.pop("version", None)
+            raw_step.pop("presetVersion", None)
             blocked = sorted(
                 key for key in raw_step if str(key).strip() in _FORBIDDEN_STEP_KEYS
             )
@@ -1558,10 +1555,6 @@ class PresetCatalogService:
                     f"Step {index} kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
                 )
             if kind == _INCLUDE_KIND:
-                if raw_step.get("version") is not None:
-                    raise PresetValidationError(
-                        f"Step {index} include uses slug/scope only; remove version."
-                    )
                 unsupported = sorted(
                     key
                     for key in raw_step
@@ -1720,6 +1713,8 @@ class PresetCatalogService:
                 )
             if not _preset_step_enabled(rendered.pop("enabled", True)):
                 continue
+            rendered.pop("version", None)
+            rendered.pop("presetVersion", None)
             kind = str(rendered.get("kind") or _STEP_KIND).strip().lower()
             if (
                 kind == _STEP_KIND
@@ -1727,26 +1722,11 @@ class PresetCatalogService:
                 == _STEP_TYPE_PRESET
             ):
                 rendered = _preset_step_to_include(rendered, index=source_index)
+                rendered.pop("version", None)
+                rendered.pop("presetVersion", None)
                 kind = _INCLUDE_KIND
             if kind == _INCLUDE_KIND:
                 include_slug = _normalize_slug(str(rendered.get("slug") or ""))
-                if rendered.get("version") is not None:
-                    include_path = [
-                        *path,
-                        _template_path_label(
-                            slug=include_slug,
-                            alias=_normalize_slug(str(rendered.get("alias") or "")),
-                        ),
-                    ]
-                    raise _include_tree_error(
-                        message=(
-                            "Preset includes use slug/scope only; remove version at "
-                            f"{_format_include_path(include_path)}."
-                        ),
-                        code="preset_include_version_not_supported",
-                        include_path=include_path,
-                        recoverable=False,
-                    )
                 include_alias = _normalize_slug(str(rendered.get("alias") or ""))
                 include_scope = _normalize_scope(str(rendered.get("scope") or scope.value))
                 include_scope_ref = (
@@ -2047,22 +2027,8 @@ class PresetCatalogService:
             for name in _REMOVED_BATCH_WORKFLOWS_INPUTS
             if template.slug == _BATCH_WORKFLOWS_SLUG and name in submitted_inputs
         )
-        if removed_batch_inputs:
-            raise PresetValidationError(
-                "Batch workflow inputs include removed preset version fields.",
-                errors=[
-                    {
-                        "path": f"preset.inputs.{name}",
-                        "message": (
-                            f"Input '{name}' is no longer supported; select the "
-                            "target preset by slug and scope only."
-                        ),
-                        "code": "invalid_input",
-                        "recoverable": True,
-                    }
-                    for name in removed_batch_inputs
-                ],
-            )
+        for name in removed_batch_inputs:
+            submitted_inputs.pop(name, None)
         validated_inputs = self._resolve_inputs(
             schema=effective_schema,
             submitted=submitted_inputs,
@@ -2504,11 +2470,10 @@ class PresetCatalogService:
 
         created = 0
         for item in loaded:
+            item = dict(item)
+            item.pop("version", None)
+            item.pop("presetVersion", None)
             scope = str(item.get("scope", "global")).strip() or "global"
-            if item.get("version") is not None:
-                raise PresetValidationError(
-                    "Seed presets use slug/scope only; remove version."
-                )
             try:
                 await self.create_template(
                     slug=str(
@@ -2548,16 +2513,15 @@ class PresetCatalogService:
         result = SeedSyncResult()
 
         for item in loaded:
+            item = dict(item)
+            item.pop("version", None)
+            item.pop("presetVersion", None)
             scope = _normalize_scope(str(item.get("scope", "global")).strip() or "global")
             scope_ref = _normalize_scope_ref(scope, item.get("scopeRef"))
             slug = str(item.get("slug") or _slugify_from_title(item.get("title", "")))
             normalized_slug = _normalize_slug(slug)
             title = str(item.get("title") or "").strip()
             description = str(item.get("description") or "").strip() or "Seed template."
-            if item.get("version") is not None:
-                raise PresetValidationError(
-                    "Seed presets use slug/scope only; remove version."
-                )
             validated_inputs = self._validate_inputs_schema(item.get("inputs") or [])
             validated_steps = self._validate_template_steps(item.get("steps") or [])
             annotations = _normalize_seed_annotations(item)

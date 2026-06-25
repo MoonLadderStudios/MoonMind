@@ -107,36 +107,40 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
     assert "version" not in expanded["appliedTemplate"]
 
-async def test_create_template_rejects_tool_version_identity(tmp_path):
+async def test_create_template_strips_tool_version_identity(tmp_path):
     user_id = uuid4()
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
-            with pytest.raises(PresetValidationError, match="Tool steps use tool names only"):
-                await service.create_template(
-                    slug="tool-version",
-                    title="Tool Version",
-                    description="Rejects semantic tool versions.",
-                    scope="personal",
-                    scope_ref=str(user_id),
-                    tags=[],
-                    inputs_schema=[],
-                    steps=[
-                        {
-                            "type": "tool",
-                            "title": "Fetch issue",
-                            "instructions": "Fetch issue.",
-                            "tool": {
-                                "id": "jira.get_issue",
-                                "version": "1.0.0",
-                                "inputs": {"issueKey": "MM-916"},
-                            },
-                        }
-                    ],
-                    annotations={},
-                    required_capabilities=[],
-                    created_by=user_id,
-                )
+            created = await service.create_template(
+                slug="tool-version",
+                title="Tool Version",
+                description="Strips semantic tool versions.",
+                scope="personal",
+                scope_ref=str(user_id),
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "type": "tool",
+                        "title": "Fetch issue",
+                        "instructions": "Fetch issue.",
+                        "tool": {
+                            "id": "jira.get_issue",
+                            "version": "1.0.0",
+                            "inputs": {"issueKey": "MM-916"},
+                        },
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=user_id,
+            )
+
+    assert created["steps"][0]["tool"] == {
+        "id": "jira.get_issue",
+        "inputs": {"issueKey": "MM-916"},
+    }
 
 @pytest.mark.parametrize("slug", ["jira-orchestrate", "moonspec-orchestrate"])
 async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
@@ -1104,7 +1108,7 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
     ]
 
 
-async def test_expand_template_rejects_include_version_with_explicit_error(
+async def test_expand_template_strips_include_version(
     tmp_path,
 ):
     async with template_db(tmp_path) as session_maker:
@@ -1123,30 +1127,42 @@ async def test_expand_template_rejects_include_version_with_explicit_error(
                 required_capabilities=[],
                 created_by=None,
             )
-            with pytest.raises(PresetValidationError) as excinfo:
-                await service.create_template(
-                    slug="version-field-parent",
-                    title="Version Field Parent",
-                    description="Rejects versioned preset includes.",
-                    scope="global",
-                    scope_ref=None,
-                    tags=[],
-                    inputs_schema=[],
-                    steps=[
-                        {
-                            "kind": "include",
-                            "slug": "child-checks",
-                            "version": "2",
-                            "alias": "child",
-                            "scope": "global",
-                        }
-                    ],
-                    annotations={},
-                    required_capabilities=[],
-                    created_by=None,
-                )
+            await service.create_template(
+                slug="version-field-parent",
+                title="Version Field Parent",
+                description="Strips versioned preset includes.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "child-checks",
+                        "version": "2",
+                        "alias": "child",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+            expanded = await service.expand_template(
+                slug="version-field-parent",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                context={},
+            )
 
-    assert "slug/scope only" in str(excinfo.value)
+    assert len(expanded["steps"]) == 1
+    include = expanded["appliedTemplate"]["composition"]["includes"][0]
+    assert include["slug"] == "child-checks"
+    assert include["alias"] == "child"
+    assert include["scope"] == "global"
+    assert "version" not in include
+    assert "presetVersion" not in include
 
 async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
     tmp_path,
@@ -1223,42 +1239,47 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
 
     assert "Selected mode: runtime." in expanded["steps"][0]["instructions"]
 
-async def test_create_template_rejects_templated_include_version(tmp_path):
+async def test_create_template_strips_templated_include_version(tmp_path):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = PresetCatalogService(session)
 
-            with pytest.raises(
-                PresetValidationError,
-                match="slug/scope only",
-            ):
-                await service.create_template(
-                    slug="runtime-selected-parent",
-                    title="Runtime Selected Parent",
-                    description="Invalid dynamic child selection",
-                    scope="global",
-                    scope_ref=None,
-                    tags=[],
-                    inputs_schema=[
-                        {
-                            "name": "child_version",
-                            "label": "Child version",
-                            "type": "text",
-                        }
-                    ],
-                    steps=[
-                        {
-                            "kind": "include",
-                            "slug": "child-checks",
-                            "version": "{{ inputs.child_version }}",
-                            "alias": "checks",
-                            "scope": "global",
-                        }
-                    ],
-                    annotations={},
-                    required_capabilities=[],
-                    created_by=None,
-                )
+            created = await service.create_template(
+                slug="runtime-selected-parent",
+                title="Runtime Selected Parent",
+                description="Strips dynamic child version",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[
+                    {
+                        "name": "child_version",
+                        "label": "Child version",
+                        "type": "text",
+                    }
+                ],
+                steps=[
+                    {
+                        "kind": "include",
+                        "slug": "child-checks",
+                        "version": "{{ inputs.child_version }}",
+                        "alias": "checks",
+                        "scope": "global",
+                    }
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+    assert created["steps"] == [
+        {
+            "kind": "include",
+            "slug": "child-checks",
+            "alias": "checks",
+            "scope": "global",
+        }
+    ]
 
 async def test_create_template_rejects_unsupported_include_fields(tmp_path):
     async with template_db(tmp_path) as session_maker:

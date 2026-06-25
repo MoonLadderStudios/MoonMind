@@ -6123,10 +6123,6 @@ class MoonMindRunWorkflow:
             tool_name = str(
                 tool.get("name") or tool.get("id") or ""
             ).strip()
-            if "version" in tool:
-                raise ValueError(
-                    "plan node tool.version is not supported; executable tools are identified by name only"
-                )
             node_id = str(node.get("id") or "unknown")
             if self._is_preserved_step(node_id):
                 self._record_preserved_step_terminal_state(node_id, node)

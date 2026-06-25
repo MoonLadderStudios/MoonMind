@@ -836,7 +836,8 @@ async def test_promote_proposal_uses_reviewed_flattened_payload_without_reexpans
     assert task["steps"][0]["type"] == reviewed_steps[0]["type"]
     assert task["steps"][0]["skill"] == reviewed_steps[0]["skill"]
     assert "presetVersion" not in task["steps"][0]["source"]
-    assert task["taskTemplate"]["version"] == "live-version-that-must-not-be-expanded"
+    assert task["taskTemplate"]["slug"] == "jira-orchestrate"
+    assert "version" not in task["taskTemplate"]
 
 
 @pytest.mark.asyncio

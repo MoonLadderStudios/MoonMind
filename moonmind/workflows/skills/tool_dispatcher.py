@@ -135,18 +135,8 @@ async def execute_tool_activity(
                     "invalid_payload",
                     "tool.type must be 'skill' for the current runtime contract",
                 )
-            if "version" in tool_payload:
-                raise ToolDispatchError(
-                    "invalid_payload",
-                    "tool.version is not supported; executable tools are identified by name only",
-                )
             selected_payload = tool_payload
         elif isinstance(skill_payload, Mapping):
-            if "version" in skill_payload:
-                raise ToolDispatchError(
-                    "invalid_payload",
-                    "skill.version is not supported; executable tools are identified by name only",
-                )
             selected_payload = skill_payload
         else:
             raise ToolDispatchError(

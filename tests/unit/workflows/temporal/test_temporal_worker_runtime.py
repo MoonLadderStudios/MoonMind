@@ -547,6 +547,7 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
                         "instructions": "Fetch MM-559.",
                         "tool": {
                             "id": "jira.get_issue",
+                            "toolVersion": "1.0.0",
                             "inputs": {"issueKey": "MM-559"},
                         },
                         "source": {
@@ -596,6 +597,7 @@ def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runti
                         "instructions": "Implement MM-573.",
                         "skill": {
                             "id": "moonspec-implement",
+                            "skillVersion": "1.0.0",
                             "inputs": {"issueKey": "MM-573"},
                         },
                         "source": {
@@ -710,6 +712,7 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
                         "tool": {
                             "type": "skill",
                             "name": "deployment.update_compose_stack",
+                            "version": "1.0.0",
                         },
                         "inputs": {
                             "stack": "moonmind",
@@ -1191,6 +1194,7 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
                 "tool": {
                     "type": "skill",
                     "name": "pr-resolver",
+                    "version": "1.0.0",
                     "inputs": {"pr": "123", "repo": "MoonLadderStudios/MoonMind"},
                 },
                 "runtime": {"mode": "gemini_cli"},
