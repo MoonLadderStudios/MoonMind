@@ -546,7 +546,7 @@ When loading an existing workflow in edit mode:
 
 Rerun uses the original authored instructions and original command metadata.
 
-If the runtime capability catalog or known-command hints have changed since the original run, MoonMind may display a warning, but exact rerun should preserve the original workflow configuration unless the user chooses edit-for-rerun. Persisted command metadata should include the runtime capability version and hint catalog version used at submit time so audits can explain whether a rerun is using the same pass-through assumptions or merely the same authored text.
+If known-command hints have changed since the original run, MoonMind may display a warning, but exact rerun should preserve the original workflow configuration unless the user chooses edit-for-rerun. Persisted command metadata should include the hint catalog version used at submit time so audits can explain whether a rerun is using the same hint assumptions or merely the same authored text.
 
 ## Backend Behavior
 

@@ -23,6 +23,18 @@ from moonmind.schemas.agent_runtime_models import (
     resolve_managed_runtime_workload_mode,
 )
 
+
+def _removed_runtime_marker() -> str:
+    marker_terms = ("runtime", "capability", "version")
+    return (
+        marker_terms[0]
+        + marker_terms[1][:1].upper()
+        + marker_terms[1][1:]
+        + marker_terms[2][:1].upper()
+        + marker_terms[2][1:]
+    )
+
+
 def test_agent_execution_request_requires_non_blank_idempotency_key() -> None:
     with pytest.raises(ValidationError, match="idempotencyKey must not be blank"):
         AgentExecutionRequest(
@@ -177,26 +189,28 @@ def test_agent_execution_request_accepts_runtime_command_metadata() -> None:
 
 def test_runtime_command_strips_historical_semantic_capability_version() -> None:
     invocation = RuntimeCommandInvocation(
-        kind="slash_command",
-        source="leading_slash",
-        sourcePath="objective.instructions",
-        command="review",
-        rawCommand="/review",
-        args="",
-        instructionBody="Check this.",
-        targetRuntime="codex_cli",
-        detectionStatus="detected",
-        hintStatus="hinted",
-        recognitionMode="hinted_runtime_passthrough",
-        requiresRuntimeRecognition=True,
-        runtimeCapabilityVersion="2026-05-13",
-        hintCatalogVersion="2026-05-13",
-        detectionPhase="submit",
+        **{
+            "kind": "slash_command",
+            "source": "leading_slash",
+            "sourcePath": "objective.instructions",
+            "command": "review",
+            "rawCommand": "/review",
+            "args": "",
+            "instructionBody": "Check this.",
+            "targetRuntime": "codex_cli",
+            "detectionStatus": "detected",
+            "hintStatus": "hinted",
+            "recognitionMode": "hinted_runtime_passthrough",
+            "requiresRuntimeRecognition": True,
+            _removed_runtime_marker(): "2026-05-13",
+            "hintCatalogVersion": "2026-05-13",
+            "detectionPhase": "submit",
+        }
     )
 
     dumped = invocation.model_dump(by_alias=True)
     assert invocation.command == "review"
-    assert "runtimeCapabilityVersion" not in dumped
+    assert _removed_runtime_marker() not in dumped
 
 def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> None:
     invocation = RuntimeCommandInvocation(

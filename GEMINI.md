@@ -40,14 +40,14 @@ MoonMind uses a four-tier test model that separates hermetic CI from credentiale
 
 | Tier | Marker(s) | Required on PR? | Runner |
 |------|-----------|-----------------|--------|
-| **Unit** | `asyncio` (as needed) | Yes | `./tools/test_unit.sh` |
-| **Hermetic Integration CI** | `integration` + `integration_ci` | Yes | `./tools/test_integration.sh` |
+| **Unit** | `asyncio` (as needed) | Targeted suite required when selected by impact | `./tools/test_unit.sh` |
+| **Hermetic Integration CI** | `integration` + `integration_ci` | Targeted suite required only when selected by impact | `./tools/test_integration.sh` |
 | **Provider Verification** | `provider_verification` + `jules` + `requires_credentials` | No (manual/nightly) | `./tools/test_jules_provider.sh` |
 | **Local-only Integration** | `integration` without `integration_ci` | No | local dev only |
 
 - **Hermetic Integration Tests** — compose-backed, local-dependencies-only, no external credentials required.
-  These are marked with `@pytest.mark.integration_ci` and are run by the required CI pipeline.
-  Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell) to run them locally.
+  These are marked with `@pytest.mark.integration_ci` and are selected by impact for pull requests that touch Docker, compose, database, migrations, integration tests, or runtime infrastructure.
+  Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell) locally when those areas are affected or when the selector/fail-open policy requires it.
 
   The required integration_ci suite focuses on the highest-risk seams:
   - **Artifacts**: create/upload/list, auth/preview, lifecycle cleanup, authorization boundaries
@@ -67,12 +67,12 @@ Note: Jules **unit** tests (`tests/unit/jules/`, `tests/unit/workflows/temporal/
 
 ### Running Tests
 
-- **Unit Tests**: Always use `./tools/test_unit.sh` for final unit-test verification. In MoonMind-managed agent containers, unit tests are expected to run locally inside the current container. Do not use `./tools/test_unit_docker.sh` or nested Docker for normal managed-agent verification.
+- **Unit Tests**: For PR preparation, run the targeted unit command for the changed area, using `./tools/test_unit.sh` with Python path filters or `--ui-args` for frontend targets as appropriate. Run the full unit suite only when the impact selector, fail-open policy, broad/risky changes, or unclear coverage requires it. In MoonMind-managed agent containers, unit tests are expected to run locally inside the current container. Do not use `./tools/test_unit_docker.sh` or nested Docker for normal managed-agent verification.
 - **Managed-Agent Local Test Mode**: Managed-agent worker environments should run with `MOONMIND_FORCE_LOCAL_TESTS=1`. The WSL Docker fallback applies to human local WSL development only, not to containerized worker sessions.
 - **Frontend Test Prereqs**: Frontend unit tests require local Node/npm and repo JS dependencies from `package-lock.json`. `./tools/test_unit.sh` should prepare these automatically when dashboard tests are enabled. If `node_modules` is missing or stale relative to `package-lock.json`, the script runs `npm ci --no-fund --no-audit` before executing `npm run ui:test`.
-- **Targeted Test Runs**: Positional args to `./tools/test_unit.sh` filter Python tests only. They do not target a Vitest file. For focused frontend iteration, use `npm run ui:test -- <path>` after local JS deps are prepared, or use `./tools/test_unit.sh --ui-args <path>` to route Vitest targets through the test runner. Before finalizing, rerun `./tools/test_unit.sh` for the full suite.
+- **Targeted Test Runs**: Positional args to `./tools/test_unit.sh` filter Python tests only. They do not target a Vitest file. For focused frontend iteration, use `npm run ui:test -- <path>` after local JS deps are prepared, or use `./tools/test_unit.sh --ui-args <path>` to route Vitest targets through the test runner. Before preparing a PR, rerun the selector-equivalent targeted suite for the changed area; escalate to the full suite only for fail-open, broad, risky, or ambiguous changes.
 - **No Docker Assumption in Agent Jobs**: Do not assume the Docker socket is available inside MoonMind-managed agent workspaces when running unit tests.
-- **Hermetic Integration Tests**: Run compose-backed, no-credentials-required tests marked with `integration_ci`. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell). Under the hood: `docker compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
+- **Hermetic Integration Tests**: Run compose-backed, no-credentials-required tests marked with `integration_ci` only when the change affects Docker, compose, database, migrations, integration-test coverage, runtime infrastructure, or another selector-selected integration boundary. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell). Under the hood: `docker compose -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
 - **Provider Verification**: Run live external-provider tests that require real credentials. Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1` (PowerShell). These scripts fail fast if `JULES_API_KEY` is not set.
 - **Workflow Boundary Coverage**: Any change to Temporal workflows, activity signatures, signal/update names, serialized payload shapes, status normalization, or adapter-to-workflow contracts MUST add or update tests at the workflow boundary, not just isolated unit tests. At minimum:
   - cover the real invocation shape used by the worker binding or Temporal activity wrapper,

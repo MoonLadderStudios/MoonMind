@@ -1944,6 +1944,13 @@ describe('Workflow Detail Entrypoint', () => {
     });
     expect(screen.getAllByText('approval policy: passed')[0]?.className).toContain('check-passed');
 
+    // MM-920: the embedded step logs drop the redundant left rail and the second
+    // "Live Logs" disclosure, so the log content sits directly under the
+    // "Logs & Diagnostics" heading.
+    const logsHeading = screen.getByRole('heading', { name: 'Logs & Diagnostics' });
+    expect(logsHeading.closest('section')?.className).toContain('step-tl-detail-section--logs');
+    expect(screen.queryByText('Live Logs')).toBeNull();
+
     expect(
       fetchSpy.mock.calls.some(([url]) => String(url).includes('/agent-runs/agent-run-step-1/observability-summary')),
     ).toBe(true);

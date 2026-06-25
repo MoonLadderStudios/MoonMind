@@ -3632,6 +3632,18 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: rgb(var(--mm-panel) / 0.35);
 }
 
+/*
+ * MM-920: Drop the redundant left rail on the Logs & Diagnostics section so the
+ * only vertical line beside the live logs is the step timeline spine. Removing
+ * the padding/background also lets the log content sit flush under the heading.
+ */
+.step-tl-detail-section--logs {
+  border-left: 0;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+}
+
 .step-tl-detail-section h4 {
   margin: 0 0 0.35rem;
   font-size: 0.78rem;
