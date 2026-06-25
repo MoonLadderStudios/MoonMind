@@ -2228,9 +2228,11 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
             assert "repository" not in expanded["appliedTemplate"]["inputs"]
             assert "runtime_mode" not in expanded["appliedTemplate"]["inputs"]
 
-async def test_jira_breakdown_replaces_tool_placeholder_with_single_allowed_project(
+@pytest.mark.parametrize("submitted_project", ["TOOL", "MM"])
+async def test_jira_breakdown_replaces_legacy_placeholder_with_single_allowed_project(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
+    submitted_project: str,
 ):
     monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "MM")
     monkeypatch.setattr(
@@ -2257,7 +2259,7 @@ async def test_jira_breakdown_replaces_tool_placeholder_with_single_allowed_proj
                 version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
-                    "jira_project_key": "TOOL",
+                    "jira_project_key": submitted_project,
                     "jira_issue_type": "Story",
                     "jira_dependency_mode": "none",
                 },
@@ -2641,7 +2643,16 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
         "MoonLadderStudios/MoonMind#123"
     )
 
-async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path):
+async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "")
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        None,
+    )
     seed_dir = (
         Path(__file__).resolve().parents[3]
         / "api_service"
@@ -2725,7 +2736,16 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 "MM-404"
             )
 
-async def test_jira_breakdown_orchestrate_can_create_source_subtasks(tmp_path):
+async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", "")
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        None,
+    )
     seed_dir = (
         Path(__file__).resolve().parents[3]
         / "api_service"

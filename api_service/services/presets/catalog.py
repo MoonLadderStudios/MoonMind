@@ -81,7 +81,7 @@ _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
     }
 )
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
-_JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS = frozenset({"TOOL"})
+_JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS = frozenset({"TOOL", "MM"})
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
 _NATIVE_BOOLEAN_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
@@ -896,13 +896,8 @@ def _apply_contextual_input_overrides(
 
     if project_key:
         submitted_project = str(adjusted.get(_JIRA_BREAKDOWN_PROJECT_INPUT) or "").strip()
-        schema_project = schema_defaults.get(_JIRA_BREAKDOWN_PROJECT_INPUT, "")
         if (
             not submitted_project
-            or (
-                bool(repository_project_key)
-                and submitted_project in {schema_project, "MM"}
-            )
             or submitted_project in _JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS
         ):
             adjusted[_JIRA_BREAKDOWN_PROJECT_INPUT] = project_key

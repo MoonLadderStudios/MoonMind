@@ -240,6 +240,8 @@ async def _run_command(cmd, **kwargs):
 logger = getLogger(__name__)
 
 _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
+_PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
+_PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
 
@@ -314,7 +316,9 @@ class TemporalPentestProviderLeaseManager:
                 task_queue=get_workflow_task_queue(),
             )
         except WorkflowAlreadyStartedError:
-            pass
+            logger.debug(
+                "Provider profile manager %s is already running", workflow_id
+            )
         return workflow_id
 
     async def _assert_profile_known(
@@ -329,17 +333,18 @@ class TemporalPentestProviderLeaseManager:
         client = await get_client()
         handle = client.get_workflow_handle(workflow_id)
         last_error: Exception | None = None
-        for _attempt in range(5):
+        for _attempt in range(_PROFILE_MANAGER_READY_POLL_ATTEMPTS):
             try:
                 state = await handle.query("get_state")
             except Exception as exc:
                 last_error = exc
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
                 continue
+            last_error = None
             profiles = state.get("profiles") if isinstance(state, Mapping) else None
             if isinstance(profiles, Mapping) and profile_id in profiles:
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
         if last_error is not None:
             raise last_error
         raise RuntimeError(

@@ -1440,6 +1440,96 @@ async def test_temporal_pentest_provider_lease_manager_acquires_slot_with_update
         )
     ]
 
+async def test_temporal_pentest_provider_lease_manager_waits_for_profile_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sleeps: list[float] = []
+
+    async def _sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(activity_runtime_module.asyncio, "sleep", _sleep)
+
+    class _WorkflowHandle:
+        def __init__(self) -> None:
+            self.queries = 0
+
+        async def query(self, query_name: str) -> dict[str, object]:
+            assert query_name == "get_state"
+            self.queries += 1
+            if self.queries < 3:
+                return {"profiles": {}}
+            return {"profiles": {"claude_anthropic": {"enabled": True}}}
+
+    class _TemporalClient:
+        def __init__(self) -> None:
+            self.handle = _WorkflowHandle()
+            self.started: list[tuple[str, dict[str, object], str]] = []
+
+        async def start_workflow(
+            self,
+            workflow_name: str,
+            arg: dict[str, object],
+            *,
+            id: str,
+            task_queue: str,
+        ) -> None:
+            self.started.append((workflow_name, arg, id))
+
+        def get_workflow_handle(self, workflow_id: str) -> _WorkflowHandle:
+            assert workflow_id == "provider-profile-manager:claude_code"
+            return self.handle
+
+    class _ClientAdapter:
+        def __init__(self) -> None:
+            self.client = _TemporalClient()
+            self.updates: list[tuple[str, str, dict[str, object]]] = []
+
+        async def get_client(self) -> _TemporalClient:
+            return self.client
+
+        async def update_workflow(
+            self, workflow_id: str, update_name: str, arg: dict[str, object]
+        ) -> dict[str, object]:
+            self.updates.append((workflow_id, update_name, arg))
+            return {
+                "profile_id": "claude_anthropic",
+                "lease_id": "owner-1",
+            }
+
+    client = _ClientAdapter()
+    manager = TemporalPentestProviderLeaseManager(client)
+
+    lease_id = await manager.acquire(
+        runtime_id="claude_code",
+        profile_id="claude_anthropic",
+        owner="owner-1",
+        metadata={},
+    )
+
+    assert lease_id == "owner-1"
+    assert client.client.handle.queries == 3
+    assert sleeps == [1.0, 1.0]
+    assert client.client.started == [
+        (
+            "MoonMind.ProviderProfileManager",
+            {"runtime_id": "claude_code"},
+            "provider-profile-manager:claude_code",
+        )
+    ]
+    assert client.updates == [
+        (
+            "provider-profile-manager:claude_code",
+            "AcquireSlot",
+            {
+                "requester_workflow_id": "owner-1",
+                "runtime_id": "claude_code",
+                "execution_profile_ref": "claude_anthropic",
+                "metadata": {},
+            },
+        )
+    ]
+
 async def test_temporal_pentest_provider_lease_manager_fails_closed_without_updates():
     class _ClientAdapter:
         async def signal_workflow(
