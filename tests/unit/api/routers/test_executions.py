@@ -26,6 +26,7 @@ from api_service.api.routers.executions import (
     _build_original_workflow_input_snapshot_payload,
     _build_recurring_target,
     _checkpoint_failed_step_execution,
+    _execution_recurrence_provenance,
     _expand_goal_preset_for_workflow_submission,
     _extract_cost_estimate_usd,
     _effective_user_roles,
@@ -6870,6 +6871,76 @@ def test_serialize_execution_leaves_immediate_run_unscheduled() -> None:
 
     assert payload.scheduled_for is None
     assert payload.created_at == created_at
+
+def test_serialize_execution_surfaces_recurring_schedule_provenance() -> None:
+    created_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="wf-1",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        scheduled_for=None,
+        created_at=created_at,
+        started_at=created_at,
+        updated_at=created_at,
+        closed_at=None,
+        integration_state=None,
+        parameters={"system": {"recurrence": {"definitionId": "schedule-alpha"}}},
+    )
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["recurrence"] == {
+        "definitionId": "schedule-alpha",
+        "href": "/schedules/schedule-alpha",
+    }
+
+
+def test_serialize_execution_surfaces_recurring_schedule_provenance_from_memo() -> None:
+    created_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={"definitionId": "schedule-from-memo"},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="wf-1",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        scheduled_for=None,
+        created_at=created_at,
+        started_at=created_at,
+        updated_at=created_at,
+        closed_at=None,
+        integration_state=None,
+        parameters={},
+    )
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["recurrence"] == {
+        "definitionId": "schedule-from-memo",
+        "href": "/schedules/schedule-from-memo",
+    }
+
+
+def test_execution_recurrence_provenance_ignores_non_mapping_params() -> None:
+    assert _execution_recurrence_provenance(None) is None
+    assert _execution_recurrence_provenance(None, {"definitionId": "memo-schedule"}) == {
+        "definitionId": "memo-schedule",
+        "href": "/schedules/memo-schedule",
+    }
+
 
 def test_serialize_execution_falls_back_to_updated_at_without_scheduled_time() -> None:
     updated_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)

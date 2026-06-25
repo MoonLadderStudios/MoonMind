@@ -4766,6 +4766,7 @@ export interface components {
             resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
+            recurrence?: components["schemas"]["ExecutionRecurrenceProvenanceModel"] | null;
             targetDiagnostics?: components["schemas"]["ExecutionTargetDiagnosticsModel"] | null;
             /** Runmetrics */
             runMetrics?: {
@@ -4969,6 +4970,16 @@ export interface components {
             remediation?: string | null;
             /** Cause */
             cause?: string | null;
+        };
+        /**
+         * ExecutionRecurrenceProvenanceModel
+         * @description Schedule provenance for executions spawned by recurring definitions.
+         */
+        ExecutionRecurrenceProvenanceModel: {
+            /** Definitionid */
+            definitionId: string;
+            /** Href */
+            href: string;
         };
         /**
          * ExecutionRefreshEnvelope
@@ -7175,6 +7186,8 @@ export interface components {
             dispatchAttempts: number;
             /** Dispatchafter */
             dispatchAfter?: string | null;
+            /** Startedat */
+            startedAt?: string | null;
             /** Temporalworkflowid */
             temporalWorkflowId?: string | null;
             /** Temporalrunid */

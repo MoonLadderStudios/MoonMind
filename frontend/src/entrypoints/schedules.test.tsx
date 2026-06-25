@@ -53,6 +53,7 @@ const detailRuns = {
       outcome: "enqueued",
       dispatchAttempts: 1,
       dispatchAfter: null,
+      startedAt: "2026-06-24T02:00:02Z",
       temporalWorkflowId: "workflow-from-schedule",
       temporalRunId: "temporal-run-1",
       message: "Started",
@@ -292,10 +293,17 @@ describe("SchedulesPage", () => {
     expect(screen.getByText("Temporal Schedule ID")).not.toBeNull();
     expect(screen.getByText("temporal-schedule-alpha")).not.toBeNull();
     expect(screen.getByText("MoonLadderStudios/MoonMind")).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Actual Start" })).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Status" })).not.toBeNull();
     expect(screen.getByText("Started")).not.toBeNull();
     expect(screen.getByRole("link", { name: "workflow-from-schedule" }).getAttribute("href")).toBe(
       "/workflows/workflow-from-schedule?source=temporal",
     );
+    expect(screen.queryByRole("heading", { name: "Steps" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Artifacts" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(false);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);

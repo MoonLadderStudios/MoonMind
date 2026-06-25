@@ -38,6 +38,7 @@ const ScheduleRunSchema = z.object({
   outcome: z.string(),
   dispatchAttempts: z.number(),
   dispatchAfter: z.string().nullable().optional(),
+  startedAt: z.string().nullable().optional(),
   temporalWorkflowId: z.string().nullable().optional(),
   temporalRunId: z.string().nullable().optional(),
   message: z.string().nullable().optional(),
@@ -955,8 +956,13 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                 render: (item) => formatWhen(item.scheduledFor),
               },
               {
+                key: 'startedAt',
+                header: 'Actual Start',
+                render: (item) => formatWhen(item.startedAt),
+              },
+              {
                 key: 'outcome',
-                header: 'Outcome',
+                header: 'Status',
                 render: (item) => titleCaseLabel(formatStatusLabel(item.outcome)),
               },
               {

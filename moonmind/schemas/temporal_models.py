@@ -2987,6 +2987,14 @@ class ExecutionRelatedRunModel(BaseModel):
     created_at: Optional[datetime] = Field(None, alias="createdAt")
     href: str = Field(..., alias="href", min_length=1)
 
+class ExecutionRecurrenceProvenanceModel(BaseModel):
+    """Schedule provenance for executions spawned by recurring definitions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    definition_id: str = Field(..., alias="definitionId", min_length=1)
+    href: str = Field(..., alias="href", min_length=1)
+
 class ExecutionTargetDiagnosticAttachmentModel(BaseModel):
     """Attachment bound to the objective or a single executable step."""
 
@@ -3190,6 +3198,9 @@ class ExecutionModel(BaseModel):
     resume: ExecutionResumeSummaryModel | None = Field(None, alias="resume")
     related_runs: list[ExecutionRelatedRunModel] = Field(
         default_factory=list, alias="relatedRuns"
+    )
+    recurrence: ExecutionRecurrenceProvenanceModel | None = Field(
+        None, alias="recurrence"
     )
     target_diagnostics: ExecutionTargetDiagnosticsModel | None = Field(
         None, alias="targetDiagnostics"
