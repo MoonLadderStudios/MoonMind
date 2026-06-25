@@ -4,7 +4,7 @@
 **Doc type:** API contract 
 **Status:** Draft 
 **Owner:** MoonMind Platform 
-**Last updated:** 2026-06-23 (UTC) 
+**Last updated:** 2026-06-25 (UTC)
 **Audience:** backend, dashboard, integrations
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
@@ -776,8 +776,8 @@ Required payload fields:
 Behavior:
 
 - may attach `payloadArtifactRef` to `artifactRefs`,
-- clears `awaiting_external`,
-- resumes execution if not paused,
+- records the integration event,
+- clears the external wait only when the execution is not paused,
 - updates the execution summary.
 
 #### `Approve`
@@ -799,13 +799,13 @@ Behavior:
 
 Purpose:
 
-- request that the execution enter an awaiting state.
+- pause automatic progress for a non-terminal execution.
 
 Behavior:
 
 - sets `paused = true`,
-- sets `awaiting_external = true`,
-- moves `state` to `awaiting_external`.
+- preserves the underlying lifecycle `state`,
+- records operator pause waiting metadata so product surfaces can display the paused overlay.
 
 #### `Resume`
 
@@ -815,8 +815,8 @@ Purpose:
 
 Behavior:
 
-- clears pause/external wait flags,
-- moves execution back to `executing`.
+- clears `paused` and operator pause waiting metadata,
+- preserves the underlying lifecycle `state` so scheduled, dependency-waiting, slot-waiting, and active executions resume from the correct gate.
 
 ### 13.4 Success response
 

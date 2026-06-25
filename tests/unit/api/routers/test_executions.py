@@ -10198,6 +10198,39 @@ def test_describe_execution_exposes_dependency_bypass_action(
     assert body["actions"]["canBypassDependencies"] is True
     assert "canBypassDependencies" not in body["actions"]["disabledReasons"]
 
+@pytest.mark.parametrize(
+    "state",
+    [
+        MoonMindWorkflowState.SCHEDULED,
+        MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
+        MoonMindWorkflowState.AWAITING_SLOT,
+        MoonMindWorkflowState.PLANNING,
+        MoonMindWorkflowState.PROPOSALS,
+        MoonMindWorkflowState.FINALIZING,
+    ],
+)
+def test_describe_execution_exposes_pause_for_non_terminal_pause_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+    state: MoonMindWorkflowState,
+) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    mock_service.describe_execution.return_value = _build_execution_record(state=state)
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_temporal_client(app)
+    _override_user_dependencies(app, is_superuser=True)
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/api/executions/mm:wf-1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == state.value
+    assert body["actions"]["canPause"] is True
+    assert "canPause" not in body["actions"]["disabledReasons"]
+
 def test_describe_execution_exposes_lifecycle_resume_for_operator_paused_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

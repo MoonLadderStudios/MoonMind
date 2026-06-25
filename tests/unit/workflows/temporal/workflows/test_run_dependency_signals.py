@@ -583,7 +583,7 @@ async def test_run_workflow_multi_dep_fan_in_via_signals(
             assert result["status"] == "success"
 
 # ---------------------------------------------------------------------------
-# 9. Dependent pause → prerequisite failure → immediate fail on resume
+# 9. Dependent pause → prerequisite failure → fail after resume
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -592,7 +592,7 @@ async def test_run_workflow_pause_then_prerequisite_failure(
     monkeypatch,
 ):
     """While the dependent run is paused during dependency wait, a
-    prerequisite fails. On resume, the workflow must fail immediately."""
+    prerequisite fails. The failure is recorded but not raised until resume."""
 
     async def fake_reconcile(self, dependency_ids):
         pass
@@ -636,8 +636,11 @@ async def test_run_workflow_pause_then_prerequisite_failure(
                 ),
             )
 
-            # The current workflow logic fails immediately on dependency
-            # failure, even while paused, so no Resume update is required.
+            status = await handle.query("get_status")
+            assert status["state"] == "waiting_on_dependencies"
+            assert status["paused"] is True
+
+            await handle.execute_update("Resume")
 
             with pytest.raises(WorkflowFailureError):
                 await handle.result()

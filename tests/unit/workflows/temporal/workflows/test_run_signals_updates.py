@@ -1,5 +1,6 @@
 import asyncio
-from unittest.mock import AsyncMock
+import inspect
+from unittest.mock import AsyncMock, call
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -346,7 +347,11 @@ async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypa
     workflow_instance._active_agent_id = "jules"
     workflow_instance._awaiting_external = True
 
-    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    mock_handle = type(
+        "MockHandle",
+        (),
+        {"execute_update": AsyncMock(), "signal": AsyncMock()},
+    )()
     monkeypatch.setattr(
         workflow,
         "get_external_workflow_handle",
@@ -359,11 +364,84 @@ async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypa
         {"message": "Please rename it to Provider Profiles."}
     )
 
+    mock_handle.execute_update.assert_awaited_once_with("Resume")
     mock_handle.signal.assert_awaited_once_with(
         "operator_message",
         {"message": "Please rename it to Provider Profiles."},
     )
     assert workflow_instance._recovery_requested is True
+
+@pytest.mark.asyncio
+async def test_pause_resume_forwards_lifecycle_updates_to_active_child(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:agent:implement"
+    workflow_instance._active_agent_id = "codex"
+
+    mock_handle = type("MockHandle", (), {"execute_update": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+
+    await workflow_instance.pause()
+    await workflow_instance.resume()
+
+    assert workflow_instance._paused is False
+    assert mock_handle.execute_update.await_args_list == [
+        call("Pause"),
+        call("Resume"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pause_reverts_and_fails_when_active_child_update_fails(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:agent:implement"
+    workflow_instance._active_agent_id = "codex"
+
+    mock_handle = type(
+        "MockHandle",
+        (),
+        {"execute_update": AsyncMock(side_effect=RuntimeError("child gone"))},
+    )()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+
+    with pytest.raises(RuntimeError, match="Failed to forward Pause"):
+        await workflow_instance.pause()
+
+    assert workflow_instance._paused is False
+    assert workflow_instance._waiting_reason is None
+    assert workflow_instance._pause_resume_transition_in_progress is False
+
+
+def test_pause_resume_validators_block_concurrent_transition() -> None:
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._pause_resume_transition_in_progress = True
+
+    with pytest.raises(ValueError, match="transition already in progress"):
+        workflow_instance.validate_pause()
+    with pytest.raises(ValueError, match="transition already in progress"):
+        workflow_instance.validate_resume()
+
+
+def test_dependency_wait_loop_exits_after_unpaused_dependency_failure() -> None:
+    source = inspect.getsource(MoonMindUserWorkflow._wait_for_dependencies)
+
+    assert (
+        "(self._dependency_failure is None and self._unresolved_dependency_ids)"
+        in source
+    )
+    assert (
+        "or (self._dependency_failure is not None and self._paused)"
+        not in source
+    )
 
 @pytest.mark.asyncio
 async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):

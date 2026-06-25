@@ -4717,16 +4717,37 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         settings.temporal_dashboard.temporal_workflow_editing_enabled
     )
     state_actions = {
-        "scheduled": {"can_set_title", "can_update_inputs", "can_cancel"},
-        "initializing": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "scheduled": {
+            "can_set_title",
+            "can_update_inputs",
+            "can_pause",
+            "can_cancel",
+        },
+        "initializing": {
+            "can_set_title",
+            "can_update_inputs",
+            "can_pause",
+            "can_cancel",
+        },
         "waiting_on_dependencies": {
             "can_set_title",
             "can_update_inputs",
+            "can_pause",
             "can_cancel",
             "can_bypass_dependencies",
         },
-        "awaiting_slot": {"can_set_title", "can_update_inputs", "can_cancel"},
-        "planning": {"can_set_title", "can_update_inputs", "can_cancel"},
+        "awaiting_slot": {
+            "can_set_title",
+            "can_update_inputs",
+            "can_pause",
+            "can_cancel",
+        },
+        "planning": {
+            "can_set_title",
+            "can_update_inputs",
+            "can_pause",
+            "can_cancel",
+        },
         "executing": {
             "can_set_title",
             "can_update_inputs",
@@ -4736,6 +4757,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
         "proposals": {
             "can_set_title",
             "can_update_inputs",
+            "can_pause",
             "can_cancel",
         },
         "awaiting_external": {
@@ -4746,7 +4768,7 @@ def _build_action_capabilities(record) -> ExecutionActionCapabilityModel:
             "can_reject",
             "can_send_message",
         },
-        "finalizing": {"can_cancel"},
+        "finalizing": {"can_pause", "can_cancel"},
         "completed": {"can_edit_for_rerun", "can_rerun"},
         "failed": {"can_edit_for_rerun", "can_rerun"},
         "canceled": {"can_edit_for_rerun", "can_rerun"},

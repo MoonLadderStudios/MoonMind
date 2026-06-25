@@ -954,6 +954,7 @@ class MoonMindRunWorkflow:
 
         # State tracking
         self._paused: bool = False
+        self._pause_resume_transition_in_progress: bool = False
         self._awaiting_external: bool = False
         self._waiting_reason: Optional[str] = None
         self._attention_required: bool = False
@@ -5172,15 +5173,14 @@ class MoonMindRunWorkflow:
 
         try:
             await self._reconcile_dependencies(dependency_ids)
-            while (
-                not self._cancel_requested
-                and self._dependency_failure is None
-                and (self._unresolved_dependency_ids or self._paused)
+            while not self._cancel_requested and (
+                (self._dependency_failure is None and self._unresolved_dependency_ids)
+                or self._paused
             ):
                 try:
                     await workflow.wait_condition(
                         lambda: self._cancel_requested
-                        or self._dependency_failure is not None
+                        or (self._dependency_failure is not None and not self._paused)
                         or (
                             not self._paused
                             and not self._unresolved_dependency_ids
@@ -5291,12 +5291,19 @@ class MoonMindRunWorkflow:
                 now = workflow.now()
                 delay = target_dt - now
                 if delay.total_seconds() <= 0:
-                    break
+                    if not self._paused:
+                        break
+                    await self._wait_if_paused_at_safe_boundary()
+                    if self._cancel_requested:
+                        break
+                    continue
 
                 self._reschedule_requested = False
                 try:
                     await workflow.wait_condition(
-                        lambda: self._reschedule_requested or self._cancel_requested,
+                        lambda: self._reschedule_requested
+                        or self._cancel_requested
+                        or self._paused,
                         timeout=delay,
                     )
                 except asyncio.TimeoutError:
@@ -5307,6 +5314,11 @@ class MoonMindRunWorkflow:
 
                 if self._cancel_requested:
                     break
+                if self._paused:
+                    await self._wait_if_paused_at_safe_boundary()
+                    if self._cancel_requested:
+                        break
+                    continue
 
         if self._cancel_requested:
             await self._run_finalizing_stage(
@@ -13953,13 +13965,26 @@ class MoonMindRunWorkflow:
         return None
 
     @workflow.update(name="Pause")
-    def pause(self) -> None:
-        self._paused = True
-        self._waiting_reason = "Paused by user"
-        self._update_search_attributes()
+    async def pause(self) -> None:
+        self._pause_resume_transition_in_progress = True
+        previous_waiting_reason = self._waiting_reason
+        try:
+            self._paused = True
+            self._waiting_reason = "Paused by user"
+            if not await self._forward_lifecycle_update_to_active_child("Pause"):
+                self._paused = False
+                self._waiting_reason = previous_waiting_reason
+                raise RuntimeError(
+                    "Failed to forward Pause update to active child workflow."
+                )
+            self._update_search_attributes()
+        finally:
+            self._pause_resume_transition_in_progress = False
 
     @pause.validator
     def validate_pause(self) -> None:
+        if self._pause_resume_transition_in_progress:
+            raise ValueError("Pause/Resume transition already in progress.")
         if self._paused:
             raise ValueError("Workflow is already paused.")
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
@@ -13967,15 +13992,29 @@ class MoonMindRunWorkflow:
 
     @workflow.update(name="Resume")
     async def resume(self, payload: dict[str, Any] | None = None) -> None:
-        self._paused = False
-        self._waiting_reason = None
-        await self._forward_operator_message_to_active_child(payload)
-        if self._awaiting_external:
-            self._recovery_requested = True
-        self._update_search_attributes()
+        self._pause_resume_transition_in_progress = True
+        previous_paused = self._paused
+        previous_waiting_reason = self._waiting_reason
+        try:
+            self._paused = False
+            self._waiting_reason = None
+            if not await self._forward_lifecycle_update_to_active_child("Resume"):
+                self._paused = previous_paused
+                self._waiting_reason = previous_waiting_reason
+                raise RuntimeError(
+                    "Failed to forward Resume update to active child workflow."
+                )
+            await self._forward_operator_message_to_active_child(payload)
+            if self._awaiting_external:
+                self._recovery_requested = True
+            self._update_search_attributes()
+        finally:
+            self._pause_resume_transition_in_progress = False
 
     @resume.validator
     def validate_resume(self, payload: dict[str, Any] | None = None) -> None:
+        if self._pause_resume_transition_in_progress:
+            raise ValueError("Pause/Resume transition already in progress.")
         if not self._paused and not self._awaiting_external:
             raise ValueError("Workflow is not paused or awaiting external completion.")
         if self._state in (STATE_COMPLETED, STATE_CANCELED, STATE_FAILED):
@@ -14166,6 +14205,24 @@ class MoonMindRunWorkflow:
         await handle.signal("operator_message", {"message": message})
         self._summary = "Operator clarification sent to Jules."
         self._update_memo()
+        return True
+
+    async def _forward_lifecycle_update_to_active_child(self, update_name: str) -> bool:
+        if not self._active_agent_child_workflow_id:
+            return True
+        handle = workflow.get_external_workflow_handle(
+            self._active_agent_child_workflow_id
+        )
+        try:
+            await handle.execute_update(update_name)
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to forward %s update to active child workflow %s: %s",
+                update_name,
+                self._active_agent_child_workflow_id,
+                exc,
+            )
+            return False
         return True
 
     @staticmethod

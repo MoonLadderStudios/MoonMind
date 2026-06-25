@@ -416,6 +416,7 @@ class MoonMindAgentRun:
         self._skip_default_profile_pin_once: bool = False
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
+        self._paused: bool = False
 
     @staticmethod
     def _safe_callback_key(*parts: str) -> str:
@@ -1876,6 +1877,28 @@ class MoonMindAgentRun:
         self._assigned_profile_id = payload.get("profile_id")
         self.slot_assigned_event.set()
 
+    @workflow.update(name="Pause")
+    def pause(self) -> None:
+        self._paused = True
+
+    @pause.validator
+    def validate_pause(self) -> None:
+        if self._paused:
+            raise ValueError("Agent run is already paused.")
+        if self.run_status in _TERMINAL_RUN_STATUSES:
+            raise ValueError("Cannot pause a terminal agent run.")
+
+    @workflow.update(name="Resume")
+    def resume(self) -> None:
+        self._paused = False
+
+    @resume.validator
+    def validate_resume(self) -> None:
+        if not self._paused:
+            raise ValueError("Agent run is not paused.")
+        if self.run_status in _TERMINAL_RUN_STATUSES:
+            raise ValueError("Cannot resume a terminal agent run.")
+
     @workflow.signal
     def update_runtime_selection(self, payload: dict[str, Any] | None = None) -> None:
         payload = payload or {}
@@ -2572,6 +2595,10 @@ class MoonMindAgentRun:
                     )
 
                 manager_handle = None
+                if self._paused:
+                    await workflow.wait_condition(lambda: not self._paused)
+                    overall_start = workflow.now()
+
                 # Acquire provider-profile slot if managed
                 if request.agent_kind == "managed":
                     runtime_id = self._managed_runtime_id(request.agent_id)
@@ -2795,12 +2822,16 @@ class MoonMindAgentRun:
                                 lambda: self.slot_assigned_event.is_set(),
                             )
 
-                    # Reset the execution clock so the timeout budget starts
-                    # from slot acquisition, not from workflow start.
-                    overall_start = workflow.now()
                     self._awaiting_slot_reason_override = None
                     self._slot_wait_timeout_override_seconds = None
-                    
+
+                    if self._paused:
+                        await workflow.wait_condition(lambda: not self._paused)
+
+                    # Reset the execution clock so the timeout budget starts
+                    # from launch readiness, excluding slot and pause waits.
+                    overall_start = workflow.now()
+
                     self.run_status = RunStatus.launching
                     if parent_info:
                         parent_handle = workflow.get_external_workflow_handle(

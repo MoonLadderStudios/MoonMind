@@ -3877,7 +3877,8 @@ async def test_signal_pause_recovery_and_external_event_transitions(
             payload_artifact_ref=None,
         )
         paused = await service.describe_execution(created.workflow_id)
-        assert paused.state is MoonMindWorkflowState.AWAITING_EXTERNAL
+        assert paused.state is MoonMindWorkflowState.INITIALIZING
+        assert paused.paused is True
         assert paused.memo["waiting_reason"] == "operator_paused"
         assert paused.memo["attention_required"] is True
         assert paused.memo["intervention_audit"][-1]["transport"] == "temporal_update"
@@ -3889,7 +3890,8 @@ async def test_signal_pause_recovery_and_external_event_transitions(
             payload_artifact_ref=None,
         )
         resumed = await service.describe_execution(created.workflow_id)
-        assert resumed.state is MoonMindWorkflowState.EXECUTING
+        assert resumed.state is MoonMindWorkflowState.INITIALIZING
+        assert resumed.paused is False
         assert "waiting_reason" not in resumed.memo
         assert resumed.memo["intervention_audit"][-1]["transport"] == "temporal_update"
 
@@ -3936,7 +3938,8 @@ async def test_signal_resume_forwards_payload_via_workflow_update(
             {"message": "Use the Provider Profiles label."},
         )
         resumed = await service.describe_execution(created.workflow_id)
-        assert resumed.state is MoonMindWorkflowState.EXECUTING
+        assert resumed.state is MoonMindWorkflowState.INITIALIZING
+        assert resumed.paused is False
         assert resumed.memo.get("waiting_reason") is None
         assert resumed.memo["intervention_audit"][-1]["transport"] == "temporal_update"
         assert (
