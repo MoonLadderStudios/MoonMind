@@ -58,6 +58,7 @@ type ScheduleSources = {
   update?: string | undefined;
   runNow?: string | undefined;
   runs?: string | undefined;
+  delete?: string | undefined;
 };
 
 const SchedulesBootDataSchema = z
@@ -75,6 +76,7 @@ const SchedulesBootDataSchema = z
                 update: z.string().optional(),
                 runNow: z.string().optional(),
                 runs: z.string().optional(),
+                delete: z.string().optional(),
               })
               .partial()
               .optional(),
@@ -93,6 +95,7 @@ const SchedulesBootDataSchema = z
             update: z.string().optional(),
             runNow: z.string().optional(),
             runs: z.string().optional(),
+            delete: z.string().optional(),
           })
           .partial()
           .optional(),
@@ -173,6 +176,25 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : String(error || fallback);
 }
 
+class ScheduleRequestError extends Error {
+  status: number;
+
+  constructor(status: number, statusText: string) {
+    super(scheduleDetailErrorMessage(status, statusText));
+    this.status = status;
+  }
+}
+
+function scheduleDetailErrorMessage(status: number, statusText: string): string {
+  if (status === 403) {
+    return 'You do not have access to this recurring schedule.';
+  }
+  if (status === 404) {
+    return 'Recurring schedule not found.';
+  }
+  return `Failed to fetch schedule: ${statusText || status}`;
+}
+
 function titleCaseLabel(value: string): string {
   return value.replace(/\b[a-z]/g, (match) => match.toUpperCase());
 }
@@ -183,6 +205,93 @@ function scheduleState(schedule: Schedule): 'active' | 'paused' | 'attention' {
   }
   const status = String(schedule.lastDispatchStatus || '').toLowerCase();
   return status.includes('error') || status.includes('failed') ? 'attention' : 'active';
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function booleanValue(record: Record<string, unknown> | null, keys: string[]): boolean | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function stringValue(record: Record<string, unknown> | null, keys: string[]): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function explicitScheduleBoolean(schedule: Schedule, keys: string[]): boolean | undefined {
+  const root = asRecord(schedule);
+  const containers = [
+    root,
+    asRecord(root?.permissions),
+    asRecord(root?.actions),
+    asRecord(root?.actionAvailability),
+  ];
+  for (const container of containers) {
+    const value = booleanValue(container, keys);
+    if (typeof value === 'boolean') {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function explicitScheduleReason(schedule: Schedule, keys: string[]): string | undefined {
+  const root = asRecord(schedule);
+  const disabledReasons = asRecord(root?.disabledReasons);
+  const containers = [
+    disabledReasons,
+    asRecord(asRecord(root?.actions)?.disabledReasons),
+    asRecord(asRecord(root?.actionAvailability)?.disabledReasons),
+    asRecord(asRecord(root?.permissions)?.disabledReasons),
+  ];
+  for (const container of containers) {
+    const value = stringValue(container, keys);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function scheduleActionAvailability(schedule: Schedule, sources: ScheduleSources | undefined) {
+  const canEdit = explicitScheduleBoolean(schedule, ['canEdit', 'canUpdate', 'canManage', 'edit', 'update']);
+  const canRun = explicitScheduleBoolean(schedule, ['canRunNow', 'canRun', 'runNow', 'run']);
+  const canDelete = explicitScheduleBoolean(schedule, ['canDelete', 'delete']);
+  const deleteContractAvailable = Boolean(sources?.delete);
+  return {
+    canEdit: canEdit ?? true,
+    canRun: canRun ?? true,
+    canDelete: deleteContractAvailable && Boolean(canDelete),
+    deleteContractAvailable,
+    editReason: explicitScheduleReason(schedule, ['canEdit', 'canUpdate', 'edit', 'update']) || 'You can view this schedule, but you do not have permission to edit it.',
+    runReason: explicitScheduleReason(schedule, ['canRunNow', 'canRun', 'runNow', 'run']) || 'You can view this schedule, but you do not have permission to run it manually.',
+    deleteReason: explicitScheduleReason(schedule, ['canDelete', 'delete']) || (
+      deleteContractAvailable
+        ? 'You can view this schedule, but you do not have permission to delete it.'
+        : 'Schedule deletion is not available yet.'
+    ),
+  };
 }
 
 function stateLabel(schedule: Schedule): string {
@@ -272,13 +381,14 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
   const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
   const runsEndpoint = useMemo(() => scheduleEndpoint(payload, 'runs', definitionId), [payload, definitionId]);
+  const sources = useMemo(() => scheduleSources(payload), [payload]);
 
   const detailQuery = useQuery({
     queryKey: ['schedule-detail', definitionId, detailEndpoint],
     queryFn: async () => {
       const response = await fetch(detailEndpoint, { credentials: 'include' });
       if (!response.ok) {
-        throw new Error(`Failed to fetch schedule: ${response.statusText}`);
+        throw new ScheduleRequestError(response.status, response.statusText);
       }
       return ScheduleSchema.parse(await response.json());
     },
@@ -354,10 +464,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const schedule = detailQuery.data;
   const runs = runsQuery.data?.items || [];
   const currentForm = editForm || (schedule ? editFormFromSchedule(schedule) : null);
+  const actions = schedule ? scheduleActionAvailability(schedule, sources) : null;
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (currentForm) {
+    if (currentForm && actions?.canEdit) {
       updateMutation.mutate(currentForm);
     }
   };
@@ -411,6 +522,8 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
               setEditForm(editFormFromSchedule(schedule));
               setIsEditing((value) => !value);
             }}
+            disabled={!actions?.canEdit}
+            title={!actions?.canEdit ? actions?.editReason : undefined}
           >
             {isEditing ? 'Cancel edit' : 'Edit schedule'}
           </button>
@@ -418,12 +531,28 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             type="button"
             className="button"
             onClick={() => runNowMutation.mutate()}
-            disabled={runNowMutation.isPending}
+            disabled={runNowMutation.isPending || !actions?.canRun}
+            title={!actions?.canRun ? actions?.runReason : undefined}
           >
             {runNowMutation.isPending ? 'Running' : 'Run now'}
           </button>
+          {actions?.canDelete ? (
+            <button type="button" className="secondary" disabled title={actions.deleteReason}>
+              Delete schedule
+            </button>
+          ) : null}
         </div>
       </header>
+
+      {actions && (!actions.canEdit || !actions.canRun || (actions.deleteContractAvailable && !actions.canDelete)) ? (
+        <div className="schedules-error" role="note">
+          {[
+            !actions.canEdit ? actions.editReason : null,
+            !actions.canRun ? actions.runReason : null,
+            actions.deleteContractAvailable && !actions.canDelete ? actions.deleteReason : null,
+          ].filter(Boolean).join(' ')}
+        </div>
+      ) : null}
 
       {updateMutation.isError && (
         <div className="schedules-error" role="alert">
