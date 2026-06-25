@@ -1,6 +1,6 @@
 slug: jira-breakdown
 title: Jira Breakdown
-description: Break a declarative design into MoonSpec story candidates, then create Jira Story issues from the generated breakdown.
+description: Break a preferred source input into MoonSpec story candidates, then create Jira Story issues from the generated breakdown.
 scope: global
 tags:
   - jira
@@ -15,9 +15,20 @@ annotations:
   output: jira
 inputs:
   - name: feature_request
-    label: Declarative Design Path or Text
+    label: Workflow Instructions
     type: markdown
-    required: true
+    required: false
+    default: ""
+  - name: source_design_path
+    label: Declarative Document Path
+    type: repo_path
+    required: false
+    default: ""
+  - name: source_issue_key
+    label: Source Jira Issue Key
+    type: text
+    required: false
+    default: ""
   - name: jira_project_key
     label: Jira Project Key
     type: text
@@ -42,13 +53,40 @@ inputs:
       - linear_blocker_chain
       - none
 steps:
-  - title: Break down declarative design
+  - title: Load source Jira issue description
+    type: tool
+    enabled: "{{ inputs.source_issue_key | trim != '' and inputs.source_design_path | trim == '' }}"
     instructions: |-
-      Run moonspec-breakdown for this declarative design:
+      Fetch source Jira issue {{ inputs.source_issue_key }} through the deterministic trusted Jira tool surface.
 
+      Build a compact source brief from the issue key, summary, description, and acceptance criteria. The following breakdown step may use this trusted Jira issue description only when no declarative document path is provided.
+    tool:
+      id: jira.load_preset_brief
+      requiredCapabilities:
+        - jira
+      args: {}
+      inputs:
+        issueKey: "{{ inputs.source_issue_key }}"
+  - title: Break down preferred source input
+    instructions: |-
+      Run moonspec-breakdown using this input preference chain:
+
+      1. If Source declarative document path is non-empty, read that repo path and use it as the source design.
+      2. Otherwise, if trusted Jira previous output from the prior step is available, use its jiraPresetBrief as the source design.
+      3. Otherwise, use Workflow instructions as the source design.
+
+      Source declarative document path:
+      {{ inputs.source_design_path }}
+
+      Source Jira issue key:
+      {{ inputs.source_issue_key }}
+
+      Workflow instructions:
       {{ inputs.feature_request }}
 
       If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
+      If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, and set each story's sourceReference.path to null.
+      If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, and set each story's sourceReference.path to null.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
       Classify the input before extracting stories. If it is primarily an imperative checklist, status tracker, or migration plan and no explicit imperative override was given, fail fast with the moonspec-breakdown imperative-input error instead of decomposing it.
       Record sourceDocumentClass in the breakdown output.
@@ -63,7 +101,8 @@ steps:
       Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each story from the generated MoonSpec breakdown.
 
       Use the runtime-provided story breakdown JSON path.
-      Every Jira issue must include the Source Document path from the story breakdown.
+      Every Jira issue must include the Source Document path from the story breakdown when present; otherwise include the source title and Source Jira issue key when present.
+      {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
       {% if inputs.jira_board_id %}Selected Jira board ID: {{ inputs.jira_board_id }}.{% endif %}
       Dependency mode: {{ inputs.jira_dependency_mode }}.
       If dependency mode is linear_blocker_chain, create an ordered blocker chain so each later story is blocked by the immediately preceding story.

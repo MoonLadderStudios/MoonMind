@@ -89,8 +89,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         jira_template = result.scalar_one_or_none()
         assert jira_template is not None
         assert [
-            step["skill"]["id"] for step in jira_template.steps
-        ] == ["moonspec-breakdown", "story.create_jira_issues"]
+            (step.get("skill") or step.get("tool"))["id"]
+            for step in jira_template.steps
+        ] == [
+            "jira.load_preset_brief",
+            "moonspec-breakdown",
+            "story.create_jira_issues",
+        ]
 
         result = await session.execute(
             select(Preset)
@@ -344,17 +349,18 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         composite_template = result.scalar_one_or_none()
         assert composite_template is not None
         assert [
-            step["skill"]["id"]
+            (step.get("skill") or step.get("tool"))["id"]
             for step in composite_template.steps
         ] == [
+            "jira.load_preset_brief",
             "moonspec-breakdown",
             "story-reconcile-implementation",
             "story.create_jira_issues",
             "story.create_jira_orchestrate_tasks",
         ]
-        reconcile_step = composite_template.steps[1]
+        reconcile_step = composite_template.steps[2]
         assert "fully implemented stories" in reconcile_step["instructions"]
-        downstream_step = composite_template.steps[3]
+        downstream_step = composite_template.steps[4]
         assert "trusted Jira story output" in downstream_step["instructions"]
         assert "dependsOn" in downstream_step["instructions"]
         assert "orchestrationMode" not in downstream_step["jiraOrchestration"]["task"]
@@ -377,16 +383,17 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         implement_composite_template = result.scalar_one_or_none()
         assert implement_composite_template is not None
         assert [
-            step["skill"]["id"]
+            (step.get("skill") or step.get("tool"))["id"]
             for step in implement_composite_template.steps
         ] == [
+            "jira.load_preset_brief",
             "moonspec-breakdown",
             "story-reconcile-implementation",
             "story.create_jira_issues",
             "story.create_jira_implement_tasks",
         ]
         implement_downstream_step = (
-            implement_composite_template.steps[3]
+            implement_composite_template.steps[4]
         )
         assert (
             "Create one Jira Implement task"

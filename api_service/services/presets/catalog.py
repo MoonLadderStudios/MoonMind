@@ -650,6 +650,19 @@ def _render_value(
         }
     return value
 
+
+def _preset_step_enabled(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value or "").strip().lower()
+    if normalized in {"", "0", "false", "no", "off"}:
+        return False
+    return True
+
 def _single_allowed_jira_project_key() -> str | None:
     projects = settings.atlassian.jira.jira_allowed_projects
     if not projects:
@@ -1665,6 +1678,8 @@ class PresetCatalogService:
                 raise PresetValidationError(
                     f"Expanded step at {_format_include_path(path)} must be an object."
                 )
+            if not _preset_step_enabled(rendered.pop("enabled", True)):
+                continue
             kind = str(rendered.get("kind") or _STEP_KIND).strip().lower()
             if (
                 kind == _STEP_KIND

@@ -1372,7 +1372,7 @@ describe.skip("Task Create Entrypoint", () => {
                   steps: [
                     {
                       id: "tpl:jira-breakdown-orchestrate:1:01",
-                      title: "Break down declarative design",
+                      title: "Break down preferred source input",
                       instructions: "Break down the Grid UI overlay plan.",
                       skill: {
                         id: "moonspec-breakdown",
@@ -2239,7 +2239,7 @@ describe.skip("Task Create Entrypoint", () => {
                     steps: [
                       {
                         id: "tpl:jira-breakdown-orchestrate:1:01",
-                        title: "Break down declarative design",
+                        title: "Break down preferred source input",
                         instructions: "Break down the Grid UI overlay plan.",
                         tool: {
                           type: "skill",
@@ -14447,7 +14447,7 @@ describe("Task Create MM-578 Preset expansion", () => {
             steps: [
               {
                 id: "tpl:jira-breakdown-orchestrate:1:01",
-                title: "Break down declarative design",
+                title: "Break down preferred source input",
                 instructions: "Break down the feature request.",
                 skill: { id: "moonspec-breakdown", args: {} },
               },
@@ -14602,7 +14602,7 @@ describe("Task Create MM-578 Preset expansion", () => {
             steps: [
               {
                 id: "tpl:jira-breakdown-orchestrate:1:01",
-                title: "Break down declarative design",
+                title: "Break down preferred source input",
                 instructions: "Break down the feature request.",
                 skill: { id: "moonspec-breakdown", args: {} },
               },

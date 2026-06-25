@@ -1937,7 +1937,11 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 scope_ref=None,
             )
             assert template.title == "Jira Breakdown"
-            assert [step["skill"]["id"] for step in template.steps] == [
+            assert [
+                (step.get("skill") or step.get("tool"))["id"]
+                for step in template.steps
+            ] == [
+                "jira.load_preset_brief",
                 "moonspec-breakdown",
                 "story.create_jira_issues",
             ]
@@ -1956,6 +1960,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
 
             assert len(expanded["steps"]) == 2
             assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
+            assert expanded["steps"][0]["title"] == "Break down preferred source input"
             assert "docs/Designs/RuntimeTypes.md" in expanded["steps"][0]["instructions"]
             assert expanded["steps"][1]["skill"]["id"] == "story.create_jira_issues"
             assert "Jira Story issue in project MM" in expanded["steps"][1]["instructions"]
@@ -1974,6 +1979,53 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert expanded["appliedTemplate"]["inputs"]["jira_dependency_mode"] == (
                 "linear_blocker_chain"
             )
+
+            expanded_with_source_issue = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "source_issue_key": "MM-910",
+                    "jira_project_key": "MM",
+                    "jira_issue_type": "Story",
+                },
+                context={},
+            )
+
+            assert len(expanded_with_source_issue["steps"]) == 3
+            assert expanded_with_source_issue["steps"][0]["tool"]["id"] == (
+                "jira.load_preset_brief"
+            )
+            assert expanded_with_source_issue["steps"][0]["tool"]["inputs"] == {
+                "issueKey": "MM-910"
+            }
+            assert expanded_with_source_issue["steps"][1]["skill"]["id"] == (
+                "moonspec-breakdown"
+            )
+            assert "jiraPresetBrief" in expanded_with_source_issue["steps"][1][
+                "instructions"
+            ]
+
+            expanded_with_path_and_issue = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "source_design_path": "docs/Designs/RuntimeTypes.md",
+                    "source_issue_key": "MM-910",
+                    "jira_project_key": "MM",
+                    "jira_issue_type": "Story",
+                },
+                context={},
+            )
+
+            assert len(expanded_with_path_and_issue["steps"]) == 2
+            assert expanded_with_path_and_issue["steps"][0]["skill"]["id"] == (
+                "moonspec-breakdown"
+            )
+            assert "docs/Designs/RuntimeTypes.md" in expanded_with_path_and_issue[
+                "steps"
+            ][0]["instructions"]
 
 async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
     """MM-889: a Document Health Update preset runs review then remediate steps."""
@@ -2136,8 +2188,8 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 },
             )
 
-            jira_step = expanded["steps"][2]
-            downstream_step = expanded["steps"][3]
+            jira_step = expanded["steps"][3]
+            downstream_step = expanded["steps"][4]
 
             assert "Jira Story issue in project GAME" in jira_step[
                 "instructions"
@@ -2252,11 +2304,11 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
                 },
             )
 
-            assert expanded["steps"][2]["storyOutput"]["jira"]["projectKey"] == "PLAT"
-            assert expanded["steps"][3]["jiraOrchestration"]["task"]["repository"] == (
+            assert expanded["steps"][3]["storyOutput"]["jira"]["projectKey"] == "PLAT"
+            assert expanded["steps"][4]["jiraOrchestration"]["task"]["repository"] == (
                 "ExampleOrg/Game"
             )
-            assert expanded["steps"][3]["jiraOrchestration"]["task"]["runtime"] == (
+            assert expanded["steps"][4]["jiraOrchestration"]["task"]["runtime"] == (
                 {"mode": "claude_code"}
             )
 
@@ -2608,8 +2660,10 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                 "dependent-jira-orchestrate-tasks"
             )
             assert [
-                step["skill"]["id"] for step in template.steps
+                (step.get("skill") or step.get("tool"))["id"]
+                for step in template.steps
             ] == [
+                "jira.load_preset_brief",
                 "moonspec-breakdown",
                 "story-reconcile-implementation",
                 "story.create_jira_issues",
@@ -2635,26 +2689,29 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(
                 },
             )
 
-            assert len(expanded["steps"]) == 4
-            assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
-            assert expanded["steps"][1]["skill"]["id"] == (
+            assert len(expanded["steps"]) == 5
+            assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
+            assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-404"}
+            assert expanded["steps"][1]["skill"]["id"] == "moonspec-breakdown"
+            assert "input preference chain" in expanded["steps"][1]["instructions"]
+            assert expanded["steps"][2]["skill"]["id"] == (
                 "story-reconcile-implementation"
             )
-            assert "fully implemented stories" in expanded["steps"][1]["instructions"]
-            assert expanded["steps"][2]["skill"]["id"] == "story.create_jira_issues"
-            assert expanded["steps"][2]["storyOutput"]["jira"] == {
+            assert "fully implemented stories" in expanded["steps"][2]["instructions"]
+            assert expanded["steps"][3]["skill"]["id"] == "story.create_jira_issues"
+            assert expanded["steps"][3]["storyOutput"]["jira"] == {
                 "projectKey": "MM",
                 "issueTypeName": "Story",
                 "boardId": "84",
                 "sourceIssueKey": "MM-404",
                 "dependencyMode": "linear_blocker_chain",
             }
-            downstream = expanded["steps"][3]
+            downstream = expanded["steps"][4]
             assert downstream["skill"]["id"] == "story.create_jira_orchestrate_tasks"
             assert "Create one Jira Orchestrate task" in downstream["instructions"]
             assert "dependsOn" in downstream["instructions"]
             assert "MM-404" in downstream["instructions"]
-            assert "Selected Jira board ID: 84" in expanded["steps"][2]["instructions"]
+            assert "Selected Jira board ID: 84" in expanded["steps"][3]["instructions"]
             assert downstream["jiraOrchestration"]["task"] == {
                 "repository": "MoonLadderStudios/MoonMind",
                 "runtime": {"mode": "codex_cli"},
@@ -2704,7 +2761,7 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(
                 },
             )
 
-            jira_step = expanded["steps"][2]
+            jira_step = expanded["steps"][3]
             assert "Create each generated Jira issue as a sub-task of MM-404" in (
                 jira_step["instructions"]
             )
@@ -2748,11 +2805,13 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
                 },
             )
 
-    assert len(expanded["steps"]) == 4
-    assert expanded["steps"][0]["skill"]["id"] == "moonspec-breakdown"
-    assert expanded["steps"][1]["skill"]["id"] == "story-reconcile-implementation"
-    assert expanded["steps"][2]["skill"]["id"] == "story.create_jira_issues"
-    downstream = expanded["steps"][3]
+    assert len(expanded["steps"]) == 5
+    assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
+    assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-404"}
+    assert expanded["steps"][1]["skill"]["id"] == "moonspec-breakdown"
+    assert expanded["steps"][2]["skill"]["id"] == "story-reconcile-implementation"
+    assert expanded["steps"][3]["skill"]["id"] == "story.create_jira_issues"
+    downstream = expanded["steps"][4]
     assert downstream["skill"]["id"] == "story.create_jira_implement_tasks"
     assert downstream["jiraOrchestration"]["task"] == {
         "repository": "MoonLadderStudios/MoonMind",
