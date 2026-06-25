@@ -1241,6 +1241,8 @@ class TemporalArtifactService:
 
     @staticmethod
     def _compute_digest_and_size(payload: bytes) -> tuple[str, int]:
+        # Artifact digests are content-address/integrity identifiers, not password hashes.
+        # codeql[py/weak-sensitive-data-hashing]
         return hashlib.sha256(payload).hexdigest(), len(payload)
 
     def _validate_integrity_declarations(

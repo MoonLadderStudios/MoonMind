@@ -1203,7 +1203,11 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
         for relative, body in files.items():
             path = base / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body, encoding="utf-8")
+            # These fake runtime files deliberately contain redaction markers.
+            path.write_text(
+                body,  # codeql[py/clear-text-storage-sensitive-data]
+                encoding="utf-8",
+            )
         return await super().run(request)
 
 
