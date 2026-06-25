@@ -134,6 +134,8 @@ _STEP_TYPE_SKILL = "skill"
 _STEP_TYPE_PRESET = "preset"
 _RUNTIME_ONLY_ORCHESTRATE_SLUGS = {"jira-orchestrate", "moonspec-orchestrate"}
 _ORCHESTRATION_MODE_INPUT = "orchestration_mode"
+_BATCH_WORKFLOWS_SLUG = "batch-workflows"
+_REMOVED_BATCH_WORKFLOWS_INPUTS = frozenset({"target_preset_version"})
 _SKILL_METADATA_KEYS = frozenset(
     {"context", "permissions", "autonomy", "runtime", "allowedTools"}
 )
@@ -2045,6 +2047,27 @@ class PresetCatalogService:
             context=effective_context,
             annotations=selected_version.annotations or {},
         )
+        removed_batch_inputs = sorted(
+            name
+            for name in _REMOVED_BATCH_WORKFLOWS_INPUTS
+            if template.slug == _BATCH_WORKFLOWS_SLUG and name in submitted_inputs
+        )
+        if removed_batch_inputs:
+            raise PresetValidationError(
+                "Batch workflow inputs include removed preset version fields.",
+                errors=[
+                    {
+                        "path": f"preset.inputs.{name}",
+                        "message": (
+                            f"Input '{name}' is no longer supported; select the "
+                            "target preset by slug and scope only."
+                        ),
+                        "code": "invalid_input",
+                        "recoverable": True,
+                    }
+                    for name in removed_batch_inputs
+                ],
+            )
         validated_inputs = self._resolve_inputs(
             schema=effective_schema,
             submitted=submitted_inputs,

@@ -1,10 +1,12 @@
-"""Catalog-boundary tests for the MM-885 ``batch-workflows`` seed preset.
+"""Catalog-boundary tests for the MM-885/MM-913 ``batch-workflows`` seed preset.
 
 These exercise the real preset validation + expansion path (the adapter boundary
 for presets): the seed YAML must validate, expose the documented batch contract
 (source discriminator, both source field sets, target-preset selector, default
 issue bindings, runtimeInheritance=caller, and a single shared publish policy),
 and expand into an orchestration step that queues child workflows.
+MM-913 preserves MM-901 traceability by rejecting stale target preset version
+inputs and selecting target presets by slug/scope only.
 """
 
 from __future__ import annotations
@@ -19,7 +21,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import selectinload, sessionmaker
 
 from api_service.db.models import Base, Preset, PresetScopeType
-from api_service.services.presets.catalog import PresetCatalogService
+from api_service.services.presets.catalog import (
+    PresetCatalogService,
+    PresetValidationError,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -105,14 +110,17 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             ):
                 assert name in schema["properties"]
 
-            # Target preset selector (slug/version/scope/scopeRef).
+            # Target preset selector (slug/scope/scopeRef); MM-913 removes
+            # target_preset_version so stale preset versions cannot break child
+            # runs.
             for name in (
                 "target_preset_slug",
-                "target_preset_version",
                 "target_preset_scope",
                 "target_preset_scope_ref",
             ):
                 assert name in schema["properties"]
+            assert "target_preset_version" not in schema["properties"]
+            assert "target_preset_version" not in schema["required"]
 
             # Single shared publish policy normalized around none/branch/pr.
             assert schema["properties"]["publish_mode"]["enum"] == [
@@ -187,7 +195,6 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
                     "jira_board_id": "42",
                     "jira_column": "In Progress",
                     "target_preset_slug": "jira-implement",
-                    "target_preset_version": "1.1.0",
                     "publish_mode": "pr",
                     "constraints": "Be careful",
                     "max_workflows": "10",
@@ -204,7 +211,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert orchestration["source"]["jiraBoardColumn"]["boardId"] == "42"
             assert orchestration["source"]["jiraBoardColumn"]["column"] == "In Progress"
             assert orchestration["targetPreset"]["slug"] == "jira-implement"
-            assert orchestration["targetPreset"]["version"] == "1.1.0"
+            assert "version" not in orchestration["targetPreset"]
             assert orchestration["publish"]["mode"] == "pr"
             # Every child inherits the caller runtime.
             assert orchestration["runtime"]["inherit"] == "caller"
@@ -224,3 +231,38 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             # GitHub-only batches must not be gated on Jira readiness, so the
             # parent preset no longer advertises the jira capability.
             assert "jira" not in expanded["capabilities"]
+
+
+async def test_batch_workflows_rejects_removed_target_preset_version_input(tmp_path):
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            with pytest.raises(PresetValidationError) as excinfo:
+                await service.expand_template(
+                    slug="batch-workflows",
+                    scope="global",
+                    scope_ref=None,
+                    version="1.0.0",
+                    inputs={
+                        "source_kind": "jira_board_column",
+                        "jira_board_id": "42",
+                        "jira_column": "In Progress",
+                        "target_preset_slug": "jira-implement",
+                        "target_preset_version": "1.1.0",
+                        "publish_mode": "pr",
+                    },
+                )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "preset.inputs.target_preset_version",
+            "message": (
+                "Input 'target_preset_version' is no longer supported; select the "
+                "target preset by slug and scope only."
+            ),
+            "code": "invalid_input",
+            "recoverable": True,
+        }
+    ]

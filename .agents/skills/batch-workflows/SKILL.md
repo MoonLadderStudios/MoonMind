@@ -31,7 +31,7 @@ in the In Progress column of the THOR board" with a single batch run.
 - GitHub repo issues source: `github_repository`, `github_issue_state`
   (default `open`), optional `github_label_filter`, `github_assignee_filter`,
   `github_milestone_filter`, `github_search_query`.
-- `target_preset_slug` / `target_preset_version` / `target_preset_scope`
+- `target_preset_slug` / `target_preset_scope`
   (default `global`) / `target_preset_scope_ref`: the child preset to run per
   target. Known issue presets (`jira-implement`, `github-issue-implement`) are
   auto-bound; other presets must be mapped explicitly.
@@ -84,7 +84,6 @@ in the In Progress column of the THOR board" with a single batch run.
    python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
      --targets artifacts/batch-workflows-targets.json \
      --target-preset-slug <slug> \
-     --target-preset-version <version> \
      --target-preset-scope <global|personal> \
      --publish-mode <none|branch|pr> \
      --constraints-file <optional path to shared constraints> \

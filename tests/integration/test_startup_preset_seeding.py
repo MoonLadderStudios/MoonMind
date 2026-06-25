@@ -455,6 +455,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_annotations["inputSchema"]["properties"]["source_kind"][
             "enum"
         ] == ["jira_board_column", "github_repo_issues"]
+        assert (
+            "target_preset_version"
+            not in batch_annotations["inputSchema"]["properties"]
+        )
         assert batch_annotations["bindings"]["jira-implement"]["jira_issue_key"] == (
             "{{ target.jiraIssue.key }}"
         )

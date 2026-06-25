@@ -5,7 +5,6 @@ description: Resolve a set of Jira board-column or GitHub repository issue targe
   inherited runtime/provider/model settings, and a shared publish policy. The parent
   records a summary artifact that links every queued child workflow.
 scope: global
-version: 1.0.0
 tags:
 - batch
 - orchestration
@@ -37,7 +36,6 @@ annotations:
     required:
     - source_kind
     - target_preset_slug
-    - target_preset_version
     - publish_mode
     properties:
       source_kind:
@@ -92,9 +90,6 @@ annotations:
       target_preset_slug:
         type: string
         title: Run this preset for each item
-      target_preset_version:
-        type: string
-        title: Target preset version
       target_preset_scope:
         type: string
         title: Target preset scope
@@ -163,7 +158,6 @@ annotations:
     source_kind: jira_board_column
     github_issue_state: open
     target_preset_slug: jira-implement
-    target_preset_version: 1.1.0
     target_preset_scope: global
     publish_mode: pr
     max_workflows: '25'
@@ -246,11 +240,6 @@ inputs:
   type: text
   required: true
   default: jira-implement
-- name: target_preset_version
-  label: Target Preset Version
-  type: text
-  required: true
-  default: 1.1.0
 - name: target_preset_scope
   label: Target Preset Scope
   type: enum
@@ -320,7 +309,7 @@ steps:
     credentials, web scraping, or guessed issue content to build targets.
 
     Step 2 — Queue one child workflow per resolved target running preset
-    "{{ inputs.target_preset_slug }}" version "{{ inputs.target_preset_version }}".
+    "{{ inputs.target_preset_slug }}".
     Auto-bind the resolved issue target into the child preset's issue input
     (jira_issue/jira_issue_key for jira-implement, github_issue/github_issue_ref for
     github-issue-implement) and copy the shared constraints into every child. Apply
@@ -331,7 +320,6 @@ steps:
     python3 .agents/skills/batch-workflows/bin/batch_workflows.py \
     --targets artifacts/batch-workflows-targets.json \
     --target-preset-slug "{{ inputs.target_preset_slug }}" \
-    --target-preset-version "{{ inputs.target_preset_version }}" \
     --target-preset-scope "{{ inputs.target_preset_scope }}" \
     --target-preset-scope-ref "{{ inputs.target_preset_scope_ref }}" \
     --publish-mode "{{ inputs.publish_mode }}" \
@@ -364,7 +352,6 @@ steps:
         searchQuery: '{{ inputs.github_search_query }}'
     targetPreset:
       slug: '{{ inputs.target_preset_slug }}'
-      version: '{{ inputs.target_preset_version }}'
       scope: '{{ inputs.target_preset_scope }}'
       scopeRef: '{{ inputs.target_preset_scope_ref }}'
     sharedInputs:
