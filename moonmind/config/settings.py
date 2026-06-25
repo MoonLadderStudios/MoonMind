@@ -1481,44 +1481,22 @@ class PentestSettings(BaseSettings):
             "development only."
         ),
     )
-    safe_profile_id: str = Field(
-        "pentestgpt-safe",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_SAFE_PROFILE_ID"),
-    )
-    vpn_lab_profile_id: str = Field(
-        "pentestgpt-vpn-lab",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_VPN_LAB_PROFILE_ID"),
-    )
     allowed_runner_profiles: Annotated[tuple[str, ...], NoDecode] = Field(
-        ("pentestgpt-safe",),
+        ("pentestgpt-claude-oauth",),
         validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES"),
         description="Comma-delimited allowlist of Pentest runner profile ids.",
     )
     default_runner_profile: str = Field(
-        "pentestgpt-safe",
+        "pentestgpt-claude-oauth",
         validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE"),
     )
-    allow_vpn_lab_profile: bool = Field(
-        False,
-        validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_VPN_LAB_PROFILE"),
-    )
-    vpn_state_volume: str = Field(
-        "pentest_vpn_state",
-        validation_alias=AliasChoices("MOONMIND_PENTEST_VPN_STATE_VOLUME"),
-    )
-    network_attachment_required_for_vpn: bool = Field(
-        True,
-        validation_alias=AliasChoices(
-            "MOONMIND_PENTEST_NETWORK_ATTACHMENT_REQUIRED_FOR_VPN"
-        ),
-    )
     allow_claude_oauth_profile: bool = Field(
-        False,
+        True,
         validation_alias=AliasChoices("MOONMIND_PENTEST_ALLOW_CLAUDE_OAUTH_PROFILE"),
         description=(
-            "Enable the Claude Code OAuth subscription runner/provider profiles for "
-            "PentestGPT. Disabled by default; the backing OAuth volume must be "
-            "provisioned out of band via MoonMind.OAuthSession."
+            "Enable the Claude Code OAuth subscription runner/provider profile for "
+            "PentestGPT. The backing OAuth volume must be provisioned out of band "
+            "via MoonMind.OAuthSession."
         ),
     )
     claude_oauth_runner_profile_id: str = Field(
@@ -1544,7 +1522,7 @@ class PentestSettings(BaseSettings):
         description="In-container Claude config home the PentestGPT runner authenticates against.",
     )
     claude_oauth_credential_profile_ref: str | None = Field(
-        None,
+        "claude_anthropic",
         validation_alias=AliasChoices(
             "MOONMIND_PENTEST_CLAUDE_OAUTH_CREDENTIAL_PROFILE_REF"
         ),
@@ -1564,7 +1542,7 @@ class PentestSettings(BaseSettings):
         ),
     )
     default_provider_profile: str | None = Field(
-        None,
+        "pentestgpt_claude_oauth",
         validation_alias=AliasChoices("MOONMIND_PENTEST_DEFAULT_PROVIDER_PROFILE"),
         description="Optional default PentestGPT provider profile id.",
     )
@@ -1573,7 +1551,7 @@ class PentestSettings(BaseSettings):
         validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_PROFILES_FILE"),
     )
     enabled_provider_profiles: Annotated[tuple[str, ...], NoDecode] = Field(
-        (),
+        ("pentestgpt_claude_oauth",),
         validation_alias=AliasChoices("MOONMIND_PENTEST_ENABLED_PROVIDER_PROFILES"),
         description="Comma-delimited allowlist of PentestGPT provider profile ids.",
     )
@@ -1586,14 +1564,6 @@ class PentestSettings(BaseSettings):
         None,
         ge=60,
         validation_alias=AliasChoices("MOONMIND_PENTEST_PROVIDER_LEASE_SECONDS"),
-    )
-    anthropic_secret_id: str | None = Field(
-        None,
-        validation_alias=AliasChoices("PENTESTGPT_ANTHROPIC_SECRET_ID"),
-    )
-    openrouter_secret_id: str | None = Field(
-        None,
-        validation_alias=AliasChoices("PENTESTGPT_OPENROUTER_SECRET_ID"),
     )
     default_operation_mode: str = Field(
         "recon_only",
@@ -1681,8 +1651,6 @@ class PentestSettings(BaseSettings):
     @field_validator(
         "default_provider_profile",
         "provider_profiles_file",
-        "anthropic_secret_id",
-        "openrouter_secret_id",
         "claude_oauth_credential_profile_ref",
         "provider_lease_seconds",
         mode="before",
@@ -1745,8 +1713,6 @@ class PentestSettings(BaseSettings):
                 "allowed pentest evidence levels"
             )
         effective_profiles = set(self.allowed_runner_profiles)
-        if self.allow_vpn_lab_profile:
-            effective_profiles.add(self.vpn_lab_profile_id)
         if self.default_runner_profile not in effective_profiles:
             raise ValueError(
                 "default pentest runner profile must be included in allowed "

@@ -671,7 +671,8 @@ def _effective_inputs_schema(
         return inputs_schema
 
     repository = _repository_from_context(context)
-    project_key = _jira_project_default_for_context(repository)
+    repository_project_key = _jira_project_default_for_repository(repository)
+    project_key = repository_project_key or _single_allowed_jira_project_key()
     repository_default = (
         repository if slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS else None
     )
@@ -889,7 +890,8 @@ def _apply_contextual_input_overrides(
         return adjusted
 
     repository = _repository_from_context(context)
-    project_key = _jira_project_default_for_context(repository)
+    repository_project_key = _jira_project_default_for_repository(repository)
+    project_key = repository_project_key or _single_allowed_jira_project_key()
     if not repository and not project_key:
         return submitted
 
@@ -905,10 +907,8 @@ def _apply_contextual_input_overrides(
 
     if project_key:
         submitted_project = str(adjusted.get(_JIRA_BREAKDOWN_PROJECT_INPUT) or "").strip()
-        schema_project = schema_defaults.get(_JIRA_BREAKDOWN_PROJECT_INPUT, "")
         if (
             not submitted_project
-            or submitted_project == schema_project
             or submitted_project in _JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS
         ):
             adjusted[_JIRA_BREAKDOWN_PROJECT_INPUT] = project_key

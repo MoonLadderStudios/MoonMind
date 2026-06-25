@@ -3140,7 +3140,9 @@ function pentestGeneratedScopeValues(
   const target = String(toolInputs.target || "").trim();
   const host = targetHostFromValue(target);
   const operationMode = String(toolInputs.operation_mode || "recon_only").trim();
-  const runnerProfile = String(toolInputs.runner_profile_id || "pentestgpt-safe").trim();
+  const runnerProfile = String(
+    toolInputs.runner_profile_id || "pentestgpt-claude-oauth",
+  ).trim();
   const current = draft.generatedScopeValues;
   const inferredClass = inferPentestTargetClass(target);
   return {
@@ -3161,7 +3163,7 @@ function pentestGeneratedScopeValues(
       : defaultPentestAllowedActions(operationMode),
     allowed_runner_profiles: Array.isArray(current.allowed_runner_profiles)
       ? current.allowed_runner_profiles
-      : [runnerProfile || "pentestgpt-safe"],
+      : [runnerProfile || "pentestgpt-claude-oauth"],
     requires_manual_approval:
       current.requires_manual_approval !== undefined
         ? Boolean(current.requires_manual_approval)
@@ -3187,7 +3189,7 @@ function buildPentestApprovedScope(
     : defaultPentestAllowedActions(String(toolInputs.operation_mode || "recon_only"));
   const allowedRunnerProfiles = Array.isArray(values.allowed_runner_profiles)
     ? values.allowed_runner_profiles.map(String).filter(Boolean)
-    : [String(toolInputs.runner_profile_id || "pentestgpt-safe")];
+    : [String(toolInputs.runner_profile_id || "pentestgpt-claude-oauth")];
   return {
     scope_id: String(values.scope_id || slugPart(host || target)).trim(),
     title: String(values.scope_title || `Pentest scope for ${target}`).trim(),
@@ -3221,10 +3223,7 @@ function buildPentestApprovedScope(
     approval_ticket: String(values.approval_ticket || "").trim(),
     approval_recorded: Boolean(values.approval_recorded || draft.confirmAuthorized),
     allowed_runner_profiles: allowedRunnerProfiles,
-    required_network_attachment_type:
-      String(toolInputs.runner_profile_id || "") === "pentestgpt-vpn-lab"
-        ? "lab_network"
-        : null,
+    required_network_attachment_type: null,
     metadata: {
       environment: String(values.environment || "development"),
       application_stack: String(values.application_stack || "").trim() || null,
@@ -9815,8 +9814,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           Runs require an approved scope artifact. Inline scope is
                           not accepted from workflow submission. External targets
                           are disabled unless explicitly enabled by deployment
-                          policy. Default profile is safe/non-VPN. VPN/lab
-                          requires an approved network attachment.
+                          policy. PentestGPT runs through the Claude OAuth
+                          runner profile.
                         </div>
                       ) : null}
                       {selectedToolDetail && visibleToolSchemaFields.length > 0 ? (

@@ -38,30 +38,29 @@ def test_executable_tool_registry_exposes_enabled_pentest_schema() -> None:
 
     assert registry.has_tool(PENTEST_TOOL_NAME) is True
     assert schema["x-moonmind-invocation"] == "temporal_task_submission"
-    assert schema["properties"]["runner_profile_id"]["default"] == "pentestgpt-safe"
+    assert schema["properties"]["runner_profile_id"]["default"] == "pentestgpt-claude-oauth"
     assert schema["properties"]["operation_mode"]["enum"] == [
         "recon_only",
         "validate_hypothesis",
     ]
 
 
-def test_pentest_discovery_hides_vpn_lab_profile_when_disabled(monkeypatch) -> None:
-    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", False)
+def test_pentest_discovery_exposes_only_claude_oauth_runner_profile() -> None:
     registry = ExecutableToolDiscoveryRegistry(pentest_enabled=True)
     schema = registry.list_tools()[0].input_schema
     profiles = schema["properties"]["runner_profile_id"]["enum"]
 
-    assert settings.pentest.vpn_lab_profile_id not in profiles
-    assert "pentestgpt-safe" in profiles
+    assert profiles == ["pentestgpt-claude-oauth"]
 
 
-def test_pentest_discovery_exposes_vpn_lab_profile_when_enabled(monkeypatch) -> None:
-    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", True)
+def test_pentest_discovery_hides_runner_when_claude_oauth_disabled(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings.pentest, "allow_claude_oauth_profile", False)
     registry = ExecutableToolDiscoveryRegistry(pentest_enabled=True)
     schema = registry.list_tools()[0].input_schema
-    profiles = schema["properties"]["runner_profile_id"]["enum"]
 
-    assert settings.pentest.vpn_lab_profile_id in profiles
+    assert schema["properties"]["runner_profile_id"]["enum"] == []
 
 
 def test_pentest_discovery_does_not_expose_raw_control_inputs() -> None:

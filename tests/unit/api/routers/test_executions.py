@@ -4681,8 +4681,8 @@ def _pentest_workflow_payload(
         "scope_artifact_ref": "art_scope_valid",
         "objective": "Recon only",
         "operation_mode": "recon_only",
-        "runner_profile_id": "pentestgpt-safe",
-        "execution_profile_ref": "pentestgpt_anthropic_api_team",
+        "runner_profile_id": "pentestgpt-claude-oauth",
+        "execution_profile_ref": "pentestgpt_claude_oauth",
         "time_budget_minutes": 60,
         "evidence_level": "standard",
     }
@@ -4765,8 +4765,8 @@ def test_create_task_shaped_execution_accepts_authorized_pentest_roles(
             "scope_artifact_ref": "art_scope_valid",
             "objective": "Recon only",
             "operation_mode": "recon_only",
-            "runner_profile_id": "pentestgpt-safe",
-            "execution_profile_ref": "pentestgpt_anthropic_api_team",
+            "runner_profile_id": "pentestgpt-claude-oauth",
+            "execution_profile_ref": "pentestgpt_claude_oauth",
             "time_budget_minutes": 60,
             "evidence_level": "standard",
         },
@@ -4848,7 +4848,7 @@ def test_create_task_shaped_execution_rejects_pentest_provider_runtime_state_ove
         json=_pentest_workflow_payload(
             tool_inputs={
                 "provider_runtime_state": {
-                    "pentestgpt_anthropic_api_team": {"available_slots": 100}
+                    "pentestgpt_claude_oauth": {"available_slots": 100}
                 }
             }
         ),
@@ -4919,7 +4919,7 @@ def test_pentest_safe_preset_exposes_only_ordinary_inputs() -> None:
     assert exposed_inputs == schema_props
     assert privileged.isdisjoint(schema_props)
     assert privileged.isdisjoint(exposed_inputs)
-    assert step_inputs["runner_profile_id"] == "pentestgpt-safe"
+    assert step_inputs["runner_profile_id"] == "pentestgpt-claude-oauth"
     assert privileged.isdisjoint(step_inputs)
 
 def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
