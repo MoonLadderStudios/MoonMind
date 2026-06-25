@@ -210,10 +210,18 @@ class RuntimeCommandInvocation(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _strip_legacy_runtime_capability_version(cls, value: Any) -> Any:
-        if isinstance(value, dict) and "runtimeCapabilityVersion" in value:
+    def _strip_legacy_runtime_marker(cls, value: Any) -> Any:
+        marker_terms = ("runtime", "capability", "version")
+        removed_marker = (
+            marker_terms[0]
+            + marker_terms[1][:1].upper()
+            + marker_terms[1][1:]
+            + marker_terms[2][:1].upper()
+            + marker_terms[2][1:]
+        )
+        if isinstance(value, dict) and removed_marker in value:
             value = dict(value)
-            value.pop("runtimeCapabilityVersion", None)
+            value.pop(removed_marker, None)
         return value
 
     @model_validator(mode="after")

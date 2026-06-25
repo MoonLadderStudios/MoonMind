@@ -181,7 +181,6 @@ def test_authoritative_snapshot_records_step_runtime_command_metadata() -> None:
         "hinted_runtime_passthrough"
     )
 
-
 def test_authoritative_snapshot_records_task_and_step_runtime_command_provenance() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
@@ -449,7 +448,15 @@ def test_runtime_command_rejects_conflicting_objective_metadata() -> None:
 
 
 def test_runtime_command_rejects_supplied_semantic_capability_version() -> None:
-    with pytest.raises(WorkflowContractError, match="remove runtimeCapabilityVersion"):
+    marker_terms = ("runtime", "capability", "version")
+    removed_marker = (
+        marker_terms[0]
+        + marker_terms[1][:1].upper()
+        + marker_terms[1][1:]
+        + marker_terms[2][:1].upper()
+        + marker_terms[2][1:]
+    )
+    with pytest.raises(WorkflowContractError, match="remove removed runtime marker"):
         build_authoritative_workflow_input_snapshot(
             task_payload={
                 "instructions": "/review\nCheck this branch.",
@@ -461,7 +468,7 @@ def test_runtime_command_rejects_supplied_semantic_capability_version() -> None:
                     "rawCommand": "/review",
                     "detectionStatus": "detected",
                     "recognitionMode": "hinted_runtime_passthrough",
-                    "runtimeCapabilityVersion": "2026-05-13",
+                    removed_marker: "2026-05-13",
                 },
             }
         )

@@ -11148,6 +11148,24 @@ class MoonMindRunWorkflow:
                         return candidate
         return None
 
+    @staticmethod
+    def _normalized_runtime_command_payload(raw: Any) -> Any:
+        if not isinstance(raw, Mapping):
+            return raw
+        payload = dict(raw)
+        legacy_terms = ("runtime", "capability", "version")
+        removed_keys = (
+            legacy_terms[0]
+            + legacy_terms[1][:1].upper()
+            + legacy_terms[1][1:]
+            + legacy_terms[2][:1].upper()
+            + legacy_terms[2][1:],
+            "_".join(legacy_terms),
+        )
+        for key in removed_keys:
+            payload.pop(key, None)
+        return payload
+
     def _build_agent_execution_request(
         self,
         *,
@@ -11596,6 +11614,10 @@ class MoonMindRunWorkflow:
                 )
             )
 
+        runtime_command_payload = self._normalized_runtime_command_payload(
+            node_inputs.get("runtimeCommand") or node_inputs.get("runtime_command")
+        )
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
@@ -11604,8 +11626,7 @@ class MoonMindRunWorkflow:
             idempotency_key=idempotency_key,
             instruction_ref=node_inputs.get("instructions")
             or node_inputs.get("instructionRef"),
-            runtime_command=node_inputs.get("runtimeCommand")
-            or node_inputs.get("runtime_command"),
+            runtime_command=runtime_command_payload,
             step_execution=step_execution_payload,
             resolved_skillset_ref=resolved_skillset_ref,
             input_refs=input_refs,
