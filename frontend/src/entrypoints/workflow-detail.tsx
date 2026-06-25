@@ -203,7 +203,6 @@ function RuntimeCommandDetail({
     command.hintStatus,
     command.recognitionMode,
   );
-  const capabilityVersion = detailStringValue(command.runtimeCapabilityVersion);
   const hintCatalogVersion = detailStringValue(command.hintCatalogVersion);
 
   return (
@@ -215,7 +214,6 @@ function RuntimeCommandDetail({
           {runtime ? <Fact label="Runtime">{formatRuntimeLabel(runtime)}</Fact> : null}
           {renderMode ? <Fact label="Render Mode">{formatStatusLabel(renderMode)}</Fact> : null}
           {status ? <Fact label="Status">{formatStatusLabel(status)}</Fact> : null}
-          {capabilityVersion ? <Fact label="Capability Version">{capabilityVersion}</Fact> : null}
           {hintCatalogVersion ? <Fact label="Hint Catalog Version">{hintCatalogVersion}</Fact> : null}
         </div>
       ) : (

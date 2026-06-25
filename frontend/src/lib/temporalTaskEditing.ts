@@ -96,7 +96,6 @@ export type TemporalSubmissionDraftPresetPayload = {
   id?: string;
   slug?: string;
   name?: string;
-  version?: string;
   inputs?: Record<string, unknown>;
   [key: string]: unknown;
 };
@@ -150,7 +149,6 @@ export type TemporalSubmissionDraft = {
   }>;
   appliedTemplates: Array<{
     slug: string;
-    version: string;
     inputs: Record<string, unknown>;
     stepIds: string[];
     appliedAt: string;
@@ -188,7 +186,6 @@ export type TemporalArtifactEditUpdatePayload = {
 };
 
 export type RuntimeCommandVersionConfig = {
-  capabilityVersion?: unknown;
   hintCatalogVersion?: unknown;
 };
 
@@ -203,18 +200,6 @@ export function buildRuntimeCommandVersionWarnings(
   }
 
   const warnings: string[] = [];
-  const storedCapabilityVersion = stringValue(command.runtimeCapabilityVersion);
-  const currentCapabilityVersion = stringValue(config.capabilityVersion);
-  if (
-    storedCapabilityVersion &&
-    currentCapabilityVersion &&
-    storedCapabilityVersion !== currentCapabilityVersion
-  ) {
-    warnings.push(
-      `Runtime command capability version changed from ${storedCapabilityVersion} to ${currentCapabilityVersion}.`,
-    );
-  }
-
   const storedHintCatalogVersion = stringValue(command.hintCatalogVersion);
   const currentHintCatalogVersion = stringValue(config.hintCatalogVersion);
   if (
@@ -693,7 +678,6 @@ function normalizeAppliedTemplates(
     .map((entry) => objectValue(entry))
     .map((entry) => ({
       slug: stringValue(entry.slug),
-      version: stringValue(entry.version),
       inputs: objectValue(entry.inputs),
       stepIds: Array.isArray(entry.stepIds)
         ? entry.stepIds.map((item) => String(item || '').trim()).filter(Boolean)

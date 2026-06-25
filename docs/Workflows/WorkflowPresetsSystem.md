@@ -38,7 +38,7 @@ A preset is a catalog entry that defines metadata, optional user inputs, and an 
 
 ### Preset Step
 
-A preset step is a step on the Create page with `type: preset`, a `preset_id`, and collected `inputs`. It can be configured and submitted before it is expanded.
+A preset step is a step on the Create page with `type: preset`, a `preset_slug`, optional scope, and collected `inputs`. It can be configured and submitted before it is expanded.
 
 ### Input Schema
 
@@ -54,7 +54,7 @@ Expansion transforms a preset step plus validated inputs into concrete child ste
 
 ### Provenance
 
-Provenance records which preset produced each expanded step, which preset version was used, and which input values or redacted input references influenced expansion.
+Provenance records which preset slug and scope produced each expanded step, which content digest evidenced the preset definition, and which input values or redacted input references influenced expansion.
 
 ## Preset Catalog Contract
 
@@ -63,7 +63,6 @@ A preset catalog entry should follow this shape:
 ```yaml
 id: jira-orchestrate
 kind: preset
-version: 1
 label: Jira Orchestrate
 description: Build and execute an implementation workflow from a Jira issue.
 category: issue-tracker
@@ -104,7 +103,7 @@ ui_schema:
 expansion:
   steps:
     - type: skill
-      skill_id: jira-orchestrate
+      skill_name: jira-orchestrate
       title: "Implement {{ inputs.jira_issue.key }}"
       inputs:
         jira_issue_key: "{{ inputs.jira_issue.key }}"
@@ -118,7 +117,7 @@ The exact persisted representation may evolve, but these concepts are required:
 - stable preset identity
 - human-readable label and description
 - semantic category or tags
-- version
+- content digest or source reference evidence
 - JSON Schema-compatible `input_schema`
 - optional `ui_schema`
 - deterministic expansion definition
@@ -186,12 +185,12 @@ The desired direction is compatible with Agent Skills-style manifests:
 - richer behavior is expressed through portable schema fields and clearly namespaced extensions
 - runtime-specific or product-specific UI hints are optional and do not change the core input contract
 
-MoonMind should normalize preset and skill manifests into a shared internal capability input model. If Agent Skills standard field names differ from MoonMind's names, importers may support aliases, but MoonMind's internal canonical field for presets is `input_schema`.
+MoonMind should normalize preset and skill manifests into a shared internal capability input model. MoonMind's internal canonical fields are `preset_slug` and optional scope for presets, `skill_name` for Skills, and `input_schema` for preset inputs. Preset selection payloads do not carry semantic preset versions; content digests provide definition evidence.
 
 The shared internal model should be able to represent:
 
 ```yaml
-capability_id: jira-orchestrate
+preset_slug: jira-orchestrate
 capability_type: preset
 input_schema: {}
 ui_schema: {}
@@ -201,7 +200,7 @@ defaults: {}
 and:
 
 ```yaml
-capability_id: moonspec-breakdown
+skill_name: moonspec-breakdown
 capability_type: skill
 input_schema: {}
 ui_schema: {}
@@ -303,7 +302,7 @@ Before expansion, a preset step should be representable as:
 ```json
 {
   "type": "preset",
-  "preset_id": "jira-orchestrate",
+  "preset_slug": "jira-orchestrate",
   "title": "Jira Orchestrate",
   "inputs": {
     "jira_issue": {
@@ -321,15 +320,15 @@ After apply or submit-time expansion, generated steps should include provenance:
 ```json
 {
   "type": "skill",
-  "skill_id": "jira-orchestrate",
+  "skill_name": "jira-orchestrate",
   "title": "Implement MOON-123",
   "inputs": {
     "jira_issue_key": "MOON-123"
   },
   "provenance": {
     "source_type": "preset",
-    "preset_id": "jira-orchestrate",
-    "preset_version": "1",
+    "preset_slug": "jira-orchestrate",
+    "preset_digest": "sha256:...",
     "input_snapshot": {
       "jira_issue": {
         "key": "MOON-123"
@@ -344,7 +343,7 @@ After apply or submit-time expansion, generated steps should include provenance:
 Preset expansion must be available through one shared backend path:
 
 ```text
-expandPreset(preset_id, inputs, context) -> expanded_steps
+expandPreset(preset_slug, scope, inputs, context) -> expanded_steps
 ```
 
 The same path is used by:
@@ -358,7 +357,7 @@ The same path is used by:
 
 Expansion must:
 
-1. Load the preset by ID and version.
+1. Load the preset by slug and scope.
 2. Validate inputs against `input_schema`.
 3. Apply defaults.
 4. Resolve allowed contextual values such as repository, branch, issue tracker connection, or provider profile.
@@ -367,7 +366,7 @@ Expansion must:
 7. Attach provenance.
 8. Return validation errors in a field-addressable format the Create page can display next to generated inputs.
 
-Expansion must be deterministic for the same preset version, inputs, and context. If expansion requires fresh external data, the expansion output must record which external references were used.
+Expansion must be deterministic for the same preset slug, scope, content digest, inputs, and context. If expansion requires fresh external data, the expansion output must record which external references were used.
 
 ## Input Binding
 
@@ -378,7 +377,7 @@ Example:
 ```yaml
 steps:
   - type: skill
-    skill_id: moonspec-breakdown
+    skill_name: moonspec-breakdown
     inputs:
       jira_issue_key: "{{ inputs.jira_issue.key }}"
       jira_issue_summary: "{{ inputs.jira_issue.summary }}"
@@ -403,7 +402,7 @@ A preset may include child preset steps. Parent presets must explicitly map inpu
 ```yaml
 steps:
   - type: preset
-    preset_id: pr-with-merge-automation
+    preset_slug: pr-with-merge-automation
     inputs:
       jira_issue: "{{ inputs.jira_issue }}"
       publish_mode: "pr_with_merge_automation"
@@ -465,7 +464,7 @@ The initial selector is deterministic and conservative:
 - a general implementation goal maps to MoonSpec Orchestrate
 
 The submitted Workflow Execution records `presetSchedule` metadata with the goal source,
-selected preset, preset version, and reason. Once the preset is selected, the
+selected preset slug, scope, content digest, and reason. Once the preset is selected, the
 normal backend expansion service owns the executable step list.
 
 ## Apply and Reapply
@@ -474,7 +473,7 @@ Apply replaces or augments the draft with generated child steps, depending on th
 
 When applied, generated steps remain editable, but MoonMind must preserve provenance and the original preset input snapshot. Editing generated steps does not mutate the preset template.
 
-Reapply should use the saved preset ID, version, and input snapshot unless the user explicitly changes inputs.
+Reapply should use the saved preset slug, scope, content digest, and input snapshot unless the user explicitly changes inputs.
 
 ## Validation and Error Shape
 
@@ -517,7 +516,6 @@ The preset catalog API must expose enough metadata for schema-driven UI generati
 {
   "id": "jira-orchestrate",
   "kind": "preset",
-  "version": "1",
   "label": "Jira Orchestrate",
   "description": "Build and execute an implementation workflow from a Jira issue.",
   "inputSchema": {},
@@ -562,15 +560,15 @@ Persisted records should support:
 - edit and re-run
 - audit/debugging
 - comparison between original preset inputs and edited generated steps
-- future migrations when preset versions change
+- future migrations when preset content changes
 
-Preset versions are immutable once Workflow Executions have been created from them. Updating a preset creates a new version or equivalent revision identifier.
+Preset content evidence is immutable once Workflow Executions have been created from it. Updating a preset creates a new content digest while the preset remains identified by slug and scope.
 
 ## Implementation Requirements
 
 To fully realize this design, MoonMind needs:
 
-1. A canonical preset manifest model with `input_schema`, optional `ui_schema`, defaults, expansion rules, and versioning.
+1. A canonical preset manifest model with `input_schema`, optional `ui_schema`, defaults, expansion rules, and content-addressed evidence.
 2. Backend validation of preset inputs using the same schema returned to the frontend.
 3. A generic schema-form renderer on the Create page.
 4. A reusable widget registry for semantic widgets such as Jira issue picker.

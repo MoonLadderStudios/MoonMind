@@ -205,11 +205,16 @@ class RuntimeCommandInvocation(BaseModel):
     requires_runtime_recognition: bool = Field(
         False, alias="requiresRuntimeRecognition"
     )
-    runtime_capability_version: str | None = Field(
-        None, alias="runtimeCapabilityVersion"
-    )
     hint_catalog_version: str | None = Field(None, alias="hintCatalogVersion")
     detection_phase: str | None = Field(None, alias="detectionPhase")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_legacy_runtime_capability_version(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "runtimeCapabilityVersion" in value:
+            value = dict(value)
+            value.pop("runtimeCapabilityVersion", None)
+        return value
 
     @model_validator(mode="after")
     def _recognized_runtime_command_has_text(self) -> "RuntimeCommandInvocation":

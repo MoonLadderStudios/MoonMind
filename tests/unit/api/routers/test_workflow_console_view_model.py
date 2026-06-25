@@ -157,8 +157,6 @@ def test_build_runtime_config_exposes_browser_safe_runtime_command_preview_metad
     config = dashboard_view_model.build_runtime_config("/workflows/new")
 
     preview = config["system"]["runtimeCommandPreview"]
-
-    assert preview["capabilityVersion"] == "2026-05-13"
     assert preview["hintCatalogVersion"] == "2026-05-13"
     assert preview["runtimes"]["codex_cli"] == {
         "slashCommandPassthrough": True,

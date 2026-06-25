@@ -167,7 +167,6 @@ describe("Task Create Step Type authoring", () => {
                       },
                     },
                     additionalProperties: false,
-                    "x-moonmind-tool-version": "1.0.0",
                   },
                 },
                 {
@@ -219,8 +218,6 @@ describe("Task Create Step Type authoring", () => {
                   scope: "global",
                   title: "Jira Orchestrate",
                   description: "Implement a Jira issue.",
-                  latestVersion: "1.0.0",
-                  version: "1.0.0",
                 },
               ],
             }),
@@ -237,8 +234,6 @@ describe("Task Create Step Type authoring", () => {
               scope: "global",
               title: "Jira Orchestrate",
               description: "Implement a Jira issue.",
-              latestVersion: "1.0.0",
-              version: "1.0.0",
               inputs: [
                 {
                   name: "feature_request",
@@ -286,7 +281,6 @@ describe("Task Create Step Type authoring", () => {
               ],
               appliedTemplate: {
                 slug: "jira-orchestrate",
-                version: "1.0.0",
               },
               warnings: [],
             }),

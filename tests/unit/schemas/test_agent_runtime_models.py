@@ -160,7 +160,6 @@ def test_agent_execution_request_accepts_runtime_command_metadata() -> None:
                 "invocation": "/project:review",
             },
             "requiresRuntimeRecognition": True,
-            "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
             "detectionPhase": "submit",
         },
@@ -174,6 +173,30 @@ def test_agent_execution_request_accepts_runtime_command_metadata() -> None:
         "invocation": "/project:review",
     }
     assert request.model_dump(by_alias=True)["runtimeCommand"]["rawCommand"] == "/review"
+
+
+def test_runtime_command_strips_historical_semantic_capability_version() -> None:
+    invocation = RuntimeCommandInvocation(
+        kind="slash_command",
+        source="leading_slash",
+        sourcePath="objective.instructions",
+        command="review",
+        rawCommand="/review",
+        args="",
+        instructionBody="Check this.",
+        targetRuntime="codex_cli",
+        detectionStatus="detected",
+        hintStatus="hinted",
+        recognitionMode="hinted_runtime_passthrough",
+        requiresRuntimeRecognition=True,
+        runtimeCapabilityVersion="2026-05-13",
+        hintCatalogVersion="2026-05-13",
+        detectionPhase="submit",
+    )
+
+    dumped = invocation.model_dump(by_alias=True)
+    assert invocation.command == "review"
+    assert "runtimeCapabilityVersion" not in dumped
 
 def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> None:
     invocation = RuntimeCommandInvocation(
@@ -189,7 +212,6 @@ def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> N
         hintStatus="hinted",
         recognitionMode="hinted_runtime_passthrough",
         requiresRuntimeRecognition=True,
-        runtimeCapabilityVersion="2026-05-13",
         hintCatalogVersion="2026-05-13",
         detectionPhase="submit",
     )

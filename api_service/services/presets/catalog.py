@@ -379,6 +379,10 @@ def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
         raise PresetValidationError(
             f"Step {index} Tool step requires a tool payload object."
         )
+    if raw_tool.get("version") is not None or raw_tool.get("toolVersion") is not None:
+        raise PresetValidationError(
+            f"Step {index} Tool steps use tool names only; remove version or toolVersion."
+        )
     tool_id = str(raw_tool.get("id") or raw_tool.get("name") or "").strip()
     if not tool_id:
         raise PresetValidationError(
@@ -397,9 +401,6 @@ def _normalize_tool_payload(raw_tool: Any, *, index: int) -> dict[str, Any]:
             f"Step {index} tool.inputs must be an object when provided."
         )
     tool_payload: dict[str, Any] = {"id": tool_id, "inputs": dict(inputs)}
-    version = str(raw_tool.get("version") or "").strip()
-    if version:
-        tool_payload["version"] = version
     caps = raw_tool.get("requiredCapabilities")
     if caps is not None:
         if not isinstance(caps, list):
