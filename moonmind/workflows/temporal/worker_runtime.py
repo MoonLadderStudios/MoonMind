@@ -1858,7 +1858,6 @@ def _build_runtime_planner():
                     "tool": {
                         "type": "agent_runtime",
                         "name": runtime_mode,
-                        "version": "1.0",
                     },
                     "inputs": expanded_inputs,
                 })

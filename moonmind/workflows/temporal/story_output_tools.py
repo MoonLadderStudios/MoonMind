@@ -3086,7 +3086,6 @@ def _document_update_task_payload(
         "inputs": dict(task_inputs),
         "skill": {
             "name": "document-update",
-            "version": "1.0.0",
             "args": dict(task_inputs),
         },
     }

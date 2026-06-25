@@ -12017,7 +12017,6 @@ class MoonMindRunWorkflow:
                         "tool": {
                             "type": "agent_runtime",
                             "name": "jules",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "instructions": instruction,

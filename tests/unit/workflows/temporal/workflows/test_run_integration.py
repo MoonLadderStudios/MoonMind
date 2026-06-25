@@ -424,7 +424,6 @@ async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy
                         "skills": [
                             {
                                 "name": "jira.check_blockers",
-                                "version": "1.0",
                                 "description": "Check Jira blockers",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -541,7 +540,6 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -657,7 +655,6 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
                         "skills": [
                             build_dood_tool_definition_payload(
                                 name="container.run_workload",
-                                version="1.0",
                             )
                         ]
                     }
@@ -753,7 +750,6 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
     assert payload["invocation_payload"]["tool"] == {
         "type": "skill",
         "name": "container.run_workload",
-        "version": "1.0",
     }
     assert payload["context"]["workflow_id"] == "wf-1"
     assert payload["context"]["node_id"] == "workload-step"

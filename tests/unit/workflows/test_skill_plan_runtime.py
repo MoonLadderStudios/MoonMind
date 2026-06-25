@@ -206,6 +206,21 @@ def test_parse_skill_registry_rejects_duplicate_tool_names():
     with pytest.raises(ToolRegistryError, match="Duplicate tool definition"):
         parse_skill_registry(payload)
 
+def test_registry_snapshot_indexes_tools_by_name_only():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+
+    assert set(snapshot.by_key) == {"repo.run_tests", "repo.apply_patch"}
+    assert snapshot.by_key["repo.run_tests"].name == "repo.run_tests"
+    assert snapshot.get_tool(name="repo.run_tests").name == "repo.run_tests"
+    assert snapshot.get_skill(name="repo.run_tests").name == "repo.run_tests"
+
+    with pytest.raises(TypeError):
+        snapshot.get_tool(  # type: ignore[call-arg]
+            name="repo.run_tests",
+            version="1.0.0",
+        )
+
 def test_parse_plan_definition_rejects_tool_version_field():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)

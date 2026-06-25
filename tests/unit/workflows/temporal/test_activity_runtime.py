@@ -669,9 +669,10 @@ async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_
         for item in skills
         if isinstance(item, dict)
     }
-    # 'auto' is a placeholder and must not be in the registry when explicit skills are present
-    assert ("auto", "1.0") not in keyset
-    assert ("pr-resolver", "1.0") in keyset
+    # 'auto' is a placeholder and must not be in the registry when explicit skills are present.
+    assert "auto" not in keyset
+    assert "pr-resolver" in keyset
+    assert all("version" not in item for item in skills if isinstance(item, dict))
 
 async def test_default_skill_registry_payload_auto_placeholder_filtered():
     """When 'auto' is the only (placeholder) skill, it must not appear in the registry."""
@@ -691,8 +692,9 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
         for item in skills
         if isinstance(item, dict)
     }
-    # 'auto' is a placeholder and must not appear in the registry at all
-    assert ("auto", "1.0") not in keyset
+    # 'auto' is a placeholder and must not appear in the registry at all.
+    assert "auto" not in keyset
+    assert all("version" not in item for item in skills if isinstance(item, dict))
 
 @pytest.mark.parametrize(
     "skill_name",
@@ -770,9 +772,8 @@ async def test_default_skill_registry_payload_includes_input_sourced_tool_steps(
 
     skills = payload.get("skills")
     assert isinstance(skills, list)
-    assert [item["name"] for item in skills] == [
-        ("jira.get_issue", "1.0.0")
-    ]
+    assert [item["name"] for item in skills] == ["jira.get_issue"]
+    assert all("version" not in item for item in skills if isinstance(item, dict))
 
 async def test_default_skill_registry_payload_uses_curated_pentest_tool_definition():
     payload = _default_skill_registry_payload(

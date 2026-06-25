@@ -49,7 +49,7 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
     assert rows[1]["title"] == "Run tests"
     assert rows[1]["status"] == "pending"
     assert rows[1]["dependsOn"] == ["step-1"]
-    assert rows[1]["tool"] == {"type": "skill", "name": "repo.test", "version": "1"}
+    assert rows[1]["tool"] == {"type": "skill", "name": "repo.test"}
     assert rows[0]["refs"]["latestStepExecutionManifestRef"] is None
     assert rows[0]["refs"]["stepExecutionManifestRefs"] == []
     assert rows[0]["refs"]["latestStepExecutionCheckpointRef"] is None

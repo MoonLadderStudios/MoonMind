@@ -3555,14 +3555,13 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     assert initial_parameters["instructions"] == "Fix failing Temporal run."
     assert initial_parameters["workflow"]["tool"]["type"] == "skill"
     assert initial_parameters["workflow"]["tool"]["name"] == "pr-resolver"
-    assert initial_parameters["workflow"]["tool"]["version"] == "1.0"
+    assert "version" not in initial_parameters["workflow"]["tool"]
     assert initial_parameters["workflow"]["inputs"] == {
         "repo": "MoonLadderStudios/MoonMind",
         "pr": "42",
     }
     assert initial_parameters["workflow"]["skill"] == {
         "name": "pr-resolver",
-        "version": "1.0",
     }
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr",
@@ -4757,7 +4756,6 @@ def test_create_task_shaped_execution_accepts_authorized_pentest_roles(
     assert workflow["tool"] == {
         "type": "skill",
         "name": "security.pentest.run",
-        "version": "1",
         "inputs": {
             "target": "https://lab.example.test",
             "scope_artifact_ref": "art_scope_valid",
@@ -8835,7 +8833,6 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     assert payload["steps"][0]["tool"] == {
         "type": "tool",
         "name": "jira.get_issue",
-        "version": "1",
     }
     assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
     assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]

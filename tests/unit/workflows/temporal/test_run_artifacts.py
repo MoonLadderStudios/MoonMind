@@ -255,7 +255,6 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -704,7 +703,6 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run repository tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -1077,8 +1075,7 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
         "skills": [
             {
                 "name": "jira.check_blockers",
-                "version": "1.0",
-                "description": "Check Jira blockers",
+                                "description": "Check Jira blockers",
                 "inputs": {"schema": {"type": "object"}},
                 "outputs": {"schema": {"type": "object"}},
                 "executor": {
@@ -1096,8 +1093,7 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
             },
             {
                 "name": "repo.run_tests",
-                "version": "1.0",
-                "description": "Run tests",
+                                "description": "Run tests",
                 "inputs": {"schema": {"type": "object"}},
                 "outputs": {"schema": {"type": "object"}},
                 "executor": {
@@ -2102,7 +2098,6 @@ async def test_run_execution_stage_skips_registry_read_for_unpatched_histories(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -2848,7 +2843,6 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -2983,7 +2977,6 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -3118,7 +3111,6 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -4341,7 +4333,6 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -4738,7 +4729,6 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
                         "skills": [
                             {
                                 "name": "jules",
-                                "version": "1.0.0",
                                 "description": "Jules",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -4861,7 +4851,6 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
                         "skills": [
                             {
                                 "name": "jules",
-                                "version": "1.0.0",
                                 "description": "Jules",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -4999,7 +4988,6 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -5126,7 +5114,6 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},

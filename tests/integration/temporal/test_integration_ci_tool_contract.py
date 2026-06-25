@@ -80,7 +80,6 @@ async def test_moonmind_integration_ci_routes_through_curated_workload_tool() ->
             parse_tool_definition(
                 build_dood_tool_definition_payload(
                     name=INTEGRATION_CI_TOOL,
-                    version="1.0",
                 )
             ),
         ),
@@ -94,7 +93,6 @@ async def test_moonmind_integration_ci_routes_through_curated_workload_tool() ->
     dispatcher = ToolActivityDispatcher()
     dispatcher.register_skill(
         skill_name=INTEGRATION_CI_TOOL,
-        version="1.0",
         handler=build_workload_tool_handler(
             tool_name=INTEGRATION_CI_TOOL,
             registry=registry,
@@ -108,7 +106,6 @@ async def test_moonmind_integration_ci_routes_through_curated_workload_tool() ->
             "tool": {
                 "type": "skill",
                 "name": INTEGRATION_CI_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "repoDir": "/work/agent_jobs/wf-1/repo",
@@ -136,7 +133,6 @@ async def test_curated_workload_result_preserves_report_publication_metadata() -
             parse_tool_definition(
                 build_dood_tool_definition_payload(
                     name=INTEGRATION_CI_TOOL,
-                    version="1.0",
                 )
             ),
         ),
@@ -161,7 +157,6 @@ async def test_curated_workload_result_preserves_report_publication_metadata() -
     dispatcher = ToolActivityDispatcher()
     dispatcher.register_skill(
         skill_name=INTEGRATION_CI_TOOL,
-        version="1.0",
         handler=build_workload_tool_handler(
             tool_name=INTEGRATION_CI_TOOL,
             registry=registry,
@@ -175,7 +170,6 @@ async def test_curated_workload_result_preserves_report_publication_metadata() -
             "tool": {
                 "type": "skill",
                 "name": INTEGRATION_CI_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "repoDir": "/work/agent_jobs/wf-1/repo",
@@ -215,7 +209,6 @@ async def test_workflow_docker_mode_keeps_registry_and_dispatch_aligned() -> Non
             parse_tool_definition(
                 build_dood_tool_definition_payload(
                     name=CONTAINER_RUN_CONTAINER_TOOL,
-                    version="1.0",
                 )
             ),
         ),
@@ -236,7 +229,6 @@ async def test_workflow_docker_mode_keeps_registry_and_dispatch_aligned() -> Non
                 "tool": {
                     "type": "skill",
                     "name": CONTAINER_RUN_CONTAINER_TOOL,
-                    "version": "1.0",
                 },
                 "inputs": {
                     "repoDir": "/work/agent_jobs/wf-1/repo",
@@ -266,7 +258,6 @@ async def test_workflow_docker_mode_keeps_registry_and_dispatch_aligned() -> Non
             parse_tool_definition(
                 build_dood_tool_definition_payload(
                     name=CONTAINER_RUN_CONTAINER_TOOL,
-                    version="1.0",
                 )
             ),
         ),
@@ -279,7 +270,6 @@ async def test_workflow_docker_mode_keeps_registry_and_dispatch_aligned() -> Non
             "tool": {
                 "type": "skill",
                 "name": CONTAINER_RUN_CONTAINER_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "repoDir": "/work/agent_jobs/wf-1/repo",

@@ -472,8 +472,7 @@ When a workflow execution requests Jira issue creation from ambiguous user inten
 {
  "tool": {
  "type": "agent_runtime",
- "name": "codex_cli",
- "version": "1.0"
+ "name": "codex_cli"
  },
  "inputs": {
  "runtimeSelection": {
@@ -498,8 +497,7 @@ the planner may use the narrower deterministic batch tool:
 {
  "tool": {
  "type": "skill",
- "name": "story.create_jira_issues",
- "version": "1.0"
+ "name": "story.create_jira_issues"
  },
  "inputs": {
  "storyOutput": {

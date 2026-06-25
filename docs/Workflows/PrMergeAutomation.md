@@ -480,7 +480,7 @@ When the gate opens, `MoonMind.MergeAutomation` starts a child **`MoonMind.UserW
 
 That child run MUST set:
 
-- `task.tool = { type: "skill", name: "pr-resolver", version: "1.0" }`
+- `task.tool = { type: "skill", name: "pr-resolver" }`
 - top-level `initialParameters.publishMode = "none"`
 
 This is required because `pr-resolver` itself owns git push and merge behavior.
@@ -499,8 +499,7 @@ This is required because `pr-resolver` itself owns git push and merge behavior.
       "instructions": "Resolve and merge PR #123 for parent workflow mm:parent.",
       "tool": {
         "type": "skill",
-        "name": "pr-resolver",
-        "version": "1.0"
+        "name": "pr-resolver"
       },
       "inputs": {
         "repo": "owner/repo",
