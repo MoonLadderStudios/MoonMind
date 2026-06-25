@@ -21,10 +21,7 @@ from moonmind.workloads.registry import (
 )
 
 WORKSPACE_ROOT = Path("/work/agent_jobs")
-PENTEST_RUNNER_IMAGE = (
-    "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0@"
-    "sha256:a9e35914533968d4f6e394ea8b08f3c5b885eb136ecfacf4990bfeb04d3a11f6"
-)
+PENTEST_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
 
 def _profile_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
