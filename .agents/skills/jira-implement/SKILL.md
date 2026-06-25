@@ -97,7 +97,7 @@ moonmind rag search \
 
 5. Verify locally.
    - Run the most focused relevant tests during iteration.
-   - Before preparing a PR, run the targeted repository-required verification for the touched area. For this repo, prefer targeted `./tools/test_unit.sh` path filters, `--ui-args`, or selector-equivalent backend suites; run the full unit suite only when fail-open policy, broad/risky changes, or unclear coverage requires it.
+   - Before finalizing the result, including preparing a PR or returning non-PR changes, run the targeted repository-required verification for the touched area. For this repo, prefer targeted `./tools/test_unit.sh` path filters, `--ui-args`, or selector-equivalent backend suites; run the full unit suite only when fail-open policy, broad/risky changes, or unclear coverage requires it.
    - If integration behavior changed and Docker is available, run the targeted hermetic integration command such as `./tools/test_integration.sh` only for the affected integration boundary or when selector/fail-open policy requires it.
    - If tests cannot run, record the exact command, failure reason, and residual risk.
 
