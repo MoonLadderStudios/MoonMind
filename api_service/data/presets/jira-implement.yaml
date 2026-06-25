@@ -6,7 +6,6 @@ description: Move a Jira issue through implementation by first assessing the cur
   advance the issue to Review. When PR merge automation is enabled the issue
   advances to Done automatically after merge.
 scope: global
-version: 1.1.0
 tags:
 - jira
 - implementation
@@ -100,7 +99,6 @@ steps:
       issueKey: '{{ inputs.jira_issue_key }}'
 - kind: include
   slug: issue-implement-assessment
-  version: 1.0.0
   alias: assess
   scope: global
   inputMapping:
@@ -190,7 +188,6 @@ steps:
     args: {}
 - kind: include
   slug: issue-implement-work-pr
-  version: 1.0.0
   alias: work-pr
   scope: global
   inputMapping:

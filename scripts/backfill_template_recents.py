@@ -15,7 +15,6 @@ from api_service.db.base import get_async_session_context
 from api_service.db.models import (
     Preset,
     PresetRecent,
-    PresetVersion,
 )
 
 _LOOKBACK_DAYS = 30
@@ -32,11 +31,10 @@ def _extract_applied_templates(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(raw, dict):
             continue
         slug = str(raw.get("slug") or "").strip()
-        version = str(raw.get("version") or "").strip()
-        if not slug or not version:
+        if not slug:
             continue
         result.append(
-            {"slug": slug, "version": version, "appliedAt": raw.get("appliedAt")}
+            {"slug": slug, "appliedAt": raw.get("appliedAt")}
         )
     return result
 
@@ -44,21 +42,17 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
     threshold = datetime.now(UTC) - timedelta(days=lookback_days)
 
     async with get_async_session_context() as session:
-        version_rows = (
+        preset_rows = (
             await session.execute(
                 select(
-                    PresetVersion.id,
-                    PresetVersion.version,
+                    Preset.id,
                     Preset.slug,
-                ).join(
-                    Preset,
-                    Preset.id == PresetVersion.template_id,
                 )
             )
         ).all()
-        version_index: dict[tuple[str, str], UUID] = {
-            (str(slug), str(version)): version_id
-            for version_id, version, slug in version_rows
+        preset_index: dict[str, UUID] = {
+            str(slug): preset_id
+            for preset_id, slug in preset_rows
         }
 
         jobs = (
@@ -83,10 +77,8 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
             if not isinstance(payload, dict):
                 continue
             for template_meta in _extract_applied_templates(payload):
-                version_id = version_index.get(
-                    (template_meta["slug"], template_meta["version"])
-                )
-                if version_id is None:
+                preset_id = preset_index.get(template_meta["slug"])
+                if preset_id is None:
                     continue
                 applied_at = created_at
                 raw_applied = template_meta.get("appliedAt")
@@ -99,11 +91,11 @@ async def backfill_recents(*, lookback_days: int = _LOOKBACK_DAYS) -> int:
                     pg_insert(PresetRecent)
                     .values(
                         user_id=user_id,
-                        template_version_id=version_id,
+                        template_id=preset_id,
                         applied_at=applied_at,
                     )
                     .on_conflict_do_nothing(
-                        index_elements=["user_id", "template_version_id"]
+                        index_elements=["user_id", "template_id"]
                     )
                 )
                 inserted += int((result.rowcount or 0) > 0)

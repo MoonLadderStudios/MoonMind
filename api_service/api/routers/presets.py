@@ -214,7 +214,6 @@ async def expand_template(
             slug=slug,
             scope=resolved_scope,
             scope_ref=resolved_scope_ref,
-            version=payload.version,
             inputs=payload.inputs,
             context=payload.context,
             options=ExpandOptions(
@@ -247,46 +246,15 @@ async def get_template(
             slug=slug,
             scope=resolved_scope,
             scope_ref=resolved_scope_ref,
-            version=None,
             user_id=getattr(user, "id", None),
         )
     except Exception as exc:  # pragma: no cover - thin API mapping
         raise _map_service_error(exc) from exc
     return PresetResponseSchema.model_validate(item)
 
-@router.get("/{slug}/versions/{version}", response_model=PresetResponseSchema)
-async def get_template_version(
+@router.put("/{slug}/review", response_model=PresetResponseSchema)
+async def review_template(
     slug: str,
-    version: str,
-    scope: str = Query(...),
-    scope_ref: str | None = Query(None, alias="scopeRef"),
-    service: PresetCatalogService = Depends(_get_catalog_service),
-    user: User = Depends(get_current_user()),
-) -> PresetResponseSchema:
-    ensure_preset_catalog_enabled()
-
-    resolved_scope, resolved_scope_ref = resolve_template_scope_for_user(
-        user=user,
-        scope=scope,
-        scope_ref=scope_ref,
-        write=False,
-    )
-    try:
-        item = await service.get_template(
-            slug=slug,
-            scope=resolved_scope,
-            scope_ref=resolved_scope_ref,
-            version=version,
-            user_id=getattr(user, "id", None),
-        )
-    except Exception as exc:  # pragma: no cover - thin API mapping
-        raise _map_service_error(exc) from exc
-    return PresetResponseSchema.model_validate(item)
-
-@router.put("/{slug}/versions/{version}", response_model=PresetResponseSchema)
-async def review_template_version(
-    slug: str,
-    version: str,
     payload: PresetReviewRequestSchema,
     scope: str = Query(...),
     scope_ref: str | None = Query(None, alias="scopeRef"),
@@ -306,7 +274,6 @@ async def review_template_version(
             slug=slug,
             scope=resolved_scope,
             scope_ref=resolved_scope_ref,
-            version=version,
             release_status=PresetReleaseStatus(payload.release_status),
             reviewer_id=getattr(user, "id", None),
         )

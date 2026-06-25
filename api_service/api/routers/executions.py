@@ -5566,16 +5566,17 @@ def _apply_goal_schedule_metadata(
     task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {
         "slug": str(applied_template.get("slug") or schedule.slug),
-        "version": str(applied_template.get("version") or schedule.version),
         "scope": "global",
     }
     task_payload["presetSchedule"] = {
         "source": "goal",
         "reason": schedule.reason,
         "presetSlug": schedule.slug,
-        "presetVersion": schedule.version,
         "jiraIssueKey": schedule.issue_key,
     }
+    preset_digest = str(applied_template.get("presetDigest") or "").strip()
+    if preset_digest:
+        task_payload["taskTemplate"]["presetDigest"] = preset_digest
 
 
 async def _expand_goal_preset_for_workflow_submission(

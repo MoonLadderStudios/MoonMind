@@ -40,14 +40,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         template = result.scalar_one_or_none()
         assert template is not None
-        assert template.latest_version is not None
-        assert template.latest_version.release_status.value == "active"
+        assert template.release_status.value == "active"
         seeded_skill_ids = [
-            step["skill"]["id"] for step in template.latest_version.steps
+            step["skill"]["id"] for step in template.steps
         ]
         assert seeded_skill_ids == [
             "moonspec-specify",
@@ -58,13 +57,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "moonspec-verify",
             "moonspec-doc-reconcile",
         ]
-        seeded_step_titles = [step["title"] for step in template.latest_version.steps]
+        seeded_step_titles = [step["title"] for step in template.steps]
         assert "Classify request and resume point" not in seeded_step_titles
         assert "Split broad designs when needed" not in seeded_step_titles
         assert seeded_step_titles[0] == "Create or select Moon Spec"
         assert "moonspec-breakdown" not in seeded_skill_ids
         assert "speckit-analyze" not in seeded_skill_ids
-        specify_step = template.latest_version.steps[0]
+        specify_step = template.steps[0]
         assert "Before running moonspec-specify, validate" in specify_step[
             "instructions"
         ]
@@ -72,7 +71,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "routed through moonspec-breakdown" in specify_step["instructions"]
         tasks_step = next(
             step
-            for step in template.latest_version.steps
+            for step in template.steps
             if step["title"] == "Generate TDD task breakdown"
         )
         assert "/moonspec-verify" in tasks_step["instructions"]
@@ -85,13 +84,12 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         jira_template = result.scalar_one_or_none()
         assert jira_template is not None
-        assert jira_template.latest_version is not None
         assert [
-            step["skill"]["id"] for step in jira_template.latest_version.steps
+            step["skill"]["id"] for step in jira_template.steps
         ] == ["moonspec-breakdown", "story.create_jira_issues"]
 
         result = await session.execute(
@@ -101,12 +99,11 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         jira_orchestrate_template = result.scalar_one_or_none()
         assert jira_orchestrate_template is not None
-        assert jira_orchestrate_template.latest_version is not None
-        annotations = jira_orchestrate_template.latest_version.annotations or {}
+        annotations = jira_orchestrate_template.annotations or {}
         assert annotations["inputSchema"]["required"] == ["jira_issue"]
         assert annotations["inputSchema"]["properties"]["jira_issue"]["required"] == [
             "key"
@@ -118,7 +115,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert annotations["uiSchema"]["jira_issue"]["allowManualKeyEntry"] is True
         jira_orchestrate_steps = [
             (step.get("skill") or step.get("tool"))["id"]
-            for step in jira_orchestrate_template.latest_version.steps
+            for step in jira_orchestrate_template.steps
         ]
         assert jira_orchestrate_steps[0] == "jira-issue-updater"
         assert jira_orchestrate_steps[1] == "jira.check_blockers"
@@ -130,7 +127,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert jira_orchestrate_steps.count("moonspec-implement") == 7
         assert jira_orchestrate_steps.count("moonspec-verify") == 7
         assert jira_orchestrate_steps.count("moonspec-doc-reconcile") == 1
-        blocker_step = jira_orchestrate_template.latest_version.steps[1]
+        blocker_step = jira_orchestrate_template.steps[1]
         assert blocker_step["title"] == "Check Jira blockers before implementation"
         assert blocker_step["type"] == "tool"
         assert blocker_step["tool"]["id"] == "jira.check_blockers"
@@ -141,13 +138,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "non-blocker" in blocker_step["instructions"]
         assert "status cannot be determined" in blocker_step["instructions"]
         assert "stop the orchestration immediately" in blocker_step["instructions"]
-        brief_step = jira_orchestrate_template.latest_version.steps[2]
+        brief_step = jira_orchestrate_template.steps[2]
         assert brief_step["title"] == "Load Jira preset brief"
         assert brief_step["type"] == "tool"
         assert brief_step["tool"]["id"] == "jira.load_preset_brief"
         remediation_step = next(
             step
-            for step in jira_orchestrate_template.latest_version.steps
+            for step in jira_orchestrate_template.steps
             if step["title"] == "Remediate verification gaps 1 of 6"
         )
         assert remediation_step["skill"]["id"] == "moonspec-implement"
@@ -155,14 +152,14 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "verification report's gaps" in remediation_step["instructions"]
         remediation_verify_step = next(
             step
-            for step in jira_orchestrate_template.latest_version.steps
+            for step in jira_orchestrate_template.steps
             if step["title"] == "Verify remediation 6 of 6"
         )
         assert remediation_verify_step["skill"]["id"] == "moonspec-verify"
         assert "controlling verification gate" in remediation_verify_step["instructions"]
         doc_reconcile_step = next(
             step
-            for step in jira_orchestrate_template.latest_version.steps
+            for step in jira_orchestrate_template.steps
             if step["title"] == "Reconcile declarative docs"
         )
         assert doc_reconcile_step["skill"]["id"] == "moonspec-doc-reconcile"
@@ -173,16 +170,16 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "artifacts/jira-orchestrate-doc-reconcile.json" in doc_reconcile_step[
             "instructions"
         ]
-        doc_reconcile_index = jira_orchestrate_template.latest_version.steps.index(
+        doc_reconcile_index = jira_orchestrate_template.steps.index(
             doc_reconcile_step
         )
         pr_step = next(
             step
-            for step in jira_orchestrate_template.latest_version.steps
+            for step in jira_orchestrate_template.steps
             if step["title"] == "Create pull request"
         )
         assert (
-            jira_orchestrate_template.latest_version.steps.index(pr_step)
+            jira_orchestrate_template.steps.index(pr_step)
             == doc_reconcile_index + 1
         )
         assert "pull request" in pr_step["instructions"]
@@ -195,10 +192,10 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "artifacts/jira-orchestrate-pr.json" in pr_step["instructions"]
         code_review_step = next(
             step
-            for step in jira_orchestrate_template.latest_version.steps
+            for step in jira_orchestrate_template.steps
             if step["title"] == "Move Jira issue to Review"
         )
-        assert code_review_step == jira_orchestrate_template.latest_version.steps[-1]
+        assert code_review_step == jira_orchestrate_template.steps[-1]
         assert code_review_step["annotations"] == {
             "jiraOrchestrateRole": "code-review-handoff"
         }
@@ -212,13 +209,12 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         jira_implement_template = result.scalar_one_or_none()
         assert jira_implement_template is not None
-        assert jira_implement_template.latest_version is not None
         implement_annotations = (
-            jira_implement_template.latest_version.annotations or {}
+            jira_implement_template.annotations or {}
         )
         assert implement_annotations["inputSchema"]["required"] == ["jira_issue"]
         assert implement_annotations["inputSchema"]["properties"]["jira_issue"][
@@ -235,7 +231,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert (
             implement_annotations.get("postMergeJiraCompletion") == "done_category"
         )
-        raw_jira_implement_steps = jira_implement_template.latest_version.steps
+        raw_jira_implement_steps = jira_implement_template.steps
         assert raw_jira_implement_steps[1]["kind"] == "include"
         assert raw_jira_implement_steps[1]["slug"] == "issue-implement-assessment"
         assert raw_jira_implement_steps[4]["kind"] == "include"
@@ -245,7 +241,6 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             slug="jira-implement",
             scope="global",
             scope_ref=None,
-            version="1.1.0",
             inputs={"jira_issue": {"key": "MM-999"}, "constraints": ""},
             context={"repository": "MoonLadderStudios/MoonMind"},
         )
@@ -344,23 +339,22 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         composite_template = result.scalar_one_or_none()
         assert composite_template is not None
-        assert composite_template.latest_version is not None
         assert [
             step["skill"]["id"]
-            for step in composite_template.latest_version.steps
+            for step in composite_template.steps
         ] == [
             "moonspec-breakdown",
             "story-reconcile-implementation",
             "story.create_jira_issues",
             "story.create_jira_orchestrate_tasks",
         ]
-        reconcile_step = composite_template.latest_version.steps[1]
+        reconcile_step = composite_template.steps[1]
         assert "fully implemented stories" in reconcile_step["instructions"]
-        downstream_step = composite_template.latest_version.steps[3]
+        downstream_step = composite_template.steps[3]
         assert "trusted Jira story output" in downstream_step["instructions"]
         assert "dependsOn" in downstream_step["instructions"]
         assert "orchestrationMode" not in downstream_step["jiraOrchestration"]["task"]
@@ -378,14 +372,13 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         implement_composite_template = result.scalar_one_or_none()
         assert implement_composite_template is not None
-        assert implement_composite_template.latest_version is not None
         assert [
             step["skill"]["id"]
-            for step in implement_composite_template.latest_version.steps
+            for step in implement_composite_template.steps
         ] == [
             "moonspec-breakdown",
             "story-reconcile-implementation",
@@ -393,7 +386,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "story.create_jira_implement_tasks",
         ]
         implement_downstream_step = (
-            implement_composite_template.latest_version.steps[3]
+            implement_composite_template.steps[3]
         )
         assert (
             "Create one Jira Implement task"
@@ -414,12 +407,11 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         doc_template = result.scalar_one_or_none()
         assert doc_template is not None
-        assert doc_template.latest_version is not None
-        doc_steps = doc_template.latest_version.steps
+        doc_steps = doc_template.steps
         assert len(doc_steps) == 2
         assert doc_steps[0]["type"] == "tool"
         assert doc_steps[0]["tool"]["id"] == "document.discover"
@@ -445,12 +437,11 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),
             )
-            .options(selectinload(Preset.latest_version))
+            
         )
         batch_template = result.scalar_one_or_none()
         assert batch_template is not None
-        assert batch_template.latest_version is not None
-        batch_annotations = batch_template.latest_version.annotations or {}
+        batch_annotations = batch_template.annotations or {}
         assert batch_annotations["runtimeInheritance"] == "caller"
         assert batch_annotations["inputSchema"]["properties"]["source_kind"][
             "enum"
@@ -461,7 +452,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert batch_annotations["bindings"]["github-issue-implement"][
             "github_issue_ref"
         ] == "{{ target.githubIssue.repository }}#{{ target.githubIssue.number }}"
-        batch_steps = batch_template.latest_version.steps
+        batch_steps = batch_template.steps
         assert len(batch_steps) == 1
         assert batch_steps[0]["skill"]["id"] == "batch-workflows"
         assert batch_steps[0]["batchOrchestration"]["runtime"]["inherit"] == "caller"

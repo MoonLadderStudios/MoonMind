@@ -5,7 +5,6 @@ description: Review the health of a documentation scope, then remediate the issu
   the current implementation and records a structured health report, then a document
   health remediate step that fixes only the reported issues.
 scope: global
-version: 1.0.0
 tags:
 - documentation
 - document-health

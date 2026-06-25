@@ -94,7 +94,6 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
                 slug="pr-check",
                 scope="personal",
                 scope_ref=str(user_id),
-                version="1.0.0",
                 inputs={"summary": "fix failing tests"},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
@@ -155,7 +154,6 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
                 slug=slug,
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "Implement MM-600",
                     "orchestration_mode": "docs",
@@ -247,7 +245,6 @@ async def test_expand_template_preserves_literal_placeholders_from_user_input(tm
                 slug="literal-placeholder-input",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": (
                         "Preserve the literal {{ downstream.value }} token."
@@ -287,7 +284,6 @@ async def test_expand_template_rejects_unknown_template_variable(tmp_path):
                     slug="unknown-template-variable",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                 )
@@ -321,7 +317,6 @@ async def test_expand_template_reports_malformed_template_as_validation_error(tm
                     slug="malformed-template",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                 )
@@ -390,7 +385,6 @@ async def test_expand_schema_capability_reports_field_addressable_errors(tmp_pat
                     slug="schema-required",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={"jira_issue": {}},
                     context={},
                 )
@@ -448,7 +442,6 @@ async def test_expand_annotated_schema_capability_reports_field_addressable_erro
                     slug="annotated-schema-required",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={"jira_issue": {}},
                     context={},
                 )
@@ -457,7 +450,6 @@ async def test_expand_annotated_schema_capability_reports_field_addressable_erro
                 slug="annotated-schema-required",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={"jira_issue": {"key": "MM-593"}},
                 context={},
             )
@@ -533,7 +525,6 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                     {
                         "kind": "include",
                         "slug": "child-checks",
-                        "version": "1.0.0",
                         "alias": "quality",
                         "scope": "global",
                         "inputMapping": {"target": "{{ inputs.feature }}"},
@@ -548,7 +539,6 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
                 slug="parent-flow",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={"feature": "preset composition"},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
@@ -580,13 +570,11 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["authoredPresets"] == [
         {
             "presetSlug": "parent-flow",
-            "presetVersion": "1.0.0",
             "scope": "global",
             "includePath": ["parent-flow@1.0.0"],
         },
         {
             "presetSlug": "child-checks",
-            "presetVersion": "1.0.0",
             "alias": "quality",
             "scope": "global",
             "includePath": [
@@ -603,7 +591,6 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetSlug": "child-checks",
-        "presetVersion": "1.0.0",
         "includePath": [
             "parent-flow@1.0.0",
             "quality:child-checks@1.0.0",
@@ -616,7 +603,6 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["steps"][1]["source"] == {
         "kind": "preset-derived",
         "presetSlug": "child-checks",
-        "presetVersion": "1.0.0",
         "includePath": [
             "parent-flow@1.0.0",
             "quality:child-checks@1.0.0",
@@ -663,7 +649,6 @@ async def test_expand_template_preserves_explicit_original_step_id_over_step_id(
                 slug="explicit-original-id",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={},
                 context={},
             )
@@ -698,7 +683,6 @@ async def test_expand_template_omits_original_step_id_when_source_step_has_no_id
                 slug="generated-step",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={},
                 context={},
             )
@@ -739,7 +723,6 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
                     {
                         "kind": "include",
                         "slug": "stable-child",
-                        "version": "1.0.0",
                         "alias": "child",
                         "scope": "global",
                     },
@@ -754,7 +737,6 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
                 slug="stable-parent",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={},
                 context={},
             )
@@ -762,7 +744,6 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
                 slug="stable-parent",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={},
                 context={},
             )
@@ -836,7 +817,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                     {
                         "kind": "include",
                         "slug": "deep-child",
-                        "version": "1.0.0",
                         "alias": "deep",
                         "scope": "global",
                         "inputMapping": {"target": "{{ inputs.target }}"},
@@ -873,7 +853,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                     {
                         "kind": "include",
                         "slug": "middle-flow",
-                        "version": "1.0.0",
                         "alias": "middle",
                         "scope": "global",
                         "inputMapping": {"target": "{{ inputs.feature }}"},
@@ -892,7 +871,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
                 slug="parent-flow",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={"feature": "recursive provenance"},
                 context={},
             )
@@ -908,7 +886,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
     assert deep_step["source"] == {
         "kind": "preset-derived",
         "presetSlug": "deep-child",
-        "presetVersion": "1.0.0",
         "includePath": [
             "parent-flow@1.0.0",
             "middle:middle-flow@1.0.0",
@@ -919,13 +896,11 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
     assert expanded["authoredPresets"] == [
         {
             "presetSlug": "parent-flow",
-            "presetVersion": "1.0.0",
             "scope": "global",
             "includePath": ["parent-flow@1.0.0"],
         },
         {
             "presetSlug": "middle-flow",
-            "presetVersion": "1.0.0",
             "alias": "middle",
             "scope": "global",
             "includePath": [
@@ -936,7 +911,6 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
         },
         {
             "presetSlug": "deep-child",
-            "presetVersion": "1.0.0",
             "alias": "deep",
             "scope": "global",
             "includePath": [
@@ -982,13 +956,11 @@ async def test_expand_template_rejects_duplicate_include_aliases(tmp_path):
                         {
                             "kind": "include",
                             "slug": "duplicate-child",
-                            "version": "1.0.0",
                             "alias": "same",
                         },
                         {
                             "kind": "include",
                             "slug": "duplicate-child",
-                            "version": "1.0.0",
                             "alias": "same",
                         },
                     ],
@@ -1013,7 +985,6 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
                     {
                         "kind": "include",
                         "slug": "missing-child",
-                        "version": "1.0.0",
                         "alias": "missing",
                     }
                 ],
@@ -1030,7 +1001,6 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
                     slug="missing-target-parent",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                 )
@@ -1061,45 +1031,30 @@ async def test_expand_template_rejects_include_version_mismatch_with_explicit_er
                 required_capabilities=[],
                 created_by=None,
             )
-            await service.create_template(
-                slug="version-mismatch-parent",
-                title="Version Mismatch Parent",
-                description="Requests unavailable version.",
-                scope="global",
-                scope_ref=None,
-                tags=[],
-                inputs_schema=[],
-                steps=[
-                    {
-                        "kind": "include",
-                        "slug": "child-checks",
-                        "version": "2.0.0",
-                        "alias": "child",
-                        "scope": "global",
-                    }
-                ],
-                annotations={},
-                required_capabilities=[],
-                created_by=None,
-            )
-
             with pytest.raises(PresetValidationError) as excinfo:
-                await service.expand_template(
-                    slug="version-mismatch-parent",
+                await service.create_template(
+                    slug="version-field-parent",
+                    title="Version Field Parent",
+                    description="Rejects versioned preset includes.",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
-                    inputs={},
-                    context={},
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "kind": "include",
+                            "slug": "child-checks",
+                            "version": "2.0.0",
+                            "alias": "child",
+                            "scope": "global",
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=None,
                 )
 
-    assert "version mismatch" in str(excinfo.value).lower()
-    assert "child:child-checks@2.0.0" in str(excinfo.value)
-    assert excinfo.value.errors[0]["code"] == "preset_include_version_mismatch"
-    assert excinfo.value.errors[0]["includePath"] == [
-        "version-mismatch-parent@1.0.0",
-        "child:child-checks@2.0.0",
-    ]
+    assert "slug/scope only" in str(excinfo.value)
 
 async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
     tmp_path,
@@ -1152,7 +1107,6 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
                     {
                         "kind": "include",
                         "slug": "moonspec-orchestrate",
-                        "version": "1.0.0",
                         "alias": "orchestrate",
                         "scope": "global",
                         "inputMapping": {
@@ -1170,7 +1124,6 @@ async def test_expand_template_normalizes_legacy_orchestrate_mode_for_include(
                 slug="parent-flow",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={"feature_request": "Implement MM-600"},
                 context={},
                 user_id=user_id,
@@ -1236,7 +1189,6 @@ async def test_create_template_rejects_unsupported_include_fields(tmp_path):
                         {
                             "kind": "include",
                             "slug": "child-checks",
-                            "version": "1.0.0",
                             "alias": "checks",
                             "scope": "global",
                             "instructions": "Override child instructions",
@@ -1264,7 +1216,6 @@ async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
                     {
                         "kind": "include",
                         "slug": "personal-child",
-                        "version": "1.0.0",
                         "alias": "private",
                         "scope": "personal",
                     }
@@ -1282,7 +1233,6 @@ async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
                     slug="global-parent",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                     options=ExpandOptions(),
@@ -1306,7 +1256,6 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                     {
                         "kind": "include",
                         "slug": "preset-b",
-                        "version": "1.0.0",
                         "alias": "b",
                         "scope": "global",
                     }
@@ -1327,7 +1276,6 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                     {
                         "kind": "include",
                         "slug": "preset-a",
-                        "version": "1.0.0",
                         "alias": "a",
                         "scope": "global",
                     }
@@ -1345,7 +1293,6 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
                     slug="preset-a",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                     options=ExpandOptions(),
@@ -1403,7 +1350,6 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                     {
                         "kind": "include",
                         "slug": "inactive-child",
-                        "version": "1.0.0",
                         "alias": "inactive",
                         "scope": "global",
                     }
@@ -1424,7 +1370,6 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                     {
                         "kind": "include",
                         "slug": "input-child",
-                        "version": "1.0.0",
                         "alias": "requires-topic",
                         "scope": "global",
                     }
@@ -1442,7 +1387,6 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                     slug="bad-parent",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                     options=ExpandOptions(),
@@ -1456,7 +1400,6 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
                     slug="input-parent",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                     options=ExpandOptions(),
@@ -1499,7 +1442,6 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                     {
                         "kind": "include",
                         "slug": "two-step-child",
-                        "version": "1.0.0",
                         "alias": "two",
                         "scope": "global",
                     }
@@ -1512,11 +1454,10 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                 await session.execute(
                     select(Preset)
                     .where(Preset.slug == "limited-parent")
-                    .options(selectinload(Preset.latest_version))
+                    
                 )
             ).scalar_one()
-            assert template.latest_version is not None
-            template.latest_version.max_step_count = 1
+            template.max_step_count = 1
             await session.commit()
 
             with pytest.raises(
@@ -1527,7 +1468,6 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                     slug="limited-parent",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={},
                     context={},
                     options=ExpandOptions(should_enforce_step_limit=True),
@@ -1608,7 +1548,6 @@ async def test_list_templates_with_favorites_and_recents(tmp_path):
                 slug="second-template",
                 scope="personal",
                 scope_ref=user_str,
-                version="1.0.0",
                 inputs={},
                 context={},
                 options=ExpandOptions(),
@@ -1682,7 +1621,6 @@ async def test_recents_trimmed_to_latest_five_rows(tmp_path):
                     slug=slug,
                     scope="personal",
                     scope_ref=user_str,
-                    version="1.0.0",
                     inputs={},
                     context={},
                     options=ExpandOptions(),
@@ -1719,7 +1657,6 @@ async def test_release_status_sets_reviewer_fields(tmp_path):
                 slug="review-target",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 release_status=PresetReleaseStatus.ACTIVE,
                 reviewer_id=user_id,
             )
@@ -1877,7 +1814,6 @@ async def test_import_seed_templates_success(tmp_path):
         "title": "Seed Test",
         "description": "A test seed template",
         "scope": "global",
-        "version": "1.0.0",
         "steps": [{"instructions": "seed step"}],
     }
     _write_seed_template(seed_dir, seed_data)
@@ -1905,7 +1841,6 @@ async def test_import_seed_templates_skips_existing(tmp_path):
         "slug": "seed-test-conflict",
         "title": "Seed Test Conflict",
         "scope": "global",
-        "version": "1.0.0",
         "steps": [{"instructions": "seed step"}],
     }
     _write_seed_template(seed_dir, seed_data)
@@ -1934,7 +1869,6 @@ async def test_sync_seed_templates_preserves_step_original_step_id(tmp_path):
             "title": "Seeded Preset",
             "description": "Seed carries source ids.",
             "scope": "global",
-            "version": "1.0.0",
             "steps": [
                 {
                     "id": "current-id",
@@ -1954,7 +1888,6 @@ async def test_sync_seed_templates_preserves_step_original_step_id(tmp_path):
                 slug="seeded-preset",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={},
                 context={},
             )
@@ -1990,8 +1923,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 scope_ref=None,
             )
             assert template.title == "Jira Breakdown"
-            assert template.latest_version is not None
-            assert [step["skill"]["id"] for step in template.latest_version.steps] == [
+            assert [step["skill"]["id"] for step in template.steps] == [
                 "moonspec-breakdown",
                 "story.create_jira_issues",
             ]
@@ -2000,7 +1932,6 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 slug="jira-breakdown",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -2051,8 +1982,7 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 scope_ref=None,
             )
             assert template.title == "Document Health Update"
-            assert template.latest_version is not None
-            steps = template.latest_version.steps
+            steps = template.steps
             assert [step["title"] for step in steps] == [
                 "Document health review",
                 "Document health remediate",
@@ -2066,7 +1996,6 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 slug="document-health-update",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={"documentation_scope": "docs/Workflows/"},
                 context={},
             )
@@ -2106,7 +2035,6 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
                 slug="jira-breakdown",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
             )
             project_input = next(
                 item
@@ -2119,7 +2047,6 @@ async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
                 slug="jira-breakdown",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_issue_type": "Story",
@@ -2166,7 +2093,6 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 slug="jira-breakdown-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
             )
             assert "orchestration_mode" not in {
                 item["name"] for item in template["inputs"]
@@ -2182,7 +2108,6 @@ async def test_jira_breakdown_orchestrate_uses_repository_policy_defaults(
                 slug="jira-breakdown-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -2254,7 +2179,6 @@ async def test_jira_breakdown_replaces_tool_placeholder_with_single_allowed_proj
                 slug="jira-breakdown",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "TOOL",
@@ -2298,7 +2222,6 @@ async def test_jira_breakdown_orchestrate_preserves_explicit_project_input(
                 slug="jira-breakdown-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "PLAT",
@@ -2345,7 +2268,6 @@ async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_
                 slug="jira-breakdown",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
             )
             project_input = next(
                 item
@@ -2358,7 +2280,6 @@ async def test_jira_breakdown_uses_seeded_default_when_multiple_allowed_without_
                 slug="jira-breakdown",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_issue_type": "Story",
@@ -2388,22 +2309,20 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 scope_ref=None,
             )
             assert template.title == "Jira Orchestrate"
-            assert template.latest_version is not None
-            assert template.latest_version.annotations["jiraWorkflow"] == (
+            assert template.annotations["jiraWorkflow"] == (
                 "implementation-to-code-review"
             )
             template_payload = await service.get_template(
                 slug="jira-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
             )
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
             }
             assert [
                 (step.get("skill") or step.get("tool"))["id"]
-                for step in template.latest_version.steps
+                for step in template.steps
             ] == [
                 "jira-issue-updater",
                 "jira.check_blockers",
@@ -2421,14 +2340,13 @@ async def test_seed_catalog_includes_jira_orchestrate_preset(tmp_path):
                 "auto",
                 "jira-issue-updater",
             ]
-            step_titles = [step["title"] for step in template.latest_version.steps]
+            step_titles = [step["title"] for step in template.steps]
             assert "Return Jira orchestration report" not in step_titles
 
             expanded = await service.expand_template(
                 slug="jira-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "jira_issue_key": "MM-328",
                     "source_design_path": "",
@@ -2563,7 +2481,6 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
                 slug="jira-implement",
                 scope="global",
                 scope_ref=None,
-                version="1.1.0",
                 inputs={"jira_issue": {"key": "MM-742"}},
                 context={},
             )
@@ -2608,7 +2525,6 @@ async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_p
                 slug="github-issue-implement",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "github_issue": {
                         "repository": "MoonLadderStudios/MoonMind",
@@ -2660,15 +2576,14 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 scope_ref=None,
             )
             assert template.title == "Jira Breakdown and Orchestrate"
-            assert template.latest_version is not None
-            assert template.latest_version.annotations["sourceSkill"] == (
+            assert template.annotations["sourceSkill"] == (
                 "jira-breakdown"
             )
-            assert template.latest_version.annotations["output"] == (
+            assert template.annotations["output"] == (
                 "dependent-jira-orchestrate-tasks"
             )
             assert [
-                step["skill"]["id"] for step in template.latest_version.steps
+                step["skill"]["id"] for step in template.steps
             ] == [
                 "moonspec-breakdown",
                 "story-reconcile-implementation",
@@ -2680,7 +2595,6 @@ async def test_seed_catalog_includes_jira_breakdown_orchestrate_preset(tmp_path)
                 slug="jira-breakdown-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -2742,7 +2656,6 @@ async def test_jira_breakdown_orchestrate_can_create_source_subtasks(tmp_path):
                 slug="jira-breakdown-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -2786,7 +2699,6 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
                 slug="jira-breakdown-implement",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
@@ -2836,16 +2748,15 @@ async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path
                 scope_ref=None,
             )
             assert template.title == "Document Update Orchestrate"
-            assert template.latest_version is not None
-            assert template.latest_version.annotations["sourceSkill"] == (
+            assert template.annotations["sourceSkill"] == (
                 "document-update-orchestrate"
             )
-            assert template.latest_version.annotations["output"] == (
+            assert template.annotations["output"] == (
                 "document-update-tasks"
             )
             assert [
                 step.get("tool", step.get("skill", {})).get("id")
-                for step in template.latest_version.steps
+                for step in template.steps
             ] == [
                 "document.discover",
                 "story.create_document_update_tasks",
@@ -2855,7 +2766,6 @@ async def test_seed_catalog_includes_document_update_orchestrate_preset(tmp_path
                 slug="document-update-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "document_directory": "docs",
                     "publish_mode": "pr_with_merge_automation",
@@ -2901,8 +2811,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 scope_ref=None,
             )
             assert template.title == "MoonSpec Orchestrate"
-            assert template.latest_version is not None
-            assert [step["skill"]["id"] for step in template.latest_version.steps] == [
+            assert [step["skill"]["id"] for step in template.steps] == [
                 "moonspec-specify",
                 "moonspec-plan",
                 "moonspec-tasks",
@@ -2911,7 +2820,7 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 "moonspec-verify",
                 "moonspec-doc-reconcile",
             ]
-            step_titles = [step["title"] for step in template.latest_version.steps]
+            step_titles = [step["title"] for step in template.steps]
             assert (
                 "Return orchestration report and defer publish actions"
                 not in step_titles
@@ -2922,7 +2831,6 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 slug="moonspec-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
             )
             assert "orchestration_mode" not in {
                 item["name"] for item in template_payload["inputs"]
@@ -2932,7 +2840,6 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
                 slug="moonspec-orchestrate",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "feature_request": "MM-366: Simplify Orchestrate Summary",
                     "orchestration_mode": "docs",
@@ -2968,7 +2875,6 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
         "title": "MoonSpec Orchestrate",
         "description": "Seeded preset",
         "scope": "global",
-        "version": "1.0.0",
         "steps": [
             {
                 "title": "Specify",
@@ -3001,8 +2907,7 @@ async def test_sync_seed_templates_creates_missing_seed(tmp_path):
                 scope_ref=None,
             )
             assert template.title == "MoonSpec Orchestrate"
-            assert template.latest_version is not None
-            assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
+            assert template.steps[0]["skill"]["id"] == "moonspec-specify"
 
 async def test_sync_seed_templates_preserves_default_expansion_limit_for_includes(
     tmp_path,
@@ -3013,12 +2918,10 @@ async def test_sync_seed_templates_preserves_default_expansion_limit_for_include
         "title": "Composed Seed",
         "description": "Seeded preset with child include",
         "scope": "global",
-        "version": "1.0.0",
         "steps": [
             {
                 "kind": "include",
                 "slug": "shared-child",
-                "version": "1.0.0",
                 "alias": "shared",
                 "scope": "global",
             }
@@ -3039,8 +2942,7 @@ async def test_sync_seed_templates_preserves_default_expansion_limit_for_include
                 scope_ref=None,
             )
 
-    assert template.latest_version is not None
-    assert template.latest_version.max_step_count == 25
+    assert template.max_step_count == 25
 
 async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_path):
     seed_dir = tmp_path / "seeds"
@@ -3049,12 +2951,10 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
         "title": "Composed Seed",
         "description": "Seeded preset with child include",
         "scope": "global",
-        "version": "1.0.0",
         "steps": [
             {
                 "kind": "include",
                 "slug": "shared-child",
-                "version": "1.0.0",
                 "alias": "shared",
                 "scope": "global",
             }
@@ -3085,8 +2985,7 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
                 scope=PresetScopeType.GLOBAL,
                 scope_ref=None,
             )
-            assert template.latest_version is not None
-            template.latest_version.max_step_count = 1
+            template.max_step_count = 1
             await session.commit()
 
             result = await service.sync_seed_templates(seed_dir=seed_dir)
@@ -3098,8 +2997,7 @@ async def test_sync_seed_templates_updates_existing_include_limit_default(tmp_pa
             )
 
     assert result.updated == 1
-    assert template.latest_version is not None
-    assert template.latest_version.max_step_count == 25
+    assert template.max_step_count == 25
 
 async def test_sync_seed_templates_updates_existing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"
@@ -3108,7 +3006,6 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
         "title": "MoonSpec Orchestrate",
         "description": "Updated seeded preset",
         "scope": "global",
-        "version": "1.0.0",
         "steps": [
             {
                 "title": "Specify",
@@ -3162,10 +3059,9 @@ async def test_sync_seed_templates_updates_existing_seed(tmp_path):
                 scope_ref=None,
             )
             assert template.description == "Updated seeded preset"
-            assert template.latest_version is not None
-            assert len(template.latest_version.steps) == 2
-            assert template.latest_version.steps[0]["skill"]["id"] == "moonspec-specify"
-            assert template.latest_version.annotations["sourceSkill"] == "moonspec-orchestrate"
+            assert len(template.steps) == 2
+            assert template.steps[0]["skill"]["id"] == "moonspec-specify"
+            assert template.annotations["sourceSkill"] == "moonspec-orchestrate"
 
 async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
     user_id = uuid4()
@@ -3187,7 +3083,6 @@ async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
                         "instructions": "Move MM-557 to In Progress.",
                         "tool": {
                             "id": "jira.transition_issue",
-                            "version": "1.0.0",
                             "inputs": {
                                 "issueKey": "MM-557",
                                 "targetStatus": "In Progress",
@@ -3206,7 +3101,6 @@ async def test_mm557_accepts_and_expands_jira_transition_tool_step(tmp_path):
                 slug="jira-transition-tool",
                 scope="personal",
                 scope_ref=str(user_id),
-                version="1.0.0",
                 inputs={},
                 context={},
                 options=ExpandOptions(should_enforce_step_limit=True),
@@ -3511,7 +3405,6 @@ async def test_mm569_accepts_valid_tool_skill_and_preset_draft_steps(tmp_path):
                 slug="mm569-explicit-step-types",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={},
                 context={},
             )
@@ -3530,7 +3423,6 @@ async def test_mm569_accepts_valid_tool_skill_and_preset_draft_steps(tmp_path):
     assert preset["type"] == "preset"
     assert preset["preset"] == {
         "slug": "mm569-child-preset",
-        "version": "1.0.0",
         "inputs": {"issue_key": "MM-569"},
     }
     assert [step["type"] for step in expanded["steps"]] == ["tool", "skill", "skill"]
