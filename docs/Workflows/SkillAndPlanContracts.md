@@ -98,11 +98,12 @@ Canonical Python class names:
 | Plan node | `Step` | `SkillInvocation` |
 | Policies | `ToolPolicies` | `SkillPolicies` |
 
-Compatibility rule:
+Internal capability identity rule:
 
-* Legacy `Skill*` aliases are re-exported for backward compatibility during migration.
-* New code should import canonical `Tool*` names.
-* Legacy `Skill*` Python aliases remain for registry/model compatibility. Current `MoonMind.UserWorkflow` plan execution accepts `agent_runtime` nodes and rejects legacy `tool.type = "skill"` nodes.
+* executable tools are identified by tool name only;
+* registry snapshot digests provide content-addressed evidence for the tool definition used;
+* Python class aliases are not capability identifiers and must not appear in authored payloads;
+* current `MoonMind.UserWorkflow` plan execution accepts `agent_runtime` nodes and rejects legacy `tool.type = "skill"` nodes.
 
 ---
 
@@ -240,7 +241,7 @@ security:
 
 ### 4.3 ToolInvocation schema
 
-A Plan node (step) references an executable Tool by name with inputs. The registry snapshot digest supplies content-addressed evidence for the definition used.
+A Plan node (step) references an executable Tool by name with inputs. Plan nodes do not carry semantic tool versions. The registry snapshot digest supplies content-addressed evidence for the definition used.
 Note: Step-level agent skill selectors are defined in `docs/Steps/SkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
 
 ```json

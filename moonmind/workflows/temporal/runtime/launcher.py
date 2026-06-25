@@ -103,9 +103,6 @@ def build_runtime_command_audit_events(
         "sourcePath": _compact_string(command_metadata.get("sourcePath")),
         "hintStatus": _compact_string(command_metadata.get("hintStatus")),
         "recognitionMode": _compact_string(command_metadata.get("recognitionMode")),
-        "runtimeCapabilityVersion": _compact_string(
-            command_metadata.get("runtimeCapabilityVersion")
-        ),
         "hintCatalogVersion": _compact_string(
             command_metadata.get("hintCatalogVersion")
         ),

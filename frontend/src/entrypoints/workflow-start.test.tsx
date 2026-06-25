@@ -97,7 +97,6 @@ const historicalRuntimeCommand = {
   hintStatus: "hinted",
   recognitionMode: "hinted_runtime_passthrough",
   targetRuntime: "codex_cli",
-  runtimeCapabilityVersion: "2026-05-12",
   hintCatalogVersion: "2026-05-12",
   detectionPhase: "submit",
 };
@@ -207,7 +206,6 @@ function withRuntimeCommandPreview(payload: BootPayload = mockPayload): BootPayl
             "codex_cloud",
           ],
           runtimeCommandPreview: {
-            capabilityVersion: "2026-05-13",
             hintCatalogVersion: "2026-05-13",
             runtimes: {
               codex_cli: {
@@ -4048,7 +4046,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(draft.taskInstructions).toBe("/review\nCheck the branch.");
     expect(draft.runtimeCommand).toMatchObject({
       command: "review",
-      runtimeCapabilityVersion: "2026-05-12",
       hintCatalogVersion: "2026-05-12",
     });
   });
@@ -4145,18 +4142,15 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.payload.task.resume).toBeUndefined();
   });
 
-  it("reports current preview version drift without mutating source-run command metadata", () => {
+  it("reports current hint catalog version drift without mutating source-run command metadata", () => {
     const warnings = buildRuntimeCommandVersionWarnings(historicalRuntimeCommand, {
-      capabilityVersion: "2026-05-13",
       hintCatalogVersion: "2026-05-13",
     });
 
     expect(warnings).toEqual([
-      "Runtime command capability version changed from 2026-05-12 to 2026-05-13.",
       "Runtime command hint catalog version changed from 2026-05-12 to 2026-05-13.",
     ]);
     expect(historicalRuntimeCommand).toMatchObject({
-      runtimeCapabilityVersion: "2026-05-12",
       hintCatalogVersion: "2026-05-12",
     });
   });

@@ -1499,7 +1499,6 @@ describe('Workflow Detail Entrypoint', () => {
             renderMode: 'prompt_prefix',
             detectionStatus: 'detected',
             hintStatus: 'hinted',
-            runtimeCapabilityVersion: '2026-05-13',
             hintCatalogVersion: '2026-05-13',
           },
         },
@@ -1526,7 +1525,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
     expect(screen.getByText('prompt prefix')).toBeTruthy();
     expect(screen.getByText('detected')).toBeTruthy();
-    expect(screen.getAllByText('2026-05-13').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('2026-05-13').length).toBeGreaterThanOrEqual(1);
   });
 
   it('displays legacy snake_case slash command metadata from historical execution snapshots', async () => {

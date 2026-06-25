@@ -13,8 +13,6 @@ def test_dashboard_boot_payload_exposes_runtime_command_preview_contract() -> No
     config = build_runtime_config("/workflows/new")
 
     preview = config["system"]["runtimeCommandPreview"]
-
-    assert preview["capabilityVersion"] == "2026-05-13"
     assert preview["hintCatalogVersion"] == "2026-05-13"
     assert preview["runtimes"]["codex_cli"]["slashCommandPassthrough"] is True
     assert preview["runtimes"]["claude_code"]["slashCommandPassthrough"] is True

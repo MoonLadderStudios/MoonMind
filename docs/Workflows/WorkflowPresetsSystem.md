@@ -185,7 +185,7 @@ The desired direction is compatible with Agent Skills-style manifests:
 - richer behavior is expressed through portable schema fields and clearly namespaced extensions
 - runtime-specific or product-specific UI hints are optional and do not change the core input contract
 
-MoonMind should normalize preset and skill manifests into a shared internal capability input model. MoonMind's internal canonical fields are `preset_slug` for presets, `skill_name` for Skills, and `input_schema` for preset inputs.
+MoonMind should normalize preset and skill manifests into a shared internal capability input model. MoonMind's internal canonical fields are `preset_slug` and optional scope for presets, `skill_name` for Skills, and `input_schema` for preset inputs. Preset selection payloads do not carry semantic preset versions; content digests provide definition evidence.
 
 The shared internal model should be able to represent:
 

@@ -186,7 +186,6 @@ export type TemporalArtifactEditUpdatePayload = {
 };
 
 export type RuntimeCommandVersionConfig = {
-  capabilityVersion?: unknown;
   hintCatalogVersion?: unknown;
 };
 
@@ -201,18 +200,6 @@ export function buildRuntimeCommandVersionWarnings(
   }
 
   const warnings: string[] = [];
-  const storedCapabilityVersion = stringValue(command.runtimeCapabilityVersion);
-  const currentCapabilityVersion = stringValue(config.capabilityVersion);
-  if (
-    storedCapabilityVersion &&
-    currentCapabilityVersion &&
-    storedCapabilityVersion !== currentCapabilityVersion
-  ) {
-    warnings.push(
-      `Runtime command capability version changed from ${storedCapabilityVersion} to ${currentCapabilityVersion}.`,
-    );
-  }
-
   const storedHintCatalogVersion = stringValue(command.hintCatalogVersion);
   const currentHintCatalogVersion = stringValue(config.hintCatalogVersion);
   if (

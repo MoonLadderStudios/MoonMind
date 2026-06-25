@@ -327,6 +327,7 @@ Local-only Skills are excluded from version control by default and may participa
 A workflow execution or step may explicitly include or exclude Skills or SkillSets.
 
 Explicit selectors express execution intent and participate in resolution before runtime launch.
+Selectors identify Skills by canonical skill name only. They do not carry semantic skill versions; resolved content refs and digests provide the evidence for the exact instruction content used.
 
 ---
 
