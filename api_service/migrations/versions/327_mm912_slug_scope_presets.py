@@ -68,6 +68,24 @@ def upgrade() -> None:
         """
     )
     op.alter_column("preset_recents", "template_id", nullable=False)
+    op.execute(
+        """
+        delete from preset_recents r
+         using (
+            select id
+              from (
+                select id,
+                       row_number() over (
+                         partition by user_id, template_id
+                         order by applied_at desc, id desc
+                       ) as row_number
+                  from preset_recents
+              ) ranked
+             where ranked.row_number > 1
+         ) duplicates
+         where r.id = duplicates.id
+        """
+    )
     op.drop_constraint("uq_preset_recent_user_version", "preset_recents", type_="unique")
     op.create_unique_constraint(
         "uq_preset_recent_user_template",
