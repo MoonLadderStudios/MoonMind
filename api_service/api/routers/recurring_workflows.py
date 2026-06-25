@@ -30,6 +30,18 @@ from api_service.services.recurring_workflows_service import (
 router = APIRouter(prefix="/api/recurring-workflows", tags=["recurring-workflows"])
 logger = logging.getLogger(__name__)
 
+class RecurringWorkflowActionPermissionsModel(BaseModel):
+    """Action availability for a recurring schedule visible to the caller."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    can_edit: bool = Field(..., alias="canEdit")
+    can_run_now: bool = Field(..., alias="canRunNow")
+    can_delete: bool = Field(False, alias="canDelete")
+    disabled_reasons: dict[str, str] = Field(
+        default_factory=dict, alias="disabledReasons"
+    )
+
 class RecurringWorkflowDefinitionModel(BaseModel):
     """Serialized recurring schedule definition."""
 
@@ -52,6 +64,10 @@ class RecurringWorkflowDefinitionModel(BaseModel):
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     target: dict[str, Any] = Field(default_factory=dict, alias="target")
     policy: dict[str, Any] = Field(default_factory=dict, alias="policy")
+    permissions: RecurringWorkflowActionPermissionsModel = Field(
+        ..., alias="permissions"
+    )
+    actions: RecurringWorkflowActionPermissionsModel = Field(..., alias="actions")
     version: int = Field(..., alias="version")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
@@ -131,7 +147,16 @@ async def _get_service(
 def _serialize_definition(
     definition: RecurringWorkflowDefinition,
     runtime_summary: RecurringScheduleRuntimeSummary | None = None,
+    action_permissions: RecurringWorkflowActionPermissionsModel | None = None,
 ) -> RecurringWorkflowDefinitionModel:
+    permissions = action_permissions or RecurringWorkflowActionPermissionsModel(
+        can_edit=True,
+        can_run_now=True,
+        can_delete=False,
+        disabled_reasons={
+            "canDelete": "Schedule deletion is not available yet.",
+        },
+    )
     return RecurringWorkflowDefinitionModel(
         id=definition.id,
         name=definition.name,
@@ -166,9 +191,42 @@ def _serialize_definition(
         scope_ref=definition.scope_ref,
         target=dict(definition.target or {}),
         policy=dict(definition.policy or {}),
+        permissions=permissions,
+        actions=permissions,
         version=int(definition.version or 1),
         created_at=definition.created_at,
         updated_at=definition.updated_at,
+    )
+
+def _action_permissions_for_definition(
+    definition: RecurringWorkflowDefinition,
+    *,
+    user: User,
+) -> RecurringWorkflowActionPermissionsModel:
+    user_id = getattr(user, "id", None)
+    is_operator = bool(getattr(user, "is_superuser", False))
+    if definition.scope_type is RecurringWorkflowScopeType.GLOBAL:
+        can_manage = is_operator
+        manage_reason = "Operator privileges are required to manage global schedules."
+    elif definition.scope_type is RecurringWorkflowScopeType.PERSONAL:
+        can_manage = isinstance(user_id, UUID) and definition.owner_user_id == user_id
+        manage_reason = "Only the schedule owner can manage this schedule."
+    else:
+        can_manage = is_operator
+        manage_reason = "Operator privileges are required to manage this schedule."
+
+    disabled_reasons: dict[str, str] = {
+        "canDelete": "Schedule deletion is not available yet.",
+    }
+    if not can_manage:
+        disabled_reasons["canEdit"] = manage_reason
+        disabled_reasons["canRunNow"] = manage_reason
+
+    return RecurringWorkflowActionPermissionsModel(
+        can_edit=can_manage,
+        can_run_now=can_manage,
+        can_delete=False,
+        disabled_reasons=disabled_reasons,
     )
 
 def _serialize_run(
@@ -296,6 +354,10 @@ async def list_recurring_workflows(
             _serialize_definition(
                 item,
                 runtime_summary=runtime_summaries.get(item.id),
+                action_permissions=_action_permissions_for_definition(
+                    item,
+                    user=user,
+                ),
             )
             for item in definitions
         ]
@@ -361,7 +423,10 @@ async def create_recurring_workflow(
         definition_id=definition.id,
         scope=definition.scope_type.value,
     )
-    return _serialize_definition(definition)
+    return _serialize_definition(
+        definition,
+        action_permissions=_action_permissions_for_definition(definition, user=user),
+    )
 
 @router.get("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
 async def get_recurring_workflow(
@@ -385,7 +450,11 @@ async def get_recurring_workflow(
             exc=exc,
         )
         raise _map_error(exc) from exc
-    return _serialize_definition(definition, runtime_summary=runtime_summary)
+    return _serialize_definition(
+        definition,
+        runtime_summary=runtime_summary,
+        action_permissions=_action_permissions_for_definition(definition, user=user),
+    )
 
 @router.patch("/{definition_id}", response_model=RecurringWorkflowDefinitionModel)
 async def update_recurring_workflow(
@@ -433,7 +502,10 @@ async def update_recurring_workflow(
         definition_id=updated.id,
         scope=updated.scope_type.value,
     )
-    return _serialize_definition(updated)
+    return _serialize_definition(
+        updated,
+        action_permissions=_action_permissions_for_definition(updated, user=user),
+    )
 
 @router.post(
     "/{definition_id}/run",

@@ -7077,6 +7077,25 @@ export interface components {
             evidence?: components["schemas"]["EvidenceRefStatusModel"][];
         };
         /**
+         * RecurringWorkflowActionPermissionsModel
+         * @description Action availability for a recurring schedule visible to the caller.
+         */
+        RecurringWorkflowActionPermissionsModel: {
+            /** Canedit */
+            canEdit: boolean;
+            /** Canrunnow */
+            canRunNow: boolean;
+            /**
+             * Candelete
+             * @default false
+             */
+            canDelete: boolean;
+            /** Disabledreasons */
+            disabledReasons?: {
+                [key: string]: string;
+            };
+        };
+        /**
          * RecurringWorkflowDefinitionListResponse
          * @description List response for recurring definitions.
          */
@@ -7130,6 +7149,8 @@ export interface components {
             policy?: {
                 [key: string]: unknown;
             };
+            permissions: components["schemas"]["RecurringWorkflowActionPermissionsModel"];
+            actions: components["schemas"]["RecurringWorkflowActionPermissionsModel"];
             /** Version */
             version: number;
             /**
