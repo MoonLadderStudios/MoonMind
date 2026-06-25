@@ -547,7 +547,6 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
                         "instructions": "Fetch MM-559.",
                         "tool": {
                             "id": "jira.get_issue",
-                            "version": "1.0.0",
                             "inputs": {"issueKey": "MM-559"},
                         },
                         "source": {
@@ -567,7 +566,6 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     assert plan["nodes"][0]["tool"] == {
         "type": "skill",
         "name": "jira.get_issue",
-        "version": "1.0.0",
     }
     assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     assert plan["nodes"][0]["inputs"]["type"] == "tool"
@@ -598,7 +596,6 @@ def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runti
                         "instructions": "Implement MM-573.",
                         "skill": {
                             "id": "moonspec-implement",
-                            "version": "1.0.0",
                             "inputs": {"issueKey": "MM-573"},
                         },
                         "source": {
@@ -616,7 +613,6 @@ def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runti
     assert plan["nodes"][0]["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == "moonspec-implement"
     assert plan["nodes"][0]["inputs"]["type"] == "skill"
@@ -646,7 +642,6 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
                         "instructions": "Fetch MM-573.",
                         "tool": {
                             "id": "jira.get_issue",
-                            "version": "1.0.0",
                             "inputs": {"issueKey": "MM-573"},
                         },
                         "source": {
@@ -660,7 +655,6 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
                         "instructions": "Implement MM-573.",
                         "skill": {
                             "id": "moonspec-implement",
-                            "version": "1.0.0",
                             "inputs": {"issueKey": "MM-573"},
                         },
                         "source": {
@@ -683,12 +677,10 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
     assert plan["nodes"][0]["tool"] == {
         "type": "skill",
         "name": "jira.get_issue",
-        "version": "1.0.0",
     }
     assert plan["nodes"][1]["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert plan["nodes"][0]["inputs"]["source"]["presetSlug"] == "jira-orchestrate"
     assert plan["nodes"][1]["inputs"]["source"]["presetSlug"] == "jira-orchestrate"
@@ -718,7 +710,6 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
                         "tool": {
                             "type": "skill",
                             "name": "deployment.update_compose_stack",
-                            "version": "1.0.0",
                         },
                         "inputs": {
                             "stack": "moonmind",
@@ -743,7 +734,6 @@ def test_runtime_planner_preserves_authored_task_plan_tool_nodes():
             "tool": {
                 "type": "skill",
                 "name": "deployment.update_compose_stack",
-                "version": "1.0.0",
             },
             "inputs": {
                 "stack": "moonmind",
@@ -779,7 +769,6 @@ def test_runtime_planner_maps_legacy_task_plan_skill_without_type_to_agent_runti
                         "id": "implement-story",
                         "skill": {
                             "name": "moonspec-implement",
-                            "version": "1.0.0",
                         },
                         "inputs": {"story": "MM-573"},
                     }
@@ -795,7 +784,6 @@ def test_runtime_planner_maps_legacy_task_plan_skill_without_type_to_agent_runti
             "tool": {
                 "type": "agent_runtime",
                 "name": "codex_cli",
-                "version": "1.0.0",
             },
             "inputs": {
                 "instructions": "Execute skill 'moonspec-implement'",
@@ -827,7 +815,6 @@ def test_runtime_planner_preserves_authored_task_plan_node_metadata():
                         "tool": {
                             "type": "skill",
                             "name": "deployment.update_compose_stack",
-                            "version": "1.0.0",
                         },
                         "inputs": {
                             "stack": "moonmind",
@@ -871,7 +858,6 @@ def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
                         "tool": {
                             "type": "skill",
                             "name": "deployment.update_compose_stack",
-                            "version": "1.0.0",
                             "inputs": {
                                 "stack": "moonmind",
                                 "image": {
@@ -892,7 +878,6 @@ def test_runtime_planner_maps_deployment_update_step_to_typed_tool_node():
     assert plan["nodes"][0]["tool"] == {
         "type": "skill",
         "name": "deployment.update_compose_stack",
-        "version": "1.0.0",
     }
     assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     assert plan["nodes"][0]["inputs"]["image"]["reference"] == "latest"
@@ -917,7 +902,6 @@ def test_runtime_planner_rejects_duplicate_authored_task_plan_node_ids():
                             "tool": {
                                 "type": "skill",
                                 "name": "deployment.update_compose_stack",
-                                "version": "1.0.0",
                             },
                             "inputs": {"stack": "moonmind"},
                         },
@@ -925,7 +909,6 @@ def test_runtime_planner_rejects_duplicate_authored_task_plan_node_ids():
                             "tool": {
                                 "type": "skill",
                                 "name": "deployment.update_compose_stack",
-                                "version": "1.0.0",
                             },
                             "inputs": {"stack": "moonmind"},
                         },
@@ -1131,7 +1114,6 @@ def test_runtime_planner_materializes_tool_steps_without_source_lookup(
         "instructions": "Fetch MM-579.",
         "tool": {
             "id": "jira.get_issue",
-            "version": "1.0.0",
             "inputs": {"issueKey": "MM-579"},
         },
     }
@@ -1153,7 +1135,6 @@ def test_runtime_planner_materializes_tool_steps_without_source_lookup(
     assert plan["nodes"][0]["tool"] == {
         "type": "skill",
         "name": "jira.get_issue",
-        "version": "1.0.0",
     }
     assert "selectedSkill" not in plan["nodes"][0]["inputs"]
     if source is None:
@@ -1193,7 +1174,6 @@ def test_runtime_planner_maps_explicit_skill_step_to_agent_runtime_node():
     assert plan["nodes"][0]["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert plan["nodes"][0]["inputs"]["selectedSkill"] == "moonspec-implement"
     assert plan["nodes"][0]["inputs"]["type"] == "skill"
@@ -1211,7 +1191,6 @@ def test_runtime_planner_embeds_skill_inputs_for_generated_skill_instructions():
                 "tool": {
                     "type": "skill",
                     "name": "pr-resolver",
-                    "version": "1.0",
                     "inputs": {"pr": "123", "repo": "MoonLadderStudios/MoonMind"},
                 },
                 "runtime": {"mode": "gemini_cli"},
@@ -1286,7 +1265,6 @@ def test_runtime_planner_routes_jira_issue_creator_as_agent_skill_step():
     assert jira["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert jira["inputs"]["selectedSkill"] == "jira-issue-creator"
     assert jira["inputs"]["publishMode"] == "none"
@@ -1361,7 +1339,6 @@ def test_runtime_planner_shares_story_breakdown_path_for_jira_breakdown_preset()
     assert jira["tool"] == {
         "type": "skill",
         "name": "story.create_jira_issues",
-        "version": "1.0",
     }
     assert "selectedSkill" not in jira["inputs"]
     assert jira["inputs"]["publishMode"] == "none"
@@ -1517,7 +1494,6 @@ def test_runtime_planner_preserves_authored_branch_for_jira_story_import():
     assert node["tool"] == {
         "type": "skill",
         "name": "story.create_jira_issues",
-        "version": "1.0",
     }
     assert "selectedSkill" not in node["inputs"]
     assert node["inputs"]["publishMode"] == "none"
@@ -1599,7 +1575,6 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     assert reconcile["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert reconcile["inputs"]["selectedSkill"] == "story-reconcile-implementation"
     assert (
@@ -1613,7 +1588,6 @@ def test_runtime_planner_routes_jira_orchestrate_task_creator_as_skill_step():
     assert orchestrate["tool"] == {
         "type": "skill",
         "name": "story.create_jira_orchestrate_tasks",
-        "version": "1.0",
     }
     assert "selectedSkill" not in orchestrate["inputs"]
     assert orchestrate["inputs"]["publishMode"] == "none"
@@ -1694,7 +1668,6 @@ def test_runtime_planner_routes_jira_implement_task_creator_as_skill_step():
     assert implement["tool"] == {
         "type": "skill",
         "name": "story.create_jira_implement_tasks",
-        "version": "1.0",
     }
     assert "selectedSkill" not in implement["inputs"]
     assert implement["inputs"]["publishMode"] == "none"
@@ -1753,7 +1726,6 @@ def test_runtime_planner_routes_document_update_task_creator_as_tool_step():
     assert create_tasks["tool"] == {
         "type": "skill",
         "name": "story.create_document_update_tasks",
-        "version": "1.0",
     }
     assert "selectedSkill" not in create_tasks["inputs"]
     assert create_tasks["inputs"]["publishMode"] == "none"
@@ -1795,7 +1767,6 @@ def test_runtime_planner_routes_single_document_update_task_creator_as_tool_step
     assert node["tool"] == {
         "type": "skill",
         "name": "story.create_document_update_tasks",
-        "version": "1.0",
     }
     assert "selectedSkill" not in node["inputs"]
     assert node["inputs"]["publishMode"] == "none"
@@ -1990,9 +1961,8 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
                         "tool": {
                             "type": "skill",
                             "name": "jira-orchestrate",
-                            "version": "1.0",
                         },
-                        "skill": {"name": "jira-orchestrate", "version": "1.0"},
+                        "skill": {"name": "jira-orchestrate"},
                         "inputs": {
                             "jira_issue_key": "MM-820",
                             "source_design_path": (
@@ -2034,7 +2004,6 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
     assert first_node["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert first_node["inputs"]["selectedSkill"] == "jira-issue-updater"
 
@@ -2353,7 +2322,6 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_creator():
     assert node["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert node["inputs"]["selectedSkill"] == "jira-issue-creator"
     assert node["inputs"]["publishMode"] == "none"
@@ -2385,7 +2353,6 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_issue_updater():
     assert node["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert node["inputs"]["selectedSkill"] == "jira-issue-updater"
     assert node["inputs"]["publishMode"] == "none"
@@ -2417,7 +2384,6 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_verify():
     assert node["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert node["inputs"]["selectedSkill"] == "jira-verify"
     assert node["inputs"]["publishMode"] == "none"
@@ -2449,7 +2415,6 @@ def test_runtime_planner_does_not_require_pr_branch_for_jira_pr_verify():
     assert node["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
-        "version": "1.0",
     }
     assert node["inputs"]["selectedSkill"] == "jira-pr-verify"
     assert node["inputs"]["publishMode"] == "none"
@@ -2565,7 +2530,6 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
                 "tool": {
                     "type": "skill",
                     "name": "pr-resolver",
-                    "version": "1.0",
                 },
                 "git": {"startingBranch": "fix/my-feature-branch"},
                 "runtime": {"mode": "gemini_cli"},
@@ -2595,7 +2559,6 @@ def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
                 "tool": {
                     "type": "skill",
                     "name": "PR-Resolver",
-                    "version": "1.0",
                     "inputs": {"branch": "fix/from-tool-inputs"},
                 },
                 "runtime": {"mode": "gemini_cli"},
@@ -2629,7 +2592,6 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
-                        "version": "1.0",
                     },
                     "runtime": {"mode": "gemini_cli"},
                 }

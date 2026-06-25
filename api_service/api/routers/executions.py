@@ -6009,11 +6009,13 @@ def _normalize_task_tool(task_payload: dict[str, Any]) -> dict[str, Any] | None:
     name = str(selected_payload.get("name") or selected_payload.get("id") or "").strip()
     if not name:
         return None
-    version = str(selected_payload.get("version") or "").strip() or "1.0"
+    if "version" in selected_payload:
+        raise _invalid_workflow_request(
+            "payload.workflow.tool.version is not supported; executable tools are identified by name only."
+        )
     normalized: dict[str, Any] = {
         "type": "skill",
         "name": name,
-        "version": version,
     }
 
     inline_inputs = selected_payload.get("inputs")
@@ -7210,7 +7212,6 @@ async def _create_execution_from_workflow_request(
         # Keep legacy shape for compatibility while tool is canonical.
         normalized_task_for_planner["skill"] = {
             "name": normalized_tool["name"],
-            "version": normalized_tool["version"],
         }
         if isinstance(normalized_tool.get("inputs"), dict):
             normalized_task_for_planner["inputs"] = dict(normalized_tool["inputs"])

@@ -62,7 +62,7 @@ async def test_step_execution_manifest_refs_are_append_only_for_reexecution(
         ordered_nodes=[
             {
                 "id": "implement",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Implement"},
             }
         ],

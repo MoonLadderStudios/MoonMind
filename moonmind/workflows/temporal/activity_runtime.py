@@ -1514,9 +1514,9 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     text = payload.decode("utf-8", errors="replace")
     return text[-max_chars:]
 
-def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
+def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if is_dood_tool(name):
-        return build_dood_tool_definition_payload(name=name, version=version)
+        return build_dood_tool_definition_payload(name=name)
 
     if name == DEPLOYMENT_UPDATE_TOOL_NAME:
         return build_deployment_update_tool_definition_payload()
@@ -1524,7 +1524,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == "security.pentest.run":
         return {
             "name": name,
-            "version": version,
             "type": "skill",
             "description": (
                 "Run an authorized PentestGPT workload against an approved "
@@ -1746,7 +1745,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
         return {
             "name": name,
-            "version": version,
             "description": (
                 "Check whether a Jira issue is blocked by unresolved inbound "
                 "Blocks links using trusted Jira data."
@@ -1794,7 +1792,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == JIRA_LOAD_PRESET_BRIEF_TOOL_NAME:
         return {
             "name": name,
-            "version": version,
             "description": (
                 "Load a compact Jira preset brief through MoonMind's trusted "
                 "Jira service."
@@ -1850,7 +1847,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == "story.create_jira_issues":
         return {
             "name": name,
-            "version": version,
             "description": "Create Jira issues from Moon Spec story breakdown output.",
             "inputs": {
                 "schema": {
@@ -1910,7 +1906,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
 
     return {
         "name": name,
-        "version": version,
         "description": description,
         "inputs": {
             "schema": {
@@ -1944,9 +1939,9 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
 
 def _iter_requested_registry_tools(
     parameters: Mapping[str, Any] | None,
-) -> tuple[tuple[str, str], ...]:
-    selected: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+) -> tuple[str, ...]:
+    selected: list[str] = []
+    seen: set[str] = set()
 
     if not isinstance(parameters, Mapping):
         return tuple(selected)
@@ -1978,17 +1973,19 @@ def _iter_requested_registry_tools(
             continue
         if tool_name.lower() in JIRA_AGENT_SKILLS:
             continue
-        tool_version = str(selected_payload.get("version") or "").strip() or "1.0"
-        key = (tool_name, tool_version)
-        if key in seen:
+        if "version" in selected_payload:
+            raise ValueError(
+                "tool.version is not supported; executable tools are identified by name only"
+            )
+        if tool_name in seen:
             continue
-        seen.add(key)
-        selected.append(key)
+        seen.add(tool_name)
+        selected.append(tool_name)
 
     # 'auto' is a placeholder meaning "no explicit skill selected". It should
     # not be included in the registry as a dispatchable skill — when only 'auto'
     # is present, the runtime should be used directly without skill dispatch.
-    if selected and all(name == _AUTO_SKILL_SENTINEL for name, _ in selected):
+    if selected and all(name == _AUTO_SKILL_SENTINEL for name in selected):
         selected = []
 
     return tuple(selected)
@@ -1998,20 +1995,19 @@ def _default_skill_registry_payload(
     parameters: Mapping[str, Any] | None = None,
     inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    requested: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    requested: list[str] = []
+    seen: set[str] = set()
     for payload in (parameters, inputs):
-        for name, version in _iter_requested_registry_tools(payload):
-            key = (name, version)
-            if key in seen:
+        for name in _iter_requested_registry_tools(payload):
+            if name in seen:
                 continue
-            seen.add(key)
-            requested.append(key)
+            seen.add(name)
+            requested.append(name)
 
     return {
         "skills": [
-            _default_registry_skill_payload(name=name, version=version)
-            for name, version in requested
+            _default_registry_skill_payload(name=name)
+            for name in requested
         ]
     }
 

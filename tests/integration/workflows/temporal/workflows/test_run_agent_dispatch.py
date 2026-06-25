@@ -317,7 +317,7 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                 "nodes": [
                     {
                         "id": "bad-step",
-                        "tool": {"type": "unknown_type", "name": "x", "version": "1.0"},
+                        "tool": {"type": "unknown_type", "name": "x"},
                         "inputs": {},
                     }
                 ],
@@ -380,7 +380,6 @@ class TestAgentRuntimeDispatch(unittest.IsolatedAsyncioTestCase):
                         "tool": {
                             "type": "skill",
                             "name": "repo.run_tests",
-                            "version": "1.0.0",
                         },
                         "inputs": {},
                     }
@@ -531,7 +530,6 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                         "tool": {
                             "type": "agent_runtime",
                             "name": "codex_cli",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "repo_ref": "git:moonmind",
@@ -626,7 +624,6 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                         "tool": {
                             "type": "agent_runtime",
                             "name": "codex_cli",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "repo_ref": "git:moonmind",
@@ -735,7 +732,6 @@ class TestSnapshotPinningOnRetry(unittest.IsolatedAsyncioTestCase):
                         "tool": {
                             "type": "agent_runtime",
                             "name": "codex_cli",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "repo_ref": "git:moonmind",

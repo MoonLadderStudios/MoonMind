@@ -15,7 +15,6 @@ from moonmind.workflows.skills.deployment_execution import (
 )
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
     build_deployment_update_tool_definition_payload,
 )
 from moonmind.workflows.skills.tool_dispatcher import (
@@ -112,7 +111,6 @@ def _payload() -> dict[str, object]:
         "tool": {
             "type": "skill",
             "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-            "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
         },
         "inputs": {
             "stack": "moonmind",

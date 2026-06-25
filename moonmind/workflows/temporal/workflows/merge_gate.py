@@ -341,7 +341,7 @@ def build_resolver_run_request(
                 f"Resolve and merge pull request {pr.url}. "
                 "Use pr-resolver and do not create another pull request."
             ),
-            "tool": {"type": "skill", "name": "pr-resolver", "version": "1.0"},
+            "tool": {"type": "skill", "name": "pr-resolver"},
             "skill": {"id": "pr-resolver", "args": args},
             "runtime": runtime_payload,
             "publish": {"mode": "none"},

@@ -188,7 +188,6 @@ Tools are declared in a registry (YAML or JSON). Example:
 
 ```yaml
 name: "repo.apply_patch"
-version: "2.1.0"
 type: "skill"
 description: "Apply a patch artifact to a repo ref and optionally format."
 inputs:
@@ -231,7 +230,7 @@ security:
 
 #### Required fields
 
-* `name`, `version`
+* `name`
 * `inputs.schema`, `outputs.schema` (JSON Schema)
 * `executor.activity_type`
 * `policies.timeouts`, `policies.retries`
@@ -241,13 +240,13 @@ security:
 
 ### 4.3 ToolInvocation schema
 
-A Plan node (step) references an executable Tool with pinned version and inputs.
+A Plan node (step) references an executable Tool by name with inputs.
 Note: Step-level agent skill selectors are defined in `docs/Steps/SkillSystem.md`. This document only defines the executable tool invocation shape. A plan node may carry both executable tool intent and agent skill selection intent.
 
 ```json
 {
  "id": "n1",
- "tool": { "type": "skill", "name": "repo.apply_patch", "version": "2.1.0" },
+ "tool": { "type": "skill", "name": "repo.apply_patch" },
  "inputs": {
  "repo_ref": "git:org/repo#branch",
  "patch_artifact": "art:sha256:…",
@@ -260,12 +259,14 @@ Note: Step-level agent skill selectors are defined in `docs/Steps/SkillSystem.md
 }
 ```
 
-Legacy compatibility form (accepted only during migration):
+Legacy `tool.version` and `skill.version` fields are invalid. Executable tools are identified by `tool.name` only.
+
+Legacy `skill` spelling remains an alias for the node object name, without version:
 
 ```json
 {
  "id": "n1",
- "skill": { "name": "repo.apply_patch", "version": "2.1.0" },
+ "skill": { "name": "repo.apply_patch" },
  "inputs": {
  "repo_ref": "git:org/repo#branch",
  "patch_artifact": "art:sha256:…"
@@ -310,7 +311,7 @@ Representative `agent_runtime` step using an agent skill:
 ```json
 {
  "id": "n1",
- "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
+ "tool": { "type": "agent_runtime", "name": "codex_cli" },
  "inputs": {
  "instructions": "Use the selected runtime skill to create Jira stories.",
  "runtimeSelection": {
@@ -330,7 +331,7 @@ Representative `agent_runtime` step using a runtime-native command:
 ```json
 {
  "id": "n2",
- "tool": { "type": "agent_runtime", "name": "codex_cli", "version": "1.0" },
+ "tool": { "type": "agent_runtime", "name": "codex_cli" },
  "inputs": {
  "instructions": "Review the current changes and publish the review as artifacts.",
  "runtimeSelection": {
@@ -471,8 +472,7 @@ When a workflow execution requests Jira issue creation from ambiguous user inten
 {
  "tool": {
  "type": "agent_runtime",
- "name": "codex_cli",
- "version": "1.0"
+ "name": "codex_cli"
  },
  "inputs": {
  "runtimeSelection": {
@@ -497,8 +497,7 @@ the planner may use the narrower deterministic batch tool:
 {
  "tool": {
  "type": "skill",
- "name": "story.create_jira_issues",
- "version": "1.0"
+ "name": "story.create_jira_issues"
  },
  "inputs": {
  "storyOutput": {
@@ -593,7 +592,7 @@ participate in execution.
  {
  "id": "n1",
  "title": "Run test suite",
- "tool": { "type": "skill", "name": "repo.run_tests", "version": "1.2.0" },
+ "tool": { "type": "skill", "name": "repo.run_tests" },
  "inputs": { "repo_ref": "git:org/repo#branch" },
  "source": {
  "binding_id": "preset-binding-123",
@@ -605,7 +604,7 @@ participate in execution.
  {
  "id": "n2",
  "title": "Generate follow-up plan",
- "tool": { "type": "skill", "name": "plan.generate", "version": "1.0.0" },
+ "tool": { "type": "skill", "name": "plan.generate" },
  "inputs": { "context_artifact": "art:sha256:…" }
  }
  ],
@@ -736,7 +735,7 @@ Planning is expressed as one or more tools (e.g., `plan.generate`) executed as A
 
 **Invocation payload**
 
-* `tool.name`, `tool.version`
+* `tool.name`
 * `inputs` (with references resolved to concrete values or artifact refs)
 * an execution context (execution identifiers, correlation IDs)
 * optional overrides (timeouts/retries within allowed bounds)
@@ -790,7 +789,7 @@ This progress object is the lightweight execution-detail summary only. The canon
 
 ### 11.1 Executable tool registry validation
 
-* unique `(name, version)`
+* unique `name`
 * valid JSON Schemas
 * valid policy bounds (timeouts, retries)
 * executor binding defined

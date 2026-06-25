@@ -144,7 +144,6 @@ def test_contract_registry_helpers_roundtrip_snapshot():
             "skills": [
                 {
                     "name": "repo.run_tests",
-                    "version": "1.0.0",
                     "description": "Run tests",
                     "inputs": {
                         "schema": {
@@ -185,6 +184,6 @@ def test_contract_registry_helpers_roundtrip_snapshot():
     )
 
     assert loaded.digest == snapshot.digest
-    assert loaded.get_skill(
-        name="repo.run_tests", version="1.0.0"
-    ).executor.activity_type == ("mm.skill.execute")
+    assert loaded.get_skill(name="repo.run_tests").executor.activity_type == (
+        "mm.skill.execute"
+    )

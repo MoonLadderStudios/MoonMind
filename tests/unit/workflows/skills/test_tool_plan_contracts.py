@@ -13,7 +13,6 @@ def test_step_skills_accepts_valid_properties() -> None:
         "tool": {
             "name": "foo",
             "type": "skill",
-            "version": "1.0.0"
         },
         "inputs": {},
         "skills": {

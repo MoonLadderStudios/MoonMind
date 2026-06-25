@@ -175,7 +175,7 @@ def _snapshot(*tool_names: str) -> SkillRegistrySnapshot:
     return create_registry_snapshot(
         skills=tuple(
             parse_tool_definition(
-                build_dood_tool_definition_payload(name=tool_name, version="1.0")
+                build_dood_tool_definition_payload(name=tool_name)
             )
             for tool_name in tool_names
         ),
@@ -202,7 +202,6 @@ async def test_profile_backed_run_workload_routes_through_runner_profile() -> No
             "tool": {
                 "type": "skill",
                 "name": CONTAINER_RUN_WORKLOAD_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "profileId": "local-python",
@@ -262,7 +261,6 @@ async def test_profile_backed_run_workload_preserves_durable_refs_and_publicatio
             "tool": {
                 "type": "skill",
                 "name": CONTAINER_RUN_WORKLOAD_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "profileId": "local-python",
@@ -313,7 +311,6 @@ async def test_profile_backed_run_workload_keeps_session_metadata_as_association
             "tool": {
                 "type": "skill",
                 "name": CONTAINER_RUN_WORKLOAD_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "profileId": "local-python",
@@ -377,7 +374,6 @@ async def test_profile_backed_run_workload_rejects_raw_container_fields(
                 "tool": {
                     "type": "skill",
                     "name": CONTAINER_RUN_WORKLOAD_TOOL,
-                    "version": "1.0",
                 },
                 "inputs": {
                     "profileId": "local-python",
@@ -416,7 +412,6 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
             "tool": {
                 "type": "skill",
                 "name": CONTAINER_START_HELPER_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "profileId": "redis-helper",
@@ -444,7 +439,6 @@ async def test_profile_backed_helper_lifecycle_stays_bounded() -> None:
             "tool": {
                 "type": "skill",
                 "name": CONTAINER_STOP_HELPER_TOOL,
-                "version": "1.0",
             },
             "inputs": {
                 "profileId": "redis-helper",
@@ -498,7 +492,6 @@ async def test_unrestricted_run_docker_preserves_artifact_classes_and_publicatio
             "tool": {
                 "type": "skill",
                 "name": "container.run_docker",
-                "version": "1.0",
             },
             "inputs": {
                 "repoDir": "/work/agent_jobs/wf-1/repo",
@@ -544,7 +537,6 @@ async def test_unrestricted_run_docker_preserves_shared_workload_metadata() -> N
             "tool": {
                 "type": "skill",
                 "name": "container.run_docker",
-                "version": "1.0",
             },
             "inputs": {
                 "repoDir": "/work/agent_jobs/wf-1/repo",
@@ -585,7 +577,6 @@ async def test_disabled_mode_denies_profile_backed_workload_tools() -> None:
                 "tool": {
                     "type": "skill",
                     "name": CONTAINER_RUN_WORKLOAD_TOOL,
-                    "version": "1.0",
                 },
                 "inputs": {
                     "profileId": "local-python",

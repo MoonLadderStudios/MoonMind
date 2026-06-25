@@ -392,7 +392,6 @@ class PlanInterpreter:
                 invocation = SkillInvocation(
                     id=node.id,
                     skill_name=node.skill_name,
-                    skill_version=node.skill_version,
                     inputs=resolved_inputs,
                     options=node.options,
                 )

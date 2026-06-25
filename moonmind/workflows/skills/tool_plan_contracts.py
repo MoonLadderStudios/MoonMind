@@ -324,7 +324,6 @@ class ToolDefinition:
     """Validated skill contract stored in the registry snapshot."""
 
     name: str
-    version: str
     description: str
     input_schema: Mapping[str, Any]
     output_schema: Mapping[str, Any]
@@ -336,7 +335,6 @@ class ToolDefinition:
 
     def __post_init__(self) -> None:
         _ensure_non_empty(self.name, field_name="name")
-        _ensure_non_empty(self.version, field_name="version")
         if not isinstance(self.input_schema, Mapping):
             raise ContractValidationError(
                 "invalid_contract", "inputs.schema must be an object"
@@ -352,8 +350,8 @@ class ToolDefinition:
             )
 
     @property
-    def key(self) -> tuple[str, str]:
-        return self.name, self.version
+    def key(self) -> str:
+        return self.name
 
     def to_payload(self) -> dict[str, Any]:
         security: dict[str, Any] = {"allowed_roles": list(self.allowed_roles)}
@@ -361,7 +359,6 @@ class ToolDefinition:
             security["opsRuntime"] = dict(self.ops_runtime)
         return {
             "name": self.name,
-            "version": self.version,
             "description": self.description,
             "inputs": {"schema": dict(self.input_schema)},
             "outputs": {"schema": dict(self.output_schema)},
@@ -466,7 +463,6 @@ class Step:
 
     id: str
     skill_name: str
-    skill_version: str
     inputs: Mapping[str, Any]
     options: Mapping[str, Any] = field(default_factory=dict)
     tool_type: str = "skill"
@@ -476,8 +472,6 @@ class Step:
     def __post_init__(self) -> None:
         _ensure_non_empty(self.id, field_name="node.id")
         _ensure_non_empty(self.skill_name, field_name="node.tool.name")
-        if self.tool_type == "skill":
-            _ensure_non_empty(self.skill_version, field_name="node.tool.version")
         if not isinstance(self.inputs, Mapping):
             raise ContractValidationError(
                 "invalid_plan", "node.inputs must be an object"
@@ -488,19 +482,15 @@ class Step:
             )
 
     @property
-    def skill_key(self) -> tuple[str, str]:
-        return self.skill_name, self.skill_version
+    def skill_key(self) -> str:
+        return self.skill_name
 
     @property
     def tool_name(self) -> str:
         return self.skill_name
 
     @property
-    def tool_version(self) -> str:
-        return self.skill_version
-
-    @property
-    def tool_key(self) -> tuple[str, str]:
+    def tool_key(self) -> str:
         return self.skill_key
 
     def to_payload(self) -> dict[str, Any]:
@@ -512,10 +502,8 @@ class Step:
             },
             "inputs": dict(self.inputs),
         }
-        if self.skill_version:
-            payload["tool"]["version"] = self.skill_version
         if self.tool_type == "skill":
-            payload["skill"] = {"name": self.skill_name, "version": self.skill_version}
+            payload["skill"] = {"name": self.skill_name}
         if self.options:
             payload["options"] = dict(self.options)
         if self.skills is not None:
@@ -1045,7 +1033,6 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
     return Step(
         id=str(payload.get("id") or "").strip(),
         skill_name=str(node_payload.get("name") or node_payload.get("id") or "").strip(),
-        skill_version=str(node_payload.get("version") or "").strip(),
         inputs=inputs,
         options=(
             payload.get("options")
@@ -1173,6 +1160,11 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
             "invalid_registry",
             "Tool definition type must be 'skill' for the current runtime contract",
         )
+    if "version" in payload:
+        raise ContractValidationError(
+            "invalid_registry",
+            "ToolDefinition.version is not supported; executable tools are identified by name only",
+        )
 
     inputs = payload.get("inputs")
     outputs = payload.get("outputs")
@@ -1243,7 +1235,6 @@ def parse_tool_definition(payload: Mapping[str, Any]) -> ToolDefinition:
 
     return ToolDefinition(
         name=str(payload.get("name") or "").strip(),
-        version=str(payload.get("version") or "").strip(),
         description=str(payload.get("description") or "").strip(),
         input_schema=dict(inputs["schema"]),
         output_schema=dict(outputs["schema"]),

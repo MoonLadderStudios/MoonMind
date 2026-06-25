@@ -57,12 +57,12 @@ def _ordered_nodes() -> list[dict]:
     return [
         {
             "id": "prepare",
-            "tool": {"type": "agent_runtime", "name": "codex_cli", "version": "1"},
+            "tool": {"type": "agent_runtime", "name": "codex_cli"},
             "inputs": {"title": "Prepare workspace"},
         },
         {
             "id": "run-tests",
-            "tool": {"type": "agent_runtime", "name": "codex_cli", "version": "1"},
+            "tool": {"type": "agent_runtime", "name": "codex_cli"},
             "inputs": {"title": "Run tests"},
         },
     ]
@@ -167,7 +167,6 @@ def _approval_policy_plan_payload() -> dict[str, Any]:
                 "tool": {
                     "type": "agent_runtime",
                     "name": "codex_cli",
-                    "version": "1.0.0",
                 },
                 "inputs": {"instructions": "Apply the patch"},
                 "options": {},
@@ -516,12 +515,12 @@ async def test_step_execution_manifest_prefers_per_step_resilience_policy_ref(
         ordered_nodes=[
             {
                 "id": "delegate-agent",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Delegate agent"},
             },
             {
                 "id": "plain-step",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Plain step"},
             },
         ],
@@ -581,7 +580,7 @@ async def test_start_manifest_uses_launch_context_projection_refs(
         ordered_nodes=[
             {
                 "id": "collect-evidence",
-                "tool": {"type": "agent_runtime", "name": "codex_cli", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex_cli"},
                 "inputs": {"title": "Collect evidence"},
             }
         ],
@@ -1052,16 +1051,16 @@ def test_plan_dependency_map_rewrites_bundled_dependencies(
         ordered_nodes=[
             {
                 "id": "prepare",
-                "tool": {"type": "skill", "name": "repo.prepare", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.prepare"},
             },
             {
                 "id": bundle_id,
-                "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "jules"},
                 "inputs": {"bundledNodeIds": ["step-1", "step-2"]},
             },
             {
                 "id": "publish",
-                "tool": {"type": "skill", "name": "repo.publish", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.publish"},
             },
         ],
         edges=(
@@ -1191,7 +1190,7 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         ordered_nodes=[
             {
                 "id": "delegate-agent",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Delegate agent"},
             }
         ],
@@ -1264,7 +1263,7 @@ def test_run_waiting_state_captures_child_workflow_lineage(
         ordered_nodes=[
             {
                 "id": "delegate-agent",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Delegate agent"},
             }
         ],
@@ -1331,7 +1330,7 @@ async def test_run_records_step_execution_manifest_ref_when_work_begins(
         ordered_nodes=[
             {
                 "id": "delegate-agent",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Delegate agent"},
             }
         ],
@@ -1486,7 +1485,7 @@ async def test_step_execution_manifest_includes_compact_resilience_policy_ref(
         ordered_nodes=[
             {
                 "id": "delegate-agent",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Delegate agent"},
             }
         ],
@@ -1544,7 +1543,7 @@ async def test_step_execution_manifest_merges_explicit_execution_with_refs(
         ordered_nodes=[
             {
                 "id": "delegate-external",
-                "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "jules"},
                 "inputs": {"title": "Delegate external agent"},
             }
         ],
@@ -1645,7 +1644,7 @@ async def test_external_continuation_manifest_records_side_effects_and_checkpoin
         ordered_nodes=[
             {
                 "id": "delegate-external",
-                "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "jules"},
                 "inputs": {"title": "Delegate external agent"},
             }
         ],
@@ -1762,7 +1761,7 @@ async def test_run_records_terminal_step_execution_manifest_with_result_refs(
         ordered_nodes=[
             {
                 "id": "run-tests",
-                "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.run_tests"},
                 "inputs": {"title": "Run tests"},
             }
         ],
@@ -1945,7 +1944,7 @@ def test_run_uses_deterministic_output_primary_fallback_for_generic_results(
         ordered_nodes=[
             {
                 "id": "run-tests",
-                "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.run_tests"},
                 "inputs": {"title": "Run tests"},
             }
         ],
@@ -1990,7 +1989,6 @@ def test_run_projects_workload_artifacts_and_metadata_from_tool_result(
                 "tool": {
                     "type": "skill",
                     "name": "container.run_workload",
-                    "version": "1",
                 },
                 "inputs": {"title": "Run workload"},
             }
@@ -2059,7 +2057,7 @@ def test_run_accepts_tuple_output_refs_and_ignores_string_values(
         ordered_nodes=[
             {
                 "id": "run-tests",
-                "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.run_tests"},
                 "inputs": {"title": "Run tests"},
             }
         ],
@@ -2899,13 +2897,13 @@ async def test_run_execution_stage_stops_downstream_handoff_when_gate_budget_exh
     plan_payload["nodes"] = [
         {
             "id": "implement",
-            "tool": {"type": "agent_runtime", "name": "repo.apply_patch", "version": "1.0.0"},
+            "tool": {"type": "agent_runtime", "name": "repo.apply_patch"},
             "inputs": {"targetRuntime": "codex_cli", "instructions": "Apply patch"},
             "options": {},
         },
         {
             "id": "publish",
-            "tool": {"type": "agent_runtime", "name": "repo.publish", "version": "1.0.0"},
+            "tool": {"type": "agent_runtime", "name": "repo.publish"},
             "inputs": {"targetRuntime": "codex_cli", "instructions": "Publish"},
             "options": {},
         },
@@ -3072,13 +3070,13 @@ async def test_run_execution_stage_stops_downstream_handoff_when_no_progress_bud
     plan_payload["nodes"] = [
         {
             "id": "implement",
-            "tool": {"type": "agent_runtime", "name": "repo.apply_patch", "version": "1.0.0"},
+            "tool": {"type": "agent_runtime", "name": "repo.apply_patch"},
             "inputs": {"targetRuntime": "codex_cli", "instructions": "Apply patch"},
             "options": {},
         },
         {
             "id": "publish",
-            "tool": {"type": "agent_runtime", "name": "repo.publish", "version": "1.0.0"},
+            "tool": {"type": "agent_runtime", "name": "repo.publish"},
             "inputs": {"targetRuntime": "codex_cli", "instructions": "Publish"},
             "options": {},
         },
@@ -3221,13 +3219,13 @@ async def test_run_execution_stage_continues_independent_nodes_after_gate_stop(
     plan_payload["nodes"] = [
         {
             "id": "implement",
-            "tool": {"type": "agent_runtime", "name": "repo.apply_patch", "version": "1.0.0"},
+            "tool": {"type": "agent_runtime", "name": "repo.apply_patch"},
             "inputs": {"targetRuntime": "codex_cli", "instructions": "Apply patch"},
             "options": {},
         },
         {
             "id": "publish",
-            "tool": {"type": "agent_runtime", "name": "repo.publish", "version": "1.0.0"},
+            "tool": {"type": "agent_runtime", "name": "repo.publish"},
             "inputs": {"targetRuntime": "codex_cli", "instructions": "Publish independent report"},
             "options": {},
         },
@@ -3391,7 +3389,7 @@ async def test_run_execution_stage_retries_agent_runtime_reviews_with_feedback_i
     plan_payload["nodes"] = [
         {
             "id": "delegate-agent",
-            "tool": {"type": "agent_runtime", "name": "jules", "version": ""},
+            "tool": {"type": "agent_runtime", "name": "jules"},
             "inputs": {
                 "targetRuntime": "jules",
                 "instructions": "Implement the requested change.",
