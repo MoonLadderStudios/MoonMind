@@ -184,6 +184,7 @@ def test_end_to_end_mixed_pr_set(monkeypatch: Any, tmp_path: Path) -> None:
     for body in _FakeAsyncClient.submissions:
         assert body["payload"]["task"]["publish"]["mode"] == "none"
         assert body["payload"]["task"]["skill"]["name"] == "pr-resolver"
+        assert "version" not in body["payload"]["task"]["skill"]
         assert body["payload"]["idempotencyKey"].startswith(
             "batch-dependabot-resolver:MoonLadderStudios/MoonMind:pr:"
         )

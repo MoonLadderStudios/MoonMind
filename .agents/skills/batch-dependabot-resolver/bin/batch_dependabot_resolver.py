@@ -590,7 +590,6 @@ def _build_queue_request(
     max_iterations: int,
     priority: int,
     max_attempts: int,
-    skill_version: str = "1.0",
     inherit_runtime_from_caller: bool = False,
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
@@ -612,7 +611,6 @@ def _build_queue_request(
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
             "skill": {
                 "name": "pr-resolver",
-                "version": skill_version,
             },
             "inputs": {
                 "repo": repo,
@@ -707,7 +705,6 @@ def _build_request_records(
             max_iterations=args.max_iterations,
             priority=args.priority,
             max_attempts=args.max_attempts,
-            skill_version=args.skill_version,
             inherit_runtime_from_caller=inherit_from_caller,
         )
         queue_requests.append(
@@ -936,7 +933,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--runtime-effort", default=None)
     parser.add_argument("--runtime-provider-profile", default=None)
     parser.add_argument("--task-context-path", default=None)
-    parser.add_argument("--skill-version", default="1.0")
     parser.add_argument("--artifacts-dir", default="artifacts")
     args = parser.parse_args(argv)
     args.package_managers = _flatten_package_managers(args.package_managers)

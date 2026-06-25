@@ -766,7 +766,7 @@ def _build_request(module: dict[str, Any], **overrides: Any) -> dict[str, Any]:
     return build("MoonLadderStudios/MoonMind", 42, "feature/test", **kwargs)
 
 def test_build_queue_request_skill_contract() -> None:
-    """skill.name + skill.version are present; legacy skill.id and skill.args are absent."""
+    """skill.name is present; legacy identity fields and args are absent."""
     module = _load_module()
     req = _build_request(module)
     task = req["payload"]["task"]
@@ -774,9 +774,9 @@ def test_build_queue_request_skill_contract() -> None:
 
     # Correct fields per SkillInvocation contract
     assert skill.get("name") == "pr-resolver", "skill.name must be 'pr-resolver'"
-    assert skill.get("version") == "1.0", "skill.version must default to '1.0'"
 
     # Legacy / wrong fields must NOT be present
+    assert "version" not in skill, "skill.version must not be sent to Temporal"
     assert (
         "id" not in skill
     ), "skill.id is the legacy field; must not be sent to Temporal"
@@ -808,13 +808,6 @@ def test_build_queue_request_required_capabilities_toplevel() -> None:
     assert (
         "requiredCapabilities" not in skill
     ), "requiredCapabilities must not be nested inside skill"
-
-def test_build_queue_request_skill_version_passthrough() -> None:
-    """--skill-version value is forwarded to the payload."""
-    module = _load_module()
-    req = _build_request(module, skill_version="2.3")
-    skill = req["payload"]["task"]["skill"]
-    assert skill.get("version") == "2.3"
 
 def test_write_run_artifacts_emits_no_op_when_zero_queued_no_errors(tmp_path: Path) -> None:
     """A genuine no-op run writes skill_outcome.json declaring status=no_op."""

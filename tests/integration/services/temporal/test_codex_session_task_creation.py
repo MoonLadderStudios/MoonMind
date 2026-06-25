@@ -314,6 +314,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
             branch="codex/session-child-task",
         )
         assert body["payload"]["task"]["skill"]["name"] == "pr-resolver"
+        assert "version" not in body["payload"]["task"]["skill"]
         assert body["payload"]["task"]["inputs"]["pr"] == "1337"
     finally:
         await asyncio.to_thread(server.shutdown)

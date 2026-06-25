@@ -484,7 +484,6 @@ def _build_queue_request(
     priority: int,
     max_attempts: int,
     batch_scope: str | None = None,
-    skill_version: str = "1.0",
     inherit_runtime_from_caller: bool = False,
 ) -> dict[str, Any]:
     publish_mode = resolve_publish_mode_for_skill("pr-resolver", "none")
@@ -506,7 +505,6 @@ def _build_queue_request(
             "instructions": f"Resolve PR #{pr_number} on branch `{branch}`.",
             "skill": {
                 "name": "pr-resolver",
-                "version": skill_version,
             },
             "inputs": {
                 "repo": repo,
@@ -611,11 +609,6 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--merge-method", default="squash")
     parser.add_argument("--max-iterations", type=int, default=3)
-    parser.add_argument(
-        "--skill-version",
-        default="1.0",
-        help="Skill registry version for the pr-resolver skill (default: 1.0).",
-    )
     parser.add_argument(
         "--artifacts-dir",
         default="artifacts",
@@ -771,7 +764,6 @@ def _build_request_records(
             priority=args.priority,
             max_attempts=args.max_attempts,
             batch_scope=batch_scope,
-            skill_version=args.skill_version,
             inherit_runtime_from_caller=inherit_from_caller,
         )
         queue_requests.append(

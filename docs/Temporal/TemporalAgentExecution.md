@@ -164,10 +164,10 @@ _run_execution_stage()
 ```
 
 For **generic LLM text instructions** (no specific tool), planning produces
-`tool = { type: "agent_runtime", name: "auto", version: "1.0" }` and the
-workflow dispatches it as a `MoonMind.AgentRun` child workflow. The `runtime.mode`
-field (e.g. `codex`, `gemini_cli`, `jules`) determines which `AgentAdapter`
-implementation handles the run.
+`tool = { type: "agent_runtime", name: "auto" }` and the workflow dispatches it
+as a `MoonMind.AgentRun` child workflow. The `runtime.mode` field (e.g. `codex`,
+`gemini_cli`, `jules`) determines which `AgentAdapter` implementation handles
+the run.
 
 For the full agent execution model including managed runtime supervision, external
 agent callbacks, and auth-profile controls, see
@@ -192,8 +192,7 @@ agent callbacks, and auth-profile controls, see
       "instructions": "Resolve PR #42 on branch `feature/test`.",
       "tool": {
         "type": "skill",
-        "name": "pr-resolver",
-        "version": "1.0"
+        "name": "pr-resolver"
       },
       "inputs": {
         "repo": "owner/repo",
@@ -223,12 +222,11 @@ From `moonmind/workflows/skills/skill_plan_contracts.py`:
 |-------|------|----------|-------------|
 | `id` | string | ✅ | Unique node identifier within the plan |
 | `tool_name` | string | ✅ | Registered tool name (e.g. `"pr-resolver"`) |
-| `tool_version` | string | ✅ | Registry version (e.g. `"1.0"`) |
 | `inputs` | object | ✅ | Tool-specific input parameters |
 | `options` | object | ❌ | Optional execution options |
 
-Serialized payload form (canonical): `{ id, tool: { type, name, version }, inputs: {...} }`
-Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inputs: {...} }`
+Serialized payload form (canonical): `{ id, tool: { type, name }, inputs: {...} }`
+Serialized payload form (legacy accepted): `{ id, skill: { name }, inputs: {...} }`
 
 ### 3.3 Activity catalog
 
@@ -274,7 +272,7 @@ Serialized payload form (legacy accepted): `{ id, skill: { name, version }, inpu
 | **Activity catalog** | ✅ Implemented | 18 activities, 5 fleets, correct routing |
 | **Worker runtime bindings** | ✅ Implemented | `build_activity_bindings` wires handlers to catalog |
 | **Temporal↔DB state sync** | ✅ Implemented | Projection sync from Temporal visibility |
-| **Batch-PR-resolver payload** | ✅ Fixed | Now sends `skill.name` + `skill.version` + `inputs` |
+| **Batch-PR-resolver payload** | ✅ Fixed | Now sends name-only `skill.name` + `inputs` |
 | **Integration polling** (Jules) | ✅ Implemented | Durable waiting loop with status polling |
 | **Pause/Resume/Cancel signals** | ✅ Implemented | Workflow signal handlers |
 | **`plan.validate` activity** | ✅ Implemented | Registry-aware plan validation |

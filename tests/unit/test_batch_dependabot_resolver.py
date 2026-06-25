@@ -56,7 +56,6 @@ def _args(**overrides: Any) -> Any:
         "runtime_effort": None,
         "runtime_provider_profile": None,
         "task_context_path": None,
-        "skill_version": "1.0",
         "artifacts_dir": "artifacts",
     }
     base.update(overrides)
@@ -244,8 +243,9 @@ def test_build_queue_request_child_payload_shape() -> None:
     )
     payload = request["payload"]
     task = payload["task"]
-    assert task["skill"] == {"name": "pr-resolver", "version": "1.0"}
+    assert task["skill"] == {"name": "pr-resolver"}
     assert "id" not in task["skill"] and "args" not in task["skill"]
+    assert "version" not in task["skill"]
     assert payload["requiredCapabilities"] == ["gh"]
     assert task["inputs"] == {
         "repo": "MoonLadderStudios/MoonMind",
