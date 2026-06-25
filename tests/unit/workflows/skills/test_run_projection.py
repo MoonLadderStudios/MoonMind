@@ -435,6 +435,33 @@ async def test_load_resolved_skillset_round_trips() -> None:
 
 
 @pytest.mark.asyncio
+async def test_load_resolved_skillset_strips_legacy_version_metadata() -> None:
+    payload = {
+        "snapshot_id": "snap-legacy",
+        "resolved_at": datetime.now(tz=UTC).isoformat(),
+        "skills": [
+            {
+                "skill_name": "pr-resolver",
+                "version": "1.0.0",
+                "provenance": {
+                    "source_kind": "built_in",
+                    "original_version": "1.0.0",
+                },
+            }
+        ],
+    }
+
+    loaded = await load_resolved_skillset(
+        _StaticArtifactService({"snap-ref": json.dumps(payload).encode("utf-8")}),
+        "snap-ref",
+    )
+
+    assert loaded.snapshot_id == "snap-legacy"
+    assert loaded.skills[0].skill_name == "pr-resolver"
+    assert loaded.skills[0].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+
+
+@pytest.mark.asyncio
 async def test_load_resolved_skillset_raises_on_missing_service() -> None:
     with pytest.raises(SkillProjectionError, match="artifact service is required"):
         await load_resolved_skillset(None, "any-ref")
