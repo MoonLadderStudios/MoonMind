@@ -98,8 +98,8 @@ pre-commit install
      ```
 
    - or no fixture update was needed, with an explicit checklist note explaining why the PR does not change Step Execution behavior or fixture coverage.
-5. Run `./tools/test_unit.sh` for the canonical unit-test pass
-6. Run targeted selector-equivalent suites when iterating on a narrow backend change:
+5. Run the targeted unit suite selected by the changed area before preparing a PR. Use the selector-equivalent commands below for backend changes, path-filtered `./tools/test_unit.sh` invocations for narrow Python changes, or `./tools/test_unit.sh --ui-args <path>` / `npm run ui:test -- <path>` for focused frontend changes. Escalate to `./tools/test_unit.sh` only when fail-open policy, broad/risky changes, or unclear coverage requires the full unit suite.
+6. Use these selector-equivalent backend suites when iterating on a narrow backend change:
 
 ```bash
 python -m pytest tests/unit \
@@ -115,7 +115,7 @@ python -m pytest tests/unit/workflows/temporal \
   -q --durations=25
 ```
 
-7. Run `./tools/test_integration.sh` when Docker, compose, migrations, integration tests, or runtime infrastructure changed
+7. Run `./tools/test_integration.sh` only when Docker, compose, migrations, integration tests, runtime infrastructure, or another selector-selected hermetic integration boundary changed.
 
 If you prefer the Windows wrappers, `tools/test-unit.ps1`, `tools/test-integration.ps1`, and `tools/test-e2e.ps1` already include step 1 for you.
 
