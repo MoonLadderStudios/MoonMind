@@ -767,6 +767,58 @@ async def test_expand_template_repeated_recursive_expansion_is_stable(tmp_path):
     ]
 
 
+async def test_expand_template_skips_steps_with_falsy_enabled_values(tmp_path):
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.create_template(
+                slug="conditional-steps",
+                title="Conditional Steps",
+                description="Conditional steps.",
+                scope="global",
+                scope_ref=None,
+                tags=[],
+                inputs_schema=[
+                    {
+                        "name": "switch",
+                        "label": "Switch",
+                        "type": "text",
+                        "required": False,
+                        "default": "null",
+                    }
+                ],
+                steps=[
+                    {
+                        "title": "Null disabled",
+                        "instructions": "Should not run.",
+                        "enabled": None,
+                    },
+                    {
+                        "title": "String null disabled",
+                        "instructions": "Should not run either.",
+                        "enabled": "{{ inputs.switch }}",
+                    },
+                    {
+                        "title": "Enabled step",
+                        "instructions": "Should run.",
+                    },
+                ],
+                annotations={},
+                required_capabilities=[],
+                created_by=None,
+            )
+
+            expanded = await service.expand_template(
+                slug="conditional-steps",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                context={},
+            )
+
+    assert [step["title"] for step in expanded["steps"]] == ["Enabled step"]
+
+
 async def test_expand_template_flattens_multi_level_include_tree_with_provenance(
     tmp_path,
 ):
@@ -2006,6 +2058,28 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
                 "instructions"
             ]
 
+            expanded_with_null_optional_sources = await service.expand_template(
+                slug="jira-breakdown",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "feature_request": "Inline workflow source.",
+                    "source_design_path": None,
+                    "source_issue_key": None,
+                    "jira_project_key": "MM",
+                    "jira_issue_type": "Story",
+                },
+                context={},
+            )
+
+            assert len(expanded_with_null_optional_sources["steps"]) == 2
+            assert expanded_with_null_optional_sources["steps"][0]["skill"]["id"] == (
+                "moonspec-breakdown"
+            )
+            assert "Inline workflow source." in expanded_with_null_optional_sources[
+                "steps"
+            ][0]["instructions"]
+
             expanded_with_path_and_issue = await service.expand_template(
                 slug="jira-breakdown",
                 scope="global",
@@ -2026,6 +2100,30 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "docs/Designs/RuntimeTypes.md" in expanded_with_path_and_issue[
                 "steps"
             ][0]["instructions"]
+
+            with pytest.raises(PresetValidationError) as excinfo:
+                await service.expand_template(
+                    slug="jira-breakdown",
+                    scope="global",
+                    scope_ref=None,
+                    inputs={
+                        "jira_project_key": "MM",
+                        "jira_issue_type": "Story",
+                    },
+                    context={},
+                )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "preset.inputs",
+            "message": (
+                "Provide a Declarative Document Path, Source Jira Issue Key, "
+                "or Workflow Instructions."
+            ),
+            "code": "required",
+            "recoverable": True,
+        }
+    ]
 
 async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
     """MM-889: a Document Health Update preset runs review then remediate steps."""

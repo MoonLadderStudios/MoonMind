@@ -55,7 +55,7 @@ inputs:
 steps:
   - title: Load source Jira issue description
     type: tool
-    enabled: "{{ inputs.source_issue_key | trim != '' and inputs.source_design_path | trim == '' }}"
+    enabled: "{{ (inputs.source_issue_key or '') | trim != '' and (inputs.source_design_path or '') | trim == '' }}"
     instructions: |-
       Fetch source Jira issue {{ inputs.source_issue_key }} through the deterministic trusted Jira tool surface.
 

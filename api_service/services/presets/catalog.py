@@ -82,6 +82,11 @@ _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
 )
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
 _JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS = frozenset({"TOOL", "MM"})
+_JIRA_BREAKDOWN_SOURCE_INPUTS = (
+    "source_design_path",
+    "source_issue_key",
+    "feature_request",
+)
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
 _NATIVE_BOOLEAN_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
@@ -653,15 +658,49 @@ def _render_value(
 
 def _preset_step_enabled(value: Any) -> bool:
     if value is None:
-        return True
+        return False
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
         return value != 0
-    normalized = str(value or "").strip().lower()
-    if normalized in {"", "0", "false", "no", "off"}:
+    normalized = str(value).strip().lower()
+    if normalized in {
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+        "none",
+        "null",
+        "nil",
+        "undefined",
+    }:
         return False
     return True
+
+def _validate_jira_breakdown_source_inputs(
+    *,
+    slug: str,
+    inputs: Mapping[str, Any],
+) -> None:
+    if slug not in _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS:
+        return
+    if any(str(inputs.get(name) or "").strip() for name in _JIRA_BREAKDOWN_SOURCE_INPUTS):
+        return
+    raise PresetValidationError(
+        "Jira breakdown presets require a source input.",
+        errors=[
+            {
+                "path": "preset.inputs",
+                "message": (
+                    "Provide a Declarative Document Path, Source Jira Issue Key, "
+                    "or Workflow Instructions."
+                ),
+                "code": "required",
+                "recoverable": True,
+            }
+        ],
+    )
 
 def _single_allowed_jira_project_key() -> str | None:
     projects = settings.atlassian.jira.jira_allowed_projects
@@ -2031,6 +2070,10 @@ class PresetCatalogService:
             slug=template.slug,
             submitted=submitted_inputs,
             resolved=validated_inputs,
+        )
+        _validate_jira_breakdown_source_inputs(
+            slug=template.slug,
+            inputs=validated_inputs,
         )
         variables = {
             "inputs": validated_inputs,
