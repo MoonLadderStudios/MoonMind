@@ -101,10 +101,33 @@ class TestSlotWaitRetryBehavior:
         """A paused AgentRun must not cross from slot assignment into launch."""
         source = inspect.getsource(MoonMindAgentRun.run)
         slot_wait_index = source.index("slot_assigned_event.is_set()")
-        pause_gate_index = source.index("await workflow.wait_condition(lambda: not self._paused)")
+        pause_gate_index = source.rindex(
+            "await workflow.wait_condition(lambda: not self._paused)"
+        )
         launch_index = source.index("self.run_status = RunStatus.launching")
 
         assert slot_wait_index < pause_gate_index < launch_index
+
+    def test_pause_gate_runs_before_slot_acquisition(self):
+        """A paused AgentRun should not acquire a provider slot before resume."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+        pre_slot_pause_index = source.index(
+            "await workflow.wait_condition(lambda: not self._paused)"
+        )
+        slot_request_index = source.index("request_slot=True")
+
+        assert pre_slot_pause_index < slot_request_index
+
+    def test_overall_start_reset_after_paused_slot_wait(self):
+        """Paused time after slot assignment must not consume execution budget."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+        pause_gate_index = source.rindex(
+            "await workflow.wait_condition(lambda: not self._paused)"
+        )
+        reset_index = source.index("overall_start = workflow.now()", pause_gate_index)
+        launch_index = source.index("self.run_status = RunStatus.launching")
+
+        assert pause_gate_index < reset_index < launch_index
 
     def test_pause_resume_update_toggles_agent_run_overlay(self):
         run = MoonMindAgentRun()

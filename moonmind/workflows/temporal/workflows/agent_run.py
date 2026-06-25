@@ -2595,6 +2595,10 @@ class MoonMindAgentRun:
                     )
 
                 manager_handle = None
+                if self._paused:
+                    await workflow.wait_condition(lambda: not self._paused)
+                    overall_start = workflow.now()
+
                 # Acquire provider-profile slot if managed
                 if request.agent_kind == "managed":
                     runtime_id = self._managed_runtime_id(request.agent_id)
@@ -2818,14 +2822,15 @@ class MoonMindAgentRun:
                                 lambda: self.slot_assigned_event.is_set(),
                             )
 
-                    # Reset the execution clock so the timeout budget starts
-                    # from slot acquisition, not from workflow start.
-                    overall_start = workflow.now()
                     self._awaiting_slot_reason_override = None
                     self._slot_wait_timeout_override_seconds = None
 
                     if self._paused:
                         await workflow.wait_condition(lambda: not self._paused)
+
+                    # Reset the execution clock so the timeout budget starts
+                    # from launch readiness, excluding slot and pause waits.
+                    overall_start = workflow.now()
 
                     self.run_status = RunStatus.launching
                     if parent_info:
