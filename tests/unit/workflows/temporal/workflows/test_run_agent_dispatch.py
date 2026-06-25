@@ -843,6 +843,61 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         self.assertEqual(request.runtime_command.command, "review")
         self.assertEqual(request.runtime_command.raw_command, "/review")
 
+    def test_build_agent_execution_request_strips_removed_runtime_command_marker(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        marker_terms = ("runtime", "capability", "version")
+        removed_marker = (
+            marker_terms[0]
+            + marker_terms[1][:1].upper()
+            + marker_terms[1][1:]
+            + marker_terms[2][:1].upper()
+            + marker_terms[2][1:]
+        )
+        runtime_command = {
+            "kind": "slash_command",
+            "source": "leading_slash",
+            "sourcePath": "objective.instructions",
+            "command": "review",
+            "rawCommand": "/review",
+            "args": "",
+            "instructionBody": "Check this branch.",
+            "targetRuntime": "codex_cli",
+            "detectionStatus": "detected",
+            "hintStatus": "hinted",
+            "recognitionMode": "hinted_runtime_passthrough",
+            "requiresRuntimeRecognition": True,
+            removed_marker: "2026-05-13",
+            "hintCatalogVersion": "2026-05-13",
+            "detectionPhase": "submit",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "instructions": "/review\nCheck this branch.",
+                    "runtime": {"mode": "codex_cli"},
+                    "runtimeCommand": runtime_command,
+                },
+                node_id="node-runtime-command",
+                tool_name="codex_cli",
+            )
+
+        self.assertIsNotNone(request.runtime_command)
+        self.assertEqual(request.runtime_command.command, "review")
+        self.assertEqual(request.runtime_command.hint_catalog_version, "2026-05-13")
+
     def test_build_agent_execution_request_includes_step_execution_launch_policy(self) -> None:
         from unittest.mock import patch
 

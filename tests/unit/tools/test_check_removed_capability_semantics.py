@@ -103,12 +103,29 @@ def test_guard_scans_static_docs_seeds_and_fixtures(tmp_path: Path) -> None:
 
 
 def test_guard_excludes_transient_artifacts(tmp_path: Path) -> None:
-    artifact = tmp_path / "artifacts" / "context.json"
-    artifact.parent.mkdir()
-    artifact.write_text(_old_camel(), encoding="utf-8")
+    for folder in ("artifacts", "artifacts-root-owned-readonly"):
+        artifact = tmp_path / folder / "context.json"
+        artifact.parent.mkdir(exist_ok=True)
+        artifact.write_text(_old_camel(), encoding="utf-8")
 
     assert list(iter_scanned_files(tmp_path)) == []
     assert check_removed_capability_semantics(tmp_path) == []
+
+
+def test_guard_excludes_local_skill_overlay(tmp_path: Path) -> None:
+    local_skill = tmp_path / ".agents" / "skills" / "local" / "private" / "SKILL.md"
+    local_skill.parent.mkdir(parents=True)
+    local_skill.write_text(_old_camel(), encoding="utf-8")
+
+    checked_in_skill = tmp_path / ".agents" / "skills" / "checked-in" / "SKILL.md"
+    checked_in_skill.parent.mkdir(parents=True)
+    checked_in_skill.write_text(_old_camel(), encoding="utf-8")
+
+    assert list(iter_scanned_files(tmp_path)) == [checked_in_skill]
+    findings = check_removed_capability_semantics(tmp_path)
+    assert [finding.path for finding in findings] == [
+        Path(".agents/skills/checked-in/SKILL.md")
+    ]
 
 
 def test_guard_cli_reports_static_rejection(tmp_path: Path, capsys) -> None:

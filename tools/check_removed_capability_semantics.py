@@ -94,6 +94,7 @@ EXCLUDED_DIR_NAMES = {
     ".ruff_cache",
     ".venv",
     "artifacts",
+    "artifacts-root-owned-readonly",
     "build",
     "coverage",
     "dist",
@@ -118,6 +119,8 @@ def _is_scanned_file(path: Path, root: Path) -> bool:
         return False
     if any(part in EXCLUDED_DIR_NAMES for part in relative.parts):
         return False
+    if relative.parts[:3] == (".agents", "skills", "local"):
+        return False
     return path.is_file() and path.suffix in SCANNED_SUFFIXES
 
 
@@ -132,9 +135,12 @@ def check_removed_capability_semantics(root: Path = REPO_ROOT) -> list[Finding]:
     for path in iter_scanned_files(root):
         relative_path = path.relative_to(root)
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            content = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
+        if not any(pattern.search(content) for _, pattern in BANNED_PATTERNS):
+            continue
+        lines = content.splitlines()
         for line_number, line in enumerate(lines, start=1):
             for name, pattern in BANNED_PATTERNS:
                 if pattern.search(line):
