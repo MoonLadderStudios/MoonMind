@@ -19,6 +19,7 @@ from api_service.db.models import (
     RecurringWorkflowRunOutcome,
     RecurringWorkflowRunTrigger,
     RecurringWorkflowScopeType,
+    TemporalExecutionRecord,
 )
 from moonmind.workflows.recurring.cron import (
     compute_next_occurrence,
@@ -915,6 +916,29 @@ class RecurringWorkflowsService:
         
         # Temporal reconciliation could be added here in the future using adapter.describe_schedule
         return runs
+
+    async def started_at_by_workflow_id(
+        self,
+        workflow_ids: Iterable[str],
+    ) -> dict[str, datetime]:
+        normalized_ids = sorted(
+            {str(item).strip() for item in workflow_ids if str(item).strip()}
+        )
+        if not normalized_ids:
+            return {}
+        stmt = select(
+            TemporalExecutionRecord.workflow_id,
+            TemporalExecutionRecord.started_at,
+        ).where(
+            TemporalExecutionRecord.workflow_id.in_(normalized_ids),
+            TemporalExecutionRecord.started_at.is_not(None),
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return {
+            str(workflow_id): started_at
+            for workflow_id, started_at in rows
+            if started_at
+        }
 
     async def runtime_summary_for_definition(
         self,

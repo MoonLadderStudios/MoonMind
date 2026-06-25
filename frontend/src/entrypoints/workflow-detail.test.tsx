@@ -3488,6 +3488,10 @@ describe('Workflow Detail Entrypoint', () => {
       startedAt: '2026-03-28T00:00:01Z',
       updatedAt: '2026-03-28T00:00:02Z',
       closedAt: '2026-03-28T00:00:03Z',
+      recurrence: {
+        definitionId: 'schedule-alpha',
+        href: '/schedules/schedule-alpha',
+      },
       actions: { canSetTitle: true, canCancel: false, canRerun: false },
     };
 
@@ -3540,6 +3544,8 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.getByText('profile:gemini-default')).toBeTruthy();
       expect(screen.getByText('Priority').closest('div')?.textContent).toContain('4');
       expect(screen.getByRole('link', { name: 'https://github.com/MoonLadderStudios/MoonMind/pull/123' })).toBeTruthy();
+      expect(screen.getByText(/Created by schedule/)).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'schedule-alpha' }).getAttribute('href')).toBe('/schedules/schedule-alpha');
     });
 
     expect(screen.queryByText('Inspect the repository.')).toBeNull();

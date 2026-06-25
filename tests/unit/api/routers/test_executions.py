@@ -6871,6 +6871,36 @@ def test_serialize_execution_leaves_immediate_run_unscheduled() -> None:
     assert payload.scheduled_for is None
     assert payload.created_at == created_at
 
+def test_serialize_execution_surfaces_recurring_schedule_provenance() -> None:
+    created_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
+    record = SimpleNamespace(
+        close_status=None,
+        search_attributes={"mm_entry": "run"},
+        memo={},
+        owner_id="user-1",
+        entry="run",
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
+        state=MoonMindWorkflowState.EXECUTING,
+        workflow_id="wf-1",
+        namespace="moonmind",
+        run_id="run-1",
+        artifact_refs=[],
+        scheduled_for=None,
+        created_at=created_at,
+        started_at=created_at,
+        updated_at=created_at,
+        closed_at=None,
+        integration_state=None,
+        parameters={"system": {"recurrence": {"definitionId": "schedule-alpha"}}},
+    )
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["recurrence"] == {
+        "definitionId": "schedule-alpha",
+        "href": "/schedules/schedule-alpha",
+    }
+
 def test_serialize_execution_falls_back_to_updated_at_without_scheduled_time() -> None:
     updated_at = datetime(2026, 3, 6, 0, 0, tzinfo=UTC)
     record = SimpleNamespace(

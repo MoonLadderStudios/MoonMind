@@ -2146,6 +2146,7 @@ def _serialize_execution(
         actions=actions,
         resume=resume_summary,
         related_runs=related_runs,
+        recurrence=_execution_recurrence_provenance(params),
         target_diagnostics=target_diagnostics,
         run_metrics=run_metrics,
         improvement_signals=improvement_signals,
@@ -2776,6 +2777,24 @@ def _execution_related_run_metadata(record: TemporalExecutionRecord) -> dict[str
             or None
         ),
         "created_at": getattr(record, "created_at", None),
+    }
+
+
+def _execution_recurrence_provenance(
+    params: Mapping[str, Any],
+) -> dict[str, str] | None:
+    system_payload = params.get("system")
+    if not isinstance(system_payload, Mapping):
+        return None
+    recurrence_payload = system_payload.get("recurrence")
+    if not isinstance(recurrence_payload, Mapping):
+        return None
+    definition_id = str(recurrence_payload.get("definitionId") or "").strip()
+    if not definition_id:
+        return None
+    return {
+        "definitionId": definition_id,
+        "href": f"/schedules/{quote(definition_id, safe='')}",
     }
 
 
