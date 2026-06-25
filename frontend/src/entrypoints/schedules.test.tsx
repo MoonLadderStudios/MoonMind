@@ -81,11 +81,36 @@ const detailPayload: BootPayload = {
   },
 };
 
+const detailPayloadWithDelete: BootPayload = {
+  ...detailPayload,
+  initialData: {
+    dashboardConfig: {
+      initialPath: "/schedules/schedule-alpha",
+      sources: {
+        schedules: {
+          list: "/console/schedules?scope=personal",
+          detail: "/console/schedules/{definitionId}",
+          update: "/console/schedules/{definitionId}",
+          runNow: "/console/schedules/{definitionId}/run",
+          runs: "/console/schedules/{definitionId}/runs?limit=200",
+          delete: "/console/schedules/{definitionId}",
+        },
+      },
+    },
+  },
+};
+
 function mockScheduleDetailFetch(fetchSpy: MockInstance, overrides: Record<string, unknown> = {}) {
   const schedule = { ...detailSchedule, ...overrides };
   fetchSpy.mockImplementation(async (input, init) => {
     const url = String(input);
     const method = String(init?.method || "GET").toUpperCase();
+    if (url === "/console/schedules/schedule-alpha" && method === "DELETE") {
+      return {
+        ok: true,
+        json: async () => ({}),
+      } as Response;
+    }
     if (url === "/console/schedules/schedule-alpha" && method === "PATCH") {
       return {
         ok: true,
@@ -386,6 +411,63 @@ describe("SchedulesPage", () => {
     expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
+  });
+
+  it("allows personal schedule owners to delete when the delete contract is available", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockScheduleDetailFetch(fetchSpy, {
+      permissions: {
+        canEdit: true,
+        canRunNow: true,
+        canDelete: true,
+      },
+    });
+    const detailFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/console/schedules/schedule-alpha" && method === "DELETE") {
+        return new Promise<Response>(() => undefined);
+      }
+      return detailFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayloadWithDelete} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    const deleteButton = screen.getByRole("button", { name: "Delete schedule" }) as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(false);
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => (
+          String(url) === "/console/schedules/schedule-alpha"
+          && String(init?.method || "GET").toUpperCase() === "DELETE"
+        )),
+      ).toBe(true);
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("explains missing delete permission when the delete contract is available", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      permissions: {
+        canEdit: true,
+        canRunNow: true,
+        canDelete: false,
+        disabledReasons: {
+          canDelete: "Only the schedule owner can delete this schedule.",
+        },
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayloadWithDelete} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
+    expect(screen.getByText("Only the schedule owner can delete this schedule.")).not.toBeNull();
   });
 
   it("does not let disabled schedule state override read-only action visibility", async () => {

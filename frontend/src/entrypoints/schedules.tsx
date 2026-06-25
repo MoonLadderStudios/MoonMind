@@ -138,7 +138,7 @@ function scheduleRouteDefinitionId(payload: BootPayload): string | null {
 
 function scheduleEndpoint(
   payload: BootPayload,
-  key: 'detail' | 'update' | 'runNow' | 'runs',
+  key: 'detail' | 'update' | 'runNow' | 'runs' | 'delete',
   definitionId: string,
 ): string {
   const fallbackPath = key === 'runNow'
@@ -381,6 +381,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
   const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
   const runsEndpoint = useMemo(() => scheduleEndpoint(payload, 'runs', definitionId), [payload, definitionId]);
+  const deleteEndpoint = useMemo(() => scheduleEndpoint(payload, 'delete', definitionId), [payload, definitionId]);
   const sources = useMemo(() => scheduleSources(payload), [payload]);
 
   const detailQuery = useQuery({
@@ -461,6 +462,21 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(deleteEndpoint, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to delete schedule: ${response.statusText}`);
+      }
+    },
+    onSuccess: () => {
+      window.location.assign('/schedules');
+    },
+  });
+
   const schedule = detailQuery.data;
   const runs = runsQuery.data?.items || [];
   const currentForm = editForm || (schedule ? editFormFromSchedule(schedule) : null);
@@ -537,8 +553,17 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             {runNowMutation.isPending ? 'Running' : 'Run now'}
           </button>
           {actions?.canDelete ? (
-            <button type="button" className="secondary" disabled title={actions.deleteReason}>
-              Delete schedule
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => {
+                if (window.confirm('Delete this recurring schedule? Future runs will stop, but prior workflow executions and artifacts remain available.')) {
+                  deleteMutation.mutate();
+                }
+              }}
+              disabled={deleteMutation.isPending}
+            >
+              {deleteMutation.isPending ? 'Deleting' : 'Delete schedule'}
             </button>
           ) : null}
         </div>
@@ -562,6 +587,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       {runNowMutation.isError && (
         <div className="schedules-error" role="alert">
           {errorMessage(runNowMutation.error, 'Failed to run schedule')}
+        </div>
+      )}
+      {deleteMutation.isError && (
+        <div className="schedules-error" role="alert">
+          {errorMessage(deleteMutation.error, 'Failed to delete schedule')}
         </div>
       )}
 
