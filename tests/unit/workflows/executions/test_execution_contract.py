@@ -11,6 +11,7 @@ from moonmind.workflows.executions.execution_contract import (
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
     resolve_publish_mode_for_skill,
+    strip_workflow_capability_identity_versions,
     WorkflowContractError,
     WorkflowExecutionSpec,
     WorkflowRecoveryProvenance,
@@ -71,6 +72,41 @@ def test_task_skills_strip_semantic_version_fields() -> None:
                 "skills": {"include": [{"name": "test-skill:1.0.0"}]},
             }
         )
+
+
+def test_workflow_capability_identity_sanitizer_strips_nested_skill_versions() -> None:
+    payload = {
+        "skills": {
+            "include": [
+                {"name": "pr-resolver", "version": "1.0.0", "skillVersion": "1.0.0"},
+            ],
+            "exclude": [
+                {"name": "legacy", "version": "0.1.0"},
+                "old-skill",
+            ],
+        },
+        "steps": [
+            {
+                "instructions": "Run targeted skill.",
+                "skills": {
+                    "include": [
+                        {
+                            "name": "fix-ci",
+                            "version": "2.0.0",
+                            "skillVersion": "2.0.0",
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+
+    sanitized = strip_workflow_capability_identity_versions(payload)
+
+    assert sanitized["skills"]["include"] == [{"name": "pr-resolver"}]
+    assert sanitized["skills"]["exclude"] == [{"name": "legacy"}, "old-skill"]
+    assert sanitized["steps"][0]["skills"]["include"] == [{"name": "fix-ci"}]
+
 
 def test_mm842_authoritative_snapshot_omits_authored_step_graph_metadata() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(

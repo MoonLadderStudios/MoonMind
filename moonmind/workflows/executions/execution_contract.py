@@ -191,6 +191,19 @@ def strip_workflow_capability_identity_versions(
                 node,
                 _CAPABILITY_IDENTITY_VERSION_KEYS,
             )
+    skills = sanitized.get("skills")
+    if isinstance(skills, Mapping):
+        sanitized["skills"] = {
+            list_key: [
+                _strip_identity_version_keys(item, _SKILL_IDENTITY_VERSION_KEYS)
+                if isinstance(item, Mapping)
+                else item
+                for item in items
+            ]
+            if isinstance(items, list)
+            else items
+            for list_key, items in skills.items()
+        }
     for key in (
         "taskTemplate",
         "task_template",
