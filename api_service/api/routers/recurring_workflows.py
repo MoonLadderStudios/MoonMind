@@ -46,12 +46,12 @@ class RecurringWorkflowDefinitionModel(BaseModel):
     last_scheduled_for: Optional[datetime] = Field(None, alias="lastScheduledFor")
     last_dispatch_status: Optional[str] = Field(None, alias="lastDispatchStatus")
     last_dispatch_error: Optional[str] = Field(None, alias="lastDispatchError")
+    temporal_schedule_id: Optional[str] = Field(None, alias="temporalScheduleId")
     owner_user_id: Optional[UUID] = Field(None, alias="ownerUserId")
     scope_type: str = Field(..., alias="scopeType")
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     target: dict[str, Any] = Field(default_factory=dict, alias="target")
     policy: dict[str, Any] = Field(default_factory=dict, alias="policy")
-    temporal_schedule_id: Optional[str] = Field(None, alias="temporalScheduleId")
     version: int = Field(..., alias="version")
     created_at: datetime = Field(..., alias="createdAt")
     updated_at: datetime = Field(..., alias="updatedAt")
@@ -77,6 +77,7 @@ class RecurringWorkflowRunModel(BaseModel):
     outcome: str = Field(..., alias="outcome")
     dispatch_attempts: int = Field(..., alias="dispatchAttempts")
     dispatch_after: Optional[datetime] = Field(None, alias="dispatchAfter")
+    started_at: Optional[datetime] = Field(None, alias="startedAt")
     temporal_workflow_id: Optional[str] = Field(None, alias="temporalWorkflowId")
     temporal_run_id: Optional[str] = Field(None, alias="temporalRunId")
     message: Optional[str] = Field(None, alias="message")
@@ -159,18 +160,22 @@ def _serialize_definition(
             if runtime_summary is not None
             else definition.last_dispatch_error
         ),
+        temporal_schedule_id=definition.temporal_schedule_id,
         owner_user_id=definition.owner_user_id,
         scope_type=definition.scope_type.value,
         scope_ref=definition.scope_ref,
         target=dict(definition.target or {}),
         policy=dict(definition.policy or {}),
-        temporal_schedule_id=definition.temporal_schedule_id,
         version=int(definition.version or 1),
         created_at=definition.created_at,
         updated_at=definition.updated_at,
     )
 
-def _serialize_run(run: RecurringWorkflowRun) -> RecurringWorkflowRunModel:
+def _serialize_run(
+    run: RecurringWorkflowRun,
+    *,
+    started_at: datetime | None = None,
+) -> RecurringWorkflowRunModel:
     return RecurringWorkflowRunModel(
         id=run.id,
         definition_id=run.definition_id,
@@ -179,6 +184,7 @@ def _serialize_run(run: RecurringWorkflowRun) -> RecurringWorkflowRunModel:
         outcome=run.outcome.value,
         dispatch_attempts=run.dispatch_attempts,
         dispatch_after=run.dispatch_after,
+        started_at=started_at,
         temporal_workflow_id=run.temporal_workflow_id,
         temporal_run_id=run.temporal_run_id,
         message=run.message,
@@ -486,6 +492,9 @@ async def list_recurring_workflow_runs(
             can_manage_global=bool(getattr(user, "is_superuser", False)),
         )
         runs = await service.list_runs(definition_id=definition.id, limit=limit)
+        started_at_by_workflow_id = await service.started_at_by_workflow_id(
+            item.temporal_workflow_id for item in runs if item.temporal_workflow_id
+        )
     except Exception as exc:  # pragma: no cover - thin mapping layer
         _log_route_exception(
             action="list_recurring_workflow_runs",
@@ -495,4 +504,14 @@ async def list_recurring_workflow_runs(
         )
         raise _map_error(exc) from exc
 
-    return RecurringWorkflowRunListResponse(items=[_serialize_run(item) for item in runs])
+    return RecurringWorkflowRunListResponse(
+        items=[
+            _serialize_run(
+                item,
+                started_at=started_at_by_workflow_id.get(
+                    str(item.temporal_workflow_id or "")
+                ),
+            )
+            for item in runs
+        ]
+    )

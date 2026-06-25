@@ -118,6 +118,18 @@ async def test_create_definition_creates_temporal_schedule(
                 "mm_owner_id": str(definition.owner_user_id),
             }
 
+
+async def test_started_at_by_workflow_id_orders_duplicate_rows_deterministically() -> None:
+    session = AsyncMock(spec=AsyncSession)
+    session.execute.return_value = SimpleNamespace(all=lambda: [])
+    service = RecurringWorkflowsService(session)
+
+    assert await service.started_at_by_workflow_id(["wf-1"]) == {}
+
+    statement = session.execute.await_args.args[0]
+    assert "ORDER BY temporal_executions.started_at ASC" in str(statement)
+
+
 async def test_create_definition_normalizes_snake_case_target_aliases(
     tmp_path: Path, mock_temporal_adapter
 ) -> None:

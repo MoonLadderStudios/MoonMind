@@ -170,7 +170,10 @@ async def test_create_recurring_workflow_returns_serialized_definition() -> None
 async def test_run_recurring_workflow_now_returns_run_row() -> None:
     service = AsyncMock()
     definition = _definition()
-    run_row = _run(definition_id=definition.id)
+    run_row = _run(
+        definition_id=definition.id,
+        temporal_workflow_id="workflow-from-schedule",
+    )
     service.require_authorized_definition.return_value = definition
     service.create_manual_run.return_value = run_row
     user = SimpleNamespace(id=uuid4(), is_superuser=False)
@@ -183,4 +186,32 @@ async def test_run_recurring_workflow_now_returns_run_row() -> None:
 
     assert response.definition_id == definition.id
     assert response.outcome == "pending_dispatch"
+    assert response.started_at is None
     service.create_manual_run.assert_awaited_once_with(definition)
+
+@pytest.mark.asyncio
+async def test_list_recurring_workflow_runs_hydrates_actual_start_time() -> None:
+    service = AsyncMock()
+    definition = _definition()
+    started_at = datetime(2026, 6, 24, 2, 0, 2, tzinfo=UTC)
+    run_row = _run(
+        definition_id=definition.id,
+        temporal_workflow_id="workflow-from-schedule",
+    )
+    service.require_authorized_definition.return_value = definition
+    service.list_runs.return_value = [run_row]
+    service.started_at_by_workflow_id.return_value = {
+        "workflow-from-schedule": started_at
+    }
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    response = await recurring_router.list_recurring_workflow_runs(
+        definition_id=definition.id,
+        limit=200,
+        service=service,
+        user=user,
+    )
+
+    assert response.items[0].temporal_workflow_id == "workflow-from-schedule"
+    assert response.items[0].started_at == started_at
+    service.started_at_by_workflow_id.assert_awaited_once()

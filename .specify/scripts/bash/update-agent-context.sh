@@ -266,6 +266,11 @@ get_language_conventions() {
     echo "$lang: Follow standard conventions"
 }
 
+agent_file_accepts_plan_history() {
+    local target_file="$1"
+    [[ "$(basename "$target_file")" != "AGENTS.md" ]]
+}
+
 create_new_agent_file() {
     local target_file="$1"
     local temp_file="$2"
@@ -349,9 +354,18 @@ create_new_agent_file() {
     # Convert \n sequences to actual newlines
     newline=$(printf '\n')
     sed -i.bak2 "s/\\\\n/${newline}/g" "$temp_file"
+
+    if ! agent_file_accepts_plan_history "$target_file"; then
+        sed -i.bak3 '/^## Active Technologies$/,/^## Project Structure$/{
+            /^## Project Structure$/!d
+        }' "$temp_file"
+        sed -i.bak4 '/^## Recent Changes$/,/^<!-- MANUAL ADDITIONS START -->$/{
+            /^<!-- MANUAL ADDITIONS START -->$/!d
+        }' "$temp_file"
+    fi
     
     # Clean up backup files
-    rm -f "$temp_file.bak" "$temp_file.bak2"
+    rm -f "$temp_file.bak" "$temp_file.bak2" "$temp_file.bak3" "$temp_file.bak4"
     
     return 0
 }
@@ -376,20 +390,24 @@ update_existing_agent_file() {
     local tech_stack=$(format_technology_stack "$NEW_LANG" "$NEW_FRAMEWORK")
     local new_tech_entries=()
     local new_change_entry=""
+    local accepts_plan_history=false
+    if agent_file_accepts_plan_history "$target_file"; then
+        accepts_plan_history=true
+    fi
     
     # Prepare new technology entries
-    if [[ -n "$tech_stack" ]] && ! grep -q "$tech_stack" "$target_file"; then
+    if [[ $accepts_plan_history == true ]] && [[ -n "$tech_stack" ]] && ! grep -q "$tech_stack" "$target_file"; then
         new_tech_entries+=("- $tech_stack ($CURRENT_BRANCH)")
     fi
     
-    if [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]] && ! grep -q "$NEW_DB" "$target_file"; then
+    if [[ $accepts_plan_history == true ]] && [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]] && ! grep -q "$NEW_DB" "$target_file"; then
         new_tech_entries+=("- $NEW_DB ($CURRENT_BRANCH)")
     fi
     
     # Prepare new change entry
-    if [[ -n "$tech_stack" ]]; then
+    if [[ $accepts_plan_history == true ]] && [[ -n "$tech_stack" ]]; then
         new_change_entry="- $CURRENT_BRANCH: Added $tech_stack"
-    elif [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]]; then
+    elif [[ $accepts_plan_history == true ]] && [[ -n "$NEW_DB" ]] && [[ "$NEW_DB" != "N/A" ]] && [[ "$NEW_DB" != "NEEDS CLARIFICATION" ]]; then
         new_change_entry="- $CURRENT_BRANCH: Added $NEW_DB"
     fi
     
@@ -787,4 +805,3 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi
-

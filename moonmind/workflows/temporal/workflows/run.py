@@ -10419,16 +10419,54 @@ class MoonMindRunWorkflow:
             nested = task_payload.get(key)
             if isinstance(nested, Mapping):
                 mappings.append(nested)
+        for templates in (
+            task_payload.get("appliedStepTemplates"),
+            task_payload.get("applied_step_templates"),
+        ):
+            if not isinstance(templates, Sequence) or isinstance(
+                templates, (str, bytes)
+            ):
+                continue
+            for template in templates:
+                if not isinstance(template, Mapping):
+                    continue
+                mappings.append(template)
+                for key in ("inputs", "input", "inputMapping", "input_mapping"):
+                    nested = template.get(key)
+                    if isinstance(nested, Mapping):
+                        mappings.append(nested)
         for mapping in mappings:
-            candidate = self._coerce_text(
-                mapping.get("jiraIssueKey")
-                or mapping.get("jira_issue_key")
-                or mapping.get("issueKey")
-                or mapping.get("issue_key"),
+            candidate = self._jira_issue_key_from_mapping(mapping)
+            if candidate:
+                return candidate
+        return None
+
+    def _jira_issue_key_from_mapping(self, mapping: Mapping[str, Any]) -> str | None:
+        candidate = self._coerce_text(
+            mapping.get("jiraIssueKey")
+            or mapping.get("jira_issue_key")
+            or mapping.get("issueKey")
+            or mapping.get("issue_key"),
+            max_chars=40,
+        )
+        normalized = str(candidate or "").strip().upper()
+        if normalized and _JIRA_ISSUE_KEY_PATTERN.fullmatch(normalized):
+            return normalized
+        for key in ("jiraIssue", "jira_issue", "jira"):
+            nested = mapping.get(key)
+            if not isinstance(nested, Mapping):
+                continue
+            nested_candidate = self._coerce_text(
+                nested.get("key")
+                or nested.get("issueKey")
+                or nested.get("issue_key"),
                 max_chars=40,
             )
-            if candidate and _JIRA_ISSUE_KEY_PATTERN.fullmatch(candidate.upper()):
-                return candidate.upper()
+            normalized_nested = str(nested_candidate or "").strip().upper()
+            if normalized_nested and _JIRA_ISSUE_KEY_PATTERN.fullmatch(
+                normalized_nested
+            ):
+                return normalized_nested
         return None
 
     def _is_jira_backed_task(

@@ -1,0 +1,31 @@
+# <System / Feature Name> — System / Feature Design View
+
+**Status:** Draft
+**Document Class:** Canonical declarative
+**Viewpoint:** System / Feature Design View
+**Owner:** <team or person>
+**Last Updated:** <YYYY-MM-DD>
+**Audience:** <primary readers>
+**Related:** <links to related canonical docs and/or source issues>
+
+> Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
+
+## 1. Purpose
+
+The problem this system or feature solves and the intended user-visible outcome.
+
+## 2. Desired behavior
+
+How it should behave, including the primary scenarios and edge cases that matter.
+
+## 3. Shape
+
+The key entities, states, and interfaces involved in the design.
+
+## 4. Non-goals
+
+What this design deliberately does not do.
+
+## 5. Constraints & decisions
+
+Constraints that bound the design and the decisions made within them.
