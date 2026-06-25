@@ -11,6 +11,7 @@ import secrets
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping
 from uuid import uuid4
@@ -1242,8 +1243,7 @@ class TemporalArtifactService:
     @staticmethod
     def _compute_digest_and_size(payload: bytes) -> tuple[str, int]:
         # Artifact digests are content-address/integrity identifiers, not password hashes.
-        digest = hashlib.new("sha256", usedforsecurity=False)
-        digest.update(payload)  # codeql[py/weak-sensitive-data-hashing] # lgtm[py/weak-sensitive-data-hashing]
+        digest = hashlib.file_digest(BytesIO(payload), "sha256")
         return digest.hexdigest(), len(payload)
 
     def _validate_integrity_declarations(
