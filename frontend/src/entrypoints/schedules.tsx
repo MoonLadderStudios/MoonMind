@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { DataTable } from '../components/tables/DataTable';
 
 import { z } from 'zod';
@@ -485,6 +485,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
   const [submitErrors, setSubmitErrors] = useState<ScheduleEditErrors>({});
+  const isEditingRef = useRef(false);
+
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
   const detailEndpoint = useMemo(() => scheduleEndpoint(payload, 'detail', definitionId), [payload, definitionId]);
   const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
   const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
@@ -542,6 +547,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       queryClient.setQueryData(['schedule-detail', definitionId, detailEndpoint], updated);
       setEditForm(editFormFromSchedule(updated));
       setSubmitErrors({});
+      isEditingRef.current = false;
       setIsEditing(false);
       await refreshDetail();
     },
@@ -563,6 +569,31 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
     },
   });
 
+  const pauseResumeMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      const response = await fetch(updateEndpoint, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
+      }
+      return ScheduleSchema.parse(await response.json());
+    },
+    onSuccess: async (updated) => {
+      queryClient.setQueryData(['schedule-detail', definitionId, detailEndpoint], updated);
+      setEditForm((previous) => {
+        if (isEditingRef.current && previous) {
+          return { ...previous, enabled: updated.enabled };
+        }
+        return editFormFromSchedule(updated);
+      });
+      await refreshDetail();
+    },
+  });
+
   const schedule = detailQuery.data;
   const runs = runsQuery.data?.items || [];
   const currentForm = editForm || (schedule ? editFormFromSchedule(schedule) : null);
@@ -578,6 +609,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       }
       const patchPayload = buildSchedulePatchPayload(schedule, currentForm);
       if (Object.keys(patchPayload).length === 0) {
+        isEditingRef.current = false;
         setIsEditing(false);
         return;
       }
@@ -633,7 +665,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             onClick={() => {
               setEditForm(editFormFromSchedule(schedule));
               setSubmitErrors({});
-              setIsEditing((value) => !value);
+              setIsEditing((value) => {
+                const next = !value;
+                isEditingRef.current = next;
+                return next;
+              });
             }}
           >
             {isEditing ? 'Cancel edit' : 'Edit schedule'}
@@ -646,6 +682,16 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
           >
             {runNowMutation.isPending ? 'Running' : 'Run now'}
           </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
+            disabled={pauseResumeMutation.isPending || isEditing || updateMutation.isPending}
+          >
+            {pauseResumeMutation.isPending
+              ? (schedule.enabled ? 'Pausing' : 'Resuming')
+              : (schedule.enabled ? 'Pause schedule' : 'Resume schedule')}
+          </button>
         </div>
       </header>
 
@@ -657,6 +703,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
       {runNowMutation.isError && (
         <div className="schedules-error" role="alert">
           {errorMessage(runNowMutation.error, 'Failed to run schedule')}
+        </div>
+      )}
+      {pauseResumeMutation.isError && (
+        <div className="schedules-error" role="alert">
+          {errorMessage(pauseResumeMutation.error, schedule.enabled ? 'Failed to pause schedule' : 'Failed to resume schedule')}
         </div>
       )}
 
@@ -821,6 +872,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                   onClick={() => {
                     setEditForm(editFormFromSchedule(schedule));
                     setSubmitErrors({});
+                    isEditingRef.current = false;
                     setIsEditing(false);
                   }}
                 >

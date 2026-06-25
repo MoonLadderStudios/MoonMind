@@ -299,6 +299,10 @@ describe("SchedulesPage", () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(false);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
+    expect(screen.getByRole("button", { name: "Edit schedule" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Run now" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Pause schedule" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /delete schedule/i })).toBeNull();
   });
 
   it("ignores malformed schedule route ids instead of throwing during render", async () => {
@@ -607,5 +611,98 @@ describe("SchedulesPage", () => {
       "/workflows/workflow-from-schedule?source=temporal",
     );
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("disables pause and resume while editing schedule configuration", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    const pauseButton = screen.getByRole("button", { name: "Pause schedule" }) as HTMLButtonElement;
+    expect(pauseButton.disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+
+    expect((screen.getByRole("button", { name: "Pause schedule" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("preserves unsaved edits when a pending pause update resolves after editing starts", async () => {
+    let resolvePause: ((response: Response) => void) | undefined;
+    fetchSpy.mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/console/schedules/schedule-alpha" && method === "PATCH") {
+        return new Promise<Response>((resolve) => {
+          resolvePause = resolve;
+        });
+      }
+      if (url === "/console/schedules/schedule-alpha/run" && method === "POST") {
+        return { ok: true, json: async () => ({ ...detailRuns.items[0], id: "run-manual", trigger: "manual" }) } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: true, json: async () => detailRuns } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha") {
+        return { ok: true, json: async () => detailSchedule } as Response;
+      }
+      throw new Error(`Unexpected fetch ${method} ${url}`);
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Pause schedule" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit schedule" }));
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Unsaved schedule name" } });
+
+    await waitFor(() => {
+      expect(resolvePause).toBeDefined();
+    });
+    resolvePause?.({
+      ok: true,
+      json: async () => ({ ...detailSchedule, enabled: false }),
+    } as Response);
+
+    await waitFor(() => {
+      expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Unsaved schedule name");
+      expect((screen.getByLabelText("Enabled") as HTMLInputElement).checked).toBe(false);
+    });
+  });
+
+  it("pauses schedules through the detail update contract", async () => {
+    mockScheduleDetailFetch(fetchSpy);
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Pause schedule" }));
+
+    await waitFor(() => {
+      const pauseCall = fetchSpy.mock.calls.find(([url, init]) => (
+        String(url) === "/console/schedules/schedule-alpha"
+        && String(init?.method || "GET").toUpperCase() === "PATCH"
+        && JSON.parse(String(init?.body || "{}")).enabled === false
+      ));
+      expect(pauseCall).toBeDefined();
+    });
+  });
+
+  it("resumes paused schedules through the detail update contract", async () => {
+    mockScheduleDetailFetch(fetchSpy, { enabled: false });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Resume schedule" }));
+
+    await waitFor(() => {
+      const resumeCall = fetchSpy.mock.calls.find(([url, init]) => (
+        String(url) === "/console/schedules/schedule-alpha"
+        && String(init?.method || "GET").toUpperCase() === "PATCH"
+        && JSON.parse(String(init?.body || "{}")).enabled === true
+      ));
+      expect(resumeCall).toBeDefined();
+    });
   });
 });
