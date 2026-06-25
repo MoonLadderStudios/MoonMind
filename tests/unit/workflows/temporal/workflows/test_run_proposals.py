@@ -570,7 +570,6 @@ async def test_run_proposals_stage_passes_artifact_refs_instead_of_raw_inputs(
                     {
                         "id": "preset-1",
                         "name": "Implementation preset",
-                        "version": "2026-06-21",
                         "sourceRef": "artifact://preset-source",
                         "body": "raw preset body should not cross workflow history",
                     }
@@ -605,7 +604,6 @@ async def test_run_proposals_stage_passes_artifact_refs_instead_of_raw_inputs(
                 {
                     "id": "preset-1",
                     "name": "Implementation preset",
-                    "version": "2026-06-21",
                     "sourceRef": "artifact://preset-source",
                     "index": 0,
                 }
