@@ -2134,7 +2134,6 @@ def register_deployment_update_tool_handler(
 ) -> None:
     dispatcher.register_skill(
         skill_name=DEPLOYMENT_UPDATE_TOOL_NAME,
-        version=DEPLOYMENT_UPDATE_TOOL_VERSION,
         handler=build_deployment_update_handler(executor),
     )
 

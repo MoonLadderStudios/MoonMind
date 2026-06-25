@@ -31,13 +31,13 @@ from moonmind.workflows.skills.skill_registry import (
     create_registry_snapshot,
     parse_skill_registry,
 )
+from moonmind.workflows.skills.tool_registry import ToolRegistryError
 
 def _registry_payload() -> dict:
     return {
         "skills": [
             {
                 "name": "repo.run_tests",
-                "version": "1.0.0",
                 "description": "Run tests and publish report artifact ref",
                 "inputs": {
                     "schema": {
@@ -75,7 +75,6 @@ def _registry_payload() -> dict:
             },
             {
                 "name": "repo.apply_patch",
-                "version": "2.1.0",
                 "description": "Apply patch from artifact",
                 "inputs": {
                     "schema": {
@@ -138,12 +137,12 @@ def _plan_payload(
         "nodes": [
             {
                 "id": "n1",
-                "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                "skill": {"name": "repo.run_tests"},
                 "inputs": {"repo_ref": "git:org/repo#branch"},
             },
             {
                 "id": "n2",
-                "skill": {"name": "repo.apply_patch", "version": "2.1.0"},
+                "skill": {"name": "repo.apply_patch"},
                 "inputs": {
                     "repo_ref": "git:org/repo#branch",
                     "patch_artifact": {
@@ -190,6 +189,39 @@ def test_validate_plan_payload_accepts_dag_and_refs():
     validated = validate_plan_payload(payload=plan_payload, registry_snapshot=snapshot)
 
     assert validated.topological_order == ("n1", "n2")
+
+def test_parse_skill_registry_rejects_tool_definition_version_field():
+    payload = _registry_payload()
+    payload["skills"][0]["version"] = "1.0.0"
+
+    with pytest.raises(ToolRegistryError, match="ToolDefinition.version"):
+        parse_skill_registry(payload)
+
+def test_parse_skill_registry_rejects_duplicate_tool_names():
+    payload = _registry_payload()
+    duplicate = dict(payload["skills"][0])
+    duplicate["description"] = "Duplicate name"
+    payload["skills"].append(duplicate)
+
+    with pytest.raises(ToolRegistryError, match="Duplicate tool definition"):
+        parse_skill_registry(payload)
+
+def test_parse_plan_definition_rejects_tool_version_field():
+    store = InMemoryArtifactStore()
+    snapshot = _snapshot(store)
+    plan_payload = _plan_payload(
+        snapshot_digest=snapshot.digest,
+        snapshot_ref=snapshot.artifact_ref,
+    )
+    plan_payload["nodes"][0]["tool"] = {
+        "type": "skill",
+        "name": "repo.run_tests",
+        "version": "1.0.0",
+    }
+    del plan_payload["nodes"][0]["skill"]
+
+    with pytest.raises(ValueError, match="node.tool.version"):
+        parse_plan_definition(plan_payload)
 
 def test_validate_plan_payload_rejects_invalid_reference_pointer():
     store = InMemoryArtifactStore()
@@ -240,7 +272,7 @@ def test_parse_plan_definition_accepts_tool_nodes():
         snapshot_ref=snapshot.artifact_ref,
     )
     first = plan_payload["nodes"][0]
-    first["tool"] = {"type": "skill", "name": "repo.run_tests", "version": "1.0.0"}
+    first["tool"] = {"type": "skill", "name": "repo.run_tests"}
     del first["skill"]
 
     parsed = parse_plan_definition(plan_payload)
@@ -357,7 +389,7 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
         )
 
     dispatcher.register_skill(
-        skill_name="repo.run_tests", version="1.0.0", handler=mm_handler
+        skill_name="repo.run_tests", handler=mm_handler
     )
     dispatcher.register_activity(
         activity_type="sandbox.run_command", handler=sandbox_handler
@@ -367,7 +399,7 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
         execute_skill_activity(
             invocation_payload={
                 "id": "n1",
-                "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                "skill": {"name": "repo.run_tests"},
                 "inputs": {"repo_ref": "git:org/repo#branch"},
             },
             registry_snapshot=snapshot,
@@ -378,7 +410,7 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
         execute_skill_activity(
             invocation_payload={
                 "id": "n2",
-                "skill": {"name": "repo.apply_patch", "version": "2.1.0"},
+                "skill": {"name": "repo.apply_patch"},
                 "inputs": {
                     "repo_ref": "git:org/repo#branch",
                     "patch_artifact": "art:sha256:feed",
@@ -400,7 +432,6 @@ def test_skill_dispatcher_accepts_tool_payload_alias():
 
     dispatcher.register_skill(
         skill_name="repo.run_tests",
-        version="1.0.0",
         handler=lambda inputs, _context: SkillResult(
             status="COMPLETED",
             outputs={"test_report_artifact": inputs["repo_ref"]},
@@ -411,7 +442,7 @@ def test_skill_dispatcher_accepts_tool_payload_alias():
         execute_skill_activity(
             invocation_payload={
                 "id": "n1",
-                "tool": {"type": "skill", "name": "repo.run_tests", "version": "1.0.0"},
+                "tool": {"type": "skill", "name": "repo.run_tests"},
                 "inputs": {"repo_ref": "git:org/repo#branch"},
             },
             registry_snapshot=snapshot,

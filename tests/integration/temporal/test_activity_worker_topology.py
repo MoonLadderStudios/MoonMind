@@ -96,7 +96,7 @@ def _planner(_inputs, _parameters, _snapshot):
         "nodes": [
             {
                 "id": "n1",
-                "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                "skill": {"name": "repo.run_tests"},
                 "inputs": {"repo_ref": "git:org/repo#main"},
             }
         ],

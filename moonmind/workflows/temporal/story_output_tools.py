@@ -3303,7 +3303,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=JIRA_CREATE_ISSUES_TOOL_NAME,
-        version="1.0",
         handler=_create_jira_issues,
     )
 
@@ -3319,7 +3318,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
-        version="1.0",
         handler=_create_jira_orchestrate_tasks,
     )
 
@@ -3335,7 +3333,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=JIRA_IMPLEMENT_TASKS_TOOL_NAME,
-        version="1.0",
         handler=_create_jira_implement_tasks,
     )
 
@@ -3347,7 +3344,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=JIRA_CHECK_BLOCKERS_TOOL_NAME,
-        version="1.0",
         handler=_check_jira_blockers,
     )
 
@@ -3359,7 +3355,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=JIRA_LOAD_PRESET_BRIEF_TOOL_NAME,
-        version="1.0",
         handler=_load_jira_preset_brief,
     )
 
@@ -3371,7 +3366,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME,
-        version="1.0",
         handler=_load_github_issue_preset_brief,
     )
 
@@ -3383,7 +3377,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME,
-        version="1.0",
         handler=_check_github_issue_blockers,
     )
 
@@ -3395,7 +3388,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME,
-        version="1.0",
         handler=_update_github_issue_status,
     )
 
@@ -3407,7 +3399,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=DOCUMENT_DISCOVER_TOOL_NAME,
-        version="1.0",
         handler=_discover_documents,
     )
 
@@ -3423,7 +3414,6 @@ def register_story_output_tool_handlers(
 
     dispatcher.register_skill(
         skill_name=DOCUMENT_UPDATE_TASKS_TOOL_NAME,
-        version="1.0",
         handler=_create_document_update_tasks,
     )
 

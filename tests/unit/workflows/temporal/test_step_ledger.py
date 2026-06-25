@@ -25,12 +25,12 @@ def test_build_initial_step_rows_uses_plan_metadata_and_dependencies() -> None:
         ordered_nodes=[
             {
                 "id": "step-1",
-                "tool": {"type": "skill", "name": "repo.setup", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.setup"},
                 "inputs": {"title": "Prepare workspace"},
             },
             {
                 "id": "step-2",
-                "tool": {"type": "skill", "name": "repo.test", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.test"},
                 "inputs": {"title": "Run tests"},
             },
         ],
@@ -102,11 +102,11 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
         ordered_nodes=[
             {
                 "id": "",
-                "tool": {"type": "skill", "name": "repo.invalid", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.invalid"},
             },
             {
                 "id": "step-2",
-                "tool": {"type": "skill", "name": "repo.test", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.test"},
                 "inputs": {"title": "Run tests"},
             },
         ],
@@ -119,7 +119,7 @@ def test_build_initial_step_rows_skips_blank_node_ids() -> None:
             "logicalStepId": "step-2",
             "order": 1,
             "title": "Run tests",
-            "tool": {"type": "skill", "name": "repo.test", "version": "1"},
+            "tool": {"type": "skill", "name": "repo.test"},
             "dependsOn": [],
             "status": "ready",
             "waitingReason": None,
@@ -245,7 +245,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "logicalStepId": "run-tests",
             "order": 2,
             "title": "Run tests",
-            "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+            "tool": {"type": "skill", "name": "repo.run_tests"},
             "dependsOn": ["prepare-workspace"],
             "status": "running",
             "waitingReason": None,
@@ -273,7 +273,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "logicalStepId": "delegate-agent",
             "order": 3,
             "title": "Delegate agent run",
-            "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+            "tool": {"type": "agent_runtime", "name": "codex"},
             "dependsOn": ["run-tests"],
             "status": "awaiting_external",
             "waitingReason": "Awaiting child workflow progress",
@@ -305,7 +305,7 @@ def test_contract_models_accept_representative_rows_and_progress() -> None:
             "logicalStepId": "review-patch",
             "order": 4,
             "title": "Review patch",
-            "tool": {"type": "skill", "name": "repo.review_patch", "version": "1"},
+            "tool": {"type": "skill", "name": "repo.review_patch"},
             "dependsOn": ["delegate-agent"],
             "status": "reviewing",
             "waitingReason": "Awaiting structured review result",
@@ -465,7 +465,7 @@ def test_update_step_row_allows_explicit_last_error_clear() -> None:
         ordered_nodes=[
             {
                 "id": "run-tests",
-                "tool": {"type": "skill", "name": "repo.test", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.test"},
                 "inputs": {"title": "Run tests"},
             }
         ],
@@ -496,7 +496,7 @@ def test_upsert_step_check_updates_existing_review_state() -> None:
         ordered_nodes=[
             {
                 "id": "review-patch",
-                "tool": {"type": "skill", "name": "repo.review_patch", "version": "1"},
+                "tool": {"type": "skill", "name": "repo.review_patch"},
                 "inputs": {"title": "Review patch"},
             }
         ],
@@ -540,7 +540,7 @@ def test_update_step_row_merges_structured_refs_and_artifacts() -> None:
         ordered_nodes=[
             {
                 "id": "delegate-agent",
-                "tool": {"type": "agent_runtime", "name": "codex", "version": ""},
+                "tool": {"type": "agent_runtime", "name": "codex"},
                 "inputs": {"title": "Delegate agent"},
             }
         ],
@@ -594,7 +594,7 @@ def test_mark_step_execution_manifest_evidence_tracks_latest_and_history() -> No
         ordered_nodes=[
             {
                 "id": "implement",
-                "tool": {"type": "skill", "name": "codex", "version": "1"},
+                "tool": {"type": "skill", "name": "codex"},
                 "inputs": {"title": "Implement"},
             }
         ],

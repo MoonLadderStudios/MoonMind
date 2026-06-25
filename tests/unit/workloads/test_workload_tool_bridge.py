@@ -196,10 +196,7 @@ class _FailingLauncher:
         raise AssertionError("launcher should not run")
 
 def test_container_run_workload_tool_definition_routes_to_docker_workload() -> None:
-    definition = build_dood_tool_definition_payload(
-        name="container.run_workload",
-        version="1.0",
-    )
+    definition = build_dood_tool_definition_payload(name="container.run_workload")
 
     assert definition["type"] == "skill"
     assert definition["executor"]["activity_type"] == "mm.tool.execute"
@@ -232,7 +229,7 @@ def test_container_run_workload_tool_definition_routes_to_docker_workload() -> N
     ],
 )
 def test_dood_tool_definitions_expose_generic_collect_globs(tool_name: str) -> None:
-    definition = build_dood_tool_definition_payload(name=tool_name, version="1.0")
+    definition = build_dood_tool_definition_payload(name=tool_name)
     collect_globs_schema = definition["inputs"]["schema"]["properties"]["collectGlobs"]
     assert collect_globs_schema == {
         "type": "array",
@@ -240,10 +237,7 @@ def test_dood_tool_definitions_expose_generic_collect_globs(tool_name: str) -> N
     }
 
 def test_unreal_run_tests_tool_definition_routes_to_docker_workload() -> None:
-    definition = build_dood_tool_definition_payload(
-        name="unreal.run_tests",
-        version="1.0",
-    )
+    definition = build_dood_tool_definition_payload(name="unreal.run_tests")
 
     assert definition["type"] == "skill"
     assert definition["executor"]["activity_type"] == "mm.tool.execute"
@@ -285,10 +279,7 @@ def test_helper_tool_definitions_route_to_docker_workload(
     tool_name: str,
     required: list[str],
 ) -> None:
-    definition = build_dood_tool_definition_payload(
-        name=tool_name,
-        version="1.0",
-    )
+    definition = build_dood_tool_definition_payload(name=tool_name)
 
     assert definition["type"] == "skill"
     assert definition["executor"]["activity_type"] == "mm.tool.execute"
@@ -436,10 +427,7 @@ async def test_workload_tool_handler_preserves_report_publication_metadata() -> 
 
 
 def test_integration_ci_tool_definition_routes_to_docker_workload() -> None:
-    definition = build_dood_tool_definition_payload(
-        name=INTEGRATION_CI_TOOL,
-        version="1.0",
-    )
+    definition = build_dood_tool_definition_payload(name=INTEGRATION_CI_TOOL)
 
     assert definition["name"] == INTEGRATION_CI_TOOL
     assert definition["type"] == "skill"
@@ -973,14 +961,14 @@ async def test_unreal_run_tests_handler_requires_project_path_before_launch() ->
 
 class _RecordingDispatcher:
     def __init__(self) -> None:
-        self.skills: list[tuple[str, str]] = []
+        self.skills: list[str] = []
 
-    def register_skill(self, *, skill_name: str, version: str, handler: Any) -> None:
-        self.skills.append((skill_name, version))
+    def register_skill(self, *, skill_name: str, handler: Any) -> None:
+        self.skills.append(skill_name)
 
 def test_unrestricted_tool_definitions_are_registered_as_docker_workloads() -> None:
     for tool_name in (CONTAINER_RUN_CONTAINER_TOOL, CONTAINER_RUN_DOCKER_TOOL):
-        definition = build_dood_tool_definition_payload(name=tool_name, version="1.0")
+        definition = build_dood_tool_definition_payload(name=tool_name)
 
         assert definition["type"] == "skill"
         assert definition["executor"]["activity_type"] == "mm.tool.execute"
@@ -1008,7 +996,7 @@ def test_register_workload_tool_handlers_exposes_only_curated_tools_in_profiles_
         workflow_docker_mode="profiles",
     )
 
-    registered = {name for name, _version in dispatcher.skills}
+    registered = set(dispatcher.skills)
     assert CONTAINER_RUN_CONTAINER_TOOL not in registered
     assert CONTAINER_RUN_DOCKER_TOOL not in registered
     assert INTEGRATION_CI_TOOL in registered
@@ -1023,7 +1011,7 @@ def test_register_workload_tool_handlers_exposes_unrestricted_tools_only_in_unre
         workflow_docker_mode="unrestricted",
     )
 
-    registered = {name for name, _version in dispatcher.skills}
+    registered = set(dispatcher.skills)
     assert registered == DOOD_TOOL_NAMES
 
 @pytest.mark.asyncio

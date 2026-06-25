@@ -35,7 +35,6 @@ async def step_review_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
         total_steps=int(payload.get("total_steps") or 1),
         review_attempt=int(payload.get("review_attempt") or 1),
         tool_name=str(payload.get("tool_name") or ""),
-        tool_version=str(payload.get("tool_version") or ""),
         tool_type=str(payload.get("tool_type") or "skill"),
         inputs=payload.get("inputs") if isinstance(payload.get("inputs"), dict) else {},
         execution_result=(

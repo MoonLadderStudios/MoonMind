@@ -34,7 +34,6 @@ class ReviewRequest:
     total_steps: int
     review_attempt: int
     tool_name: str
-    tool_version: str
     tool_type: str
     inputs: Mapping[str, Any]
     execution_result: Mapping[str, Any]
@@ -64,7 +63,6 @@ class ReviewRequest:
             "total_steps": self.total_steps,
             "review_attempt": self.review_attempt,
             "tool_name": self.tool_name,
-            "tool_version": self.tool_version,
             "tool_type": self.tool_type,
             "inputs": dict(self.inputs),
             "execution_result": dict(self.execution_result),
@@ -446,7 +444,7 @@ You are a code review agent for MoonMind. Your job is to evaluate whether a \
 workflow step achieved its intended outcome.
 
 ## Step Information
-- Tool: {tool_name} v{tool_version}
+- Tool: {tool_name}
 - Step {step_index} of {total_steps} in plan "{plan_title}"
 
 ## Step Inputs (what the step was asked to do)
@@ -487,7 +485,6 @@ def build_review_prompt(request: ReviewRequest) -> str:
 
     return _REVIEW_PROMPT_TEMPLATE.format(
         tool_name=request.tool_name,
-        tool_version=request.tool_version,
         step_index=request.step_index,
         total_steps=request.total_steps,
         plan_title=plan_title,

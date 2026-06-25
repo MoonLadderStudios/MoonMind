@@ -43,7 +43,7 @@ def test_merge_automation_request_infers_jira_orchestrate_issue_key() -> None:
             ),
             "task": {
                 "tool": {"type": "skill", "name": "jira-orchestrate"},
-                "skill": {"name": "jira-orchestrate", "version": "1.0"},
+                "skill": {"name": "jira-orchestrate"},
                 "instructions": (
                     "Use the trusted Jira issue updater workflow for THOR-336."
                 ),
@@ -406,7 +406,7 @@ def test_build_merge_gate_start_payload_carries_inferred_jira_orchestrate_key() 
                 "implementation starts."
             ),
             "task": {
-                "skill": {"name": "jira-orchestrate", "version": "1.0"},
+                "skill": {"name": "jira-orchestrate"},
                 "tool": {"type": "skill", "name": "jira-orchestrate"},
                 "instructions": (
                     "Use the trusted Jira issue updater workflow for THOR-336."

@@ -35,7 +35,7 @@ class ToolActivityDispatcher:
     """Routes tool invocations based on activity type and tool key."""
 
     _activity_handlers: dict[str, ActivityHandler] = field(default_factory=dict)
-    _skill_handlers: dict[tuple[str, str], SkillHandler] = field(default_factory=dict)
+    _skill_handlers: dict[str, SkillHandler] = field(default_factory=dict)
     _default_skill_handler: SkillHandler | None = None
 
     def register_activity(
@@ -52,13 +52,12 @@ class ToolActivityDispatcher:
         self,
         *,
         skill_name: str,
-        version: str,
         handler: SkillHandler,
     ) -> None:
-        key = (str(skill_name or "").strip(), str(version or "").strip())
-        if not key[0] or not key[1]:
+        key = str(skill_name or "").strip()
+        if not key:
             raise ToolDispatchError(
-                "invalid_dispatch", "skill_name and version must be non-empty"
+                "invalid_dispatch", "skill_name must be non-empty"
             )
         self._skill_handlers[key] = handler
 
@@ -79,10 +78,7 @@ class ToolActivityDispatcher:
         snapshot: ToolRegistrySnapshot,
         context: Mapping[str, Any] | None = None,
     ) -> ToolResult:
-        definition = snapshot.get_tool(
-            name=invocation.skill_name,
-            version=invocation.skill_version,
-        )
+        definition = snapshot.get_tool(name=invocation.skill_name)
         activity_type = definition.executor.activity_type
 
         if activity_type in {"mm.tool.execute", "mm.skill.execute"}:
@@ -94,7 +90,7 @@ class ToolActivityDispatcher:
                     "tool_handler_not_registered",
                     "No "
                     f"{activity_type} handler registered for "
-                    f"{invocation.skill_name}:{invocation.skill_version}",
+                    f"{invocation.skill_name}",
                 )
             result = handler(invocation.inputs, context)
         else:
@@ -139,8 +135,18 @@ async def execute_tool_activity(
                     "invalid_payload",
                     "tool.type must be 'skill' for the current runtime contract",
                 )
+            if "version" in tool_payload:
+                raise ToolDispatchError(
+                    "invalid_payload",
+                    "tool.version is not supported; executable tools are identified by name only",
+                )
             selected_payload = tool_payload
         elif isinstance(skill_payload, Mapping):
+            if "version" in skill_payload:
+                raise ToolDispatchError(
+                    "invalid_payload",
+                    "skill.version is not supported; executable tools are identified by name only",
+                )
             selected_payload = skill_payload
         else:
             raise ToolDispatchError(
@@ -160,7 +166,6 @@ async def execute_tool_activity(
             skill_name=str(
                 selected_payload.get("name") or selected_payload.get("id") or ""
             ).strip(),
-            skill_version=str(selected_payload.get("version") or "").strip(),
             inputs=inputs,
             options=(
                 invocation_payload.get("options")

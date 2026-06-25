@@ -813,7 +813,6 @@ async def test_create_execution_promotes_legacy_task_payload_to_workflow(
                             "tool": {
                                 "type": "skill",
                                 "name": "deployment.update_compose_stack",
-                                "version": "1.0.0",
                                 "inputs": {"stack": "moonmind"},
                             },
                         }
@@ -3643,9 +3642,8 @@ async def test_fresh_rerun_expands_unexpanded_jira_orchestrate_template(
                     "tool": {
                         "type": "skill",
                         "name": "jira-orchestrate",
-                        "version": "1.0",
                     },
-                    "skill": {"name": "jira-orchestrate", "version": "1.0"},
+                    "skill": {"name": "jira-orchestrate"},
                     "inputs": {
                         "jira_issue_key": "MM-820",
                         "source_design_path": (

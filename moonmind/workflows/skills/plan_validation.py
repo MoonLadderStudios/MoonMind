@@ -331,13 +331,13 @@ def validate_plan(
         node_id: tuple(sorted(values)) for node_id, values in outgoing_list.items()
     }
 
-    registry_skills: dict[tuple[str, str], SkillDefinition] = registry_snapshot.by_key
+    registry_skills: dict[str, SkillDefinition] = registry_snapshot.by_key
     for node in plan.nodes:
         definition = registry_skills.get(node.skill_key)
         if definition is None:
             raise PlanValidationError(
                 "invalid_plan",
-                f"Plan node '{node.id}' references unknown skill '{node.skill_name}:{node.skill_version}'",
+                f"Plan node '{node.id}' references unknown tool '{node.skill_name}'",
             )
 
         _validate_schema_shape(definition.input_schema, path=f"{node.id}.inputs")
