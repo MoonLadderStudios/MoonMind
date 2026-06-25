@@ -75,7 +75,7 @@ Where this is headed: self-healing remediation workflows — already taking shap
 
 "It finished" is not an answer. MoonMind treats every run as an evidence-producing process:
 
-- **Mission Control.** Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI.
+- **The dashboard.** Track run status in real time, inspect per-step progress, open step-scoped logs and diagnostics, browse generated artifacts, monitor intervention requests, and audit execution histories from a single UI.
 - **Live logs as a session-aware timeline.** Merged stdout/stderr/system/session events stream over SSE into one ordered, run-global sequence — with durable artifact-backed replay after the run ends. Session boundaries, resets, and epochs are explicit, observable events.
 - **Artifact-first outputs.** Prompts, transcripts, diffs, and diagnostics are stored as immutable, content-addressed artifacts rather than buried in process logs, so every run's evidence outlives the container that produced it.
 - **Correlated structured logs.** Every log line carries correlation IDs tying it to its workflow, run, activity, and trace — "what happened?" is answerable without reading raw worker internals.
@@ -88,7 +88,7 @@ Other platforms make you rebuild agents in their SDK. MoonMind operates at a hig
 
 - **Managed sessions and managed runs.** MoonMind runs owned CLI runtimes on your own infrastructure using your existing subscriptions or API keys.
 - **Step-based context management.** Agents perform better on small, focused tasks. MoonMind injects the right context into each step and clears it between steps to prevent context-window pollution.
-- **Personal-use friendly defaults.** A fresh local install boots with `docker compose up -d`; enter a few secrets in Mission Control and go — no enterprise secret infrastructure required up front.
+- **Personal-use friendly defaults.** A fresh local install boots with `docker compose up -d`; enter a few secrets in the dashboard and go — no enterprise secret infrastructure required up front.
 
 ### 🔓 Free Yourself from Vendor Lock-In
 
@@ -104,12 +104,12 @@ MoonMind runs as a set of decoupled containers from a single `docker-compose.yam
 
 | Component | Role |
 | --- | --- |
-| **API Service** | FastAPI control plane for Mission Control, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
+| **API Service** | FastAPI control plane for the dashboard, `/api/executions`, artifacts, templates, proposals, and MCP/context surfaces. |
 | **Temporal Server** | Durable execution engine with PostgreSQL persistence. |
 | **Worker Fleet** | Specialized isolated workers for orchestration, sandbox execution, LLM calls, managed runtime supervision, and external integrations. |
 | **Managed Session Plane** | Workflow-scoped owned runtime sessions for Codex CLI. Ordinary managed-session Docker work uses a per-session sidecar daemon rather than the host socket. Claude Code and additional runtime adapters can adopt the same shared `ManagedSession*` pattern once they provide a runtime-specific session controller. |
 | **Docker Workload Plane** | Control-plane-launched specialized workload containers for MoonMind admin/update, helper, and deliberately gated exceptional workloads, kept separate from managed agent session identity. |
-| **Mission Control** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
+| **Dashboard** | Operational dashboard for managing workflows, reviewing per-step progress, and inspecting logs, diagnostics, and artifacts. |
 | **Qdrant & MinIO** | Vector database for RAG/memory, and S3-compatible artifact storage. |
 | **Docker Proxy** | Restricted Docker socket access for control-plane workload workers; ordinary managed sessions use their private sidecar daemon instead of the host socket. |
 

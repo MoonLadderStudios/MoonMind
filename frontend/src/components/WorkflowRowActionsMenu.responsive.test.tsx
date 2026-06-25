@@ -8,15 +8,15 @@ import { fireEvent, screen } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { WorkflowRowActionsMenu } from './WorkflowRowActionsMenu';
 
-const missionControlCss = readFileSync(
-  `${process.cwd()}/frontend/src/styles/mission-control.css`,
+const dashboardCss = readFileSync(
+  `${process.cwd()}/frontend/src/styles/dashboard.css`,
   'utf8',
 );
 
 let parsedCss: Root | null = null;
 
 function cssRoot(): Root {
-  parsedCss ??= postcss.parse(missionControlCss);
+  parsedCss ??= postcss.parse(dashboardCss);
   return parsedCss;
 }
 

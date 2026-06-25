@@ -377,7 +377,7 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
         idempotencyKey="idem-codex-rollout",
         parameters={
             "publishMode": "none",
-            "instructions": "Shrink the Mission Control title text a bit",
+            "instructions": "Shrink the dashboard title text a bit",
         },
         managedSession={
             "workflowId": "test-codex-session-workflow",

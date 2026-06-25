@@ -13,7 +13,7 @@ import type { Root, Rule } from 'postcss';
 
 import type { BootPayload } from '../boot/parseBootPayload';
 import { fireEvent, renderWithClient, screen, waitFor } from '../utils/test-utils';
-import { MissionControlApp } from './mission-control-app';
+import { DashboardApp } from './dashboard-app';
 
 function normalizeCssSelector(selector: string): string {
   return selector
@@ -104,15 +104,15 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }));
 
-describe('Mission Control shared entry', () => {
+describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
-  let missionControlCss: string;
+  let dashboardCss: string;
   const originalWebSocket = window.WebSocket;
 
   beforeAll(async () => {
     const { readFileSync } = await import('node:fs');
-    missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+    dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
   });
@@ -157,7 +157,7 @@ describe('Mission Control shared entry', () => {
       },
     };
 
-    renderWithClient(<MissionControlApp payload={payload} />);
+    renderWithClient(<DashboardApp payload={payload} />);
 
     expect(await screen.findByRole('heading', { name: 'Workflows' }, { timeout: 10000 })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open workflows' }).getAttribute('href')).toBe('/workflows');
@@ -170,16 +170,16 @@ describe('Mission Control shared entry', () => {
     });
   });
 
-  it('does not register a Mission Control proposal review page for MM-859', async () => {
-    renderWithClient(<MissionControlApp payload={{ page: 'proposals', apiBase: '/api' }} />);
+  it('does not register a dashboard proposal review page for MM-859', async () => {
+    renderWithClient(<DashboardApp payload={{ page: 'proposals', apiBase: '/api' }} />);
 
-    expect(await screen.findByText('Unknown Mission Control page:')).toBeTruthy();
+    expect(await screen.findByText('Unknown dashboard page:')).toBeTruthy();
     expect(screen.getByText('proposals')).toBeTruthy();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
-    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
+    renderWithClient(<DashboardApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
     expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open workflows' }).getAttribute('href')).toBe('/workflows');
@@ -189,7 +189,7 @@ describe('Mission Control shared entry', () => {
   });
 
   it('uses the constrained shell by default for non-table pages', async () => {
-    renderWithClient(<MissionControlApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
+    renderWithClient(<DashboardApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
     expect(await screen.findByRole('heading', { name: 'Workflows' })).toBeTruthy();
     expect(document.querySelector('.panel--data-wide')).toBeNull();
@@ -198,10 +198,10 @@ describe('Mission Control shared entry', () => {
   });
 
   it('keeps the default panel constrained and centered while data routes opt wider', async () => {
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.panel\s*\{[^}]*margin-left:\s*auto;[^}]*margin-right:\s*auto;[^}]*max-width:\s*min\(72rem,\s*calc\(100vw - 2rem\)\)/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.panel\.panel--data-wide\s*\{[^}]*max-width:\s*min\(112rem,\s*calc\(100vw - 2rem\)\)/s,
     );
   });
@@ -221,45 +221,45 @@ describe('Mission Control shared entry', () => {
     ];
 
     for (const token of requiredTokens) {
-      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
-      expect(missionControlCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
+      expect(dashboardCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+      expect(dashboardCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
     }
   });
 
-  it('renders Mission Control atmosphere and shared chrome from visual tokens', async () => {
-    expect(missionControlCss).toMatch(
+  it('renders dashboard atmosphere and shared chrome from visual tokens', async () => {
+    expect(dashboardCss).toMatch(
       /^body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/ms,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.dark body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.masthead::before\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*box-shadow:\s*var\(--mm-elevation-panel\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.panel\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-panel\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar\s*\{[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar \.queue-inline-selector select,\s*\.queue-floating-bar \.queue-inline-selector input\s*\{[^}]*background:\s*var\(--mm-input-well\);[^}]*border-color:\s*var\(--mm-glass-edge\);/s,
     );
   });
 
   it('defines the MM-425 shared surface hierarchy roles', async () => {
-    const matteBlock = cssRuleBlock(missionControlCss, '.surface--matte-data');
-    const satinBlock = cssRuleBlock(missionControlCss, '.panel--satin');
+    const matteBlock = cssRuleBlock(dashboardCss, '.surface--matte-data');
+    const satinBlock = cssRuleBlock(dashboardCss, '.panel--satin');
     const glassBlock = cssRuleBlock(
-      missionControlCss,
+      dashboardCss,
       '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility',
     );
-    const liquidBlock = cssRuleBlock(missionControlCss, '.surface--liquidgl-hero');
-    const accentBlock = cssRuleBlock(missionControlCss, '.surface--accent-live');
-    const nestedDenseBlock = cssRuleBlock(missionControlCss, '.surface--nested-dense');
+    const liquidBlock = cssRuleBlock(dashboardCss, '.surface--liquidgl-hero');
+    const accentBlock = cssRuleBlock(dashboardCss, '.surface--accent-live');
+    const nestedDenseBlock = cssRuleBlock(dashboardCss, '.surface--nested-dense');
 
     expect(matteBlock).toContain('background: rgb(var(--mm-panel) / 0.92)');
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.panel--data\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.92\);/s,
     );
     expect(satinBlock).toContain('background: var(--mm-input-well)');
@@ -274,21 +274,21 @@ describe('Mission Control shared entry', () => {
 
   it('keeps glass token based with near-opaque fallbacks when backdrop filtering is unavailable', async () => {
     const glassBlock = cssRuleBlock(
-      missionControlCss,
+      dashboardCss,
       '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility',
     );
 
     expect(glassBlock).toContain('backdrop-filter: blur(18px) saturate(1.35)');
     expect(glassBlock).toContain('-webkit-backdrop-filter: blur(18px) saturate(1.35)');
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.surface--glass-control,\s*\.panel--controls,\s*\.panel--floating,\s*\.panel--utility,\s*\.surface--liquidgl-hero,\s*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);/s,
     );
   });
 
   it('keeps the Step Type segmented control focus ring visible', async () => {
-    const stepTypeBlock = cssRuleBlock(missionControlCss, '.queue-step-type-options');
+    const stepTypeBlock = cssRuleBlock(dashboardCss, '.queue-step-type-options');
     const stepTypeFocusBlock = cssRuleBlock(
-      missionControlCss,
+      dashboardCss,
       '.queue-step-type-option:has(input:focus-visible)',
     );
 
@@ -299,7 +299,7 @@ describe('Mission Control shared entry', () => {
   });
 
   it('lets Settings use the page canvas without a surrounding shared card', async () => {
-    const settingsPanelBlock = cssRuleBlock(missionControlCss, '.panel:has(.settings-page)');
+    const settingsPanelBlock = cssRuleBlock(dashboardCss, '.panel:has(.settings-page)');
 
     expect(settingsPanelBlock).toContain('border: 0');
     expect(settingsPanelBlock).toContain('background: transparent');
@@ -315,15 +315,15 @@ describe('Mission Control shared entry', () => {
       rule.parent.params.includes('max-width: 767px');
 
     const mobileSlabBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       isMobileWorkflowRule('.workflow-list-data-slab'),
     );
     const mobileHeaderBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       isMobileWorkflowRule('.workflow-list-results-header'),
     );
     const mobileFooterBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       isMobileWorkflowRule('.workflow-list-data-slab .workflow-list-results-footer'),
     );
 
@@ -341,14 +341,14 @@ describe('Mission Control shared entry', () => {
     expect(mobileFooterBlock).toContain('padding-right: 0');
 
     // Individual cards must keep their standalone card styling.
-    const cardBlock = cssRuleBlock(missionControlCss, '.queue-card');
+    const cardBlock = cssRuleBlock(dashboardCss, '.queue-card');
     expect(cardBlock).toContain('border: 1px solid rgb(var(--mm-border) / 0.8)');
     expect(cardBlock).toContain('border-radius: 1rem');
     expect(cardBlock).toContain('background: rgb(var(--mm-panel) / 0.78)');
   });
 
   it('stacks Settings section radio controls on mobile viewports', async () => {
-    const mobileSettingsNavBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const mobileSettingsNavBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-options' &&
         rule.parent?.type === 'atrule' &&
@@ -356,7 +356,7 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
-    const mobileSettingsOptionBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const mobileSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-option' &&
         rule.parent?.type === 'atrule' &&
@@ -364,7 +364,7 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
-    const mobileFirstSettingsOptionBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const mobileFirstSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-option:first-of-type' &&
         rule.parent?.type === 'atrule' &&
@@ -372,7 +372,7 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
-    const mobileLastSettingsOptionBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const mobileLastSettingsOptionBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-option:last-of-type' &&
         rule.parent?.type === 'atrule' &&
@@ -380,7 +380,7 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
-    const mobileSettingsLabelBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const mobileSettingsLabelBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-option-label' &&
         rule.parent?.type === 'atrule' &&
@@ -388,7 +388,7 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
-    const mobileSettingsActiveBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const mobileSettingsActiveBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-option:has(input:checked)' &&
         rule.parent?.type === 'atrule' &&
@@ -396,7 +396,7 @@ describe('Mission Control shared entry', () => {
         rule.parent.params.includes('max-width: 640px')
       );
     });
-    const reducedMotionSettingsActiveBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const reducedMotionSettingsActiveBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       return (
         normalizeCssSelector(rule.selector) === '.settings-nav-option:has(input:checked)' &&
         rule.parent?.type === 'atrule' &&
@@ -426,29 +426,29 @@ describe('Mission Control shared entry', () => {
   });
 
   it('keeps liquidGL opt-in and away from default dense surfaces', async () => {
-    expect(cssRuleBlock(missionControlCss, '.panel')).not.toContain('liquid');
-    expect(cssRuleBlock(missionControlCss, '.card')).not.toContain('liquid');
-    expect(cssRuleBlock(missionControlCss, 'table')).not.toContain('liquid');
-    expect(cssRuleBlock(missionControlCss, '.data-table-slab')).not.toContain('liquid');
+    expect(cssRuleBlock(dashboardCss, '.panel')).not.toContain('liquid');
+    expect(cssRuleBlock(dashboardCss, '.card')).not.toContain('liquid');
+    expect(cssRuleBlock(dashboardCss, 'table')).not.toContain('liquid');
+    expect(cssRuleBlock(dashboardCss, '.data-table-slab')).not.toContain('liquid');
 
-    const liquidBlock = cssRuleBlock(missionControlCss, '.surface--liquidgl-hero');
+    const liquidBlock = cssRuleBlock(dashboardCss, '.surface--liquidgl-hero');
     expect(liquidBlock).toContain('isolation: isolate');
     expect(liquidBlock).toContain('overflow: hidden');
     expect(liquidBlock).toContain('backdrop-filter: blur(26px) saturate(1.65)');
   });
 
-  it('enforces MM-429 readable contrast tokens across common Mission Control surfaces', async () => {
-    expect(cssRuleBlock(missionControlCss, 'label')).toContain('color: rgb(var(--mm-ink))');
-    expect(cssRuleBlock(missionControlCss, '.data-table th,\n.data-table td')).toContain(
+  it('enforces MM-429 readable contrast tokens across common dashboard surfaces', async () => {
+    expect(cssRuleBlock(dashboardCss, 'label')).toContain('color: rgb(var(--mm-ink))');
+    expect(cssRuleBlock(dashboardCss, '.data-table th,\n.data-table td')).toContain(
       'color: rgb(var(--mm-ink))',
     );
-    expect(cssRuleBlock(missionControlCss, 'input::placeholder,\ntextarea::placeholder')).toContain(
+    expect(cssRuleBlock(dashboardCss, 'input::placeholder,\ntextarea::placeholder')).toContain(
       'color: rgb(var(--mm-muted))',
     );
-    expect(cssRuleBlock(missionControlCss, '.workflow-list-filter-chip')).toContain(
+    expect(cssRuleBlock(dashboardCss, '.workflow-list-filter-chip')).toContain(
       'color: rgb(var(--mm-ink))',
     );
-    const primaryButtonBlock = cssRuleBlockMatching(missionControlCss, (rule) => {
+    const primaryButtonBlock = cssRuleBlockMatching(dashboardCss, (rule) => {
       const selectors = rule.selector.split(',').map(normalizeCssSelector);
       return (
         selectors.some(
@@ -459,7 +459,7 @@ describe('Mission Control shared entry', () => {
       );
     });
     expect(primaryButtonBlock).toContain('color: #fff');
-    expect(cssRuleBlock(missionControlCss, '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility')).toContain(
+    expect(cssRuleBlock(dashboardCss, '.surface--glass-control, .panel--controls, .panel--floating, .panel--utility')).toContain(
       'background: var(--mm-glass-fill)',
     );
   });
@@ -478,14 +478,14 @@ describe('Mission Control shared entry', () => {
     ];
 
     for (const selector of focusSelectors) {
-      const block = cssRuleBlock(missionControlCss, selector);
+      const block = cssRuleBlock(dashboardCss, selector);
       expect(block).toContain('box-shadow: var(--mm-control-focus-ring)');
     }
   });
 
   it('enforces MM-429 reduced-motion suppression for live and premium effects', async () => {
     const runningIconBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       (rule) =>
         normalizeCssSelector(rule.selector) === '.step-tl-icon.step-icon-running' &&
         rule.nodes.some((node) => node.type === 'decl' && node.toString() === 'animation: none !important'),
@@ -494,7 +494,7 @@ describe('Mission Control shared entry', () => {
     expect(runningIconBlock).toContain('opacity: 1');
 
     const premiumEffectBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       (rule) =>
         rule.selector
           .split(',')
@@ -510,7 +510,7 @@ describe('Mission Control shared entry', () => {
   });
 
   it('enforces MM-429 fallback shells and premium-effect limits', async () => {
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.surface--glass-control,[^}]*\.panel--controls,[^}]*\.panel--floating,[^}]*\.panel--utility,[^}]*\.surface--liquidgl-hero,[^}]*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);[^}]*border-color:\s*rgb\(var\(--mm-border\) \/ 0\.84\);/s,
     );
 
@@ -522,14 +522,14 @@ describe('Mission Control shared entry', () => {
       '.td-evidence-slab',
       'textarea',
     ]) {
-      const block = cssRuleBlock(missionControlCss, selector);
+      const block = cssRuleBlock(dashboardCss, selector);
       expect(block).not.toContain('liquid');
       expect(block).not.toContain('backdrop-filter');
       expect(block).not.toContain('blur(26px)');
     }
   });
 
-  it('enforces MM-430 semantic shell class stability for Mission Control sources', async () => {
+  it('enforces MM-430 semantic shell class stability for dashboard sources', async () => {
     const { readFileSync } = await import('node:fs');
     const dashboardTemplate = readFileSync(
       `${process.cwd()}/api_service/templates/react_dashboard.html`,
@@ -557,38 +557,38 @@ describe('Mission Control shared entry', () => {
       '.status-running',
       '.queue-submit-form',
     ]) {
-      expect(cssRuleBlock(missionControlCss, selector)).not.toBe('');
+      expect(cssRuleBlock(dashboardCss, selector)).not.toBe('');
     }
   });
 
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
-    expect(missionControlCss).not.toContain('--mm-executing-sweep-halo-peak-width-multiplier');
-    expect(missionControlCss).not.toContain('--mm-executing-sweep-core-peak-width-multiplier');
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-x:\s*135%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-start-y:\s*160%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-x:\s*-135%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
-    expect(missionControlCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
-    expect(missionControlCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
-    expect(missionControlCss).toContain('--mm-executing-letter-sweep-start-ratio: 0.2');
-    expect(missionControlCss).toContain('--mm-executing-letter-sweep-travel-ratio: 0.18');
-    expect(missionControlCss).toContain('--mm-executing-letter-sweep-direction: 1');
-    expect(missionControlCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
-    expect(missionControlCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%)');
-    expect(missionControlCss).toContain('--mm-executing-border-glint-outset: 1px');
-    expect(missionControlCss).toContain('--mm-executing-border-glint-width: 3px');
-    expect(missionControlCss).toContain('--mm-executing-border-glint-opacity: 0.95');
-    expect(missionControlCss).toContain('--mm-executing-moving-light-gradient:');
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-band-width:\s*24%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-band-height:\s*180%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-halo-width-multiplier:\s*10/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-core-width-multiplier:\s*9\.1667/);
+    expect(dashboardCss).not.toContain('--mm-executing-sweep-halo-peak-width-multiplier');
+    expect(dashboardCss).not.toContain('--mm-executing-sweep-core-peak-width-multiplier');
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-x:\s*135%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-start-y:\s*160%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-x:\s*-135%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-end-y:\s*-160%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-x:\s*-12%/);
+    expect(dashboardCss).toMatch(/--mm-executing-sweep-layer-offset-y:\s*-10%/);
+    expect(dashboardCss).toContain('--mm-executing-letter-cycle-duration: var(--mm-executing-sweep-cycle-duration)');
+    expect(dashboardCss).toContain('--mm-executing-letter-sweep-start-ratio: 0.2');
+    expect(dashboardCss).toContain('--mm-executing-letter-sweep-travel-ratio: 0.18');
+    expect(dashboardCss).toContain('--mm-executing-letter-sweep-direction: 1');
+    expect(dashboardCss).toContain('--mm-executing-letter-halo: rgb(var(--mm-accent-2) / 0.32)');
+    expect(dashboardCss).toContain('--mm-executing-letter-bright: color-mix(in srgb, rgb(var(--mm-accent-2)) 68%, white 32%)');
+    expect(dashboardCss).toContain('--mm-executing-border-glint-outset: 1px');
+    expect(dashboardCss).toContain('--mm-executing-border-glint-width: 3px');
+    expect(dashboardCss).toContain('--mm-executing-border-glint-opacity: 0.95');
+    expect(dashboardCss).toContain('--mm-executing-moving-light-gradient:');
 
     const shimmerBlock = cssRuleBlocks(
-      missionControlCss,
+      dashboardCss,
       '.status-running[data-effect="shimmer-sweep"], .status-running.is-executing, .status-running.is-planning',
     ).join('\n');
     expect(shimmerBlock).toContain('background-color: rgb(var(--mm-accent-2) / 0.14)');
@@ -597,7 +597,7 @@ describe('Mission Control shared entry', () => {
     expect(shimmerBlock).not.toContain('animation-delay:');
 
     const sharedLightMaskBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       (rule) =>
         rule.selector.includes('status-running') &&
         rule.selector.includes('shimmer-sweep') &&
@@ -614,23 +614,23 @@ describe('Mission Control shared entry', () => {
       /background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),\s*calc\(var\(--mm-executing-sweep-start-x\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-x\)\)\s*calc\(var\(--mm-executing-sweep-start-y\)\s*\+\s*var\(--mm-executing-sweep-layer-offset-y\)\)/,
     );
 
-    expect(missionControlCss).not.toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?52%\s*\{/);
-    expect(missionControlCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\),[\s\S]*?background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),[\s\S]*?calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\);/);
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).not.toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?52%\s*\{/);
+    expect(dashboardCss).toMatch(/@keyframes mm-status-pill-shimmer\s*\{[\s\S]*?0%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-start-x\)\s*var\(--mm-executing-sweep-start-y\),[\s\S]*?100%\s*\{[\s\S]*?background-position:\s*var\(--mm-executing-sweep-end-x\)\s*var\(--mm-executing-sweep-end-y\),[\s\S]*?background-size:\s*calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-halo-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\),[\s\S]*?calc\(var\(--mm-executing-sweep-band-width\)\s*\*\s*var\(--mm-executing-sweep-core-width-multiplier\)\)\s*var\(--mm-executing-sweep-band-height\);/);
+    expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\],\s*\.status-running\.is-executing,\s*\.status-running\.is-planning[\s\S]*?animation: none;/,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?background-position:\s*50% 50%,[\s\S]*?calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-x\) \/ 2\)\)\s*calc\(50% \+ \(var\(--mm-executing-sweep-layer-offset-y\) \/ 2\)\);[\s\S]*?background-size:\s*160% var\(--mm-executing-sweep-band-height\),\s*140% var\(--mm-executing-sweep-band-height\);/,
     );
     const shimmerBeforeSelector = cssRuleBlocks(
-      missionControlCss,
+      dashboardCss,
       '.status-running[data-effect="shimmer-sweep"]::before, .status-running.is-executing::before, .status-running.is-planning::before',
     ).join('\n');
     expect(shimmerBeforeSelector).toContain('opacity: 0.62');
     expect(shimmerBeforeSelector).toContain('z-index: 1');
 
     const shimmerAfterBlock = cssRuleBlocks(
-      missionControlCss,
+      dashboardCss,
       '.status-running[data-effect="shimmer-sweep"]::after, .status-running.is-executing::after, .status-running.is-planning::after',
     ).join('\n');
     expect(shimmerAfterBlock).toContain('mask-composite: exclude');
@@ -639,17 +639,17 @@ describe('Mission Control shared entry', () => {
     expect(shimmerAfterBlock).toContain('inset: calc(-1 * var(--mm-executing-border-glint-outset))');
     expect(shimmerAfterBlock).toContain('padding: var(--mm-executing-border-glint-width)');
     expect(shimmerAfterBlock).toContain('opacity: var(--mm-executing-border-glint-opacity)');
-    expect(cssRuleBlock(missionControlCss, '.status-letter-wave')).toContain('z-index: 3');
-    const glyphBlock = cssRuleBlock(missionControlCss, '.status-letter-wave__glyph');
+    expect(cssRuleBlock(dashboardCss, '.status-letter-wave')).toContain('z-index: 3');
+    const glyphBlock = cssRuleBlock(dashboardCss, '.status-letter-wave__glyph');
     expect(glyphBlock).toContain('--mm-letter-phase');
     expect(glyphBlock).toContain('var(--mm-letter-index)');
     expect(glyphBlock).toContain('var(--mm-letter-count)');
     expect(glyphBlock).toContain('var(--mm-executing-letter-sweep-direction)');
     expect(glyphBlock).not.toContain('will-change');
-    expect(missionControlCss).toContain('@keyframes mm-executing-letter-brighten');
-    expect(missionControlCss).toContain('mm-executing-letter-brighten');
+    expect(dashboardCss).toContain('@keyframes mm-executing-letter-brighten');
+    expect(dashboardCss).toContain('mm-executing-letter-brighten');
 
-    const baseLetterWaveBlock = cssRuleBlock(missionControlCss, '.status-letter-wave');
+    const baseLetterWaveBlock = cssRuleBlock(dashboardCss, '.status-letter-wave');
     expect(baseLetterWaveBlock).toContain('color: inherit');
     expect(baseLetterWaveBlock).not.toContain('animation:');
     expect(baseLetterWaveBlock).not.toContain('background-image:');
@@ -657,7 +657,7 @@ describe('Mission Control shared entry', () => {
     expect(baseLetterWaveBlock).not.toContain('-webkit-background-clip: text');
     expect(baseLetterWaveBlock).not.toContain('-webkit-text-fill-color: transparent');
     const textMaskBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       (rule) =>
         rule.selector.includes('status-running') &&
         rule.selector.includes('shimmer-sweep') &&
@@ -672,7 +672,7 @@ describe('Mission Control shared entry', () => {
     expect(textMaskBlock).toContain('mix-blend-mode: plus-lighter');
 
     const activeLetterWaveBlock = cssRuleBlocks(
-      missionControlCss,
+      dashboardCss,
       '.status-running[data-effect="shimmer-sweep"] .status-letter-wave, .status-running.is-executing .status-letter-wave, .status-running.is-planning .status-letter-wave',
     ).join('\n');
     expect(activeLetterWaveBlock).toContain('color: inherit');
@@ -681,7 +681,7 @@ describe('Mission Control shared entry', () => {
     expect(activeLetterWaveBlock).not.toContain('animation: mm-status-pill-shimmer');
     expect(activeLetterWaveBlock).not.toContain('white 50%');
     const activeGlyphBlock = cssRuleBlocks(
-      missionControlCss,
+      dashboardCss,
       '.status-running[data-effect="shimmer-sweep"] .status-letter-wave__glyph, .status-running.is-executing .status-letter-wave__glyph, .status-running.is-planning .status-letter-wave__glyph',
     ).join('\n');
     expect(activeGlyphBlock).toContain('animation: none');
@@ -693,21 +693,21 @@ describe('Mission Control shared entry', () => {
     expect(activeGlyphBlock).toContain('animation-iteration-count: infinite');
     expect(activeGlyphBlock).toContain('animation-delay: calc(');
     expect(activeGlyphBlock).toContain('(var(--mm-letter-phase) - 0.22)');
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@keyframes mm-executing-letter-brighten\s*\{[\s\S]*?color:\s*var\(--mm-executing-letter-bright\);[\s\S]*?text-shadow:\s*0 0 10px var\(--mm-executing-letter-halo\);/,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\] \.status-letter-wave,\s*\.status-running\.is-executing \.status-letter-wave,\s*\.status-running\.is-planning \.status-letter-wave[\s\S]*?text-shadow: none;/,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-running\[data-effect="shimmer-sweep"\]::before,[\s\S]*?\.status-running\.is-planning \.status-letter-wave::after[\s\S]*?animation: none;/,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.status-letter-wave__glyph\s*\{[\s\S]*?animation:\s*none !important;[\s\S]*?text-shadow:\s*none !important;[\s\S]*?filter:\s*none !important;/,
     );
 
     const forcedColorsLetterWaveBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       (rule) =>
         rule.selector.includes('.status-letter-wave') &&
         Boolean(rule.parent?.toString().startsWith('@media (forced-colors: active)')),
@@ -716,7 +716,7 @@ describe('Mission Control shared entry', () => {
     expect(forcedColorsLetterWaveBlock).not.toContain('-webkit-text-fill-color');
     expect(forcedColorsLetterWaveBlock).not.toContain('background-clip');
     const forcedColorsGlyphBlock = cssRuleBlockMatching(
-      missionControlCss,
+      dashboardCss,
       (rule) =>
         rule.selector.includes('.status-letter-wave__glyph') &&
         Boolean(rule.parent?.toString().startsWith('@media (forced-colors: active)')),
@@ -733,10 +733,10 @@ describe('Mission Control shared entry', () => {
       '.panel.panel--data-wide',
       '.dashboard-shell-constrained--data-wide',
     ]) {
-      expect(cssRuleBlock(missionControlCss, selector)).not.toBe('');
+      expect(cssRuleBlock(dashboardCss, selector)).not.toBe('');
     }
 
-    expect(cssRuleBlock(missionControlCss, '.panel.panel--data-wide')).toContain(
+    expect(cssRuleBlock(dashboardCss, '.panel.panel--data-wide')).toContain(
       'max-width: min(112rem, calc(100vw - 2rem))',
     );
   });
@@ -752,7 +752,7 @@ describe('Mission Control shared entry', () => {
     ];
 
     for (const selector of semanticRoleSelectors) {
-      const blocks = cssRuleBlocks(missionControlCss, selector);
+      const blocks = cssRuleBlocks(dashboardCss, selector);
       expect(blocks.join('\n')).toContain('var(--mm-');
       for (const block of blocks) {
         expect(block).not.toMatch(
@@ -773,18 +773,18 @@ describe('Mission Control shared entry', () => {
       '--mm-glass-fill',
       '--mm-control-shell',
     ]) {
-      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
-      expect(missionControlCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
+      expect(dashboardCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+      expect(dashboardCss).toMatch(new RegExp(`\\.dark\\s*\\{[^}]*${token}:`, 's'));
     }
 
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /^body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/ms,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.dark body\s*\{[^}]*background:\s*var\(--mm-atmosphere-violet\),\s*var\(--mm-atmosphere-cyan\),\s*var\(--mm-atmosphere-warm\),\s*var\(--mm-atmosphere-base\);/s,
     );
-    expect(missionControlCss).not.toMatch(/\.dark\s+\.panel\s*\{[^}]*background:/s);
-    expect(missionControlCss).not.toMatch(/\.dark\s+\.card\s*\{[^}]*background:/s);
+    expect(dashboardCss).not.toMatch(/\.dark\s+\.panel\s*\{[^}]*background:/s);
+    expect(dashboardCss).not.toMatch(/\.dark\s+\.card\s*\{[^}]*background:/s);
   });
 
   it('defines shared interaction tokens for routine controls', async () => {
@@ -800,26 +800,26 @@ describe('Mission Control shared entry', () => {
     ];
 
     for (const token of requiredTokens) {
-      expect(missionControlCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
+      expect(dashboardCss).toMatch(new RegExp(`:root\\s*\\{[^}]*${token}:`, 's'));
     }
   });
 
   it('uses scale-only glow and grow states for routine buttons', async () => {
     const routineBlocks = [
       cssRuleBlock(
-        missionControlCss,
+        dashboardCss,
         'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover',
       ),
-      cssRuleBlock(missionControlCss, 'button.secondary:hover'),
+      cssRuleBlock(dashboardCss, 'button.secondary:hover'),
       cssRuleBlock(
-        missionControlCss,
+        dashboardCss,
         '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):hover',
       ),
-      cssRuleBlock(missionControlCss, '.button.secondary:hover'),
-      cssRuleBlock(missionControlCss, '.queue-action:hover,\n.queue-submit-primary:hover'),
-      cssRuleBlock(missionControlCss, '.queue-step-extension-button:hover'),
-      cssRuleBlock(missionControlCss, '.queue-step-icon-button:hover'),
-      cssRuleBlock(missionControlCss, '.queue-step-icon-button.destructive:hover'),
+      cssRuleBlock(dashboardCss, '.button.secondary:hover'),
+      cssRuleBlock(dashboardCss, '.queue-action:hover,\n.queue-submit-primary:hover'),
+      cssRuleBlock(dashboardCss, '.queue-step-extension-button:hover'),
+      cssRuleBlock(dashboardCss, '.queue-step-icon-button:hover'),
+      cssRuleBlock(dashboardCss, '.queue-step-icon-button.destructive:hover'),
     ];
 
     for (const block of routineBlocks) {
@@ -829,16 +829,16 @@ describe('Mission Control shared entry', () => {
 
     const pressedBlocks = [
       cssRuleBlock(
-        missionControlCss,
+        dashboardCss,
         'button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active',
       ),
       cssRuleBlock(
-        missionControlCss,
+        dashboardCss,
         '.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):active',
       ),
-      cssRuleBlock(missionControlCss, '.queue-action:active,\n.queue-submit-primary:active'),
-      cssRuleBlock(missionControlCss, '.queue-step-icon-button:active'),
-      cssRuleBlock(missionControlCss, '.queue-step-icon-button.destructive:active'),
+      cssRuleBlock(dashboardCss, '.queue-action:active,\n.queue-submit-primary:active'),
+      cssRuleBlock(dashboardCss, '.queue-step-icon-button:active'),
+      cssRuleBlock(dashboardCss, '.queue-step-icon-button.destructive:active'),
     ];
 
     for (const block of pressedBlocks) {
@@ -848,26 +848,26 @@ describe('Mission Control shared entry', () => {
   });
 
   it('aligns compact controls, focus rings, disabled states, and reduced motion', async () => {
-    const inlineToggleBlock = cssRuleBlock(missionControlCss, '.queue-inline-toggle {');
+    const inlineToggleBlock = cssRuleBlock(dashboardCss, '.queue-inline-toggle {');
     expect(inlineToggleBlock).toContain('padding: 0');
     expect(inlineToggleBlock).not.toContain('background: var(--mm-control-shell)');
     expect(inlineToggleBlock).not.toContain('border: 1px solid var(--mm-control-border)');
 
-    const inlineFilterBlock = cssRuleBlock(missionControlCss, '.queue-inline-filter {');
+    const inlineFilterBlock = cssRuleBlock(dashboardCss, '.queue-inline-filter {');
     expect(inlineFilterBlock).toContain('background: var(--mm-control-shell)');
     expect(inlineFilterBlock).toContain('border: 1px solid var(--mm-control-border)');
 
-    const pageSizeSelectorBlock = cssRuleBlock(missionControlCss, '.queue-page-size-selector {');
+    const pageSizeSelectorBlock = cssRuleBlock(dashboardCss, '.queue-page-size-selector {');
     expect(pageSizeSelectorBlock).toContain('background: transparent');
     expect(pageSizeSelectorBlock).toContain('border: 0');
     expect(pageSizeSelectorBlock).toContain('box-shadow: none');
     expect(pageSizeSelectorBlock).toContain('transition: var(--mm-control-transition)');
 
-    const filterChipBlock = cssRuleBlock(missionControlCss, '.workflow-list-filter-chip {');
+    const filterChipBlock = cssRuleBlock(dashboardCss, '.workflow-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
     const popoverFilterBlock = cssRuleBlock(
-      missionControlCss,
+      dashboardCss,
       '.workflow-list-header-filter-popover .workflow-list-header-filter-control',
     );
     expect(popoverFilterBlock).toContain('display: grid');
@@ -877,73 +877,73 @@ describe('Mission Control shared entry', () => {
     expect(popoverFilterBlock).toContain('box-shadow: none');
     expect(
       cssRuleBlock(
-        missionControlCss,
+        dashboardCss,
         '.workflow-list-header-filter-popover .workflow-list-header-filter-control label',
       ),
     ).toContain('gap: 0.55rem');
-    expect(cssRuleBlock(missionControlCss, '.workflow-list-filter-actions')).toContain(
+    expect(cssRuleBlock(dashboardCss, '.workflow-list-filter-actions')).toContain(
       'border-top: 1px solid rgb(var(--mm-border) / 0.7)',
     );
-    expect(cssRuleBlock(missionControlCss, '.queue-inline-filter:focus-within')).toContain(
+    expect(cssRuleBlock(dashboardCss, '.queue-inline-filter:focus-within')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
-    expect(cssRuleBlock(missionControlCss, 'button:focus-visible')).toContain(
+    expect(cssRuleBlock(dashboardCss, 'button:focus-visible')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
-    expect(cssRuleBlock(missionControlCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
+    expect(cssRuleBlock(dashboardCss, 'input:focus-visible,\nselect:focus-visible,\ntextarea:focus-visible')).toContain(
       'box-shadow: var(--mm-control-focus-ring)',
     );
-    expect(cssRuleBlock(missionControlCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"],\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"]:hover')).toMatch(
+    expect(cssRuleBlock(dashboardCss, 'button:disabled,\nbutton:disabled:hover,\nbutton.secondary:disabled,\nbutton.secondary:disabled:hover,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled,\nbutton:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle)):disabled:hover,\n.button[aria-disabled="true"],\n.button[aria-disabled="true"]:hover,\n.button.secondary[aria-disabled="true"],\n.button.secondary[aria-disabled="true"]:hover,\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"],\n.button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-icon-button, .queue-step-attachment-add-button, .queue-step-extension-button, .table-sort-button, .td-instructions-toggle))[aria-disabled="true"]:hover')).toMatch(
       /opacity:\s*var\(--mm-control-disabled-opacity\);[^}]*transform:\s*none;[^}]*box-shadow:\s*none;/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@media \(prefers-reduced-motion: reduce\)\s*\{[^}]*button,[^}]*\.button,[^}]*\.queue-action,[^}]*\.queue-submit-primary,[^}]*\.queue-step-icon-button,[^}]*\.queue-step-extension-button,[^}]*\.queue-inline-toggle,[^}]*\.queue-inline-filter,[^}]*\.queue-page-size-selector\s*\{[^}]*transition-duration:\s*0s !important;[^}]*animation-duration:\s*0s !important;[^}]*transform:\s*none !important;/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@media \(forced-colors: active\)\s*\{[^}]*button:focus-visible,[^}]*\.button:focus-visible,[^}]*\.route-nav a:focus-visible,[^}]*\.live-logs-artifact-link:focus-visible,[^}]*\.queue-action:focus-visible,[^}]*\.queue-submit-primary:focus-visible\s*\{[^}]*outline:\s*2px solid ButtonText;[^}]*outline-offset:\s*2px;/s,
     );
   });
 
   it('lets masthead content and chrome span the page while panels stay constrained', async () => {
-    const dashboardRootBlock = cssRuleBlock(missionControlCss, '.dashboard-root');
+    const dashboardRootBlock = cssRuleBlock(dashboardCss, '.dashboard-root');
     expect(dashboardRootBlock).toContain('--dashboard-pt: 0;');
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.dashboard-shell-full\s*\{[^}]*width:\s*100%/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.masthead::before\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.masthead::after\s*\{[^}]*left:\s*calc\(50% - 50cqw - 1rem\);[^}]*right:\s*calc\(50% - 50cqw - 1rem\);/s,
     );
   });
 
   it('keeps the masthead brand left, navigation centered, and version aligned right on desktop', async () => {
     const { readFileSync } = await import('node:fs');
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+    const dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.masthead\s*\{[^}]*display:\s*grid;[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto\s+minmax\(0,\s*1fr\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.masthead-brand\s*\{[^}]*justify-self:\s*start;/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.masthead-nav\s*\{[^}]*align-self:\s*stretch;[^}]*justify-content:\s*center;[^}]*justify-self:\s*center;/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.masthead-title-meta\s*\{[^}]*justify-self:\s*end;[^}]*justify-content:\s*flex-end;/s,
     );
   });
 
   it('keeps navigation positions stable across route selection changes', async () => {
-    const htmlBlock = cssRuleBlock(missionControlCss, 'html');
+    const htmlBlock = cssRuleBlock(dashboardCss, 'html');
     expect(htmlBlock).toContain('scrollbar-gutter: stable;');
 
-    const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
+    const linkBlocks = cssRuleBlocks(dashboardCss, '.route-nav a');
     expect(linkBlocks.join('\n')).not.toMatch(/transition:[^;]*\btransform\b/);
     const desktopLinkBlock = linkBlocks.find((block) =>
       block.includes('padding: 0.48rem 0.82rem;'),
@@ -953,7 +953,7 @@ describe('Mission Control shared entry', () => {
     expect(desktopLinkBlock).toContain('align-items: center;');
     expect(desktopLinkBlock).not.toMatch(/margin-bottom:\s*-/);
 
-    const underlineBlocks = cssRuleBlocks(missionControlCss, '.route-nav a::after');
+    const underlineBlocks = cssRuleBlocks(dashboardCss, '.route-nav a::after');
     expect(
       underlineBlocks.some((block) =>
         block.includes('bottom: calc(-1 * var(--masthead-padding-block-end));'),
@@ -961,17 +961,17 @@ describe('Mission Control shared entry', () => {
     ).toBe(true);
     expect(underlineBlocks.some((block) => block.includes('height: 3px;'))).toBe(true);
 
-    const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
+    const activeBlocks = cssRuleBlocks(dashboardCss, '.route-nav a.active');
     expect(activeBlocks.join('\n')).not.toMatch(/transform:[^;]*\bscale\b/);
   });
 
   it('keeps the mobile navigation layer above route content panels', async () => {
-    const mastheadBlock = cssRuleBlock(missionControlCss, '.masthead');
+    const mastheadBlock = cssRuleBlock(dashboardCss, '.masthead');
     expect(mastheadBlock).toContain('position: relative;');
     expect(mastheadBlock).toContain('z-index: 50;');
     expect(mastheadBlock).toContain('isolation: isolate;');
 
-    const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
+    const navBlocks = cssRuleBlocks(dashboardCss, '.route-nav');
     expect(
       navBlocks.some(
         (block) =>
@@ -985,7 +985,7 @@ describe('Mission Control shared entry', () => {
   });
 
   it('uses a mobile top-sheet navigation with row-style links', async () => {
-    const navBlocks = cssRuleBlocks(missionControlCss, '.route-nav');
+    const navBlocks = cssRuleBlocks(dashboardCss, '.route-nav');
     expect(
       navBlocks.some(
         (block) =>
@@ -997,7 +997,7 @@ describe('Mission Control shared entry', () => {
       ),
     ).toBe(true);
 
-    const linkBlocks = cssRuleBlocks(missionControlCss, '.route-nav a');
+    const linkBlocks = cssRuleBlocks(dashboardCss, '.route-nav a');
     expect(
       linkBlocks.some(
         (block) =>
@@ -1010,7 +1010,7 @@ describe('Mission Control shared entry', () => {
       ),
     ).toBe(true);
 
-    const activeBlocks = cssRuleBlocks(missionControlCss, '.route-nav a.active');
+    const activeBlocks = cssRuleBlocks(dashboardCss, '.route-nav a.active');
     expect(
       activeBlocks.some(
         (block) =>
@@ -1022,8 +1022,8 @@ describe('Mission Control shared entry', () => {
   });
 
   it('derives mobile navigation colors from theme tokens', async () => {
-    const rootBlock = cssRuleBlock(missionControlCss, ':root');
-    const darkBlock = cssRuleBlock(missionControlCss, '.dark');
+    const rootBlock = cssRuleBlock(dashboardCss, ':root');
+    const darkBlock = cssRuleBlock(dashboardCss, '.dark');
 
     expect(rootBlock).toContain('--mm-mobile-nav-fill: rgb(var(--mm-panel) / 0.92);');
     expect(rootBlock).toContain('--mm-mobile-nav-border: rgb(var(--mm-accent) / 0.35);');
@@ -1034,18 +1034,18 @@ describe('Mission Control shared entry', () => {
 
   it('keeps the wider masthead breakpoint isolated from the shared mobile layout rules', async () => {
     const { readFileSync } = await import('node:fs');
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+    const dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    const mastheadBreakpointStart = missionControlCss.indexOf('@media (max-width: 1180px)');
-    const sharedMobileStart = missionControlCss.indexOf('@media (max-width: 900px)');
-    const mastheadResponsive = missionControlCss.slice(
+    const mastheadBreakpointStart = dashboardCss.indexOf('@media (max-width: 1180px)');
+    const sharedMobileStart = dashboardCss.indexOf('@media (max-width: 900px)');
+    const mastheadResponsive = dashboardCss.slice(
       mastheadBreakpointStart,
       sharedMobileStart,
     );
-    const sharedMobile = missionControlCss.slice(sharedMobileStart);
+    const sharedMobile = dashboardCss.slice(sharedMobileStart);
 
     expect(mastheadBreakpointStart).toBeGreaterThanOrEqual(0);
     expect(sharedMobileStart).toBeGreaterThan(mastheadBreakpointStart);
@@ -1057,19 +1057,19 @@ describe('Mission Control shared entry', () => {
 
   it('renders an explicit error state for unknown pages', async () => {
     renderWithClient(
-      <MissionControlApp payload={{ page: 'not-a-page', apiBase: '/api' }} />,
+      <DashboardApp payload={{ page: 'not-a-page', apiBase: '/api' }} />,
     );
 
-    expect(await screen.findByText(/Unknown Mission Control page:/i)).toBeTruthy();
+    expect(await screen.findByText(/Unknown dashboard page:/i)).toBeTruthy();
     expect(screen.getByText('not-a-page')).toBeTruthy();
   });
 
   it('treats inherited object keys as unsupported pages', async () => {
     renderWithClient(
-      <MissionControlApp payload={{ page: 'toString', apiBase: '/api' }} />,
+      <DashboardApp payload={{ page: 'toString', apiBase: '/api' }} />,
     );
 
-    expect(await screen.findByText(/Unknown Mission Control page:/i)).toBeTruthy();
+    expect(await screen.findByText(/Unknown dashboard page:/i)).toBeTruthy();
     expect(screen.getByText('toString')).toBeTruthy();
   });
 
@@ -1146,7 +1146,7 @@ describe('Mission Control shared entry', () => {
       });
 
       renderWithClient(
-        <MissionControlApp
+        <DashboardApp
           payload={{
             page: 'oauth-terminal',
             apiBase: '/api',
@@ -1286,7 +1286,7 @@ describe('Mission Control shared entry', () => {
     });
 
     renderWithClient(
-      <MissionControlApp
+      <DashboardApp
         payload={{
           page: 'oauth-terminal',
           apiBase: '/api',
@@ -1400,7 +1400,7 @@ describe('Mission Control shared entry', () => {
     });
 
     renderWithClient(
-      <MissionControlApp
+      <DashboardApp
         payload={{
           page: 'oauth-terminal',
           apiBase: '/api',

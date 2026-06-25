@@ -8,7 +8,7 @@ Last Updated: 2026-04-27
 
 > [!NOTE]
 > This document defines the desired-state MoonMind Settings System.
-> It is a declarative contract for how Mission Control exposes, validates, persists, resolves, audits, and safely applies user, workspace, provider, secret, and operational configuration.
+> It is a declarative contract for how the dashboard exposes, validates, persists, resolves, audits, and safely applies user, workspace, provider, secret, and operational configuration.
 >
 > This document is not an implementation checklist. Rollout sequencing, migration tasks, and backlog tickets belong in MoonSpec artifacts, gitignored handoffs, or `docs/tmp/` implementation plans.
 
@@ -18,7 +18,7 @@ Last Updated: 2026-04-27
 
 MoonMind needs a unified Settings System that gives users and operators a single, predictable place to configure the product without turning the UI into a manually maintained collection of one-off forms.
 
-The Settings System should make Mission Control the human-facing configuration plane for:
+The Settings System should make the dashboard the human-facing configuration plane for:
 
 - provider profiles,
 - managed secrets,
@@ -132,7 +132,7 @@ Settings may influence runtime strategies through typed effective configuration,
 The Settings System must support all of the following:
 
 1. **Unified configuration surface**
-   - Mission Control exposes Providers & Secrets, User / Workspace settings, and Operations under one stable Settings page.
+   - The dashboard exposes Providers & Secrets, User / Workspace settings, and Operations under one stable Settings page.
 
 2. **Declarative catalog**
    - Editable settings are described by backend-owned descriptors with type, scope, category, validation, UI metadata, sensitivity, and reload behavior.
@@ -161,7 +161,7 @@ The Settings System must support all of the following:
    - Operational controls are discoverable from Settings but remain explicit, authorized, auditable actions.
 
 10. **Local-first baseline**
-    - A personal or local deployment can start with minimal external prerequisites, then configure secrets and settings through Mission Control.
+    - A personal or local deployment can start with minimal external prerequisites, then configure secrets and settings through the dashboard.
 
 11. **Auditable changes**
     - Operators can answer who changed what, when, at which scope, and with what effect, without exposing sensitive values.
@@ -1349,7 +1349,7 @@ Consumers may subscribe to settings change events where appropriate.
 
 Examples:
 
-- Mission Control refreshes catalog state.
+- The dashboard refreshes catalog state.
 - Workflow creation uses updated defaults.
 - Provider profile manager syncs profile-related changes.
 - Workers reload non-disruptive settings.
@@ -1510,7 +1510,7 @@ Operators who run their own backup tooling against the database SHOULD treat the
 
 Settings often point at adjacent resources (managed secrets, OAuth volumes, provider profiles). A partial restore — settings restored without their dependencies, or vice versa — MUST NOT silently degrade. The system surfaces these conditions explicitly:
 
-- SecretRef overrides pointing at missing managed secrets resolve to the catalog default and emit a `secret_ref_unresolved` (or `unresolved_secret_ref`) diagnostic on the affected setting; Mission Control renders the diagnostic next to the descriptor and on the SecretRef picker.
+- SecretRef overrides pointing at missing managed secrets resolve to the catalog default and emit a `secret_ref_unresolved` (or `unresolved_secret_ref`) diagnostic on the affected setting; the dashboard renders the diagnostic next to the descriptor and on the SecretRef picker.
 - `workflow.default_provider_profile_ref` overrides pointing at missing provider profiles emit a `provider_profile_not_found` diagnostic and the resolver falls back to inheritance instead of accepting the broken value.
 - Migration audit events restored alongside their override rows let operators correlate any post-restore diagnostic with the migration that produced the current key set.
 - `api_service/services/settings_backup.py::scan_broken_references` returns a `SettingsBrokenReference` for every persisted override whose SecretRef target is missing/disabled/invalid, or whose provider-profile target is missing/disabled. Operator dashboards and post-restore checklists SHOULD run this scan so dependent settings and profiles are detectable without waiting for a runtime launch to fail.

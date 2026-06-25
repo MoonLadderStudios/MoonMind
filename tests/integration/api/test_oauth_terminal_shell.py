@@ -1,4 +1,4 @@
-"""Integration coverage for the OAuth terminal Mission Control shell."""
+"""Integration coverage for the OAuth terminal dashboard shell."""
 
 from __future__ import annotations
 
@@ -60,12 +60,12 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
             "css": ["assets/mountPage.css"],
         }
     }
-    manifest["entrypoints/mission-control.tsx"] = {
-        "file": "assets/mission-control.js",
+    manifest["entrypoints/dashboard.tsx"] = {
+        "file": "assets/dashboard.js",
         "imports": [shared_key],
     }
-    (assets_dir / "mission-control.js").write_text(
-        "console.log('mission-control');",
+    (assets_dir / "dashboard.js").write_text(
+        "console.log('dashboard');",
         encoding="utf-8",
     )
     (assets_dir / "mountPage.js").write_text("console.log('shared');", encoding="utf-8")

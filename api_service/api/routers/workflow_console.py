@@ -54,7 +54,7 @@ from moonmind.workflows.skills.resolver import (
 )
 
 from api_service.ui_boot import generate_boot_payload
-from api_service.ui_assets import MissionControlUIAssetsError, ui_assets
+from api_service.ui_assets import DashboardUIAssetsError, ui_assets
 
 from moonmind.workflows.temporal import TemporalExecutionService
 
@@ -244,19 +244,19 @@ async def _get_temporal_service(
         ),
     )
 
-def _mission_control_ui_error_response(page: str, detail: str) -> HTMLResponse:
+def _dashboard_ui_error_response(page: str, detail: str) -> HTMLResponse:
     """503 HTML when Vite assets are missing or incomplete (never a silent blank shell)."""
     body = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mission Control UI unavailable</title>
+  <title>MoonMind dashboard UI unavailable</title>
 </head>
 <body>
-  <h1>Mission Control UI unavailable</h1>
-  <p>Missing or incomplete Vite bundle for the shared Mission Control entrypoint <code>mission-control</code>.</p>
-  <p>While rendering Mission Control page <code>{escape(page)}</code>.</p>
+  <h1>MoonMind dashboard UI unavailable</h1>
+  <p>Missing or incomplete Vite bundle for the shared dashboard entrypoint <code>dashboard</code>.</p>
+  <p>While rendering dashboard page <code>{escape(page)}</code>.</p>
   <p>{escape(detail)}</p>
   <p>Rebuild with <code>npm run ui:build</code> or deploy a Docker image that builds the UI from source (see <code>api_service/Dockerfile</code> <code>frontend-builder</code> stage).</p>
 </body>
@@ -265,9 +265,9 @@ def _mission_control_ui_error_response(page: str, detail: str) -> HTMLResponse:
 
 def _vite_assets_or_error(page: str) -> HTMLResponse | str:
     try:
-        return ui_assets("mission-control")
-    except MissionControlUIAssetsError as exc:
-        return _mission_control_ui_error_response(page, str(exc))
+        return ui_assets("dashboard")
+    except DashboardUIAssetsError as exc:
+        return _dashboard_ui_error_response(page, str(exc))
 
 async def _render_react_page(
     request: Request,

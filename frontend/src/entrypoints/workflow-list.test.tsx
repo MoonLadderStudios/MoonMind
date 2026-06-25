@@ -5,7 +5,7 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import { WorkflowListPage } from './workflow-list';
-import '../styles/mission-control.css';
+import '../styles/dashboard.css';
 
 describe('Workflows Entrypoint', () => {
   const mockPayload: BootPayload = {
@@ -1154,7 +1154,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('21 total entries')).toBeTruthy();
   });
 
-  it('uses the Mission Control control deck and data slab composition', async () => {
+  it('uses the dashboard control deck and data slab composition', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');

@@ -507,7 +507,7 @@ Manifest execution is orchestrated by the `MoonMind.ManifestIngest` Temporal wor
 
 * Concurrency, failure policy, and task queue routing configured via execution policy at workflow start time.
 * Worker topology and activity task queue assignments defined in `docs/Temporal/ActivityCatalogAndWorkerTopology.md`.
-* Monitor manifest runs via Mission Control UI or Temporal Visibility queries (`mm_entry=manifest`).
+* Monitor manifest runs via the MoonMind dashboard or Temporal Visibility queries (`mm_entry=manifest`).
 
 ---
 

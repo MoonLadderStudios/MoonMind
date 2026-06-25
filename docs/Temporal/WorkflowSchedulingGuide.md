@@ -9,7 +9,7 @@
 
 ## 1. Purpose
 
-This guide covers how to start Temporal workflows at a specific time and how to create recurring schedules. It addresses both the backend API contracts and the Mission Control UI experience for each pattern.
+This guide covers how to start Temporal workflows at a specific time and how to create recurring schedules. It addresses both the backend API contracts and the MoonMind dashboard experience for each pattern.
 
 ## 2. Related Docs
 
@@ -47,7 +47,7 @@ When a deferred one-time execution is created:
 - Temporal creates the workflow execution record immediately.
 - The workflow is dispatched to the task queue as soon as a worker is available (there is no server-side `start_delay` deferring dispatch).
 - The workflow code acquires a worker slot and then waits/sleeps until the `scheduledFor` time before executing any business logic.
-- The workflow is visible in Temporal Visibility and Mission Control immediately.
+- The workflow is visible in Temporal Visibility and the dashboard immediately.
 - Cancellation before the scheduled time stops further work, but the Temporal execution has already been started (and may appear as `RUNNING` while idle).
 - The detail page should show a "Scheduled to run at {time}" banner even though the underlying execution is already started and waiting.
 
@@ -58,7 +58,7 @@ When a deferred one-time execution is created:
 3. API calls `TemporalClientAdapter.start_workflow()` **without** the `start_delay` parameter.
 4. The workflow implementation's first step is to wait/sleep until `scheduledFor` before performing any activities or emitting user-visible side effects.
 5. The execution record can expose `mm_state=scheduled` until the start time for UI purposes, even though Temporal sees the execution as started and idle.
-6. In Mission Control, it appears in the workflow list with `dashboardStatus=queued` / "Scheduled" until `scheduledFor`, then transitions to the appropriate running/completed status.
+6. In the dashboard, it appears in the workflow list with `dashboardStatus=queued` / "Scheduled" until `scheduledFor`, then transitions to the appropriate running/completed status.
 
 #### Response
 
@@ -257,7 +257,7 @@ POST /api/executions
 }
 ```
 
-### 5.3 Mission Control UI: Submitting a One-Time Workflow
+### 5.3 MoonMind dashboard: Submitting a One-Time Workflow
 
 #### Route
 
@@ -291,7 +291,7 @@ POST /api/executions
 - For Temporal-backed executions, `taskId == workflowId`.
 - After redirect, the detail page shows real-time status via polling.
 
-### 5.4 Mission Control UI: Schedule Panel on Submit Form
+### 5.4 MoonMind dashboard: Schedule Panel on Submit Form
 
 The submit form at `/workflows/new` adds a **Schedule** panel that lets the user choose between immediate, deferred, and recurring execution.
 
@@ -354,14 +354,14 @@ When the user selects "Schedule for later", the panel shows:
 
 ---
 
-## 6. Scheduled Executions in Visibility and Mission Control
+## 6. Scheduled Executions in Visibility and the Dashboard
 
 ### 6.1 How deferred one-time executions appear
 
 When a workflow is started with `start_delay`:
 
 - it is immediately visible in Temporal Visibility with `mm_state=scheduled`
-- Mission Control shows it in the workflow list with `dashboardStatus=queued`
+- The dashboard shows it in the workflow list with `dashboardStatus=queued`
 - the detail page shows `state=scheduled` and a "Scheduled to run at {time}" indicator
 - the execution transitions to `initializing` when the delay elapses
 

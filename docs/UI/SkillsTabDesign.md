@@ -1,4 +1,4 @@
-# Mission Control Skills Tab Design Document
+# Dashboard Skills Tab Design Document
 
 Status: Proposed 
 Owners: MoonMind Engineering 
@@ -8,11 +8,11 @@ Last Updated: 2026-03-24
 
 ## 1. Purpose
 
-Define the desired design for the **Skills** area in Mission Control: navigation, list/detail UX, API usage, and security expectations so operators can view and create `.agents/skills` entries from the dashboard.
+Define the desired design for the **Skills** area in the dashboard: navigation, list/detail UX, API usage, and security expectations so operators can view and create `.agents/skills` entries from the dashboard.
 
 ## 2. Goals
 
-- Dedicated Mission Control entry point for skills (route `/skills`).
+- Dedicated dashboard entry point for skills (route `/skills`).
 - List skills and preview `SKILL.md` content (Markdown → HTML).
 - Create flow: name + Markdown body persisted under `.agents/skills/local/{name}/SKILL.md`.
 - `POST /api/workflows/skills` creates on-disk skill; `GET /api/workflows/skills` lists skills and, when complete, returns enough data for list and detail views.
@@ -32,7 +32,7 @@ Define the desired design for the **Skills** area in Mission Control: navigation
 
 ### 3.3 Visual Style
 
-- Follow [`MissionControlStyleGuide.md`](MissionControlStyleGuide.md): `queue-submit-primary` for primary save, `mm-glass` / `mm-glass-strong` containers, `markdown-body` or equivalent prose for preview (dark-mode safe).
+- Follow [`DashboardDesignSystem.md`](DashboardDesignSystem.md): `queue-submit-primary` for primary save, `mm-glass` / `mm-glass-strong` containers, `markdown-body` or equivalent prose for preview (dark-mode safe).
 
 ## 4. API & backend
 

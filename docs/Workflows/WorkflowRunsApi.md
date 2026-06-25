@@ -13,7 +13,7 @@ MoonMind now splits this responsibility across:
 - **`/api/executions`** for Temporal-backed execution lifecycle operations
 - **`/api/agent-runs`** for managed-run observability (logs, diagnostics, live follow)
 
-Mission Control still presents these executions as **Workflows** in the product UI, but the active lifecycle API is execution-oriented.
+The dashboard still presents these executions as **Workflows** in the product UI, but the active lifecycle API is execution-oriented.
 
 The public `/api/agent-runs` path comes from the `agent_runs` router's `prefix="/agent-runs"`, which FastAPI mounts under the app-level `/api` prefix.
 

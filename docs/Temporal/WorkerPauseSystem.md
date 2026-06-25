@@ -20,7 +20,7 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 
 1. **Stop new work from starting** across all Managed Agents and `agent_runtime` worker fleets.
 2. Keep the queues **undisturbed**: queued Temporal workflows remain queued.
-3. Provide a **clear, auditable operator control** (API + Mission Control Dashboard) with reason + timestamps.
+3. Provide a **clear, auditable operator control** (API + dashboard) with reason + timestamps.
 4. Support an upgrade-friendly workflow:
  * **Pause → Drain → Upgrade → Resume**
 5. Optional “workflow pause” mode: allow operators to request that **running jobs pause at safe Activity boundaries** while retaining state durably (Temporal history for workflow state + `ManagedRunStore` for detached managed runtimes).
@@ -50,10 +50,10 @@ With the migration to Temporal, the legacy concept of REST API claim blocking (`
 ### 4.1 Components
 
 1. **System Pause State (DB, singleton)**
- * Source of truth for whether the Mission Control UI accepts new workflow submissions via the `POST /api/workflows` boundary.
+ * Source of truth for whether the MoonMind dashboard accepts new workflow submissions via the `POST /api/workflows` boundary.
  * **Note**: This does not govern the Temporal workers themselves; it only prevents new workflow submissions from being injected into the system from the frontend.
 
-2. **Mission Control API Guard**
+2. **Dashboard API Guard**
  * `POST /api/workflows` returns “system paused” metadata and **does not** trigger new Temporal Workflows while the DB singleton is paused.
 
 3. **Temporal Worker Graceful Shutdown (Drain)**

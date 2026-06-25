@@ -9,7 +9,7 @@ Ticket: **MM-713**
 
 This document explains how a fresh, single-operator MoonMind deployment can
 go from a clean database to a working Settings configuration **through
-Mission Control alone**, without any of the external infrastructure that a
+the dashboard alone**, without any of the external infrastructure that a
 production deployment would normally provide (no SSO directory, no managed
 identity provider, no external secret manager, no GitHub App, no Slack
 integration). It satisfies the **local-first baseline** named in
@@ -68,7 +68,7 @@ The smoke test asserts these properties against a fresh sqlite database.
 
 ---
 
-## 2. Create a managed secret in Mission Control (§14.1, §27.2)
+## 2. Create a managed secret in the dashboard (§14.1, §27.2)
 
 The operator opens **Settings → Providers & Secrets → Managed Secrets** and
 creates a single managed secret. The browser sends:

@@ -8,15 +8,15 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '../utils/test-utils';
 import { MaskedConicBorderBeam, MASKED_CONIC_BORDER_BEAM_TRACEABILITY } from './MaskedConicBorderBeam';
 
-const missionControlCss = readFileSync(
-  `${process.cwd()}/frontend/src/styles/mission-control.css`,
+const dashboardCss = readFileSync(
+  `${process.cwd()}/frontend/src/styles/dashboard.css`,
   'utf8',
 );
 
 let parsedCss: Root | null = null;
 
 function cssRoot(): Root {
-  parsedCss ??= postcss.parse(missionControlCss);
+  parsedCss ??= postcss.parse(dashboardCss);
   return parsedCss;
 }
 
@@ -407,7 +407,7 @@ describe('MaskedConicBorderBeam', () => {
     expect(rootMinimalBlock).not.toContain('--beam-border-base:');
     expect(rootMinimalBlock).toContain('--beam-glow-opacity: 0;');
     expect(activeMinimalBlock).toContain('--beam-border-base:');
-    const allBeamCss = missionControlCss
+    const allBeamCss = dashboardCss
       .split('\n')
       .filter((line) => line.includes('masked-conic-border-beam'))
       .join('\n')
@@ -433,7 +433,7 @@ describe('MaskedConicBorderBeam', () => {
     const layerBlock = cssRuleBlock('.masked-conic-border-beam__layer');
     const glowBlock = cssRuleBlock('.masked-conic-border-beam__glow');
     const orbitKeyframes = cssAtRuleBlock('keyframes', 'masked-conic-border-beam-orbit');
-    const allBeamCss = missionControlCss
+    const allBeamCss = dashboardCss
       .split('\n')
       .filter((line) => line.includes('masked-conic-border-beam'))
       .join('\n')

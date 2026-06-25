@@ -11,7 +11,7 @@ Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowPropo
 ## 1. Summary
 
 MoonMind requires a clear "what happened?" summary at the end of every
-`MoonMind.UserWorkflow` execution so Mission Control operators can quickly distinguish:
+`MoonMind.UserWorkflow` execution so dashboard operators can quickly distinguish:
 
 * **Published output** (PR/branch updated successfully) vs
 * **No changes** (publish skipped because the repository was already correct) vs
@@ -131,7 +131,7 @@ Field semantics:
 
 Failed runs MAY also include a `failureSummary` object. `failure` remains the
 low-level diagnostic captured at the failure boundary; `failureSummary` is the
-compact operator classification that Mission Control can render without parsing
+compact operator classification that the dashboard can render without parsing
 Markdown reports or long failure strings.
 
 For MoonSpec publication gates, `failureSummary` uses this shape:
@@ -273,4 +273,4 @@ When proposal generation is enabled for the run:
 4. redacted proposal-stage errors are recorded alongside those counts
 
 This wiring already exists in the Temporal run workflow and is part of the
-canonical finish-summary surface presented in Mission Control.
+canonical finish-summary surface presented in the dashboard.

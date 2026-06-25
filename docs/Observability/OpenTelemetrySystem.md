@@ -19,7 +19,7 @@ This design treats OTel as the **operational telemetry plane** for:
 
 It does **not** replace:
 - Temporal Visibility for list/query/count
-- Mission Control for product-facing execution views
+- Dashboard for product-facing execution views
 - artifact storage for large logs, outputs, traces, and run evidence
 
 ## 2. Related architecture assumptions
@@ -67,7 +67,7 @@ Rules:
 MoonMind must keep these separate:
 
 - **Temporal Visibility**: list, query, count, filters, recency.
-- **Mission Control**: workflow product UX, status, artifacts, approvals, execution summary.
+- **Dashboard**: workflow product UX, status, artifacts, approvals, execution summary.
 - **OpenTelemetry**: traces, metrics, logs for operators and developers.
 - **Artifacts**: large logs, sandbox output, command transcripts, prompt transcripts when explicitly enabled.
 
@@ -141,7 +141,7 @@ MoonMind should emit standard OTLP and allow operators to choose the backend:
    - Loki for logs
    - Grafana for dashboards
 
-7. **Mission Control**
+7. **Dashboard**
    - remains a product surface
    - links to traces/logs/artifacts by identifiers
    - does not become the OTLP backend itself
@@ -537,9 +537,9 @@ Instead:
 - write full output to artifacts using `output.logs` or `debug.trace`
 - log only the artifact reference and bounded summary
 
-### 12.4 Mission Control integration
+### 12.4 Dashboard integration
 
-Mission Control should consume:
+The dashboard should consume:
 - bounded summaries from APIs
 - artifact references for full logs
 - trace links when configured
@@ -680,11 +680,11 @@ Add:
 - webhook/callback correlation fields
 - circuit-breaker and retry telemetry
 
-## 16. Mission Control and Temporal UI integration
+## 16. Dashboard and Temporal UI integration
 
-### 16.1 What Mission Control should show
+### 16.1 What the dashboard should show
 
-Mission Control should remain the human-friendly operator surface and link to telemetry, not replace it.
+The dashboard should remain the human-friendly operator surface and link to telemetry, not replace it.
 
 Suggested detail-page fields:
 - trace ID / “View trace” link
@@ -766,7 +766,7 @@ Telemetry failure must never break workflow correctness.
 4. **Continue-As-New uses stable correlation IDs plus new run-scoped traces.**
 5. **Large evidence goes to artifacts, not spans.**
 6. **Default export target is a self-hosted OTel Collector in Docker Compose.**
-7. **Mission Control links to telemetry systems; it does not replace them.**
+7. **The dashboard links to telemetry systems; it does not replace them.**
 
 ## 21. Implementation tracker
 

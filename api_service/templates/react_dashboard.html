@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>MoonMind Mission Control</title>
+  <title>MoonMind</title>
   <script>
     (() => {
       const key = "moonmind.theme";
@@ -51,14 +51,14 @@
             width="256"
             height="199"
           />
-          <h1>Mission Control</h1>
+          <h1>MoonMind</h1>
         </div>
 
         <button
           class="nav-hamburger"
           type="button"
           aria-expanded="false"
-          aria-controls="mission-control-nav"
+          aria-controls="dashboard-nav"
           aria-label="Toggle navigation menu"
         >
           <span class="nav-hamburger-icon" aria-hidden="true"></span>
@@ -78,13 +78,13 @@
       </header>
     </div>
 
-    <div id="mission-control-root"></div>
+    <div id="dashboard-app-root"></div>
   </main>
 
   <script>
     (() => {
       const btn = document.querySelector('.nav-hamburger');
-      const nav = document.getElementById('mission-control-nav');
+      const nav = document.getElementById('dashboard-nav');
       if (!btn || !nav) return;
       const setOpen = (open) => {
         btn.setAttribute('aria-expanded', String(open));

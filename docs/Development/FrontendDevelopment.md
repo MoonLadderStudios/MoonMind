@@ -23,7 +23,7 @@ npm run ui:build
 docker compose up -d api
 ```
 
-Then open Mission Control through the normal FastAPI route:
+Then open the dashboard through the normal FastAPI route:
 
 ```text
 http://localhost:8000/workflows
@@ -39,12 +39,12 @@ http://192.168.0.20:8000/workflows
 
 In this mode, FastAPI serves the built `dist/` bundle through the Vite manifest.
 This is the preferred review path because the browser receives one coherent
-asset set from the same server that owns the Mission Control HTML shell and API
+asset set from the same server that owns the dashboard HTML shell and API
 routes.
 
 Do not open the Vite dev server root (`http://localhost:5173/`) for demos or
 reviews. MoonMind's Vite server serves frontend modules for development; it does
-not own the Mission Control HTML routes and may return `404` at `/`.
+not own the dashboard HTML routes and may return `404` at `/`.
 
 ## Live development with Hot Module Replacement (HMR)
 

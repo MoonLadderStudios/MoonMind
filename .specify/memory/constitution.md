@@ -18,7 +18,7 @@ Non-negotiable rules:
   - **Managed runs** — MoonMind directly launches and supervises a CLI runtime execution (lifecycle, recovery, result normalization). Claude Code and Codex CLI are concrete on this path today.
   - **Managed sessions** — a longer-lived, workflow-scoped runtime with explicit session identity, turn control, continuity epochs, and clear/reset semantics. Codex CLI is the current concrete implementation.
   - **External / delegated agents** — MoonMind coordinates a provider-owned runtime it does not control: tracking status, injecting context, and closing the feedback loop (e.g., Jules, Codex Cloud).
-- A runtime MUST NOT be described or surfaced as **session-capable** until it has a runtime-specific controller/adapter that satisfies the shared managed-session contract (launch/resume, turn control, active-turn identity, epoch/reset behavior, continuity artifacts, routing/affinity guarantees, and Mission Control projections). Managed-run support does not imply managed-session support.
+- A runtime MUST NOT be described or surfaced as **session-capable** until it has a runtime-specific controller/adapter that satisfies the shared managed-session contract (launch/resume, turn control, active-turn identity, epoch/reset behavior, continuity artifacts, routing/affinity guarantees, and dashboard projections). Managed-run support does not imply managed-session support.
 - Runtime-specific behavior MUST remain behind strategies, adapters, launchers, supervisors, provider-profile materialization, and activity handlers. Core orchestration MUST consume canonical contracts and compact metadata, not runtime internals.
 - Core orchestration features (planning, context management, resiliency) MUST degrade gracefully — not break — for external/delegated agents where deep control is unavailable.
 - MoonMind MUST NOT build a competing cognitive engine to replace the agents themselves. MoonMind MAY run its own scoped model calls for orchestration-level functions (planning, evaluation, summarization, risk classification, review) where they serve the orchestration layer rather than recreating the agent.
@@ -74,13 +74,13 @@ MoonMind MUST treat every run as an evidence-producing process whose durable rec
 Non-negotiable rules:
 
 - Large execution data — prompts and instruction bundles, retrieved context packs, skill snapshots, stdout/stderr, merged logs, diagnostics, generated files and patches, provider result bundles, session summaries and reset boundaries, control events, and observability event streams — MUST be stored as artifacts or compact artifact references, not embedded in workflow history or terminal result contracts.
-- Artifacts MUST remain linked to concrete executions. Workflow-, step-, run-, and session-oriented views — including Mission Control — MUST be projections over execution-linked artifacts and compact metadata, NOT a second durable source of truth.
-- MoonMind MUST provide an operator-facing surface (Mission Control) to track real-time run status, browse artifacts, inspect per-step logs and diagnostics, monitor intervention requests, and audit execution histories. Mission Control is the primary operator interface and its capabilities SHOULD grow alongside the orchestration layer.
+- Artifacts MUST remain linked to concrete executions. Workflow-, step-, run-, and session-oriented views — including the dashboard — MUST be projections over execution-linked artifacts and compact metadata, NOT a second durable source of truth.
+- MoonMind MUST provide an operator-facing surface (the dashboard) to track real-time run status, browse artifacts, inspect per-step logs and diagnostics, monitor intervention requests, and audit execution histories. The dashboard is the primary operator interface and its capabilities SHOULD grow alongside the orchestration layer.
 - Operators MUST be able to answer "what happened?" and "what is the evidence?" from durable artifacts and compact metadata without reading raw worker internals. Operators SHOULD likewise be able to answer "what changed?", "what failed?", and "what did it cost?" as the observability surface matures. *(End-to-end tracing and per-step cost attribution are target state; tracked in Roadmap Milestone 14.)*
 - Structured logs, metrics, and traces MUST use stable, non-sensitive correlation identifiers (workflow / activity / run / runtime / profile / session / turn IDs and artifact refs). Raw prompts, raw credentials, full logs, generated file contents, and secret-bearing data MUST NOT be emitted as ordinary structured telemetry fields.
 - Live logs and streaming SHOULD degrade to artifact-backed replay; live-stream failure MUST NOT fail the run.
 
-Rationale: "It finished" is not an answer. Evidence that outlives the process is what makes runs auditable, recoverable, and improvable. Mission Control reads that evidence; it does not replace it.
+Rationale: "It finished" is not an answer. Evidence that outlives the process is what makes runs auditable, recoverable, and improvable. The dashboard reads that evidence; it does not replace it.
 
 ### V. One-Click Agent Deployment
 

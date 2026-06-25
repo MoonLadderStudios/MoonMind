@@ -13789,7 +13789,7 @@ class MoonMindRunWorkflow:
         if self._resilience_policy_ref:
             memo_dict["resilience_policy_ref"] = dict(self._resilience_policy_ref)
         # MM-884: link the durable incident reconstruction manifest for failed
-        # runs so Mission Control/report surfaces reach correlated evidence
+        # runs so dashboard/report surfaces reach correlated evidence
         # without duplicating it in workflow history.
         if self._incident_reconstruction_ref:
             memo_dict["incident_reconstruction_ref"] = self._incident_reconstruction_ref

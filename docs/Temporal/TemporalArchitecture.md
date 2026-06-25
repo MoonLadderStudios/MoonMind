@@ -25,7 +25,7 @@ This document defines the top-level architecture for:
 - managed-runtime and external-agent integration
 - security, idempotency, versioning, observability, and operational guardrails
 
-Some MoonMind payloads still carry legacy `task` / `taskId` field names (they rename in the hard switch) alongside workflow detail routes and Mission Control workflow views. Those are product/API terms. Inside the Temporal architecture, the canonical durable entity is a **Workflow Execution**.
+Some MoonMind payloads still carry legacy `task` / `taskId` field names (they rename in the hard switch) alongside workflow detail routes and the dashboard workflow views. Those are product/API terms. Inside the Temporal architecture, the canonical durable entity is a **Workflow Execution**.
 
 Compatibility tables, app DB projections, historical rows, dashboard adapters, and workflow product APIs may exist, but they are not parallel orchestrators. For Temporal-managed work, workflow-owned state/history and workflow-managed metadata are authoritative. App DB projections are repairable read models.
 
@@ -112,7 +112,7 @@ MoonMind adds domain contracts above Temporal:
 - Provider Profile and SecretRef policies
 - Managed Session and session-continuity contracts
 - Runner Profile and workload-container policies
-- Mission Control read models
+- Dashboard read models
 
 MoonMind must not introduce a second durable orchestration substrate for work that is Temporal-managed.
 

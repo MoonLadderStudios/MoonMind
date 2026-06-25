@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verify the shared Mission Control Vite manifest contract (CI / local).
+"""Verify the shared dashboard Vite manifest contract (CI / local).
 
-Asserts frontend/vite.config.ts defines exactly one shared ``mission-control``
+Asserts frontend/vite.config.ts defines exactly one shared ``dashboard``
 entrypoint and that its manifest-recorded files exist under
 api_service/static/workflow_console/dist/.
 """
@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SHARED_ENTRYPOINT = "mission-control"
+SHARED_ENTRYPOINT = "dashboard"
 
 def expected_entrypoints() -> list[str]:
     vite_config = ROOT / "frontend" / "vite.config.ts"
@@ -32,7 +32,7 @@ def expected_entrypoints() -> list[str]:
     if names != [SHARED_ENTRYPOINT]:
         print(
             "Expected frontend/vite.config.ts to define exactly one shared "
-            f"Mission Control entrypoint: {SHARED_ENTRYPOINT!r}. Found: {names!r}",
+            f"dashboard entrypoint: {SHARED_ENTRYPOINT!r}. Found: {names!r}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -99,7 +99,7 @@ def main() -> int:
         return 1
 
     print(
-        f"OK: shared Mission Control entrypoint {SHARED_ENTRYPOINT!r}; manifest {manifest_path.relative_to(ROOT)}"
+        f"OK: shared dashboard entrypoint {SHARED_ENTRYPOINT!r}; manifest {manifest_path.relative_to(ROOT)}"
     )
     return 0
 

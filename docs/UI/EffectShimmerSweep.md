@@ -2,13 +2,13 @@
 
 ## Intent
 
-Define the shared Mission Control shimmer treatment used by active status pills.
+Define the shared dashboard shimmer treatment used by active status pills.
 
 The effect communicates **active progress** without implying error, urgency, or instability. It should feel like a premium “thinking” shimmer: focused, calm, phase-locked, and readable at small sizes.
 
 ## Scope
 
-This document covers the current shimmer sweep effect for Mission Control status pills.
+This document covers the current shimmer sweep effect for the dashboard status pills.
 
 It defines:
 
@@ -44,7 +44,7 @@ source_of_truth:
       - preserve the existing status class contract
 
   stylesheet:
-    path: frontend/src/styles/mission-control.css
+    path: frontend/src/styles/dashboard.css
     responsibility:
       - define shimmer tokens
       - define the shared moving light field

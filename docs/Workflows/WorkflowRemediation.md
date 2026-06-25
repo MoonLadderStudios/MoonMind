@@ -1,7 +1,7 @@
 # Workflow Remediation
 
 **Status:** Desired-state design
-**Owners:** MoonMind Platform + Mission Control
+**Owners:** MoonMind Platform + dashboard
 **Last Updated:** 2026-05-07
 **Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Api/ExecutionsApiContract.md`, `docs/Workflows/WorkflowRunsApi.md`, `docs/Workflows/WorkflowProposalSystem.md`, `docs/ManagedAgents/LiveLogs.md`, `docs/ManagedAgents/CodexCliManagedSessions.md`, `docs/ManagedAgents/SharedManagedAgentAbstractions.md`, `docs/Security/ProviderProfiles.md`, `docs/Security/SecretsSystem.md`, `docs/ManagedAgents/DockerOutOfDocker.md`, `docs/Temporal/ArtifactPresentationContract.md`, `docs/Temporal/StepLedgerAndProgressModel.md`, `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`, `docs/Temporal/SourceOfTruthAndProjectionModel.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Steps/SkillSystem.md`
 
@@ -122,7 +122,7 @@ MoonMind may still support operator handoff or manual terminal workflows elsewhe
 
 A remediation Workflow Execution should still be represented as a normal top-level `MoonMind.UserWorkflow` execution with additional nested semantics under `task.remediation`.
 
-This keeps remediation aligned with the existing Workflow-shaped create path, Mission Control Workflow views, proposal promotion, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
+This keeps remediation aligned with the existing Workflow-shaped create path, dashboard Workflow views, proposal promotion, artifacts, step ledger, cancellation, rerun, and summary flows. A new top-level workflow type is not required in v1.
 
 ### 5.2 Remediation is a relationship, not a dependency
 
@@ -388,7 +388,7 @@ The platform must persist enough data to support:
 - current lock holder,
 - latest action summary,
 - final remediation outcome,
-- Mission Control list/detail rendering.
+- dashboard list/detail rendering.
 
 ### 8.4 Read model expectations
 
@@ -544,7 +544,7 @@ The context artifact must stay **bounded**. It may include small excerpts or sum
 
 ### 9.5 Evidence access surface for remediation Workflow Executions
 
-The remediation runtime should not scrape Mission Control pages. It should receive a MoonMind-owned tool surface such as:
+The remediation runtime should not scrape dashboard pages. It should receive a MoonMind-owned tool surface such as:
 
 - `remediation.get_context()`
   Return the parsed `remediation.context` bundle.
@@ -1193,11 +1193,11 @@ Artifacts remain the operator-facing deep evidence; audit rows remain the compac
 
 ---
 
-## 15. Mission Control UX
+## 15. Dashboard UX
 
 ### 15.1 Create flow
 
-Mission Control should expose **Create remediation Workflow** from:
+The dashboard should expose **Create remediation Workflow** from:
 - Workflow detail,
 - failed Workflow banners,
 - attention-required surfaces,
@@ -1236,7 +1236,7 @@ The remediation Workflow detail should show a **Remediation Target** panel with:
 
 ### 15.4 Evidence presentation
 
-Mission Control should provide direct operator access to:
+The dashboard should provide direct operator access to:
 - the remediation context artifact,
 - referenced target logs and diagnostics,
 - remediation decision log,
@@ -1311,7 +1311,7 @@ Publish a final remediation summary and release locks. Automatic remediation of 
 A practical v1 should ship with the following constraints:
 
 1. **Manual creation first**
-   - Operators create remediation Workflow Executions explicitly from Mission Control.
+   - Operators create remediation Workflow Executions explicitly from the dashboard.
 
 2. **Pinned target run**
    - Always persist `workflowId + runId`.
@@ -1384,7 +1384,7 @@ This document is complete enough to guide implementation when all of the followi
 7. Privileged remediation uses named policy/profile binding, not implicit host access.
 8. Exclusive mutation locking and a remediation action idempotency ledger are implemented.
 9. Remediation Workflow Executions emit the required audit artifacts and summary block.
-10. Mission Control can show forward and reverse remediation links.
+10. The dashboard can show forward and reverse remediation links.
 11. The system degrades safely when only partial historical evidence is available.
 12. Automatic self-healing, when later added, is policy-driven and bounded.
 13. Remediation Workflow Executions attempt the smallest safe immediate repair when one is plausible.
@@ -1482,6 +1482,6 @@ Keep these rules stable even as implementation evolves:
 7. **Managed-session and Docker actions must go through their owning control planes.**
 8. **Secrets stay redacted even for admin remediation.**
 9. **Loop prevention is required.**
-10. **Mission Control must make the relationship visible in both directions.**
+10. **The dashboard must make the relationship visible in both directions.**
 11. **Immediate repair and long-term prevention are separate outputs; a remediator may do either or both, but it must record its decision.**
 12. **Corrected-instruction retries must be recorded as remediation context, not as silent mutation of the original Workflow input.**

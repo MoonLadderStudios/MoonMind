@@ -719,7 +719,7 @@ Report-first presentation is owned by `docs/Artifacts/ReportArtifacts.md`, but g
 
 Rules:
 
-- if an execution has `report.primary`, Mission Control may show a report-first card or panel
+- if an execution has `report.primary`, the dashboard may show a report-first card or panel
 - report artifacts must still appear in generic artifact lists unless intentionally filtered
 - report evidence should remain separately addressable
 - generic rendering must use the same `default_read_ref`, redaction, raw-download, and renderer-selection rules as any other artifact
@@ -909,10 +909,10 @@ Report-specific semantics are owned by `docs/Artifacts/ReportArtifacts.md`, but 
 Rules:
 
 - generic artifact clients should use the same preview, default-read, raw-download, and renderer-selection rules for report artifacts as for other artifacts
-- if a report-specific projection exists, Mission Control may show report artifacts in a report-first surface while keeping them accessible through generic artifact views
+- if a report-specific projection exists, the dashboard may show report artifacts in a report-first surface while keeping them accessible through generic artifact views
 - report evidence remains separately addressable and must not be hidden inside one opaque report blob when separate access improves auditability
 - `application/pdf` should remain metadata + download-only unless a PDF viewer is intentionally added
-- untrusted `text/html` report exports must not be injected into Mission Control without sanitization
+- untrusted `text/html` report exports must not be injected into the dashboard without sanitization
 
 ### 11.5 Debug artifact classes
 
@@ -1172,7 +1172,7 @@ Rules:
 - show pinned state prominently on important outputs and reports
 - do not imply that an artifact is permanent unless it is pinned or governed by a long-retention policy
 - expose pin/unpin affordances where authorization allows
-- when a report is the primary deliverable, Mission Control may make pinning especially visible
+- when a report is the primary deliverable, the dashboard may make pinning especially visible
 - deleted artifacts should render as unavailable/tombstoned rather than silently disappearing from historical context when the API returns tombstones
 
 ---
@@ -1259,7 +1259,7 @@ Consumer-facing artifact changes should include tests that cover:
 4. Should latest-artifact queries support a generic multi-link server aggregation mode, or should each projection define its own latest refs?
 5. Should `report.evidence` receive additional grouping metadata such as `finding_id`, `section_id`, or `evidence_kind` in the report-specific contract?
 6. Should session projections eventually support historical epoch browsing through query filters, or should they remain latest-session surfaces with links back to execution-scoped artifacts?
-7. How much debug-only metadata should Mission Control expose to local single-user installs by default?
+7. How much debug-only metadata should the dashboard expose to local single-user installs by default?
 
 ---
 

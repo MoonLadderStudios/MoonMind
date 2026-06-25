@@ -8,7 +8,7 @@ router = APIRouter()
 @router.get("/test-workflows-home", response_class=HTMLResponse)
 def test_tasks_home():
     boot_payload = generate_boot_payload("workflows-home")
-    assets_html = ui_assets("mission-control")
+    assets_html = ui_assets("dashboard")
 
     html = f"""
     <!DOCTYPE html>
@@ -19,7 +19,7 @@ def test_tasks_home():
         {assets_html}
     </head>
     <body class="bg-gray-50 text-gray-900 p-8">
-        <div id="mission-control-root"></div>
+        <div id="dashboard-app-root"></div>
         <script id="moonmind-ui-boot" type="application/json">
             {boot_payload}
         </script>

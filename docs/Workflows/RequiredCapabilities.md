@@ -418,7 +418,7 @@ Rules:
 
 ## 13. Observability
 
-Mission Control and operator diagnostics should expose Required Capabilities as first-class execution context.
+The dashboard and operator diagnostics should expose Required Capabilities as first-class execution context.
 
 At minimum, detail/debug surfaces should be able to show:
 

@@ -1,10 +1,10 @@
 # Report Artifacts
 
 Status: Adopted (implemented)
-Owners: MoonMind Platform + Mission Control
+Owners: MoonMind Platform + Dashboard
 Last updated: 2026-05-15
 
-The core contract in this document — `report.*` link types, the compact `report_bundle_v = 1` workflow result, the `reportProjection` execution-detail summary, retention defaults, the Mission Control report-first surface, and the report/observability separation — is implemented across the specs called out in section 22. Sections that are still future work (a dedicated `/report` endpoint, stronger evidence grouping semantics, multi-step workflow-level projections) are marked **Deferred** inline.
+The core contract in this document — `report.*` link types, the compact `report_bundle_v = 1` workflow result, the `reportProjection` execution-detail summary, retention defaults, the dashboard report-first surface, and the report/observability separation — is implemented across the specs called out in section 22. Sections that are still future work (a dedicated `/report` endpoint, stronger evidence grouping semantics, multi-step workflow-level projections) are marked **Deferred** inline.
 
 ## 1. Purpose
 
@@ -28,7 +28,7 @@ Instead, it defines:
 - what a **report** means in MoonMind
 - how reports should be modeled as artifact-backed outputs
 - how reports should be linked to executions and steps
-- how Mission Control and other consumers should present reports
+- how the dashboard and other consumers should present reports
 - how report workflows should separate curated report content from raw evidence, logs, and diagnostics
 
 ---
@@ -88,7 +88,7 @@ Instead:
 4. **Large report payloads remain artifact-backed.**
    - Workflows and activities pass refs and compact summaries rather than embedding report bodies or evidence blobs in workflow history.
 
-5. **Mission Control should treat reports as a first-class end state.**
+5. **The dashboard should treat reports as a first-class end state.**
    - If an execution has a canonical report artifact, the UI should surface it directly rather than forcing users to hunt through a generic artifact list.
 
 ---
@@ -121,7 +121,7 @@ Instead:
 - storing evidence, logs, and diagnostics inline inside one giant report blob by default
 - introducing mutable in-place report updates
 - requiring every report workflow to produce PDF output
-- making Mission Control parse provider-native raw payloads as if they were canonical reports
+- making the dashboard parse provider-native raw payloads as if they were canonical reports
 
 ---
 
@@ -407,7 +407,7 @@ Typical report renderers:
 
 ## 12.4 Report-first UX rule
 
-If an execution has a canonical `report.primary` artifact, Mission Control should present that artifact before making the user inspect the generic artifact list.
+If an execution has a canonical `report.primary` artifact, the dashboard should present that artifact before making the user inspect the generic artifact list.
 
 Recommended behavior:
 
@@ -451,7 +451,7 @@ These artifacts may support or explain the report, but they are not themselves t
 
 ## 13.2 UI rule
 
-Mission Control should not collapse raw logs and diagnostics into the report view by default.
+The dashboard should not collapse raw logs and diagnostics into the report view by default.
 
 Instead:
 
@@ -665,7 +665,7 @@ The canonical server-side report surface is the bounded `reportProjection` block
 - `findingCounts` — bounded map (only present when the primary report metadata carries it)
 - `severityCounts` — bounded map (only present when the primary report metadata carries it)
 
-The projection is built server-side from canonical report semantics by `build_report_projection_summary` in `moonmind/workflows/temporal/report_artifacts.py` and hydrated in `api_service/api/routers/executions.py` via `_hydrate_execution_report_projection`. The model lives at `ExecutionReportProjectionModel` in `moonmind/schemas/temporal_models.py`. Mission Control's report-first UI currently consumes the latest `report.primary` directly via `GET /executions/{...}/artifacts?link_type=report.primary&latest_only=true` (with `report.summary` fetched the same way) and degrades to the generic artifact list when none is present. Migrating Mission Control to read the bounded `reportProjection` refs from the execution detail payload — instead of issuing separate artifact queries — is **deferred future work** tracked alongside the dedicated `/report` endpoint in §18.2; the current direct-artifact path is the supported behavior until that migration lands.
+The projection is built server-side from canonical report semantics by `build_report_projection_summary` in `moonmind/workflows/temporal/report_artifacts.py` and hydrated in `api_service/api/routers/executions.py` via `_hydrate_execution_report_projection`. The model lives at `ExecutionReportProjectionModel` in `moonmind/schemas/temporal_models.py`. The dashboard's report-first UI currently consumes the latest `report.primary` directly via `GET /executions/{...}/artifacts?link_type=report.primary&latest_only=true` (with `report.summary` fetched the same way) and degrades to the generic artifact list when none is present. Migrating the dashboard to read the bounded `reportProjection` refs from the execution detail payload — instead of issuing separate artifact queries — is **deferred future work** tracked alongside the dedicated `/report` endpoint in §18.2; the current direct-artifact path is the supported behavior until that migration lands.
 
 Rules:
 
@@ -675,7 +675,7 @@ Rules:
 
 ## 18.2 Dedicated `/report` endpoint (Deferred)
 
-A dedicated `GET /api/executions/{namespace}/{workflow_id}/{run_id}/report` projection is **deferred future work**, not an implementation gap. The MM-496 decision was that the bounded `reportProjection` on execution detail is sufficient for current Mission Control needs and that a dedicated endpoint would duplicate read-derived behavior already available through the standard artifact APIs. The execution-artifacts API treats `link_type` as an exact match, so clients that want the canonical report artifacts query per-link-type (for example `GET /artifacts?link_type=report.primary&latest_only=true` and `GET /artifacts?link_type=report.summary&latest_only=true`) or fall back to an unfiltered list plus client-side selection.
+A dedicated `GET /api/executions/{namespace}/{workflow_id}/{run_id}/report` projection is **deferred future work**, not an implementation gap. The MM-496 decision was that the bounded `reportProjection` on execution detail is sufficient for current dashboard needs and that a dedicated endpoint would duplicate read-derived behavior already available through the standard artifact APIs. The execution-artifacts API treats `link_type` as an exact match, so clients that want the canonical report artifacts query per-link-type (for example `GET /artifacts?link_type=report.primary&latest_only=true` and `GET /artifacts?link_type=report.summary&latest_only=true`) or fall back to an unfiltered list plus client-side selection.
 
 If a dedicated endpoint is later added, it should:
 
@@ -744,7 +744,7 @@ That means:
 - report outputs stay immutable and artifact-backed
 - reports, evidence, and observability remain clearly separated
 - workflows return compact report bundle refs rather than large payloads
-- Mission Control can present a canonical final report directly when one exists
+- the dashboard can present a canonical final report directly when one exists
 - sensitive reports can reuse the existing preview/restriction model
 
 This gives MoonMind a clean way to support workflows such as unit-test reports, coverage reports, benchmark reports, and pentest reports while staying aligned with the current artifact-first Temporal architecture.
@@ -782,14 +782,14 @@ The contract in this document is implemented and verified through the following 
 | Report bundle publication, link types, final marker cardinality, step metadata, evidence refs | `tests/unit/workflows/temporal/test_artifacts.py`, `tests/unit/workflows/temporal/test_artifacts_activities.py` |
 | Compact bundle/projection helper invariants | `tests/unit/workflows/temporal/test_report_workflow_rollout.py` |
 | Execution-detail `reportProjection` serialization, omission, and bounded metadata | `tests/unit/api/routers/test_executions.py`, `tests/contract/test_temporal_execution_api.py` |
-| Mission Control report-first rendering | `frontend/src/entrypoints/workflow-detail.test.tsx` |
+| Dashboard report-first rendering | `frontend/src/entrypoints/workflow-detail.test.tsx` |
 
 ### 22.3 Specs
 
 | Spec | Scope |
 | --- | --- |
 | `specs/227-report-bundle-workflow-publishing` | Activity-level bundle publication contract (MM-461) |
-| `specs/230-mission-control-report-presentation` | Mission Control report-first UI surface |
+| `specs/230-dashboard-report-presentation` | Dashboard report-first UI surface |
 | `specs/245-publish-report-bundles` | Workflow-level fallback / publication coverage (MM-493) |
 | `specs/248-report-aware-execution-projections` | Execution-detail `reportProjection` (MM-496); the dedicated `/report` endpoint is explicitly deferred here |
 
@@ -800,6 +800,6 @@ The MM-461 spec listed `./tools/test_integration.sh` as a follow-up step. That s
 Rationale:
 
 - The report bundle contract is a pure workflow-result/validation contract layered on the existing artifact service. The slice did not change artifact persistence semantics, the storage backend, or any cross-service compose-backed seam covered by `integration_ci`.
-- The contract is fully covered by activity-boundary unit tests (`tests/unit/workflows/temporal/test_artifacts_activities.py`), router/contract tests against the FastAPI execution detail surface (`tests/contract/test_temporal_execution_api.py`), and Mission Control component tests (`frontend/src/entrypoints/workflow-detail.test.tsx`).
+- The contract is fully covered by activity-boundary unit tests (`tests/unit/workflows/temporal/test_artifacts_activities.py`), router/contract tests against the FastAPI execution detail surface (`tests/contract/test_temporal_execution_api.py`), and dashboard component tests (`frontend/src/entrypoints/workflow-detail.test.tsx`).
 - This matches the escalation policy used by spec 245 (`T020 was intentionally skipped as not required because MM-493 did not cross the hermetic integration boundary`) and spec 248 (`T021 Escalate to ./tools/test_integration.sh only if MM-496 implementation crosses the hermetic integration boundary`).
 - If a future change to the report path touches artifact persistence, the artifact-link query surface, or compose-backed service topology, the hermetic integration suite should be re-run at that time.

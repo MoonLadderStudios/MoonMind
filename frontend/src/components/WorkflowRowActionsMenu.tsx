@@ -365,7 +365,7 @@ export function WorkflowRowActionsMenu({
           cancelMutation.mutate({
             action: 'cancel',
             graceful: false,
-            reason: 'Force canceled by operator from Mission Control.',
+            reason: 'Force canceled by operator from the dashboard.',
           });
         },
         onSendMessage: () => {
@@ -380,7 +380,7 @@ export function WorkflowRowActionsMenu({
           if (!window.confirm('Bypass dependency waiting for this task?')) return;
           signalMutation.mutate({
             signalName: 'BypassDependencies',
-            payload: { reason: 'Dependency wait bypassed by operator from Mission Control.' },
+            payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
           });
         },
         onCreateRemediation: () => {

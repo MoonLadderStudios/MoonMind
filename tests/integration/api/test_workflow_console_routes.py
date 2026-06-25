@@ -63,13 +63,13 @@ def _write_dashboard_test_manifest(root: Path) -> Path:
             "file": "assets/mountPage.js",
             "css": ["assets/mountPage.css"],
         },
-        "entrypoints/mission-control.tsx": {
-            "file": "assets/mission-control.js",
+        "entrypoints/dashboard.tsx": {
+            "file": "assets/dashboard.js",
             "imports": [shared_key],
         },
     }
-    (assets_dir / "mission-control.js").write_text(
-        "console.log('mission-control');",
+    (assets_dir / "dashboard.js").write_text(
+        "console.log('dashboard');",
         encoding="utf-8",
     )
     (assets_dir / "mountPage.js").write_text("console.log('shared');", encoding="utf-8")

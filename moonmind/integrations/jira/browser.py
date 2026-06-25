@@ -171,7 +171,7 @@ class JiraListResponse(JiraBrowserModel, Generic[T]):
     project_key: str | None = Field(None, alias="projectKey")
 
 class JiraBrowserService:
-    """Trusted read-only Jira browser service used by Mission Control."""
+    """Trusted read-only Jira browser service used by the dashboard."""
 
     def __init__(
         self,

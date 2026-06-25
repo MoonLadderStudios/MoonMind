@@ -2,7 +2,7 @@
 
 **Status:** Current architecture and near-term direction
 **Updated:** 2026-05-06
-**Audience:** Contributors, operators, runtime authors, integration authors, and Mission Control developers
+**Audience:** Contributors, operators, runtime authors, integration authors, and dashboard developers
 **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtime runs, Codex CLI managed sessions, Claude Code managed runs, external agents, artifacts, provider profiles, and workload containers.
 
 MoonMind is an open-source platform for orchestrating leading AI coding agents and automation systems while adding resiliency, safety, context delivery, provider-profile routing, and artifact-first observability.
@@ -32,7 +32,7 @@ The diagram below is intentionally explicit about the Temporal execution model: 
 flowchart LR
   subgraph ControlPlane["Control Plane"]
     U[Browser]
-    MC[Mission Control]
+    MC[Dashboard]
     API[MoonMind API]
     U --> MC --> API
   end
@@ -206,7 +206,7 @@ Diagram rules:
 
 ### Control Plane
 
-The API service and Mission Control provide the operator boundary. They create workflow executions, resolve runtime intent, expose provider-profile and auth configuration, serve artifact and observability views, support intervention flows, and expose context/MCP-style surfaces to compatible runtimes.
+The API service and the dashboard provide the operator boundary. They create workflow executions, resolve runtime intent, expose provider-profile and auth configuration, serve artifact and observability views, support intervention flows, and expose context/MCP-style surfaces to compatible runtimes.
 
 Control-plane calls that change workflow-owned lifecycle state should use Temporal Start, Signal, Update, Query, or idempotent projection activities rather than mutating lifecycle tables as a competing source of truth.
 
@@ -759,10 +759,10 @@ MoonMind supports browser-terminal OAuth flows for runtime auth homes.
 
 The flow is:
 
-1. Operator starts an OAuth session in Mission Control Settings.
+1. Operator starts an OAuth session in the dashboard Settings.
 2. API starts `MoonMind.OAuthSession`.
 3. `MoonMind.OAuthSession` schedules Agent Runtime activities to ensure the auth volume and start a short-lived auth-runner container.
-4. Mission Control attaches to the PTY/WebSocket bridge out-of-band. The workflow stores compact terminal/session metadata but does not hold the PTY/WebSocket connection.
+4. The dashboard attaches to the PTY/WebSocket bridge out-of-band. The workflow stores compact terminal/session metadata but does not hold the PTY/WebSocket connection.
 5. The runtime CLI performs its native interactive login.
 6. The runtime writes durable auth state into a mounted auth volume.
 7. The user/API finalizes, cancels, or fails the auth session by Signal.
@@ -817,7 +817,7 @@ For managed runs, expected metadata includes:
 
 `AgentRunResult` is the terminal workflow contract. It must contain compact status, summary, failure classification, provider error code where available, and artifact refs. It must not embed large logs, patches, generated files, or secret-bearing output.
 
-Live logs and artifact tails belong to observability APIs and Mission Control views.
+Live logs and artifact tails belong to observability APIs and dashboard views.
 
 ### Session observability
 
@@ -1023,7 +1023,7 @@ Codex CLI:
 8. continuity artifact publication
 9. recovery and reconciliation behavior
 10. Continue-As-New state contract
-11. session-aware Mission Control projections
+11. session-aware dashboard projections
 
 Claude Code does not yet satisfy this shared session-plane entry requirement through a live controller/adapter boundary. New runtimes should meet the same bar before being described as session-capable.
 
@@ -1058,7 +1058,7 @@ Near-term architecture work should continue to:
 - reduce Codex-specific naming in generic managed-run areas where safe
 - keep runtime-specific naming inside runtime bindings while shared workflow/activity contracts use `ManagedSession*` names
 - harden Claude Code provider-profile, GitHub auth, OAuth, context, and result flows
-- improve Mission Control runtime/profile clarity
+- improve dashboard runtime/profile clarity
 - improve managed-run observability and live log plumbing
 - make external-agent callback routing explicit where supported
 - preserve signal-based provider-manager compatibility while considering Update-based admission for new synchronous callers

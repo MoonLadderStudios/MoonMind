@@ -184,7 +184,7 @@ const workspaceCatalog = {
         activation_state: 'active',
         active: true,
         pending_value: null,
-        affected_process_or_worker: 'mission_control',
+        affected_process_or_worker: 'dashboard',
         completion_guidance: null,
         options: null,
         constraints: { min_length: 3, max_length: 24 },
@@ -195,7 +195,7 @@ const workspaceCatalog = {
         requires_reload: false,
         requires_worker_restart: false,
         requires_process_restart: false,
-        applies_to: ['mission_control'],
+        applies_to: ['dashboard'],
         depends_on: [],
         order: 50,
         audit: { store_old_value: true, store_new_value: true, redact: false },
@@ -498,7 +498,7 @@ describe('GeneratedSettingsSection', () => {
           body: JSON.stringify({
             changes: { 'workflow.default_publish_mode': 'branch' },
             expected_versions: { 'workflow.default_publish_mode': 3 },
-            reason: 'Updated from Mission Control Settings.',
+            reason: 'Updated from Settings.',
           }),
         }),
       );

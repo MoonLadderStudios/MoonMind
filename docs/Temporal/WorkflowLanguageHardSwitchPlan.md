@@ -1,7 +1,7 @@
 # MoonMind Workflow Language Hard Switch Plan
 
 **Status:** Proposed hard-switch implementation plan
-**Owner:** MoonMind Platform / Mission Control / Runtime
+**Owner:** MoonMind Platform / Dashboard / Runtime
 **Scope:** Remove MoonMind's product-level `task` terminology and replace it with Temporal-aligned workflow terminology. Replace `Step Execution` with `Step Execution`.
 **Non-goal:** Preserve legacy task routes, names, pipelines, or compatibility payloads.
 
@@ -80,7 +80,7 @@ The existing MoonMind docs already show the desired direction:
 - `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md` states that once work is represented inside Temporal, it is treated as a **Workflow Execution**.
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md` states that Workflow Executions orchestrate, Activities perform side effects, and Task Queues are internal routing labels rather than product semantics.
 - The former task-execution compatibility bridge doc has been deleted; `docs/Temporal/WorkflowExecutionProductModel.md` is the canonical product model.
-- `docs/UI/WorkflowConsoleArchitecture.md` frames Mission Control as a Workflow Execution console, replacing the earlier task-console posture.
+- `docs/UI/WorkflowConsoleArchitecture.md` frames the dashboard as a Workflow Execution console, replacing the earlier task-console posture.
 - `docs/Steps/StepExecutionsAndCheckpointing.md` defines Step Execution as one semantic execution of a logical step. This plan renames that concept to **Step Execution**.
 
 The hard switch reduces ambiguity, makes MoonMind feel Temporal-native, and prevents future APIs, docs, and UI flows from reintroducing parallel task semantics.

@@ -502,7 +502,7 @@ class SystemOperationsService:
                 id="set-operational-banner",
                 label="Set Operational Banner",
                 target="operations",
-                impact="Shows a temporary operator banner in Mission Control.",
+                impact="Shows a temporary operator banner in the dashboard.",
                 requiresConfirmation=False,
                 requiredPermission="operations.invoke",
                 available=False,

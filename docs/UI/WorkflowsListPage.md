@@ -3,7 +3,7 @@
 Status: Proposed desired-state contract  
 Owners: MoonMind Engineering  
 Last updated: 2026-05-04  
-Canonical for: Mission Control Workflows list route, execution-list controls, table sorting, column filters, filter URL state, and Google Sheets-like list filtering behavior
+Canonical for: dashboard Workflows list route, execution-list controls, table sorting, column filters, filter URL state, and Google Sheets-like list filtering behavior
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the page.
 
@@ -28,7 +28,7 @@ Use related docs for system-level contracts:
 - `docs/Api/ExecutionsApiContract.md` — `/api/executions` list contract, execution lifecycle fields, filters, count, and pagination semantics.
 - `docs/Temporal/VisibilityAndUiQueryModel.md` — Temporal Visibility and UI query model.
 - `docs/UI/WorkflowConsoleArchitecture.md` — workflow console shell and shared frontend architecture.
-- `docs/UI/MissionControlDesignSystem.md` — shared Mission Control visual language.
+- `docs/UI/DashboardDesignSystem.md` — shared dashboard visual language.
 - `docs/UI/CreatePage.md` — Workflow authoring surface that creates many rows shown on this page.
 
 Representative current implementation surfaces:
@@ -38,7 +38,7 @@ api_service/api/routers/workflow_console.py
 api_service/api/routers/executions.py
 frontend/src/entrypoints/workflow-list.tsx
 frontend/src/entrypoints/workflow-list.test.tsx
-frontend/src/styles/mission-control.css
+frontend/src/styles/dashboard.css
 ```
 
 ---
@@ -55,7 +55,7 @@ Rules:
 
 1. `/workflows` is the canonical Workflows List route.
 2. Legacy `/tasks/*` list routes are removed from the route table without redirects (hard switch).
-3. The page is server-hosted by FastAPI and rendered by the shared Mission Control React/Vite frontend.
+3. The page is server-hosted by FastAPI and rendered by the shared dashboard React/Vite frontend.
 4. The server renders the `workflow-list` page key into the boot payload.
 5. The route uses a wide data-panel layout because the primary surface is a multi-column execution table.
 6. Runtime dashboard configuration is generated server-side and passed through the boot payload.

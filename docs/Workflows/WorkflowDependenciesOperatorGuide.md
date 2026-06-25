@@ -113,7 +113,7 @@ The following structured log events are emitted during dependency lifecycle:
 
 ### A Dependent Run Is Stuck in `waiting_on_dependencies`
 
-1. **Check prerequisites**: Use the detail API or Mission Control to see which prerequisites are still running.
+1. **Check prerequisites**: Use the detail API or the dashboard to see which prerequisites are still running.
 2. **Check signal delivery**: If a prerequisite completed but the dependent is still waiting, check service logs for `dependency_signal_fan_out` events. If `signals_failed > 0`, the signal may not have reached the dependent.
 3. **Check reconciliation**: The workflow reconciles every 30 seconds via `execution.dependency_status_snapshot` activity. If the activity is failing, the workflow won't detect completed prerequisites via reconciliation.
 4. **Worker health**: If the Temporal worker is down, signals queue up and reconcile activities won't execute. Check worker logs and container health.

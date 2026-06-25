@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Owner:** MoonMind Platform  
-**Audience:** backend, workflow authors, API, Mission Control  
+**Audience:** backend, workflow authors, API, Dashboard  
 **Related:** `docs/Workflows/WorkflowDependencies.md`, `docs/Workflows/WorkflowPublishing.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`, `docs/Temporal/TemporalAgentExecution.md`, `docs/ManagedAgents/SkillGithubPrResolver.md`
 
 ---
@@ -216,7 +216,7 @@ The parent SHOULD use existing state vocabulary rather than inventing a new root
 
 - parent `mm_state`: `awaiting_external`
 
-This fits the current lifecycle model, which already includes `awaiting_external` for durable external waiting. If Mission Control later needs a dedicated `merge_automation` stage marker, the implementation MUST add it through the standard `MoonMind.UserWorkflow` search-attribute update path rather than assuming `mm_stage` already carries that value.
+This fits the current lifecycle model, which already includes `awaiting_external` for durable external waiting. If the dashboard later needs a dedicated `merge_automation` stage marker, the implementation MUST add it through the standard `MoonMind.UserWorkflow` search-attribute update path rather than assuming `mm_stage` already carries that value.
 
 ---
 
@@ -732,7 +732,7 @@ The parent `reports/run_summary.json` SHOULD include:
 
 ## 21. UI Contract
 
-Mission Control SHOULD expose this under PR publish settings as:
+The dashboard SHOULD expose this under PR publish settings as:
 
 - `Publish mode: PR`
 - `Automatically resolve/merge this PR`
@@ -773,4 +773,4 @@ This design is complete when:
 7. a resolver-generated push can return control to the gate,
 8. downstream workflow executions depending on the parent workflow naturally wait for merge automation completion,
 9. non-success merge-automation terminal outcomes fail the parent workflow except `canceled`, which cancels the parent workflow,
-10. root and child artifacts expose enough state for Mission Control to explain why a workflow execution is waiting or failed.
+10. root and child artifacts expose enough state for the dashboard to explain why a workflow execution is waiting or failed.

@@ -4439,17 +4439,17 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByText('/var/lib/moonmind/raw-context.json')).toBeNull();
   });
 
-  it('keeps remediation panels accessible and contained in Mission Control CSS', async () => {
+  it('keeps remediation panels accessible and contained in dashboard CSS', async () => {
     const { readFileSync } = await import('node:fs');
-    const missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+    const dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
       'utf8',
     );
 
-    expect(missionControlCss).toMatch(/\.td-remediation-region:focus-within\s*\{[^}]*outline:\s*2px solid/s);
-    expect(missionControlCss).toMatch(/\.td-remediation-list\s+\.card\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s);
-    expect(missionControlCss).toMatch(/@media\s*\(max-width:\s*720px\)\s*\{[^}]*\.td-remediation-region/s);
-    expect(missionControlCss).toMatch(/\.td-remediation-list\s+code\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(dashboardCss).toMatch(/\.td-remediation-region:focus-within\s*\{[^}]*outline:\s*2px solid/s);
+    expect(dashboardCss).toMatch(/\.td-remediation-list\s+\.card\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s);
+    expect(dashboardCss).toMatch(/@media\s*\(max-width:\s*720px\)\s*\{[^}]*\.td-remediation-region/s);
+    expect(dashboardCss).toMatch(/\.td-remediation-list\s+code\s*\{[^}]*overflow-wrap:\s*anywhere;/s);
   });
 
   it('renders workflow detail as separated matte evidence and action regions', async () => {
@@ -5104,7 +5104,7 @@ describe('Workflow Detail Entrypoint', () => {
       expect(signalBodies).toEqual([
         {
           signalName: 'BypassDependencies',
-          payload: { reason: 'Dependency wait bypassed by operator from Mission Control.' },
+          payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
         },
       ]);
     });

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 
-import { missionControlViteBase } from "./vite-base";
+import { dashboardViteBase } from "./vite-base";
 
 const require = createRequire(import.meta.url);
 const tailwindConfig = require("../../tailwind.config.cjs") as {
@@ -10,12 +10,12 @@ const tailwindConfig = require("../../tailwind.config.cjs") as {
 };
 
 describe("vite.config", () => {
-  it("serves built Mission Control chunks from the mounted static dist root", () => {
-    expect(missionControlViteBase("build")).toBe("/static/workflow_console/dist/");
+  it("serves built dashboard chunks from the mounted static dist root", () => {
+    expect(dashboardViteBase("build")).toBe("/static/workflow_console/dist/");
   });
 
   it("keeps dev-server asset URLs at the Vite root during local HMR", () => {
-    expect(missionControlViteBase("serve")).toBe("/");
+    expect(dashboardViteBase("serve")).toBe("/");
   });
 
   it("enforces MM-430 Tailwind source scanning inputs", () => {
@@ -31,10 +31,10 @@ describe("vite.config", () => {
     );
   });
 
-  it("enforces MM-430 Mission Control source and generated dist boundaries", () => {
+  it("enforces MM-430 dashboard source and generated dist boundaries", () => {
     const canonicalStyleSource = resolve(
       process.cwd(),
-      "frontend/src/styles/mission-control.css",
+      "frontend/src/styles/dashboard.css",
     );
     const generatedDistRoot = resolve(
       process.cwd(),
@@ -44,7 +44,7 @@ describe("vite.config", () => {
     const generatedDistRootPath = generatedDistRoot.replace(/\\/g, "/");
 
     expect(canonicalStyleSourcePath).toMatch(
-      /frontend\/src\/styles\/mission-control\.css$/,
+      /frontend\/src\/styles\/dashboard\.css$/,
     );
     expect(generatedDistRootPath).toMatch(
       /api_service\/static\/workflow_console\/dist$/,

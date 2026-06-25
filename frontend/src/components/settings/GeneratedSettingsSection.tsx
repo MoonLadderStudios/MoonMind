@@ -427,7 +427,7 @@ export function GeneratedSettingsSection() {
         body: JSON.stringify({
           changes,
           expected_versions,
-          reason: 'Updated from Mission Control Settings.',
+          reason: 'Updated from Settings.',
         }),
       });
       if (!response.ok) {

@@ -1,4 +1,4 @@
-"""Discovery metadata for Temporal executable tools shown in Mission Control."""
+"""Discovery metadata for Temporal executable tools shown in the dashboard."""
 
 from __future__ import annotations
 
@@ -128,7 +128,7 @@ def _pentest_run_input_schema() -> dict[str, Any]:
 class ExecutableToolDiscoveryRegistry:
     """Read-only catalog for task-submission executable tools.
 
-    These tools are selected in Mission Control and executed by the Temporal task
+    These tools are selected in the dashboard and executed by the Temporal task
     submit path. They are intentionally not immediate `/mcp/tools/call` tools.
     """
 

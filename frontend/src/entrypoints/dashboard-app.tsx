@@ -36,7 +36,7 @@ function LoadingPage() {
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="rounded-3xl border border-mm-border/80 bg-transparent p-6 text-sm text-slate-500 shadow-sm dark:text-slate-400">
-        Loading Mission Control...
+        Loading MoonMind...
       </div>
     </div>
   );
@@ -46,7 +46,7 @@ function UnknownPage({ page }: { page: string }) {
   return (
     <div className="mx-auto max-w-5xl px-4 py-6 sm:px-6 lg:px-8">
       <div className="rounded-3xl border border-rose-200 bg-rose-50 p-6 text-sm text-rose-700 shadow-sm dark:border-rose-900/50 dark:bg-rose-900/20 dark:text-rose-400">
-        Unknown Mission Control page: <code>{page}</code>
+        Unknown dashboard page: <code>{page}</code>
       </div>
     </div>
   );
@@ -76,7 +76,7 @@ function AppShell({
   );
 }
 
-export function MissionControlApp({ payload }: { payload: BootPayload }) {
+export function DashboardApp({ payload }: { payload: BootPayload }) {
   const layout = readSharedLayout(payload);
   const LazyPage = isSupportedPage(payload.page) ? PAGE_COMPONENTS[payload.page] : null;
 
@@ -93,4 +93,4 @@ export function MissionControlApp({ payload }: { payload: BootPayload }) {
   );
 }
 
-export default MissionControlApp;
+export default DashboardApp;

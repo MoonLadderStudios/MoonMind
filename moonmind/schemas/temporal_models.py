@@ -3352,7 +3352,7 @@ class ExecutionMetricsCostModel(BaseModel):
 
 
 class ExecutionMetricsResponse(BaseModel):
-    """Operational run metrics for Mission Control dashboards."""
+    """Operational run metrics for MoonMind dashboards."""
 
     model_config = ConfigDict(populate_by_name=True)
 

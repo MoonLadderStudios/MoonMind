@@ -550,7 +550,7 @@ describe.skip("Task Create Entrypoint", () => {
   let consoleInfoSpy: MockInstance;
   let executionResponseOverride: Response | null;
   let artifactCreateResponseOverride: Response | null;
-  let missionControlCss: string;
+  let dashboardCss: string;
 
   function renderForEdit(executionId: string, payload: BootPayload = mockPayload) {
     window.history.pushState(
@@ -592,8 +592,8 @@ describe.skip("Task Create Entrypoint", () => {
 
   beforeAll(async () => {
     const { readFileSync } = await import("node:fs");
-    missionControlCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+    dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
       "utf8",
     );
   });
@@ -8864,10 +8864,10 @@ describe.skip("Task Create Entrypoint", () => {
     const instructions = await screen.findByLabelText("Instructions");
     expect(instructions.closest(".queue-floating-bar")).toBeNull();
     expect(instructions.classList.contains("queue-step-instructions")).toBe(true);
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-step-instructions,\s*\.queue-step-skill-args\s*\{[^}]*background:\s*var\(--mm-input-well\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar\s*\{[^}]*background:\s*var\(--mm-glass-fill\);/s,
     );
   });
@@ -9022,52 +9022,52 @@ describe.skip("Task Create Entrypoint", () => {
   });
 
   it("keeps MM-429 liquid glass fallback shell complete before enhancement initializes", async () => {
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar\s*\{[^}]*position:\s*fixed;[^}]*background:\s*var\(--mm-glass-fill\);[^}]*border:\s*1px solid var\(--mm-glass-border\);[^}]*box-shadow:\s*var\(--mm-elevation-floating\);[^}]*display:\s*grid;/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar--liquid-glass\s*\{[^}]*position:\s*fixed;[^}]*isolation:\s*isolate;[^}]*overflow:\s*hidden;/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-submit-primary-ripple\s*\{[^}]*inset:\s*-1\.35rem;[^}]*border:\s*0;[^}]*box-shadow:[^}]*rgb\(var\(--mm-action-primary\) \/ 0\.54\)[^}]*filter:\s*blur\(2px\);/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar::before\s*\{[^}]*background:\s*linear-gradient/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar::after\s*\{[^}]*box-shadow:\s*inset 0 1px 0 rgb\(255 255 255 \/ 0\.32\)/s,
     );
-    expect(missionControlCss).not.toMatch(
+    expect(dashboardCss).not.toMatch(
       /\.queue-floating-bar:not\(\[data-liquid-gl-renderer="canvas"\]\)::before/,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar--liquid-glass\[data-liquid-gl-initialized="true"\]\s*>\s*\*\s*\{[^}]*pointer-events:\s*auto;/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);/s,
     );
   });
 
   it("lets repository, branch, and publish controls fill the floating bar on desktop", async () => {
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar\s*\{[^}]*width:\s*min\(100% - 2rem,\s*70rem\)[^}]*justify-content:\s*stretch/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-floating-bar-row\s*\{[^}]*width:\s*100%[^}]*justify-self:\s*stretch[^}]*grid-template-columns:\s*minmax\(12rem,\s*1\.65fr\)\s*minmax\(10rem,\s*1\.45fr\)\s*minmax\(8rem,\s*1fr\)\s*auto/s,
     );
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /@media \(max-width:\s*640px\)\s*\{[^}]*\.queue-floating-bar-row\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*minmax\(9\.5rem,\s*0\.8fr\)\s*auto/s,
     );
   });
 
   it("keeps the floating submit rail stretched instead of right-aligning its grid", async () => {
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.queue-step-submit-actions\s*\{[^}]*justify-content:\s*stretch/s,
     );
   });
 
   it("centers the constrained create page panel with equal side margins", async () => {
-    expect(missionControlCss).toMatch(
+    expect(dashboardCss).toMatch(
       /\.panel:has\(\.workflow-start-page\)\s*\{[^}]*margin-inline:\s*auto/s,
     );
   });
@@ -13643,7 +13643,7 @@ describe("Task Create submit arrow animation", () => {
   beforeAll(async () => {
     const { readFileSync } = await import("node:fs");
     css = readFileSync(
-      `${process.cwd()}/frontend/src/styles/mission-control.css`,
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
       "utf8",
     );
   });

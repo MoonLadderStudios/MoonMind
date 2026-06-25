@@ -74,7 +74,7 @@ That implementation detail is important for current behavior, but it is **not** 
 - `docs/Temporal/WorkflowExecutionProductModel.md`
 - `docs/UI/WorkflowConsoleArchitecture.md`
 - `docs/Temporal/WorkflowArtifactSystemDesign.md`
-- `docs/UI/MissionControlStyleGuide.md`
+- `docs/UI/DashboardDesignSystem.md`
 - `docs/Temporal/VisibilityAndUiQueryModel.md`
 
 ---

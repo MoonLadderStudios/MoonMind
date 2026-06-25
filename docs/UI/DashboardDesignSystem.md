@@ -1,11 +1,11 @@
-# Mission Control Design System
+# Dashboard Design System
 Status: Active  
 Owners: MoonMind Engineering  
 Last updated: 2026-04-20
 
 ## 1. Purpose
 
-Define the desired-state design system for the MoonMind Mission Control UI: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what Mission Control should look and feel like when it is correct.
+Define the desired-state design system for the MoonMind dashboard: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what the dashboard should look and feel like when it is correct.
 
 For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`.
 
@@ -13,14 +13,14 @@ For route ownership, runtime config, API boundaries, and workflow console archit
 
 ## 2. Product expression
 
-Mission Control should feel like **mission control with nightlife lighting**:
+The dashboard should feel like a **focused operator console with nightlife lighting**:
 
 - **Space-program structure** provides the backbone: disciplined layout, telemetry-like metadata, modular panels, strong hierarchy, and operational readability.
 - **Liquid glass** provides the elevated control language: floating rails, sticky utilities, overlays, nav emphasis, and premium interaction surfaces.
 - **Synthwave lighting** provides the atmosphere: purple-forward identity, magenta/violet/cyan bloom, horizon gradients, and restrained energy.
 - **Cyberpunk details** provide edge in small doses: segmented corners, bracketed labels, scanner hovers, warning accents, and high-priority telemetry.
 
-Mission Control is **not** a novelty sci-fi HUD. It is a professional operator console. Readability, hierarchy, and scan speed take priority over spectacle.
+The dashboard is **not** a novelty sci-fi HUD. It is a professional operator console. Readability, hierarchy, and scan speed take priority over spectacle.
 
 ---
 
@@ -32,7 +32,7 @@ Dense data, forms, logs, and tables must stay clear and readable. Decorative eff
 
 ### 3.2 Matte for content, glass for controls
 
-Mission Control should not make every surface translucent. Dense reading and editing regions stay grounded. Floating, sticky, or elevated controls may use glass.
+The dashboard should not make every surface translucent. Dense reading and editing regions stay grounded. Floating, sticky, or elevated controls may use glass.
 
 ### 3.3 One hero effect per page
 
@@ -56,7 +56,7 @@ Use short, premium transitions and small scale changes. Avoid bouncy motion, lar
 
 ## 4. Surface hierarchy
 
-Mission Control uses a strict surface hierarchy.
+The dashboard uses a strict surface hierarchy.
 
 | Surface type | Use | Visual posture |
 | --- | --- | --- |
@@ -96,7 +96,7 @@ Glass surfaces should feel elevated above content, not interchangeable with it.
 
 ### 4.3 liquidGL hero surfaces
 
-Mission Control now uses **liquidGL** for premium liquid-glass treatment on select elevated surfaces. liquidGL is an enhancement layer, not the baseline styling system.
+The dashboard now uses **liquidGL** for premium liquid-glass treatment on select elevated surfaces. liquidGL is an enhancement layer, not the baseline styling system.
 
 Rules:
 
@@ -169,7 +169,7 @@ Optional subtle star/noise texture is allowed in large empty background fields w
 
 ### 6.1 Type system
 
-Mission Control uses:
+The dashboard uses:
 
 - **IBM Plex Sans** for body copy, headings, labels, buttons, and UI text
 - **IBM Plex Mono** for IDs, timestamps, runtime values, telemetry, logs, versions, and exact technical metadata
@@ -212,7 +212,7 @@ Best candidates for icons:
 
 ### 7.1 Shell widths
 
-Mission Control uses two desktop width modes:
+The dashboard uses two desktop width modes:
 
 - **Constrained shell** for mastheads, forms, compact controls, and narrative content: roughly `1100-1280px`
 - **Data-wide shell** for workflow tables, evidence-heavy detail regions, and comparison views: roughly `1500-1800px` or fluid width with generous side gutters
@@ -221,7 +221,7 @@ The page shell may transition between these two modes within the same route.
 
 ### 7.2 Header architecture
 
-The Mission Control masthead uses a **three-zone layout**:
+The dashboard masthead uses a **three-zone layout**:
 
 - **Left:** brand block
 - **Center:** primary navigation pills, visually centered against the viewport
@@ -312,7 +312,7 @@ Requirements:
 
 ### 8.5 Fallback posture
 
-When liquidGL or `backdrop-filter` is unavailable, the UI must gracefully fall back to token-based CSS glass or matte surfaces. Mission Control must remain coherent and premium-looking without advanced rendering.
+When liquidGL or `backdrop-filter` is unavailable, the UI must gracefully fall back to token-based CSS glass or matte surfaces. The dashboard must remain coherent and premium-looking without advanced rendering.
 
 ---
 
@@ -333,7 +333,7 @@ Use small scale changes and glow changes. Prefer:
 - hover: `scale(1.02-1.03)`
 - active press: `scale(0.98-0.99)`
 
-Avoid `translateY` lift behavior on core buttons and nav pills. Mission Control should feel precise, not floaty.
+Avoid `translateY` lift behavior on core buttons and nav pills. The dashboard should feel precise, not floaty.
 
 ### 9.3 Live-state motion
 
@@ -369,7 +369,7 @@ Version badges and utility chips on the right should read like telemetry, not le
 
 ### 10.2 Buttons
 
-Mission Control uses one consistent **glow + grow** interaction system.
+The dashboard uses one consistent **glow + grow** interaction system.
 
 Rules:
 
@@ -607,7 +607,7 @@ Heavy premium effects belong on a small number of surfaces with clear value.
 
 ### 13.1 Semantic class stability
 
-Continue to prefer stable semantic class names for shared Mission Control surfaces, including existing classes such as:
+Continue to prefer stable semantic class names for shared dashboard surfaces, including existing classes such as:
 
 - `dashboard-root`
 - `masthead`
@@ -630,7 +630,7 @@ Recommended additions include patterns such as:
 
 ### 13.2 Token-first theming
 
-Mission Control theming is token-first.
+Dashboard theming is token-first.
 
 Rules:
 
@@ -641,19 +641,19 @@ Rules:
 
 ### 13.3 Tailwind and source scanning
 
-Tailwind must scan all Mission Control sources that can contain utility classes, including:
+Tailwind must scan all dashboard sources that can contain utility classes, including:
 
 - `api_service/templates/react_dashboard.html`
 - `api_service/templates/_navigation.html`
 - `frontend/src/**/*.{js,jsx,ts,tsx}`
 
-This remains necessary because Mission Control CSS is built from source before Vite output exists.
+This remains necessary because dashboard CSS is built from source before Vite output exists.
 
 ### 13.4 Canonical styling source
 
-The source of truth for Mission Control styling remains:
+The source of truth for dashboard styling remains:
 
-- `frontend/src/styles/mission-control.css`
+- `frontend/src/styles/dashboard.css`
 
 Generated assets under `api_service/static/workflow_console/dist/` are build artifacts and should not be hand-edited.
 
@@ -671,7 +671,7 @@ Any liquidGL-enabled surface must satisfy all of the following:
 
 ## 14. Summary
 
-Mission Control’s design system is built on a simple hierarchy:
+The dashboard’s design system is built on a simple hierarchy:
 
 - **Space-program structure** for layout and discipline
 - **Matte slabs** for dense information and editing
