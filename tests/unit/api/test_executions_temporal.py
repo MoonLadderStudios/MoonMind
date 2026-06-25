@@ -510,7 +510,7 @@ def test_list_executions_source_temporal_merges_canonical_parameters(
     canon.workflow_id = "mm:wf-1"
     canon.parameters = {
         "targetRuntime": "codex",
-        "task": {"tool": {"name": "fix-ci", "version": "1"}},
+        "task": {"tool": {"name": "fix-ci"}},
     }
     mock_result = MagicMock()
     mock_scalars = MagicMock()

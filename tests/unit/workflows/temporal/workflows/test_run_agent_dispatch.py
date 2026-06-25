@@ -197,7 +197,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             ref = await wf._resolve_agent_node_skillset_ref(
                 task_skills={
                     "include": [
-                        {"name": "baseline", "version": "1.0.0"},
+                        {"name": "baseline"},
                         {"name": "remove-me"},
                     ],
                     "materializationMode": "hybrid",
@@ -220,8 +220,8 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         activity_args = kwargs["args"]
         selector = activity_args[0]
         self.assertEqual(
-            [(entry.name, entry.version) for entry in selector.include],
-            [("baseline", "1.0.0"), ("step-only", None)],
+            [entry.name for entry in selector.include],
+            ["baseline", "step-only"],
         )
         self.assertEqual(selector.exclude, ["remove-me"])
         self.assertEqual(activity_args[1:], ["owner-1", None, False, False])
@@ -262,8 +262,8 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(activity_args[1:], ["owner-1", None, False, False])
         selector = activity_args[0]
         self.assertEqual(
-            [(entry.name, entry.version) for entry in selector.include],
-            [("baseline", None), ("canonical-step", None)],
+            [entry.name for entry in selector.include],
+            ["baseline", "canonical-step"],
         )
         self.assertEqual(selector.exclude, ["legacy-input-step"])
 
@@ -335,8 +335,8 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args, ("agent_skill.resolve",))
         selector = kwargs["args"][0]
         self.assertEqual(
-            [(entry.name, entry.version) for entry in selector.include],
-            [("moonspec-breakdown", None)],
+            [entry.name for entry in selector.include],
+            ["moonspec-breakdown"],
         )
         self.assertEqual(kwargs["args"][1:], ["owner-1", "/workspace/repo", False, False])
 
@@ -372,8 +372,8 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args, ("agent_skill.resolve",))
         selector = kwargs["args"][0]
         self.assertEqual(
-            [(entry.name, entry.version) for entry in selector.include],
-            [("jira-breakdown-orchestrate", None), ("moonspec-breakdown", None)],
+            [entry.name for entry in selector.include],
+            ["jira-breakdown-orchestrate", "moonspec-breakdown"],
         )
 
     async def test_agent_node_rejects_unresolved_selected_skill_before_launch(self) -> None:
@@ -491,17 +491,17 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
 
         execute_activity.assert_not_called()
 
-    async def test_agent_node_pinned_resolution_failure_happens_before_launch(self) -> None:
+    async def test_agent_node_rejects_versioned_skill_selector_before_launch(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"
 
         with patch(
             "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
-            new=AsyncMock(side_effect=ValueError("Could not resolve pinned version")),
-        ):
+            new=AsyncMock(),
+        ) as execute_activity:
             with self.assertRaisesRegex(
                 ValueError,
-                "Could not resolve pinned version",
+                "Extra inputs are not permitted",
             ):
                 await wf._resolve_agent_node_skillset_ref(
                     task_skills={"include": [{"name": "baseline", "version": "9.9.9"}]},
@@ -509,6 +509,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
                     node_id="step-1",
                     existing_skillset_ref=None,
                 )
+        execute_activity.assert_not_called()
 
     async def test_agent_node_reuses_existing_skillset_ref_without_reresolution(self) -> None:
         wf = MoonMindRunWorkflow()

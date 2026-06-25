@@ -286,7 +286,6 @@ async def test_merge_automation_reenters_gate_after_resolver_remediation(
     assert child_payloads[0]["initial_parameters"]["task"]["tool"] == {
         "type": "skill",
         "name": "pr-resolver",
-        "version": "1.0",
     }
 
 @pytest.mark.asyncio

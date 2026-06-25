@@ -23,7 +23,6 @@ def build_deployment_update_tool_definition_payload() -> dict[str, Any]:
 
     return {
         "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-        "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
         "type": "skill",
         "description": (
             "Update an allowlisted Docker Compose stack to a desired MoonMind "

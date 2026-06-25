@@ -21,7 +21,6 @@ pytestmark = [pytest.mark.asyncio]
 def _entry(name: str) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=name,
-        version="1.0.0",
         content_ref="hidden-content-ref",
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN),
     )
@@ -94,7 +93,6 @@ async def test_enabled_query_returns_metadata_without_skill_body_refs() -> None:
             "name": "jira-issue-updater",
             "title": None,
             "description": None,
-            "latest_version": "1.0.0",
             "source_kind": "built_in",
             "supported_runtimes": [],
             "required_capabilities": [],

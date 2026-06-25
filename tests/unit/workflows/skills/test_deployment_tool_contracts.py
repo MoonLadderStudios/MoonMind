@@ -5,7 +5,6 @@ import pytest
 from moonmind.workflows.skills.artifact_store import InMemoryArtifactStore
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
-    DEPLOYMENT_UPDATE_TOOL_VERSION,
     build_deployment_update_tool_definition_payload,
 )
 from moonmind.workflows.skills.plan_validation import (
@@ -46,7 +45,6 @@ def _valid_plan_payload(snapshot) -> dict[str, object]:
                 "tool": {
                     "type": "skill",
                     "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-                    "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
                 },
                 "inputs": {
                     "stack": "moonmind",
@@ -75,7 +73,6 @@ def test_deployment_update_tool_definition_matches_mm519_contract() -> None:
     )
 
     assert definition.name == DEPLOYMENT_UPDATE_TOOL_NAME
-    assert definition.version == DEPLOYMENT_UPDATE_TOOL_VERSION
     assert definition.executor.activity_type == "mm.tool.execute"
     assert definition.executor.selector_mode == "by_capability"
     assert definition.required_capabilities == (
@@ -164,7 +161,6 @@ def test_representative_deployment_update_plan_validates_against_registry_snapsh
     assert validated.topological_order == ("update-moonmind-deployment",)
     node = validated.plan.nodes[0]
     assert node.skill_name == DEPLOYMENT_UPDATE_TOOL_NAME
-    assert node.skill_version == DEPLOYMENT_UPDATE_TOOL_VERSION
 
 
 @pytest.mark.parametrize(

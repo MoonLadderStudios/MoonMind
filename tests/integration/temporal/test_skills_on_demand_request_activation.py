@@ -32,7 +32,6 @@ def _entry(
 ) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=name,
-        version="1.0.0",
         content_ref=content_ref,
         content_digest=content_digest,
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN),

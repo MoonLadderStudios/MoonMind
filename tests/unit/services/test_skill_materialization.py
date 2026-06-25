@@ -31,7 +31,6 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
         skills=[
             ResolvedSkillEntry(
                 skill_name="my_skill",
-                version="1.0.0",
                 content_ref="artifact-my-skill",
                 content_digest=_digest(payload),
                 provenance=AgentSkillProvenance(
@@ -73,7 +72,6 @@ async def test_materializer_projects_selected_skill_to_agents_skills(tmp_path: P
                 "content_ref": "artifact-my-skill",
                 "name": "my_skill",
                 "source_kind": "deployment",
-                "version": "1.0.0",
             }
         ],
         "snapshot_id": "test_snap_123",
@@ -152,7 +150,6 @@ async def test_materializer_extracts_skill_bundle_with_companion_files(
         skills=[
             ResolvedSkillEntry(
                 skill_name="bundle_skill",
-                version="1.0.0",
                 format=AgentSkillFormat.BUNDLE,
                 content_ref="artifact-bundle",
                 provenance=AgentSkillProvenance(
@@ -301,7 +298,6 @@ async def test_materializer_rejects_checksum_mismatch_before_projection_switch(
         skills=[
             ResolvedSkillEntry(
                 skill_name="active",
-                version="1.0.0",
                 content_ref="artifact-active",
                 content_digest="sha256:does-not-match",
                 provenance=AgentSkillProvenance(
@@ -346,7 +342,6 @@ async def test_materializer_preserves_previous_projection_on_bundle_failure(
         skills=[
             ResolvedSkillEntry(
                 skill_name="active",
-                version="1.0.0",
                 format=AgentSkillFormat.BUNDLE,
                 content_ref="artifact-bundle",
                 content_digest=_digest(payload),
@@ -602,7 +597,6 @@ async def test_materializer_prompt_bundle_mode(tmp_path: Path):
 def _skill(name: str, content_ref: str) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=name,
-        version="1.0.0",
         content_ref=content_ref,
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),
     )

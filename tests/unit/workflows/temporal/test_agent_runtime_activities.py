@@ -4120,7 +4120,6 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_selected_ski
         skills=[
             ResolvedSkillEntry(
                 skill_name="pr-resolver",
-                version="1.0.0",
                 content_ref="art-pr-resolver-body",
                 content_digest="sha256:" + hashlib.sha256(skill_body).hexdigest(),
                 provenance=AgentSkillProvenance(
@@ -4217,7 +4216,6 @@ async def test_agent_runtime_prepare_turn_instructions_materializes_verifier_ski
         skills=[
             ResolvedSkillEntry(
                 skill_name="moonspec-verify",
-                version="1.0.0",
                 content_ref="art-moonspec-verify-body",
                 content_digest="sha256:" + hashlib.sha256(skill_body).hexdigest(),
                 provenance=AgentSkillProvenance(
@@ -4422,7 +4420,6 @@ async def test_agent_runtime_prepare_turn_instructions_fails_before_launch_when_
         skills=[
             ResolvedSkillEntry(
                 skill_name="pr-resolver",
-                version="1.0.0",
                 content_ref="art-pr-resolver-body",
                 content_digest="sha256:test",
                 provenance=AgentSkillProvenance(
@@ -4498,7 +4495,6 @@ async def test_agent_runtime_selected_skill_projection_rejects_non_mapping_manif
         skills=[
             ResolvedSkillEntry(
                 skill_name="pr-resolver",
-                version="1.0.0",
                 content_ref="art-pr-resolver-body",
                 content_digest="sha256:test",
                 provenance=AgentSkillProvenance(
@@ -4534,7 +4530,6 @@ async def test_agent_runtime_selected_skill_projection_enforces_repo_source_poli
                 "skills": [
                     {
                         "name": "repo-skill",
-                        "version": "1.0.0",
                         "source_kind": "repo",
                     }
                 ],
@@ -4548,7 +4543,6 @@ async def test_agent_runtime_selected_skill_projection_enforces_repo_source_poli
         skills=[
             ResolvedSkillEntry(
                 skill_name="repo-skill",
-                version="1.0.0",
                 content_ref="art-repo-skill-body",
                 content_digest="sha256:test",
                 provenance=AgentSkillProvenance(
@@ -4589,7 +4583,6 @@ async def test_agent_runtime_selected_skill_projection_enforces_local_source_pol
                 "skills": [
                     {
                         "name": "local-skill",
-                        "version": "1.0.0",
                         "source_kind": "local",
                     }
                 ],
@@ -4603,7 +4596,6 @@ async def test_agent_runtime_selected_skill_projection_enforces_local_source_pol
         skills=[
             ResolvedSkillEntry(
                 skill_name="local-skill",
-                version="1.0.0",
                 content_ref="art-local-skill-body",
                 content_digest="sha256:test",
                 provenance=AgentSkillProvenance(
@@ -4644,7 +4636,6 @@ async def test_agent_runtime_selected_skill_projection_rejects_repo_skill_with_m
                 "skills": [
                     {
                         "name": "repo-skill",
-                        "version": "1.0.0",
                         "source_kind": "repo",
                     }
                 ],
@@ -4658,7 +4649,6 @@ async def test_agent_runtime_selected_skill_projection_rejects_repo_skill_with_m
         skills=[
             ResolvedSkillEntry(
                 skill_name="repo-skill",
-                version="1.0.0",
                 content_ref="art-repo-skill-body",
                 content_digest="sha256:test",
                 provenance=AgentSkillProvenance(
@@ -4696,7 +4686,6 @@ async def test_agent_runtime_prepare_turn_instructions_enforces_dependency_sourc
         skills=[
             ResolvedSkillEntry(
                 skill_name="pr-resolver",
-                version="1.0.0",
                 content_ref="art-pr-resolver-body",
                 content_digest="sha256:test",
                 provenance=AgentSkillProvenance(
@@ -4705,7 +4694,6 @@ async def test_agent_runtime_prepare_turn_instructions_enforces_dependency_sourc
             ),
             ResolvedSkillEntry(
                 skill_name="repo-helper",
-                version="1.0.0",
                 content_ref="art-repo-helper-body",
                 content_digest="sha256:test",
                 provenance=AgentSkillProvenance(
@@ -4785,7 +4773,6 @@ async def test_agent_runtime_prepare_turn_instructions_preserves_checked_in_skil
         skills=[
             ResolvedSkillEntry(
                 skill_name="pr-resolver",
-                version="1.0.0",
                 content_ref="art-pr-resolver-body",
                 content_digest="sha256:" + hashlib.sha256(skill_body).hexdigest(),
                 provenance=AgentSkillProvenance(

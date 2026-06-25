@@ -92,8 +92,8 @@ def _unreal_report_paths_schema() -> dict[str, Any]:
         "additionalProperties": False,
     }
 
-def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, Any]:
-    """Return the pinned ToolDefinition payload for a Docker workload tool."""
+def build_dood_tool_definition_payload(*, name: str) -> dict[str, Any]:
+    """Return the ToolDefinition payload for a Docker workload tool."""
 
     normalized = str(name or "").strip()
     if normalized == CONTAINER_RUN_WORKLOAD_TOOL:
@@ -318,7 +318,6 @@ def build_dood_tool_definition_payload(*, name: str, version: str) -> dict[str, 
 
     return {
         "name": normalized,
-        "version": str(version or "").strip() or "1.0",
         "type": "skill",
         "description": description,
         "inputs": {"schema": input_schema},
@@ -379,12 +378,10 @@ def register_workload_tool_handlers(
             launcher=launcher,
             workflow_docker_mode=normalized_mode,
         )
-        for version in ("1.0", "1.0.0"):
-            dispatcher.register_skill(
-                skill_name=tool_name,
-                version=version,
-                handler=handler,
-            )
+        dispatcher.register_skill(
+            skill_name=tool_name,
+            handler=handler,
+        )
 
 def build_workload_tool_handler(
     *,

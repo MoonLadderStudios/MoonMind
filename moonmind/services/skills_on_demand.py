@@ -88,7 +88,6 @@ class SkillsOnDemandService:
                 part
                 for part in [
                     entry.skill_name,
-                    entry.version or "",
                     entry.selection_reason or "",
                 ]
                 if part
@@ -145,13 +144,9 @@ class SkillsOnDemandService:
         requested = self.normalized_requested_skills(request)
         active_snapshot = request.active_snapshot
         assert active_snapshot is not None
-        active_entries = {entry.skill_name: entry for entry in active_snapshot.skills}
-        if all(
-            name in active_entries
-            and (version is None or active_entries[name].version == version)
-            for name, version in requested
-        ):
-            requested_names = [name for name, _version in requested]
+        active_names = {entry.skill_name for entry in active_snapshot.skills}
+        if all(name in active_names for name in requested):
+            requested_names = list(requested)
             return SkillsOnDemandRequestResult(
                 status="no_change",
                 code=SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE,
@@ -245,7 +240,7 @@ class SkillsOnDemandService:
         materialization: RuntimeSkillMaterialization | None = None,
     ) -> SkillsOnDemandRequestResult:
         requested = self.normalized_requested_skills(request)
-        requested_names = [name for name, _version in requested]
+        requested_names = list(requested)
         active_names = {
             skill.skill_name for skill in (request.active_snapshot.skills if request.active_snapshot else [])
         }
@@ -307,14 +302,13 @@ class SkillsOnDemandService:
 
     def normalized_requested_skills(
         self, request: SkillsOnDemandRequest
-    ) -> list[tuple[str, str | None]]:
-        seen: dict[str, str | None] = {}
+    ) -> list[str]:
+        seen: dict[str, None] = {}
         for skill in request.requested_skills:
             name = skill.name.strip()
-            version = skill.version.strip() if skill.version is not None else None
             if name not in seen:
-                seen[name] = version
-        return [(name, version) for name, version in seen.items()]
+                seen[name] = None
+        return list(seen.keys())
 
     def _validate_activation_request(
         self, request: SkillsOnDemandRequest
@@ -327,17 +321,14 @@ class SkillsOnDemandService:
             return "current_snapshot_ref does not match active_snapshot."
         if not request.requested_skills:
             return "requested_skills must contain at least one Skill."
-        seen_versions: dict[str, str | None] = {}
+        seen_names: set[str] = set()
         for skill in request.requested_skills:
             if not skill.name.strip():
                 return "requested skill name must not be blank."
-            version = skill.version.strip() if skill.version is not None else None
-            if skill.version is not None and not version:
-                return "requested skill version must not be blank when provided."
             name = skill.name.strip()
-            if name in seen_versions and seen_versions[name] != version:
-                return f"requested skill '{name}' has conflicting versions."
-            seen_versions[name] = version
+            if ":" in name:
+                return "requested skill names must not include semantic versions."
+            seen_names.add(name)
         for field_name in ("reason", "runtime_id", "step_id"):
             value = getattr(request, field_name)
             if value is not None and not value.strip():
@@ -424,7 +415,6 @@ class SkillsOnDemandService:
         eligible, summary = self._eligibility_for(entry)
         return SkillCatalogSearchResult(
             name=entry.skill_name,
-            latest_version=entry.version,
             source_kind=entry.provenance.source_kind,
             required_capabilities=list(entry.required_capabilities),
             eligible=eligible,
@@ -499,9 +489,7 @@ class SkillsOnDemandService:
             if request.runtime_id and request.runtime_id.strip()
             else None,
             parent_snapshot_id=parent_snapshot_id,
-            requested_skills=[
-                name for name, _version in self.normalized_requested_skills(request)
-            ],
+            requested_skills=self.normalized_requested_skills(request),
             result=result,
             result_code=result_code,
             derived_snapshot_id=derived_snapshot_id,

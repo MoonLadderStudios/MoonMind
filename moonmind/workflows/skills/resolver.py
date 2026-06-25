@@ -24,7 +24,6 @@ class ResolvedSkill:
     """Resolved runtime metadata for one selected skill."""
 
     skill_name: str
-    version: str
     source_uri: str
     content_hash: str | None = None
     signature: str | None = None
@@ -45,7 +44,6 @@ class RunSkillSelection:
             "skills": [
                 {
                     "name": skill.skill_name,
-                    "version": skill.version,
                     "sourceUri": skill.source_uri,
                     "contentHash": skill.content_hash,
                     "signature": skill.signature,
@@ -76,12 +74,11 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
         if not text:
             raise SkillResolutionError("Skill entry cannot be blank")
         if ":" in text:
-            skill_name, version = text.split(":", 1)
-        else:
-            skill_name, version = text, "local"
+            raise SkillResolutionError(
+                "Skill entries must use skill names only; semantic versions are not supported"
+            )
         return {
-            "skill_name": validate_skill_name(skill_name),
-            "version": version.strip() or "local",
+            "skill_name": validate_skill_name(text),
             "source_uri": None,
             "content_hash": None,
             "signature": None,
@@ -91,7 +88,10 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
         skill_name = str(raw.get("skill_name") or raw.get("name") or "")
         if not skill_name.strip():
             raise SkillResolutionError("Skill entry is missing skill_name")
-        version = str(raw.get("version") or "local").strip() or "local"
+        if "version" in raw:
+            raise SkillResolutionError(
+                "Skill entries must not include semantic version fields"
+            )
         source_uri = (
             str(raw.get("source_uri") or raw.get("sourceUri") or "").strip() or None
         )
@@ -101,7 +101,6 @@ def _normalize_skill_entry(raw: object) -> dict[str, str | None]:
         signature = str(raw.get("signature") or "").strip() or None
         return {
             "skill_name": validate_skill_name(skill_name),
-            "version": version,
             "source_uri": source_uri,
             "content_hash": content_hash,
             "signature": signature,
@@ -303,7 +302,6 @@ def list_available_skill_names() -> tuple[str, ...]:
         try:
             _resolve_source_uri(
                 skill_name=skill_name,
-                version="local",
                 declared_source=None,
                 source_overrides=None,
             )
@@ -317,7 +315,6 @@ def list_available_skill_names() -> tuple[str, ...]:
 def _resolve_source_uri(
     *,
     skill_name: str,
-    version: str,
     declared_source: str | None,
     source_overrides: Mapping[str, object] | None,
 ) -> str:
@@ -325,9 +322,7 @@ def _resolve_source_uri(
         return declared_source
 
     if source_overrides:
-        keyed = source_overrides.get(f"{skill_name}:{version}")
-        fallback = source_overrides.get(skill_name)
-        raw = keyed if keyed is not None else fallback
+        raw = source_overrides.get(skill_name)
         if isinstance(raw, str) and raw.strip():
             return raw.strip()
         if isinstance(raw, Mapping):
@@ -340,7 +335,7 @@ def _resolve_source_uri(
         return local_source
 
     raise SkillResolutionError(
-        f"No source URI resolved for skill '{skill_name}:{version}'. "
+        f"No source URI resolved for skill '{skill_name}'. "
         "Provide skill_sources override or configure a local mirror root."
     )
 
@@ -389,7 +384,6 @@ def resolve_run_skill_selection(
 
     for entry in normalized:
         skill_name = validate_skill_name(str(entry["skill_name"] or ""))
-        version = str(entry["version"] or "local").strip() or "local"
         if skill_name in seen_names:
             raise SkillResolutionError(
                 f"Duplicate skill name '{skill_name}' in resolved selection"
@@ -397,7 +391,6 @@ def resolve_run_skill_selection(
 
         source_uri = _resolve_source_uri(
             skill_name=skill_name,
-            version=version,
             declared_source=entry.get("source_uri"),
             source_overrides=(
                 source_overrides if isinstance(source_overrides, Mapping) else None
@@ -415,7 +408,6 @@ def resolve_run_skill_selection(
         resolved.append(
             ResolvedSkill(
                 skill_name=skill_name,
-                version=version,
                 source_uri=source_uri,
                 content_hash=entry.get("content_hash"),
                 signature=entry.get("signature"),

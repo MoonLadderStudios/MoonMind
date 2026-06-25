@@ -46,6 +46,33 @@ class SkillProjectionError(RuntimeError):
     """
 
 
+def _strip_legacy_skill_version_fields(data: Any) -> Any:
+    """Remove removed skill-version metadata from persisted pre-cutover snapshots."""
+
+    if not isinstance(data, dict):
+        return data
+    normalized = dict(data)
+    raw_skills = normalized.get("skills")
+    if not isinstance(raw_skills, list):
+        return normalized
+
+    skills: list[Any] = []
+    for raw_skill in raw_skills:
+        if not isinstance(raw_skill, dict):
+            skills.append(raw_skill)
+            continue
+        skill = dict(raw_skill)
+        skill.pop("version", None)
+        provenance = skill.get("provenance")
+        if isinstance(provenance, dict):
+            normalized_provenance = dict(provenance)
+            normalized_provenance.pop("original_version", None)
+            skill["provenance"] = normalized_provenance
+        skills.append(skill)
+    normalized["skills"] = skills
+    return normalized
+
+
 async def load_resolved_skillset(
     artifact_service: Any,
     skillset_ref: str,
@@ -64,7 +91,7 @@ async def load_resolved_skillset(
             allow_restricted_raw=True,
         )
         data = json.loads(payload.decode("utf-8"))
-        return ResolvedSkillSet.model_validate(data)
+        return ResolvedSkillSet.model_validate(_strip_legacy_skill_version_fields(data))
     except (
         OSError,
         TemporalArtifactError,

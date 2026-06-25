@@ -13,13 +13,12 @@ def test_step_skills_accepts_valid_properties() -> None:
         "tool": {
             "name": "foo",
             "type": "skill",
-            "version": "1.0.0"
         },
         "inputs": {},
         "skills": {
             "sets": ["default", "node-specific"],
             "include": [
-                {"name": "test-skill-1", "version": "1.0.0"},
+                {"name": "test-skill-1"},
                 {"name": "test-skill-2"},
             ],
             "exclude": ["legacy"],
@@ -37,9 +36,7 @@ def test_step_skills_accepts_valid_properties() -> None:
     assert step.skills.sets == ("default", "node-specific")
     assert len(step.skills.include) == 2
     assert step.skills.include[0].name == "test-skill-1"
-    assert step.skills.include[0].version == "1.0.0"
     assert step.skills.include[1].name == "test-skill-2"
-    assert step.skills.include[1].version is None
     assert step.skills.exclude == ("legacy",)
     assert step.skills.materialization_mode == "hybrid"
 
@@ -69,4 +66,16 @@ def test_step_skills_rejects_invalid_values() -> None:
         parse_step({
             "id": "node-1", "tool": {"name": "foo"}, "inputs": {},
             "skills": {"materializationMode": "invalid"},
+        })
+
+    with pytest.raises(ContractValidationError, match="semantic versions"):
+        parse_step({
+            "id": "node-1", "tool": {"name": "foo"}, "inputs": {},
+            "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
+        })
+
+    with pytest.raises(ContractValidationError, match="semantic versions"):
+        parse_step({
+            "id": "node-1", "tool": {"name": "foo"}, "inputs": {},
+            "skills": {"include": [{"name": "test-skill:1.0.0"}]},
         })

@@ -411,13 +411,13 @@ def test_pentest_runner_defaults_registry_and_publish_workflow_do_not_drift(
     monkeypatch.setattr(settings.pentest, "runner_image", default_image)
 
     settings_image = settings.pentest.runner_image
-    domain_profile = get_pentest_runner_profile("pentestgpt-safe")
+    domain_profile = get_pentest_runner_profile("pentestgpt-claude-oauth")
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
         workspace_root=WORKSPACE_ROOT,
         allowed_image_registries=("ghcr.io",),
     )
-    workload_profile = registry.get("pentestgpt-safe")
+    workload_profile = registry.get("pentestgpt-claude-oauth")
     publish_workflow = Path(".github/workflows/docker-publish.yml").read_text(
         encoding="utf-8"
     )
@@ -437,12 +437,11 @@ def test_runner_profile_registry_can_override_pentest_image_from_settings() -> N
         workspace_root=WORKSPACE_ROOT,
         allowed_image_registries=("ghcr.io",),
         profile_image_overrides={
-            "pentestgpt-safe": settings_image,
-            "pentestgpt-vpn-lab": settings_image,
+            "pentestgpt-claude-oauth": settings_image,
         },
     )
 
-    workload_profile = registry.get("pentestgpt-safe")
+    workload_profile = registry.get("pentestgpt-claude-oauth")
 
     assert workload_profile is not None
     assert workload_profile.image == settings_image
@@ -457,7 +456,7 @@ def test_runner_profile_registry_revalidates_image_overrides(
             Path("config/workloads/default-runner-profiles.yaml"),
             workspace_root=WORKSPACE_ROOT,
             profile_image_overrides={
-                "pentestgpt-safe": unsafe_image,
+                "pentestgpt-claude-oauth": unsafe_image,
             },
         )
 

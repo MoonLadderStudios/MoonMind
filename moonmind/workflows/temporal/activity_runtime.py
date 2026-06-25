@@ -239,8 +239,9 @@ async def _run_command(cmd, **kwargs):
 
 logger = getLogger(__name__)
 
-_PENTEST_PROVIDER_MANAGER_WORKFLOW_ID = "provider-profile-manager:pentestgpt"
 _PENTEST_RUNNING_HEARTBEAT_INTERVAL_SECONDS = 60.0
+_PROFILE_MANAGER_READY_POLL_ATTEMPTS = 60
+_PROFILE_MANAGER_READY_POLL_SECONDS = 1.0
 _MANAGED_AGENT_UID = 1000
 _MANAGED_AGENT_GID = 1000
 
@@ -293,6 +294,63 @@ class TemporalPentestProviderLeaseManager:
     def __init__(self, client_adapter: Any) -> None:
         self._client_adapter = client_adapter
 
+    async def _ensure_manager_started(self, runtime_id: str) -> str:
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+
+        from moonmind.workflows.temporal.activity_catalog import get_workflow_task_queue
+        from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+            WORKFLOW_NAME as PROVIDER_PROFILE_MANAGER_WF,
+            workflow_id_for_runtime,
+        )
+
+        workflow_id = workflow_id_for_runtime(runtime_id)
+        get_client = getattr(self._client_adapter, "get_client", None)
+        if get_client is None:
+            return workflow_id
+        client = await get_client()
+        try:
+            await client.start_workflow(
+                PROVIDER_PROFILE_MANAGER_WF,
+                {"runtime_id": runtime_id},
+                id=workflow_id,
+                task_queue=get_workflow_task_queue(),
+            )
+        except WorkflowAlreadyStartedError:
+            logger.debug(
+                "Provider profile manager %s is already running", workflow_id
+            )
+        return workflow_id
+
+    async def _assert_profile_known(
+        self,
+        *,
+        workflow_id: str,
+        profile_id: str,
+    ) -> None:
+        get_client = getattr(self._client_adapter, "get_client", None)
+        if get_client is None:
+            return
+        client = await get_client()
+        handle = client.get_workflow_handle(workflow_id)
+        last_error: Exception | None = None
+        for _attempt in range(_PROFILE_MANAGER_READY_POLL_ATTEMPTS):
+            try:
+                state = await handle.query("get_state")
+            except Exception as exc:
+                last_error = exc
+                await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
+                continue
+            last_error = None
+            profiles = state.get("profiles") if isinstance(state, Mapping) else None
+            if isinstance(profiles, Mapping) and profile_id in profiles:
+                return
+            await asyncio.sleep(_PROFILE_MANAGER_READY_POLL_SECONDS)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(
+            f"Provider profile {profile_id!r} is not launch-ready in {workflow_id}"
+        )
+
     async def acquire(
         self,
         *,
@@ -304,8 +362,13 @@ class TemporalPentestProviderLeaseManager:
         update_workflow = getattr(self._client_adapter, "update_workflow", None)
         if update_workflow is None:
             raise RuntimeError("Temporal client adapter does not support workflow updates")
+        workflow_id = await self._ensure_manager_started(runtime_id)
+        await self._assert_profile_known(
+            workflow_id=workflow_id,
+            profile_id=profile_id,
+        )
         await update_workflow(
-            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            workflow_id,
             "AcquireSlot",
             {
                 "requester_workflow_id": owner,
@@ -325,7 +388,7 @@ class TemporalPentestProviderLeaseManager:
         lease_id: str,
     ) -> None:
         await self._client_adapter.signal_workflow(
-            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            await self._ensure_manager_started(runtime_id),
             "release_slot",
             {
                 "requester_workflow_id": owner,
@@ -345,7 +408,7 @@ class TemporalPentestProviderLeaseManager:
         reason: str,
     ) -> None:
         await self._client_adapter.signal_workflow(
-            _PENTEST_PROVIDER_MANAGER_WORKFLOW_ID,
+            await self._ensure_manager_started(runtime_id),
             "report_cooldown",
             {
                 "runtime_id": runtime_id,
@@ -1451,9 +1514,9 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
     text = payload.decode("utf-8", errors="replace")
     return text[-max_chars:]
 
-def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any]:
+def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if is_dood_tool(name):
-        return build_dood_tool_definition_payload(name=name, version=version)
+        return build_dood_tool_definition_payload(name=name)
 
     if name == DEPLOYMENT_UPDATE_TOOL_NAME:
         return build_deployment_update_tool_definition_payload()
@@ -1461,7 +1524,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == "security.pentest.run":
         return {
             "name": name,
-            "version": version,
             "type": "skill",
             "description": (
                 "Run an authorized PentestGPT workload against an approved "
@@ -1558,8 +1620,8 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
                         "network_attachment_ref": {
                             "type": "string",
                             "description": (
-                                "Optional artifact or ref required by runner "
-                                "profiles that need VPN/lab connectivity."
+                                "Optional artifact or ref reserved for future "
+                                "elevated-network runner profiles."
                             ),
                         },
                     },
@@ -1683,7 +1745,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == JIRA_CHECK_BLOCKERS_TOOL_NAME:
         return {
             "name": name,
-            "version": version,
             "description": (
                 "Check whether a Jira issue is blocked by unresolved inbound "
                 "Blocks links using trusted Jira data."
@@ -1731,7 +1792,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == JIRA_LOAD_PRESET_BRIEF_TOOL_NAME:
         return {
             "name": name,
-            "version": version,
             "description": (
                 "Load a compact Jira preset brief through MoonMind's trusted "
                 "Jira service."
@@ -1787,7 +1847,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
     if name == "story.create_jira_issues":
         return {
             "name": name,
-            "version": version,
             "description": "Create Jira issues from Moon Spec story breakdown output.",
             "inputs": {
                 "schema": {
@@ -1847,7 +1906,6 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
 
     return {
         "name": name,
-        "version": version,
         "description": description,
         "inputs": {
             "schema": {
@@ -1881,9 +1939,9 @@ def _default_registry_skill_payload(*, name: str, version: str) -> dict[str, Any
 
 def _iter_requested_registry_tools(
     parameters: Mapping[str, Any] | None,
-) -> tuple[tuple[str, str], ...]:
-    selected: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+) -> tuple[str, ...]:
+    selected: list[str] = []
+    seen: set[str] = set()
 
     if not isinstance(parameters, Mapping):
         return tuple(selected)
@@ -1915,17 +1973,19 @@ def _iter_requested_registry_tools(
             continue
         if tool_name.lower() in JIRA_AGENT_SKILLS:
             continue
-        tool_version = str(selected_payload.get("version") or "").strip() or "1.0"
-        key = (tool_name, tool_version)
-        if key in seen:
+        if "version" in selected_payload:
+            raise ValueError(
+                "tool.version is not supported; executable tools are identified by name only"
+            )
+        if tool_name in seen:
             continue
-        seen.add(key)
-        selected.append(key)
+        seen.add(tool_name)
+        selected.append(tool_name)
 
     # 'auto' is a placeholder meaning "no explicit skill selected". It should
     # not be included in the registry as a dispatchable skill — when only 'auto'
     # is present, the runtime should be used directly without skill dispatch.
-    if selected and all(name == _AUTO_SKILL_SENTINEL for name, _ in selected):
+    if selected and all(name == _AUTO_SKILL_SENTINEL for name in selected):
         selected = []
 
     return tuple(selected)
@@ -1935,20 +1995,19 @@ def _default_skill_registry_payload(
     parameters: Mapping[str, Any] | None = None,
     inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    requested: list[tuple[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    requested: list[str] = []
+    seen: set[str] = set()
     for payload in (parameters, inputs):
-        for name, version in _iter_requested_registry_tools(payload):
-            key = (name, version)
-            if key in seen:
+        for name in _iter_requested_registry_tools(payload):
+            if name in seen:
                 continue
-            seen.add(key)
-            requested.append(key)
+            seen.add(name)
+            requested.append(name)
 
     return {
         "skills": [
-            _default_registry_skill_payload(name=name, version=version)
-            for name, version in requested
+            _default_registry_skill_payload(name=name)
+            for name in requested
         ]
     }
 

@@ -34,7 +34,6 @@ def _skill_definition(
     return parse_skill_definition(
         {
             "name": "test.skill",
-            "version": "1.0.0",
             "description": "Test skill",
             "inputs": {"schema": {"type": "object", "properties": {}}},
             "outputs": {"schema": {"type": "object", "properties": {}}},

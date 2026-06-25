@@ -697,17 +697,21 @@ def _normalize_secret_ref(value: object, *, field_name: str) -> str | None:
     return f"vault://{mount}/{path}#{field}"
 
 class WorkflowSkillSelectorExact(BaseModel):
-    """Explicitly included skill by name and optional version."""
+    """Explicitly included skill by name."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="allow")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     name: str = Field(..., alias="name")
-    version: str | None = Field(None, alias="version")
 
-    @field_validator("name", "version", mode="before")
+    @field_validator("name", mode="before")
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> str | None:
-        return _clean_optional_str(value)
+        normalized = _clean_optional_str(value)
+        if normalized and ":" in normalized:
+            raise WorkflowContractError(
+                "workflow.skills.include names must not include semantic versions"
+            )
+        return normalized
 
 class WorkflowSkillSelectors(BaseModel):
     """Resolved definition for active skills during execution."""
@@ -829,7 +833,6 @@ def build_effective_workflow_skill_selectors(
                 continue
             include_by_name[item.name] = WorkflowSkillSelectorExact(
                 name=item.name,
-                version=item.version,
             )
     for item in excludes:
         include_by_name.pop(item, None)

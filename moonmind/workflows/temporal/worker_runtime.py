@@ -1048,11 +1048,14 @@ def _dedupe_repeated_step_entries(
 def _selected_step_type(step_entry: Mapping[str, Any]) -> str:
     return str(step_entry.get("type") or "").strip().lower()
 
-def _selected_step_tool_version(step_entry: Mapping[str, Any]) -> str:
+def _reject_selected_step_tool_version(step_entry: Mapping[str, Any]) -> None:
     step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
         step_entry.get("skill")
     )
-    return str(step_tool.get("version") or "1.0").strip() or "1.0"
+    if "version" in step_tool:
+        raise RuntimeError(
+            "task step tool.version is not supported; executable tools are identified by name only"
+        )
 
 def _selected_step_tool_type(step_entry: Mapping[str, Any]) -> str:
     if _selected_step_tool_name(step_entry).lower() in _STORY_OUTPUT_TASK_TOOLS:
@@ -1222,6 +1225,7 @@ def _build_runtime_planner():
         selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
             task_payload.get("skill")
         )
+        _reject_selected_step_tool_version({"tool": selected_skill_payload})
         selected_skill_name = str(
             selected_skill_payload.get("name")
             or selected_skill_payload.get("id")
@@ -1504,9 +1508,10 @@ def _build_runtime_planner():
                     if is_legacy_agent_skill_plan_entry
                     else authored_tool_name
                 )
-                tool_version = str(tool_payload.get("version") or "1.0").strip()
-                if not tool_version:
-                    raise RuntimeError("task.plan tool version is required")
+                if "version" in tool_payload:
+                    raise RuntimeError(
+                        "task.plan tool.version is not supported; executable tools are identified by name only"
+                    )
                 node_inputs = _coerce_mapping(plan_entry.get("inputs"))
                 if not node_inputs:
                     node_inputs = _coerce_mapping(
@@ -1530,7 +1535,6 @@ def _build_runtime_planner():
                     "tool": {
                         "type": tool_type,
                         "name": tool_name,
-                        "version": tool_version,
                     },
                     "inputs": dict(node_inputs),
                 }
@@ -1685,7 +1689,7 @@ def _build_runtime_planner():
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
                 tool_type = _selected_step_tool_type(step_entry)
-                tool_version = _selected_step_tool_version(step_entry)
+                _reject_selected_step_tool_version(step_entry)
                 is_agent_runtime_step = tool_type == "agent_runtime"
                 step_metadata_inputs = _authored_step_metadata_inputs(
                     step_entry,
@@ -1809,7 +1813,6 @@ def _build_runtime_planner():
                     "tool": {
                         "type": tool_type,
                         "name": step_runtime if is_agent_runtime_step else step_tool_name,
-                        "version": "1.0" if is_agent_runtime_step else tool_version,
                     },
                     "inputs": step_node_inputs,
                 })
@@ -1855,7 +1858,6 @@ def _build_runtime_planner():
                     "tool": {
                         "type": "agent_runtime",
                         "name": runtime_mode,
-                        "version": "1.0",
                     },
                     "inputs": expanded_inputs,
                 })
@@ -1892,11 +1894,8 @@ def _build_runtime_planner():
             node_tool_name = (
                 selected_skill_name if is_story_output_tool else runtime_mode
             )
-            node_tool_version = (
-                _selected_step_tool_version({"tool": selected_skill_payload})
-                if is_story_output_tool
-                else "1.0"
-            )
+            if is_story_output_tool:
+                _reject_selected_step_tool_version({"tool": selected_skill_payload})
             if is_story_output_tool:
                 node_inputs.pop("selectedSkill", None)
                 node_inputs["publishMode"] = "none"
@@ -1905,7 +1904,6 @@ def _build_runtime_planner():
                 "tool": {
                     "type": node_tool_type,
                     "name": node_tool_name,
-                    "version": node_tool_version,
                 },
                 "inputs": node_inputs,
             })
@@ -2024,8 +2022,7 @@ def _positive_int_env(name: str) -> int | None:
 def _pentest_runner_image_overrides() -> dict[str, str]:
     pentest = settings.pentest
     return {
-        pentest.safe_profile_id: pentest.runner_image,
-        pentest.vpn_lab_profile_id: pentest.runner_image,
+        pentest.claude_oauth_runner_profile_id: pentest.runner_image,
     }
 
 def _build_agent_runtime_deps(

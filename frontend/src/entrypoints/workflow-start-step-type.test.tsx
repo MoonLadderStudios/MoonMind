@@ -145,8 +145,8 @@ describe("Task Create Step Type authoring", () => {
                       runner_profile_id: {
                         type: "string",
                         title: "Runner profile",
-                        enum: ["pentestgpt-safe", "pentestgpt-vpn-lab"],
-                        default: "pentestgpt-safe",
+                        enum: ["pentestgpt-claude-oauth"],
+                        default: "pentestgpt-claude-oauth",
                       },
                       objective: {
                         type: "string",
@@ -595,7 +595,7 @@ describe("Task Create Step Type authoring", () => {
     ).toBe("recon_only");
     expect(
       (screen.getByLabelText(/^Runner profile/) as HTMLSelectElement).value,
-    ).toBe("pentestgpt-safe");
+    ).toBe("pentestgpt-claude-oauth");
     expect(screen.getByText("Approved Scope")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
@@ -617,9 +617,6 @@ describe("Task Create Step Type authoring", () => {
     expect(targetField).toBeTruthy();
     fireEvent.change(targetField!, {
       target: { value: "https://lab-app.internal.example" },
-    });
-    fireEvent.change(screen.getByLabelText(/^Runner profile/), {
-      target: { value: "pentestgpt-vpn-lab" },
     });
     fireEvent.click(
       screen.getByLabelText(
@@ -649,7 +646,7 @@ describe("Task Create Step Type authoring", () => {
         target: "https://lab-app.internal.example",
         scope_artifact_ref: "art_scope_123",
         operation_mode: "recon_only",
-        runner_profile_id: "pentestgpt-vpn-lab",
+        runner_profile_id: "pentestgpt-claude-oauth",
         time_budget_minutes: 60,
         evidence_level: "standard",
       });
@@ -671,7 +668,7 @@ describe("Task Create Step Type authoring", () => {
     const generatedScope = JSON.parse(
       String(artifactContentCall?.[1]?.body || "{}"),
     );
-    expect(generatedScope.required_network_attachment_type).toBe("lab_network");
+    expect(generatedScope.required_network_attachment_type).toBeNull();
     expect(generatedScope).not.toHaveProperty("authorized_principals");
     expect(generatedScope.targets).toEqual(
       expect.arrayContaining([

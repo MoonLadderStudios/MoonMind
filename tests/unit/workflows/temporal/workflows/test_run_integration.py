@@ -218,7 +218,6 @@ async def test_run_execution_stage_skips_integration_after_merge_gate_cancellati
                         "tool": {
                             "type": "agent_runtime",
                             "name": "jules",
-                            "version": "1.0",
                         },
                         "inputs": {"instructions": "Do nothing."},
                     }
@@ -290,7 +289,7 @@ async def test_run_integration_stage_poll_driven_completion(
     ) -> dict[str, Any]:
         captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
-            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
         if activity_type == "integration.jules.status":
@@ -336,7 +335,7 @@ async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
     ) -> dict[str, Any]:
         if activity_type == "artifact.read":
             return _mock_plan_payload(
-                [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}]
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
             )
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
@@ -375,7 +374,7 @@ async def test_run_integration_legacy_unpatched_poll_completion_still_completes(
     ) -> dict[str, Any]:
         if activity_type == "artifact.read":
             return _mock_plan_payload(
-                [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}]
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
             )
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
@@ -425,7 +424,6 @@ async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy
                         "skills": [
                             {
                                 "name": "jira.check_blockers",
-                                "version": "1.0",
                                 "description": "Check Jira blockers",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -454,7 +452,6 @@ async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy
                         "tool": {
                             "type": "skill",
                             "name": "jira.check_blockers",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "targetIssueKey": "MM-866",
@@ -543,7 +540,6 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -567,7 +563,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
                 nodes=[
                     {
                         "id": "jules-step-1",
-                        "tool": {"type": "agent_runtime", "name": "jules", "version": "1.0"},
+                        "tool": {"type": "agent_runtime", "name": "jules"},
                         "inputs": {
                             "repository": "org/repo",
                             "startingBranch": "main",
@@ -577,7 +573,7 @@ async def test_run_execution_stage_bundles_consecutive_jules_nodes(
                     },
                     {
                         "id": "jules-step-2",
-                        "tool": {"type": "agent_runtime", "name": "jules", "version": "1.0"},
+                        "tool": {"type": "agent_runtime", "name": "jules"},
                         "inputs": {
                             "repository": "org/repo",
                             "startingBranch": "main",
@@ -659,7 +655,6 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
                         "skills": [
                             build_dood_tool_definition_payload(
                                 name="container.run_workload",
-                                version="1.0",
                             )
                         ]
                     }
@@ -671,7 +666,6 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
                         "tool": {
                             "type": "skill",
                             "name": "container.run_workload",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "profileId": "local-python",
@@ -756,7 +750,6 @@ async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
     assert payload["invocation_payload"]["tool"] == {
         "type": "skill",
         "name": "container.run_workload",
-        "version": "1.0",
     }
     assert payload["context"]["workflow_id"] == "wf-1"
     assert payload["context"]["node_id"] == "workload-step"
@@ -787,7 +780,6 @@ async def test_run_execution_stage_skips_integration_after_merge_automation_canc
                     "tool": {
                         "type": "agent_runtime",
                         "name": "codex",
-                        "version": "1.0",
                     },
                     "inputs": {"instructions": "No-op"},
                 }
@@ -1080,7 +1072,7 @@ async def test_run_integration_stage_signal_driven_completion(
     ) -> dict[str, Any]:
         captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
-            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1", "tracking_ref": "track-1"}
         return {}
@@ -1121,7 +1113,7 @@ async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
     ) -> dict[str, Any]:
         captured.append((activity_type, _normalize_payload(payload)))
         if activity_type == "artifact.read":
-            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}])
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1"}
         if activity_type == "integration.jules.fetch_result":
@@ -1174,7 +1166,7 @@ async def test_run_integration_stage_branch_publish_requires_pr_url(
     ) -> dict[str, Any]:
         if activity_type == "artifact.read":
             return _mock_plan_payload(
-                [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}]
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
             )
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1"}
@@ -1212,7 +1204,7 @@ async def test_run_integration_stage_branch_publish_requires_merge_success(
     ) -> dict[str, Any]:
         if activity_type == "artifact.read":
             return _mock_plan_payload(
-                [{"id": "1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Do something"}}]
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
             )
         if activity_type == "integration.jules.start":
             return {"external_id": "ext-1"}
@@ -1256,9 +1248,9 @@ async def test_run_integration_stage_multi_step_bundles_into_single_start(
         if activity_type == "artifact.read":
             return _mock_plan_payload(
                 nodes=[
-                    {"id": "step1", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 1"}},
-                    {"id": "step2", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 2"}},
-                    {"id": "step3", "tool": {"type": "skill", "name": "t", "version": "1.0"}, "inputs": {"instructions": "Step 3"}},
+                    {"id": "step1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 1"}},
+                    {"id": "step2", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 2"}},
+                    {"id": "step3", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 3"}},
                 ],
                 edges=[
                     {"from": "step1", "to": "step2"},

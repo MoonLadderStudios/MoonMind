@@ -57,7 +57,7 @@ async def fake_execute_activity(activity_name, *args, **kwargs):
                         "id": "node-1",
                         "type": "generic",
                         "title": "dummy",
-                        "tool": {"name": "dummy_tool", "version": "1.0.0"},
+                        "tool": {"name": "dummy_tool"},
                         "input": {},
                         "dependencies": [],
                     }

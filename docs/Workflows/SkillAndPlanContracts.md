@@ -260,7 +260,9 @@ Note: Step-level agent skill selectors are defined in `docs/Steps/SkillSystem.md
 }
 ```
 
-Legacy compatibility form (accepted only during migration):
+Legacy `tool.version` and `skill.version` fields are invalid. Executable tools are identified by `tool.name` only.
+
+Legacy `skill` spelling remains an alias for the node object name, without version:
 
 ```json
 {

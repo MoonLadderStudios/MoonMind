@@ -32,7 +32,7 @@ def test_task_skills_accepts_valid_properties() -> None:
         "skills": {
             "sets": ["default", "python"],
             "include": [
-                {"name": "test-skill", "version": "1.0.0"},
+                {"name": "test-skill"},
                 {"name": "unversioned"},
             ],
             "exclude": ["legacy"],
@@ -46,12 +46,28 @@ def test_task_skills_accepts_valid_properties() -> None:
     assert spec.skills.sets == ["default", "python"]
     assert len(spec.skills.include) == 2
     assert spec.skills.include[0].name == "test-skill"
-    assert spec.skills.include[0].version == "1.0.0"
     assert spec.skills.include[1].name == "unversioned"
-    assert spec.skills.include[1].version is None
     assert spec.skills.exclude == ["legacy"]
     assert spec.skills.materialization_mode == "hybrid"
 
+def test_task_skills_rejects_semantic_version_fields() -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        WorkflowExecutionSpec.model_validate(
+            {
+                "repository": "test/repo",
+                "instructions": "execute",
+                "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
+            }
+        )
+
+    with pytest.raises(ValidationError, match="semantic versions"):
+        WorkflowExecutionSpec.model_validate(
+            {
+                "repository": "test/repo",
+                "instructions": "execute",
+                "skills": {"include": [{"name": "test-skill:1.0.0"}]},
+            }
+        )
 
 def test_mm842_authoritative_snapshot_omits_authored_step_graph_metadata() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
@@ -1130,8 +1146,8 @@ def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> 
             "skills": {
                 "sets": ["default"],
                 "include": [
-                    {"name": "baseline", "version": "1.0.0"},
-                    {"name": "remove-me", "version": "2.0.0"},
+                    {"name": "baseline"},
+                    {"name": "remove-me"},
                 ],
                 "exclude": ["legacy"],
                 "materializationMode": "hybrid",
@@ -1154,9 +1170,9 @@ def test_effective_task_step_skills_apply_exclusions_without_mutating_task() -> 
 
     assert effective is not None
     assert effective.sets == ["default", "python"]
-    assert [(item.name, item.version) for item in effective.include or []] == [
-        ("baseline", "1.0.0"),
-        ("step-only", None),
+    assert [item.name for item in effective.include or []] == [
+        "baseline",
+        "step-only",
     ]
     assert effective.exclude == ["legacy", "remove-me"]
     assert effective.materialization_mode == "none"
@@ -1196,9 +1212,7 @@ def test_effective_task_step_skills_drops_auto_without_losing_real_includes() ->
     effective = build_effective_workflow_skill_selectors(task_skills, None)
 
     assert effective is not None
-    assert [(item.name, item.version) for item in effective.include or []] == [
-        ("jira-issue-updater", None)
-    ]
+    assert [item.name for item in effective.include or []] == ["jira-issue-updater"]
 
 def test_task_input_attachments_preserve_objective_and_step_targets() -> None:
     """MM-367: objective and step refs remain distinct canonical fields."""

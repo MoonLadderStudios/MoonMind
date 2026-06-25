@@ -41,8 +41,8 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
         "runner_profile_id": {
             "type": "string",
             "title": "Runner profile",
-            "enum": ["pentestgpt-safe", "pentestgpt-vpn-lab"],
-            "default": "pentestgpt-safe",
+            "enum": ["pentestgpt-claude-oauth"],
+            "default": "pentestgpt-claude-oauth",
         },
         "execution_profile_ref": {
             "type": "string",
@@ -77,8 +77,8 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "title": "Network attachment",
             "description": (
-                "Optional approved network attachment ref required by VPN/lab "
-                "runner profiles."
+                "Optional approved network attachment ref reserved for future "
+                "elevated-network runner profiles."
             ),
         },
     },
@@ -89,11 +89,14 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
 def _pentest_run_input_schema() -> dict[str, Any]:
     pentest_settings = settings.pentest
     runner_profiles = list(pentest_settings.allowed_runner_profiles)
-    if (
-        pentest_settings.allow_vpn_lab_profile
-        and pentest_settings.vpn_lab_profile_id not in runner_profiles
-    ):
-        runner_profiles.append(pentest_settings.vpn_lab_profile_id)
+    claude_runner = pentest_settings.claude_oauth_runner_profile_id
+    if pentest_settings.allow_claude_oauth_profile:
+        if claude_runner and claude_runner not in runner_profiles:
+            runner_profiles.append(claude_runner)
+    else:
+        runner_profiles = [
+            profile_id for profile_id in runner_profiles if profile_id != claude_runner
+        ]
     operation_modes = list(pentest_settings.allowed_operation_modes)
     evidence_levels = list(pentest_settings.allowed_evidence_levels)
     schema = dict(_PENTEST_RUN_INPUT_SCHEMA)

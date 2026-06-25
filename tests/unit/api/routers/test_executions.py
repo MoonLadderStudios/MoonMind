@@ -1858,7 +1858,7 @@ def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
                     "logicalStepId": "prepare",
                     "order": 1,
                     "title": "Prepare workspace",
-                    "tool": {"type": "skill", "name": "repo.prepare", "version": "1"},
+                    "tool": {"type": "skill", "name": "repo.prepare"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -3708,14 +3708,12 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
                         "minSeverityForMoonMind": "medium",
                         "defaultRuntime": "gemini_cli",
                     },
-                    "skills": {
-                        "sets": ["deployment-default", "proposal-quality"],
-                        "include": [
-                            {"name": "moonmind-doc-writer", "version": "2.3.0"}
-                        ],
-                        "exclude": ["legacy-proposer"],
-                        "materializationMode": "hybrid",
-                    },
+                        "skills": {
+                            "sets": ["deployment-default", "proposal-quality"],
+                            "include": [{"name": "moonmind-doc-writer"}],
+                            "exclude": ["legacy-proposer"],
+                            "materializationMode": "hybrid",
+                        },
                     "steps": [
                         {
                             "id": "review",
@@ -3747,7 +3745,7 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     }
     assert initial_parameters["workflow"]["skills"] == {
         "sets": ["deployment-default", "proposal-quality"],
-        "include": [{"name": "moonmind-doc-writer", "version": "2.3.0"}],
+        "include": [{"name": "moonmind-doc-writer"}],
         "exclude": ["legacy-proposer"],
         "materializationMode": "hybrid",
     }
@@ -4792,8 +4790,8 @@ def _pentest_workflow_payload(
         "scope_artifact_ref": "art_scope_valid",
         "objective": "Recon only",
         "operation_mode": "recon_only",
-        "runner_profile_id": "pentestgpt-safe",
-        "execution_profile_ref": "pentestgpt_anthropic_api_team",
+        "runner_profile_id": "pentestgpt-claude-oauth",
+        "execution_profile_ref": "pentestgpt_claude_oauth",
         "time_budget_minutes": 60,
         "evidence_level": "standard",
     }
@@ -4825,7 +4823,6 @@ def _pentest_workflow_payload(
                         "tool": {
                             "type": "skill",
                             "name": "security.pentest.run",
-                            "version": "1",
                             "inputs": step_safe_inputs,
                         },
                     }
@@ -4874,8 +4871,8 @@ def test_create_task_shaped_execution_accepts_authorized_pentest_roles(
             "scope_artifact_ref": "art_scope_valid",
             "objective": "Recon only",
             "operation_mode": "recon_only",
-            "runner_profile_id": "pentestgpt-safe",
-            "execution_profile_ref": "pentestgpt_anthropic_api_team",
+            "runner_profile_id": "pentestgpt-claude-oauth",
+            "execution_profile_ref": "pentestgpt_claude_oauth",
             "time_budget_minutes": 60,
             "evidence_level": "standard",
         },
@@ -4957,7 +4954,7 @@ def test_create_task_shaped_execution_rejects_pentest_provider_runtime_state_ove
         json=_pentest_workflow_payload(
             tool_inputs={
                 "provider_runtime_state": {
-                    "pentestgpt_anthropic_api_team": {"available_slots": 100}
+                    "pentestgpt_claude_oauth": {"available_slots": 100}
                 }
             }
         ),
@@ -5028,7 +5025,7 @@ def test_pentest_safe_preset_exposes_only_ordinary_inputs() -> None:
     assert exposed_inputs == schema_props
     assert privileged.isdisjoint(schema_props)
     assert privileged.isdisjoint(exposed_inputs)
-    assert step_inputs["runner_profile_id"] == "pentestgpt-safe"
+    assert step_inputs["runner_profile_id"] == "pentestgpt-claude-oauth"
     assert privileged.isdisjoint(step_inputs)
 
 def test_create_task_shaped_submit_accepts_task_payload_pr_resolver(
@@ -7251,7 +7248,6 @@ def test_serialize_execution_prefers_preset_slug_over_child_skill_display() -> N
             "tool": {
                 "type": "skill",
                 "name": "jira-issue-updater",
-                "version": "1",
             },
             "skill": {
                 "id": "jira-issue-updater",
@@ -8078,7 +8074,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
                     "logicalStepId": "run-tests",
                     "order": 1,
                     "title": "Run tests",
-                    "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                    "tool": {"type": "skill", "name": "repo.run_tests"},
                     "dependsOn": [],
                     "status": "running",
                     "waitingReason": None,
@@ -8169,7 +8165,6 @@ def test_get_execution_steps_enriches_missing_agent_run_ids_once() -> None:
                     if tool_type == "agent_runtime"
                     else "repo.run_tests"
                 ),
-                "version": "1",
             },
             "dependsOn": [],
             "status": "awaiting_external",
@@ -8341,7 +8336,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -8430,7 +8425,7 @@ def test_get_execution_step_executions_sanitizes_failed_attempt_summary() -> Non
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "failed",
                     "waitingReason": None,
@@ -8509,7 +8504,7 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -8616,7 +8611,7 @@ def test_get_execution_step_executions_degraded_older_ref_uses_per_ref_ordinal()
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -8898,7 +8893,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
                     "id": "fetch-issue",
                     "title": "Fetch issue",
                     "type": "tool",
-                    "tool": {"id": "jira.get_issue", "version": "1"},
+                    "tool": {"id": "jira.get_issue"},
                 },
                 {
                     "id": "implement",
@@ -8938,7 +8933,6 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     assert payload["steps"][0]["tool"] == {
         "type": "tool",
         "name": "jira.get_issue",
-        "version": "1",
     }
     assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
     assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]
@@ -8964,7 +8958,7 @@ def test_get_execution_steps_fallback_prefers_structured_step_order(
                     "id": "fetch-issue",
                     "title": "Fetch issue",
                     "type": "tool",
-                    "tool": {"id": "jira.get_issue", "version": "1"},
+                    "tool": {"id": "jira.get_issue"},
                 },
                 {
                     "id": "implement",

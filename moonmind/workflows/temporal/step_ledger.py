@@ -405,7 +405,6 @@ def build_initial_step_rows(
                 "tool": {
                     "type": str(tool.get("type") or tool.get("kind") or "skill"),
                     "name": str(tool.get("name") or tool.get("id") or ""),
-                    "version": str(tool.get("version") or ""),
                 },
                 "dependsOn": depends_on,
                 "status": "ready" if not depends_on else "pending",
