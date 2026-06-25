@@ -380,11 +380,11 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert "/static/workflow_console/dist/assets/" in response.text
 
 def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
-    for path in ("/workflows",):
+    for path in ("/workflows", "/settings"):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":true' in response.text
-    for path in ("/manifests", "/settings"):
+    for path in ("/manifests",):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":false' in response.text

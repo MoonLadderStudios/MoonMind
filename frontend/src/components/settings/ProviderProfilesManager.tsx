@@ -1285,6 +1285,19 @@ export function ProviderProfilesManager({
                 const canStartOAuth = authModel.kind === 'codex_oauth';
                 const activationLabel = activationStatusLabel(profile);
                 const enableAllowed = mayEnableFromSettings(profile);
+                const claudeReadiness =
+                  authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
+                const hasStatusDetails = Boolean(
+                  activationLabel ||
+                    profile.disabled_reason ||
+                    profile.last_validated_at ||
+                    profile.readiness ||
+                    claudeReadiness?.connected !== undefined ||
+                    claudeReadiness?.lastValidatedAt ||
+                    claudeReadiness?.backingSecretExists !== undefined ||
+                    claudeReadiness?.launchReady !== undefined ||
+                    claudeReadiness?.failureReason,
+                );
                 return (
                 <tr key={profile.profile_id} role="row">
                   <td
@@ -1405,94 +1418,109 @@ export function ProviderProfilesManager({
                     headers="provider-profile-header-status"
                     role="cell"
                   >
-                    <span
-                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                        profile.enabled
-                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                          : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
-                      }`}
-                    >
-                      {profile.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
-                    {activationLabel ? (
-                      <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
-                        {activationLabel}
-                      </div>
-                    ) : null}
-                    {profile.disabled_reason ? (
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        Reason: {formatStatusLabel(profile.disabled_reason, profile.disabled_reason)}
-                      </div>
-                    ) : null}
-                    {profile.last_validated_at ? (
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        Last validated: {profile.last_validated_at}
-                      </div>
-                    ) : null}
-                    {profile.readiness ? (
-                      <div className="mt-2 space-y-1">
+                    <div className="provider-profile-status flex flex-col gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${readinessClass(profile.readiness.status)}`}
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                            profile.enabled
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                              : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                          }`}
                         >
-                          Readiness: {readinessLabel(profile.readiness.status)}
+                          {profile.enabled ? 'Enabled' : 'Disabled'}
                         </span>
-                        <div className="text-xs text-slate-500 dark:text-slate-400">
-                          {profile.readiness.summary}
-                        </div>
-                        {visibleReadinessChecks(profile.readiness).map((check) => (
-                          <div
-                            key={check.id}
-                            className={
-                              check.status === 'error'
-                                ? 'text-xs text-rose-600 dark:text-rose-400'
-                                : 'text-xs text-amber-700 dark:text-amber-300'
-                            }
+                        {profile.readiness ? (
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${readinessClass(profile.readiness.status)}`}
                           >
-                            {check.label}: {redactClaudeSecretText(check.message)}
+                            Readiness: {readinessLabel(profile.readiness.status)}
+                          </span>
+                        ) : null}
+                      </div>
+                      {authModel.kind === 'claude_credentials' && authModel.statusLabel ? (
+                        <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                          {authModel.statusLabel}
+                        </div>
+                      ) : null}
+                      {oauthSession ? (
+                        <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                          OAuth: {oauthStatusLabel(oauthSession.status)}
+                        </div>
+                      ) : null}
+                      {oauthSession?.failureReason ? (
+                        <div className="text-xs text-rose-600 dark:text-rose-400">
+                          {oauthSession.failureReason}
+                        </div>
+                      ) : null}
+                      {hasStatusDetails ? (
+                        <details className="provider-profile-status-details">
+                          <summary className="cursor-pointer text-xs font-medium text-slate-500 dark:text-slate-400">
+                            Diagnostics
+                          </summary>
+                          <div className="mt-2 space-y-1">
+                            {activationLabel ? (
+                              <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                                {activationLabel}
+                              </div>
+                            ) : null}
+                            {profile.disabled_reason ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Reason: {formatStatusLabel(profile.disabled_reason, profile.disabled_reason)}
+                              </div>
+                            ) : null}
+                            {profile.last_validated_at ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Last validated: {profile.last_validated_at}
+                              </div>
+                            ) : null}
+                            {profile.readiness ? (
+                              <div className="space-y-1">
+                                <div className="text-xs text-slate-500 dark:text-slate-400">
+                                  {profile.readiness.summary}
+                                </div>
+                                {visibleReadinessChecks(profile.readiness).map((check) => (
+                                  <div
+                                    key={check.id}
+                                    className={
+                                      check.status === 'error'
+                                        ? 'text-xs text-rose-600 dark:text-rose-400'
+                                        : 'text-xs text-amber-700 dark:text-amber-300'
+                                    }
+                                  >
+                                    {check.label}: {redactClaudeSecretText(check.message)}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'claude_credentials' && authModel.readiness?.connected !== undefined ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Claude connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'claude_credentials' && authModel.readiness?.lastValidatedAt ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Last validated: {authModel.readiness.lastValidatedAt}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'claude_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'claude_credentials' && authModel.readiness?.launchReady !== undefined ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'claude_credentials' && authModel.readiness?.failureReason ? (
+                              <div className="text-xs text-rose-600 dark:text-rose-400">
+                                Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
+                              </div>
+                            ) : null}
                           </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    {oauthSession ? (
-                      <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
-                        OAuth: {oauthStatusLabel(oauthSession.status)}
-                      </div>
-                    ) : null}
-                    {oauthSession?.failureReason ? (
-                      <div className="mt-1 text-xs text-rose-600 dark:text-rose-400">
-                        {oauthSession.failureReason}
-                      </div>
-                    ) : null}
-                    {authModel.kind === 'claude_credentials' && authModel.statusLabel ? (
-                      <div className="mt-2 text-xs font-medium text-slate-600 dark:text-slate-400">
-                        {authModel.statusLabel}
-                      </div>
-                    ) : null}
-                    {authModel.kind === 'claude_credentials' && authModel.readiness?.connected !== undefined ? (
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        Claude connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
-                      </div>
-                    ) : null}
-                    {authModel.kind === 'claude_credentials' && authModel.readiness?.lastValidatedAt ? (
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        Last validated: {authModel.readiness.lastValidatedAt}
-                      </div>
-                    ) : null}
-                    {authModel.kind === 'claude_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
-                      </div>
-                    ) : null}
-                    {authModel.kind === 'claude_credentials' && authModel.readiness?.launchReady !== undefined ? (
-                      <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                        Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
-                      </div>
-                    ) : null}
-                    {authModel.kind === 'claude_credentials' && authModel.readiness?.failureReason ? (
-                      <div className="mt-1 text-xs text-rose-600 dark:text-rose-400">
-                        Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
-                      </div>
-                    ) : null}
+                        </details>
+                      ) : null}
+                    </div>
                   </td>
                   <td
                     className="px-3 py-4"

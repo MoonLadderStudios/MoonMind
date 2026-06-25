@@ -1949,6 +1949,40 @@ tbody tr:hover {
   text-align: center;
 }
 
+/*
+ * Provider Profiles table (flat / desktop layout).
+ * Let dense cells wrap instead of forcing the 7-column table wider than the
+ * (data-wide) settings panel, so every row control — including the Actions
+ * column — stays reachable without horizontal scrolling at >=1280px and the
+ * table degrades gracefully toward the stacked card layout below.
+ */
+.provider-profiles-table th,
+.provider-profiles-table td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+}
+
+.provider-profile-status-details > summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.provider-profile-status-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.provider-profile-status-details > summary::before {
+  content: '▸';
+  font-size: 0.65rem;
+  line-height: 1;
+}
+
+.provider-profile-status-details[open] > summary::before {
+  content: '▾';
+}
+
 @media (max-width: 720px) {
   .schedules-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
