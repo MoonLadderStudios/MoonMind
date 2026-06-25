@@ -321,10 +321,26 @@ ALL_CHECKS = (
 )
 
 
-def run_checks(docs: Sequence[DocFile]) -> list[Finding]:
+def run_checks(
+    docs: Sequence[DocFile], *, focus_paths: Iterable[str] | None = None
+) -> list[Finding]:
+    """Run every advisory check over ``docs``.
+
+    ``focus_paths`` scopes *reported* findings to a subset of paths while still
+    evaluating every check against the full ``docs`` context. Global checks such
+    as ``check_duplicate_canonical_authority`` must see unchanged canonical docs
+    to detect a changed doc duplicating an existing one; passing the full
+    canonical set as ``docs`` and the changed subset as ``focus_paths`` keeps
+    that detection working without reporting on docs the caller did not target.
+    When ``focus_paths`` is ``None`` every finding is reported.
+    """
+
     findings: list[Finding] = []
     for check in ALL_CHECKS:
         findings.extend(check(docs))
+    if focus_paths is not None:
+        focus = set(focus_paths)
+        findings = [finding for finding in findings if finding.path in focus]
     return sorted(findings, key=lambda f: (f.path, f.rule, f.message))
 
 
@@ -465,23 +481,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # ``focus_paths`` scopes which paths are *reported*; ``context_paths`` is the
+    # full set loaded so global checks (duplicate authority) can compare a
+    # changed doc against unchanged canonical docs. ``focus_paths=None`` reports
+    # every finding (the ``all`` / full-scan scopes).
+    focus_paths: list[str] | None
     if args.paths:
         scope = "explicit"
-        doc_paths: list[str] = list(args.paths)
+        focus_paths = list(args.paths)
+        context_paths = sorted(set(focus_paths) | set(all_doc_paths()))
     elif args.scope == "all":
         scope = "all"
-        doc_paths = all_doc_paths()
+        focus_paths = None
+        context_paths = all_doc_paths()
     else:
         changed = changed_doc_paths(args.base)
         if changed is None:
             scope = "all (git unavailable, fell back to full scan)"
-            doc_paths = all_doc_paths()
+            focus_paths = None
+            context_paths = all_doc_paths()
         else:
             scope = f"changed vs {args.base}"
-            doc_paths = changed
+            focus_paths = changed
+            context_paths = sorted(set(changed) | set(all_doc_paths()))
 
-    docs = load_docs(doc_paths)
-    findings = run_checks(docs)
+    docs = load_docs(context_paths)
+    findings = run_checks(docs, focus_paths=focus_paths)
 
     if args.format == "json":
         print(_format_json(findings, scope=scope))

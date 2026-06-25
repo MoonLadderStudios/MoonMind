@@ -194,6 +194,37 @@ def test_clean_canonical_doc_produces_no_findings() -> None:
     assert mod.run_checks(docs) == []
 
 
+def test_focus_paths_reports_only_changed_doc_but_uses_full_context() -> None:
+    # Regression: with the default ``changed`` scope, a new/changed doc that
+    # duplicates the title of an *unchanged* canonical doc must still be flagged.
+    # Global checks see the full canonical set (``docs``) while reporting is
+    # scoped to the changed path via ``focus_paths``.
+    changed = "docs/B/Overview.md"
+    cls = "\n\nThis is a Cross-Cutting Concept View describing X.\n"
+    docs = [
+        _doc("docs/A/Overview.md", f"# Execution Model{cls}"),
+        _doc(changed, f"# Execution Model{cls}"),
+    ]
+    findings = mod.run_checks(docs, focus_paths=[changed])
+    assert _rules(findings) == {"duplicate-canonical-authority"}
+    # Only the changed doc is reported; the unchanged counterpart is not flagged.
+    assert {finding.path for finding in findings} == {changed}
+    # The unchanged counterpart is still surfaced in the detail for the reviewer.
+    assert any("docs/A/Overview.md" in finding.detail for finding in findings)
+
+
+def test_focus_paths_none_reports_every_finding() -> None:
+    docs = [
+        _doc("docs/A/Overview.md", "# Execution Model\n\nx\n"),
+        _doc("docs/B/Overview.md", "# Execution Model\n\ny\n"),
+    ]
+    findings = mod.run_checks(docs, focus_paths=None)
+    assert {finding.path for finding in findings} == {
+        "docs/A/Overview.md",
+        "docs/B/Overview.md",
+    }
+
+
 def test_findings_are_sorted_deterministically() -> None:
     docs = [
         _doc("docs/Z/Zed.md", "# Zed\n"),
