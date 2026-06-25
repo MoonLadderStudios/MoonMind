@@ -1159,25 +1159,14 @@ class _FakePentestLauncher:
             }
         )
 
-def _runtime_redaction_fixture(text: str) -> str:
-    return (
-        text.replace("TOK_EN", "token")
-        .replace("GHP", "ghp")
-        .replace("PASS_WORD", "password")
-    )
-
 class _FileWritingPentestLauncher(_FakePentestLauncher):
     async def run(self, request: object) -> WorkloadResult:
         workload_request = getattr(request, "request", request)
         artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
         base = artifacts_dir / "pentest"
         files = {
-            "runtime/stdout.log": _runtime_redaction_fixture(
-                "stdout TOK_EN=GHP_rawshouldnotleak1234567890\n"
-            ),
-            "runtime/stderr.log": _runtime_redaction_fixture(
-                "stderr PASS_WORD=rawshouldnotleak\n"
-            ),
+            "runtime/stdout.log": "stdout raw-output-marker-should-not-leak\n",
+            "runtime/stderr.log": "stderr raw-error-marker-should-not-leak\n",
             "runtime/diagnostics.json": json.dumps(
                 {"status": "ok", "raw_log": "must stay in artifact body"}
             ),
@@ -1209,8 +1198,8 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
                     },
                 }
             ),
-            "evidence/bundle.tar.zst": _runtime_redaction_fixture(
-                "fake evidence body GHP_evidenceshouldnotleak123456\n"
+            "evidence/bundle.tar.zst": (
+                "fake evidence body evidence-marker-should-not-leak\n"
             ),
         }
         for relative, body in files.items():
@@ -2647,9 +2636,9 @@ async def test_security_pentest_serialized_result_and_metadata_stay_compact_and_
             serialized = json.dumps(result, sort_keys=True)
             assert len(serialized.encode("utf-8")) < 60000
             blocked_patterns = (
-                "ghp_rawshouldnotleak",
-                "rawshouldnotleak",
-                "ghp_evidenceshouldnotleak",
+                "raw-output-marker-should-not-leak",
+                "raw-error-marker-should-not-leak",
+                "evidence-marker-should-not-leak",
                 "ghp_summaryshouldnotleak",
                 "presigned_url",
                 "finding_details",
