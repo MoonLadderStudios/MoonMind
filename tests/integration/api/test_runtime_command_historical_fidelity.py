@@ -58,7 +58,6 @@ def test_exact_and_edit_for_rerun_keep_source_command_metadata_immutable() -> No
             "Runtime command hint catalog version changed from 2026-05-12 to 2026-05-13."
         ],
     }
-
     assert command["hintCatalogVersion"] == "2026-05-12"
     assert editable_copy["currentWarnings"]
     assert draft["instructions"] == "/review\nCheck the branch."

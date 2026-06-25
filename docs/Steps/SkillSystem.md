@@ -17,7 +17,7 @@ It is the canonical document for:
 1. what a MoonMind Skill is,
 2. how Skills differ from Tools,
 3. how Skill steps are authored and validated,
-4. how reusable agent skill definitions are stored and versioned,
+4. how reusable agent skill definitions are stored and evidenced,
 5. how built-in, deployment, repo, and local skill sources are merged,
 6. how workflow and step skill intent resolves into immutable snapshots,
 7. how runtimes receive those snapshots,
@@ -60,7 +60,7 @@ The desired-state skill model is:
 
 1. Skills are not a subtype of Tool.
 2. Skill steps are executable Step Types, but they execute by launching or configuring an agent runtime, not by invoking a `ToolDefinition`.
-3. Agent skill definitions are versioned data, not Temporal activity contracts.
+3. Agent skill definitions are named data with content-addressed evidence, not Temporal activity contracts.
 4. A Skill step may use Tools internally, but those Tools are governed capabilities available to the agent, not the Skill itself.
 5. MoonMind supports built-in, deployment-stored, repo-checked-in, and local-only agent skill sources.
 6. At run or step start, MoonMind resolves skill intent into an immutable `ResolvedSkillSet`.
@@ -135,7 +135,7 @@ A Skill step may compile into an `AgentExecutionRequest`, a managed runtime sess
 
 The deployment-catalog representation of a reusable Skill.
 
-An `AgentSkillDefinition` is versioned data. It may contain:
+An `AgentSkillDefinition` is named instruction data. It may contain:
 
 - instructions,
 - operating rules,
@@ -149,11 +149,12 @@ An `AgentSkillDefinition` is versioned data. It may contain:
 
 An `AgentSkillDefinition` is not an executable Temporal Tool.
 
-### 3.7 AgentSkillVersion
+### 3.7 AgentSkillContent
 
-An immutable version of an `AgentSkillDefinition`.
+An immutable content-addressed revision of an `AgentSkillDefinition`.
 
-Editing Skill content creates a new version.
+Editing Skill content creates new content evidence, represented by `content_ref`
+and `content_digest`. The Skill remains selected by name.
 
 ### 3.8 SkillSet
 
@@ -169,7 +170,7 @@ Examples:
 
 ### 3.9 ResolvedSkillSet
 
-The immutable, exact set of Skill versions selected for a specific run or step after all policy, precedence, inheritance, and override rules have been applied.
+The immutable, exact set of Skill names and content evidence selected for a specific run or step after all policy, precedence, inheritance, and override rules have been applied.
 
 ### 3.10 RuntimeCommandSelection
 
@@ -204,7 +205,7 @@ The following rules are fixed.
 1. **Tool** means typed executable operation.
 2. **Skill** means agent-facing behavior or instruction data.
 3. **Skill Step** means an executable agentic step selected by the user.
-4. **AgentSkillDefinition** means versioned skill data in the skill catalog.
+4. **AgentSkillDefinition** means named skill data in the skill catalog.
 5. **Runtime command** means adapter-owned runtime behavior, not a Skill.
 6. **Preset** means authoring template, not hidden runtime work.
 7. A Skill step may use Tools internally, but Tools are allowed capabilities, not children of the Skill definition.
@@ -271,7 +272,7 @@ They are useful for:
 - starter deployment defaults,
 - runtime-specific first-run guidance.
 
-Built-in Skills are versioned with MoonMind releases and may be imported into the deployment catalog or treated as a read-only source during resolution.
+Built-in Skills ship with MoonMind releases and may be imported into the deployment catalog or treated as a read-only source during resolution.
 
 ### 6.2 Deployment-Stored Skills
 
@@ -284,7 +285,7 @@ They are useful for:
 - centrally reviewed reusable Skills,
 - shared governance and auditability.
 
-A deployment-stored Skill has immutable versions and stable provenance.
+A deployment-stored Skill has immutable content evidence and stable provenance.
 
 ### 6.3 Repo Checked-In Skills
 
@@ -323,9 +324,10 @@ Local-only Skills are excluded from version control by default and may participa
 
 ### 6.5 Explicit Workflow and Step Selectors
 
-A workflow execution or step may explicitly include, exclude, or pin Skills or SkillSets.
+A workflow execution or step may explicitly include or exclude Skills or SkillSets.
 
 Explicit selectors express execution intent and participate in resolution before runtime launch.
+Selectors identify Skills by canonical skill name only. They do not carry semantic skill versions; resolved content refs and digests provide the evidence for the exact instruction content used.
 
 ---
 
@@ -348,9 +350,9 @@ Later layers may override earlier layers where policy allows.
 When more than one source provides a Skill with the same canonical name:
 
 1. a later-precedence source may override an earlier source by name;
-2. the resolved snapshot must record the winning source and version;
+2. the resolved snapshot must record the winning source and content evidence;
 3. if two candidates at the same precedence level conflict and no deterministic tie-breaker exists, resolution fails;
-4. if a selector pins a version that cannot be satisfied, resolution fails;
+4. selectors identify Skills by canonical name only;
 5. if policy forbids a source kind, candidates from that source are excluded before precedence applies.
 
 ### 7.3 Policy Gates
@@ -382,7 +384,6 @@ Suggested fields:
 
 ```ts
 type AgentSkillDefinition = {
-  skill_id: string;
   name: string;
   title: string;
   description?: string;
@@ -401,19 +402,18 @@ type AgentSkillDefinition = {
 
 `skill_kind` is descriptive, not a dispatch mechanism. Even an `agent_behavior` Skill is not a `ToolDefinition`.
 
-### 8.2 AgentSkillVersion
+### 8.2 AgentSkillContent
 
-Represents an immutable version of Skill content.
+Represents immutable Skill content evidence.
 
 Suggested fields:
 
 ```ts
-type AgentSkillVersion = {
-  skill_id: string;
-  version: string;
+type AgentSkillContent = {
+  name: string;
   content_ref: string;
+  content_digest: string;
   format: "skill_md" | "markdown_bundle" | "json_manifest" | "mixed_bundle";
-  checksum: string;
   supported_runtimes?: string[];
   metadata?: Record<string, unknown>;
   created_at: string;
@@ -423,8 +423,8 @@ type AgentSkillVersion = {
 
 Rules:
 
-1. versions are immutable;
-2. editing content creates a new version;
+1. content refs and digests are immutable evidence;
+2. editing content creates a new content ref and digest;
 3. large bodies live in artifact/blob storage;
 4. workflow history carries refs, not bodies.
 
@@ -455,9 +455,8 @@ Suggested fields:
 ```ts
 type SkillSetEntry = {
   skill_set_id: string;
-  selector_type: "include" | "exclude" | "pin" | "condition";
+  selector_type: "include" | "exclude" | "condition";
   skill_name?: string;
-  version?: string;
   order?: number;
   conditions?: Record<string, unknown>;
 };
@@ -491,11 +490,9 @@ Suggested fields:
 ```ts
 type ResolvedSkillEntry = {
   name: string;
-  skill_id: string;
-  version: string;
   source_kind: "builtin" | "deployment" | "repo" | "local";
   content_ref: string;
-  checksum: string;
+  content_digest: string;
   visible_path?: string;
   supported_runtimes?: string[];
 };
@@ -539,7 +536,6 @@ Illustrative shape:
   "type": "skill",
   "skill": {
     "id": "code.implementation",
-    "version": "1.0.0",
     "inputs": {
       "repository": "MoonLadderStudios/MoonMind",
       "issueKey": "MM-123",
@@ -616,7 +612,7 @@ Illustrative shape:
     "skills": {
       "sets": ["deployment-default"],
       "include": [
-        { "name": "moonmind-doc-writer", "version": "2.3.0" }
+        { "name": "moonmind-doc-writer" }
       ],
       "exclude": [],
       "materializationMode": "hybrid"
@@ -631,7 +627,7 @@ Illustrative shape:
 2. `step.skill` may add, override, or exclude workflow-level skill intent.
 3. A step may explicitly opt out of inherited optional Skills where policy allows.
 4. Absent step-level selectors means the step inherits the workflow baseline.
-5. A step-level exact version pin overrides unpinned workflow-level selection if policy allows it.
+5. Step-level selection identifies Skills by canonical name only.
 6. Policy may require mandatory Skills that cannot be excluded.
 
 ### 9.5 Validation Rules
@@ -639,7 +635,7 @@ Illustrative shape:
 A Skill step is valid only when:
 
 1. the selected Skill exists or can be resolved by documented `auto` semantics;
-2. requested Skill versions can be resolved;
+2. requested Skill names can be resolved;
 3. Skill inputs validate against the Skill's input contract;
 4. the target runtime is compatible;
 5. required repository, project, or artifact context is present;
@@ -677,7 +673,7 @@ Canonical flow:
 6. apply source precedence and collision rules;
 7. validate runtime compatibility;
 8. validate allowed Tool policy;
-9. pin exact Skill versions;
+9. record selected Skill content refs and digests;
 10. write a resolved manifest artifact;
 11. write a compact prompt index when needed;
 12. return a compact `ResolvedSkillSet` ref.
@@ -687,12 +683,12 @@ Canonical flow:
 Resolution fails before runtime launch when:
 
 1. a required Skill is missing;
-2. a pinned version cannot be resolved;
+2. a requested Skill name cannot be resolved;
 3. collisions cannot be resolved deterministically;
 4. policy forbids a requested source or override;
 5. a Skill is incompatible with the runtime and no allowed fallback exists;
 6. required source content cannot be read;
-7. a Skill body or manifest checksum does not match;
+7. a Skill body or manifest digest does not match;
 8. a selected Tool is not allowed for the Skill step.
 
 ### 10.4 Provenance
@@ -700,7 +696,7 @@ Resolution fails before runtime launch when:
 The resolved snapshot must record enough provenance to answer:
 
 1. which Skills were selected,
-2. which versions were selected,
+2. which content refs and digests were selected,
 3. where each Skill came from,
 4. which selectors influenced the result,
 5. which policies allowed or denied candidates,
@@ -710,13 +706,13 @@ The resolved snapshot must record enough provenance to answer:
 
 ---
 
-## 11. Versioning, Immutability, and Replay
+## 11. Content Evidence, Immutability, and Replay
 
-### 11.1 Skill Version Immutability
+### 11.1 Skill Content Immutability
 
-Agent Skill versions are immutable.
+Agent Skill content refs and digests are immutable.
 
-Changing Skill content creates a new version.
+Changing Skill content creates new content evidence under the same canonical Skill name.
 
 ### 11.2 Snapshot Immutability
 
@@ -724,7 +720,7 @@ A `ResolvedSkillSet` is immutable.
 
 Rules:
 
-1. a run or step pins exact Skill versions;
+1. a run or step carries an exact resolved snapshot ref;
 2. retries reuse the same snapshot;
 3. reruns reuse the original snapshot by default;
 4. re-resolution is explicit and creates a new snapshot;
@@ -988,9 +984,9 @@ Suggested fields:
   "skills": [
     {
       "name": "code-implementation",
-      "version": "1.0.0",
       "source_kind": "deployment",
-      "checksum": "sha256:..."
+      "content_ref": "art:sha256:...",
+      "content_digest": "sha256:..."
     }
   ],
   "source_summary": {
@@ -1265,7 +1261,7 @@ Workflow and step detail should show:
 
 1. selected Skill step identity,
 2. resolved snapshot ID,
-3. selected Skill names and versions,
+3. selected Skill names and content evidence,
 4. source provenance,
 5. materialization mode,
 6. active visible path,
@@ -1304,9 +1300,9 @@ Preferred behavior:
 
 Scheduled work should store Skill intent at schedule creation.
 
-When a scheduled run starts, MoonMind resolves the actual `ResolvedSkillSet` unless the schedule explicitly pins Skill versions.
+When a scheduled run starts, MoonMind resolves the actual `ResolvedSkillSet` unless the schedule explicitly carries a resolved snapshot ref.
 
-Exact version pinning at schedule creation is an explicit mode, not the silent default.
+Snapshot reuse at schedule creation is an explicit mode, not the silent default.
 
 ### 20.3 Reruns
 
@@ -1331,7 +1327,7 @@ Minimum validation coverage:
 3. Runtime commands cannot be added to `ResolvedSkillSet`.
 4. Missing required Skill fails before runtime launch.
 5. Forbidden source kind fails during resolution.
-6. Version pin mismatch fails during resolution.
+6. Unknown Skill name fails during resolution.
 7. Local-only Skill use is policy-gated.
 8. Selected Tools in a Skill step are policy-gated.
 9. Rerun uses original snapshot by default.
@@ -1392,7 +1388,7 @@ with new design decisions.
 
 1. Skills are separate from Tools.
 2. Skill steps are first-class executable Step Types.
-3. Agent skills are versioned data, not `ToolDefinition`s.
+3. Agent skills are named instruction data with content-addressed evidence, not `ToolDefinition`s.
 4. Skill steps execute through agent-runtime orchestration, not direct Tool registry dispatch.
 5. A Skill step may use Tools internally under policy.
 6. Runtime commands are not Skills.
@@ -1421,7 +1417,7 @@ The desired model is:
 
 1. users author Tool, Skill, or Preset steps;
 2. Skill steps select agent-facing behavior and context;
-3. reusable agent Skills are stored as versioned data;
+3. reusable agent Skills are stored as named data with content-addressed evidence;
 4. workflow and step selectors resolve into immutable snapshots;
 5. managed runtimes receive compact activation instructions plus a full active bundle at `.agents/skills`;
 6. external runtimes receive equivalent snapshot-derived context through provider-compatible delivery;

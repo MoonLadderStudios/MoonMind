@@ -20,8 +20,11 @@ def _normalize_capabilities(values: list[Any] | None) -> list[str]:
 
 def _sanitize_template_application(entry: dict[str, Any]) -> dict[str, Any] | None:
     slug = str(entry.get("slug") or "").strip()
-    version = str(entry.get("version") or "").strip()
-    if not slug or not version:
+    if entry.get("version") is not None or entry.get("presetVersion") is not None:
+        raise ValueError(
+            "Applied step templates use slug/scope only; remove version or presetVersion."
+        )
+    if not slug:
         return None
     inputs = entry.get("inputs")
     if not isinstance(inputs, dict):
@@ -34,7 +37,6 @@ def _sanitize_template_application(entry: dict[str, Any]) -> dict[str, Any] | No
         applied_at = datetime.now(UTC).isoformat()
     payload = {
         "slug": slug,
-        "version": version,
         "inputs": inputs,
         "appliedAt": applied_at,
     }

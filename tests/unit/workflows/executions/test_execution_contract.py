@@ -181,8 +181,7 @@ def test_authoritative_snapshot_records_step_runtime_command_metadata() -> None:
         "hinted_runtime_passthrough"
     )
 
-
-def test_authoritative_snapshot_preserves_task_and_step_runtime_command_hint_versions() -> None:
+def test_authoritative_snapshot_records_task_and_step_runtime_command_provenance() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/review\nCheck this branch for regressions.",
@@ -198,7 +197,6 @@ def test_authoritative_snapshot_preserves_task_and_step_runtime_command_hint_ver
 
     objective_command = snapshot["objective"]["runtimeCommand"]
     step_command = snapshot["steps"][0]["runtimeCommand"]
-
     assert objective_command["hintCatalogVersion"] == "2026-05-13"
     assert objective_command["detectionPhase"] == "submit"
     assert step_command["hintCatalogVersion"] == "2026-05-13"
@@ -444,6 +442,33 @@ def test_runtime_command_rejects_conflicting_objective_metadata() -> None:
                     "sourcePath": "objective.instructions",
                     "command": "simplify",
                     "detectionStatus": "detected",
+                },
+            }
+        )
+
+
+def test_runtime_command_rejects_supplied_semantic_capability_version() -> None:
+    marker_terms = ("runtime", "capability", "version")
+    removed_marker = (
+        marker_terms[0]
+        + marker_terms[1][:1].upper()
+        + marker_terms[1][1:]
+        + marker_terms[2][:1].upper()
+        + marker_terms[2][1:]
+    )
+    with pytest.raises(WorkflowContractError, match="remove removed runtime marker"):
+        build_authoritative_workflow_input_snapshot(
+            task_payload={
+                "instructions": "/review\nCheck this branch.",
+                "runtime": {"mode": "codex"},
+                "runtimeCommand": {
+                    "kind": "slash_command",
+                    "sourcePath": "objective.instructions",
+                    "command": "review",
+                    "rawCommand": "/review",
+                    "detectionStatus": "detected",
+                    "recognitionMode": "hinted_runtime_passthrough",
+                    removed_marker: "2026-05-13",
                 },
             }
         )

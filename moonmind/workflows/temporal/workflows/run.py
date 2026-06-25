@@ -6104,7 +6104,10 @@ class MoonMindRunWorkflow:
             tool_name = str(
                 tool.get("name") or tool.get("id") or ""
             ).strip()
-            tool_version = str(tool.get("version") or "").strip()
+            if "version" in tool:
+                raise ValueError(
+                    "plan node tool.version is not supported; executable tools are identified by name only"
+                )
             node_id = str(node.get("id") or "unknown")
             if self._is_preserved_step(node_id):
                 self._record_preserved_step_terminal_state(node_id, node)
@@ -6502,10 +6505,7 @@ class MoonMindRunWorkflow:
 
                     elif tool_type == "skill":
                         snapshot = await load_registry_snapshot()
-                        definition = snapshot.get_skill(
-                            name=tool_name,
-                            version=tool_version,
-                        )
+                        definition = snapshot.get_skill(name=tool_name)
                         route = DEFAULT_ACTIVITY_CATALOG.resolve_skill(definition)
                         node_options = (
                             node.get("options")
@@ -6520,11 +6520,9 @@ class MoonMindRunWorkflow:
                                 "tool": {
                                     "type": tool_type,
                                     "name": tool_name,
-                                    "version": tool_version,
                                 },
                                 "skill": {
                                     "name": tool_name,
-                                    "version": tool_version,
                                 },
                                 "inputs": node_inputs,
                                 "options": node_options,
@@ -6773,7 +6771,6 @@ class MoonMindRunWorkflow:
                     total_steps=len(ordered_nodes),
                     review_attempt=current_review_attempt,
                     tool_name=tool_name,
-                    tool_version=tool_version,
                     tool_type=tool_type,
                     inputs=node_inputs,
                     execution_result=(
@@ -12041,7 +12038,6 @@ class MoonMindRunWorkflow:
                         "tool": {
                             "type": "agent_runtime",
                             "name": "jules",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "instructions": instruction,

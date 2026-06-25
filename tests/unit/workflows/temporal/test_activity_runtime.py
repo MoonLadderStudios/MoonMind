@@ -263,7 +263,6 @@ def _registry_payload() -> dict:
         "skills": [
             {
                 "name": "repo.run_tests",
-                "version": "1.0.0",
                 "description": "Run tests",
                 "inputs": {
                     "schema": {
@@ -310,7 +309,7 @@ def _plan_payload(*, registry_artifact_id: str, registry_digest: str) -> dict:
         "nodes": [
             {
                 "id": "n1",
-                "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                "skill": {"name": "repo.run_tests"},
                 "inputs": {"repo_ref": "git:org/repo#main"},
             }
         ],
@@ -569,7 +568,7 @@ async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
                     "nodes": [
                         {
                             "id": "n1",
-                            "skill": {"name": "code", "version": "1.0"},
+                            "skill": {"name": "code"},
                             "inputs": {
                                 "instructions": "Do work",
                                 "runtime": {"mode": "codex"},
@@ -592,7 +591,7 @@ async def test_plan_generate_rejects_placeholder_registry_refs(tmp_path: Path):
                     parameters={
                         "repository": "moonladder/moonmind",
                         "task": {
-                            "tool": {"type": "skill", "name": "code", "version": "1.0"},
+                            "tool": {"type": "skill", "name": "code"},
                         },
                     },
                 )
@@ -622,7 +621,7 @@ async def test_plan_generate_legacy_payload_replay(tmp_path: Path):
                     "nodes": [
                         {
                             "id": "n1",
-                            "skill": {"name": "dummy", "version": "1.0"},
+                            "skill": {"name": "dummy"},
                             "inputs": {"arg": "val"}
                         }
                     ],
@@ -663,7 +662,6 @@ async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_
                 "tool": {
                     "type": "skill",
                     "name": "pr-resolver",
-                    "version": "1.0",
                 }
             }
         }
@@ -671,13 +669,14 @@ async def test_default_skill_registry_payload_excludes_auto_when_explicit_skill_
     skills = payload.get("skills")
     assert isinstance(skills, list)
     keyset = {
-        (str(item.get("name")), str(item.get("version")))
+        str(item.get("name"))
         for item in skills
         if isinstance(item, dict)
     }
-    # 'auto' is a placeholder and must not be in the registry when explicit skills are present
-    assert ("auto", "1.0") not in keyset
-    assert ("pr-resolver", "1.0") in keyset
+    # 'auto' is a placeholder and must not be in the registry when explicit skills are present.
+    assert "auto" not in keyset
+    assert "pr-resolver" in keyset
+    assert all("version" not in item for item in skills if isinstance(item, dict))
 
 async def test_default_skill_registry_payload_auto_placeholder_filtered():
     """When 'auto' is the only (placeholder) skill, it must not appear in the registry."""
@@ -686,7 +685,6 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
             "workflow": {
                 "skill": {
                     "name": "auto",
-                    "version": "1.0",
                 }
             }
         }
@@ -694,12 +692,13 @@ async def test_default_skill_registry_payload_auto_placeholder_filtered():
     skills = payload.get("skills")
     assert isinstance(skills, list)
     keyset = {
-        (str(item.get("name")), str(item.get("version")))
+        str(item.get("name"))
         for item in skills
         if isinstance(item, dict)
     }
-    # 'auto' is a placeholder and must not appear in the registry at all
-    assert ("auto", "1.0") not in keyset
+    # 'auto' is a placeholder and must not appear in the registry at all.
+    assert "auto" not in keyset
+    assert all("version" not in item for item in skills if isinstance(item, dict))
 
 @pytest.mark.parametrize(
     "skill_name",
@@ -714,7 +713,6 @@ async def test_default_skill_registry_payload_excludes_agent_only_jira_skill(
                 "tool": {
                     "type": "skill",
                     "name": skill_name,
-                    "version": "1.0",
                 }
             }
         }
@@ -731,14 +729,12 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
                         "tool": {
                             "type": "skill",
                             "name": "container.run_workload",
-                            "version": "1.0",
                         }
                     },
                     {
                         "tool": {
                             "type": "skill",
                             "name": "unreal.run_tests",
-                            "version": "1.0",
                         }
                     },
                 ]
@@ -762,7 +758,7 @@ async def test_default_skill_registry_payload_uses_dood_tool_definitions():
 
 async def test_default_skill_registry_payload_includes_input_sourced_tool_steps():
     payload = _default_skill_registry_payload(
-        parameters={"workflow": {"tool": {"name": "auto", "version": "1.0"}}},
+        parameters={"workflow": {"tool": {"name": "auto"}}},
         inputs={
             "workflow": {
                 "steps": [
@@ -770,7 +766,6 @@ async def test_default_skill_registry_payload_includes_input_sourced_tool_steps(
                         "type": "tool",
                         "tool": {
                             "id": "jira.get_issue",
-                            "version": "1.0.0",
                             "inputs": {"issueKey": "MM-579"},
                         },
                     }
@@ -781,9 +776,8 @@ async def test_default_skill_registry_payload_includes_input_sourced_tool_steps(
 
     skills = payload.get("skills")
     assert isinstance(skills, list)
-    assert [(item["name"], item["version"]) for item in skills] == [
-        ("jira.get_issue", "1.0.0")
-    ]
+    assert [item["name"] for item in skills] == ["jira.get_issue"]
+    assert all("version" not in item for item in skills if isinstance(item, dict))
 
 async def test_default_skill_registry_payload_uses_curated_pentest_tool_definition():
     payload = _default_skill_registry_payload(
@@ -794,7 +788,6 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
                         "tool": {
                             "type": "skill",
                             "name": "security.pentest.run",
-                            "version": "1.0.0",
                         }
                     }
                 ]
@@ -808,7 +801,7 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
     definition = skills[0]
 
     assert definition["name"] == "security.pentest.run"
-    assert definition["version"] == "1.0.0"
+    assert "version" not in definition
     assert definition["type"] == "skill"
     assert definition["executor"] == {
         "activity_type": "security.pentest.execute",
@@ -916,8 +909,8 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
     }
 
     parsed = parse_skill_registry(payload)
-    assert [(tool.name, tool.version) for tool in parsed] == [
-        ("security.pentest.run", "1.0.0")
+    assert [tool.name for tool in parsed] == [
+        "security.pentest.run"
     ]
     assert parsed[0].executor.activity_type == "security.pentest.execute"
 
@@ -930,7 +923,6 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
                         "tool": {
                             "type": "skill",
                             "name": DEPLOYMENT_UPDATE_TOOL_NAME,
-                            "version": DEPLOYMENT_UPDATE_TOOL_VERSION,
                         }
                     }
                 ]
@@ -944,7 +936,7 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
     definition = skills[0]
 
     assert definition["name"] == DEPLOYMENT_UPDATE_TOOL_NAME
-    assert definition["version"] == DEPLOYMENT_UPDATE_TOOL_VERSION
+    assert "version" not in definition
     assert definition["type"] == "skill"
     assert definition["executor"] == {
         "activity_type": "mm.tool.execute",
@@ -964,8 +956,8 @@ async def test_default_skill_registry_payload_uses_curated_deployment_tool_defin
     assert input_schema["properties"]["image"]["additionalProperties"] is False
 
     parsed = parse_skill_registry(payload)
-    assert [(tool.name, tool.version) for tool in parsed] == [
-        (DEPLOYMENT_UPDATE_TOOL_NAME, DEPLOYMENT_UPDATE_TOOL_VERSION)
+    assert [tool.name for tool in parsed] == [
+        DEPLOYMENT_UPDATE_TOOL_NAME
     ]
     assert parsed[0].required_capabilities == (
         "deployment_control",
@@ -984,7 +976,6 @@ async def test_default_skill_registry_payload_routes_jira_preset_brief_to_integr
                         "tool": {
                             "type": "skill",
                             "name": "jira.load_preset_brief",
-                            "version": "1.0",
                         }
                     }
                 ]
@@ -1775,7 +1766,6 @@ async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
                 "tool": {
                     "type": "skill",
                     "name": "security.pentest.run",
-                    "version": "1.0.0",
                 },
                 "inputs": {
                     "pentest_enabled": False,
@@ -3409,8 +3399,8 @@ async def test_plan_generate_accepts_auto_placeholder_without_registry_entries(
                     "model": "MiniMax-M2.7",
                     "instructions": "Move the pagination control next to next/prev buttons.",
                     "task": {
-                        "tool": {"type": "skill", "name": "auto", "version": "1.0"},
-                        "skill": {"name": "auto", "version": "1.0"},
+                        "tool": {"type": "skill", "name": "auto"},
+                        "skill": {"name": "auto"},
                         "runtime": {"mode": "claude", "model": "MiniMax-M2.7"},
                         "instructions": "Move the pagination control next to next/prev buttons.",
                     },
@@ -3464,7 +3454,6 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
                                         "instructions": "Fetch MM-579.",
                                         "tool": {
                                             "id": "jira.get_issue",
-                                            "version": "1.0.0",
                                             "inputs": {"issueKey": "MM-579"},
                                         },
                                     }
@@ -3488,7 +3477,7 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
                     "repository": "MoonLadderStudios/MoonMind",
                     "targetRuntime": "codex_cli",
                     "workflow": {
-                        "tool": {"type": "skill", "name": "auto", "version": "1.0"}
+                        "tool": {"type": "skill", "name": "auto"}
                     },
                 },
             )
@@ -3508,12 +3497,10 @@ async def test_plan_generate_fallback_registry_includes_input_artifact_tool_step
             assert plan_payload["nodes"][0]["tool"] == {
                 "type": "skill",
                 "name": "jira.get_issue",
-                "version": "1.0.0",
             }
-            assert [
-                (item["name"], item["version"])
-                for item in registry_payload["skills"]
-            ] == [("jira.get_issue", "1.0.0")]
+            assert [item["name"] for item in registry_payload["skills"]] == [
+                "jira.get_issue"
+            ]
 
 async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
     tmp_path: Path,
@@ -3543,7 +3530,7 @@ async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
                     "maxAttempts": 3,
                     "stepCount": 1,
                     "workflow": {
-                        "tool": {"type": "skill", "name": "auto", "version": "1.0"},
+                        "tool": {"type": "skill", "name": "auto"},
                         "runtime": {
                             "mode": "claude_code",
                             "model": "claude-opus-4-8",
@@ -3583,7 +3570,6 @@ async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
             assert node["tool"] == {
                 "type": "skill",
                 "name": "security.pentest.run",
-                "version": "1.0",
             }
             assert node["inputs"] == {
                 "target": "https://lab.example.test",
@@ -3595,7 +3581,7 @@ async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
             }
 
 async def test_default_registry_payload_uses_extended_timeouts_for_pr_resolver():
-    payload = _default_registry_skill_payload(name="pr-resolver", version="1.0")
+    payload = _default_registry_skill_payload(name="pr-resolver")
     policies = payload.get("policies", {})
     timeouts = policies.get("timeouts", {})
     assert timeouts.get("start_to_close_seconds") == 7200
@@ -3624,7 +3610,6 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
             dispatcher = SkillActivityDispatcher()
             dispatcher.register_skill(
                 skill_name="repo.run_tests",
-                version="1.0.0",
                 handler=lambda inputs, _context: SkillResult(
                     status="COMPLETED",
                     outputs={"ok": inputs["repo_ref"].endswith("#main")},
@@ -3636,7 +3621,7 @@ async def test_skill_execute_loads_registry_snapshot_from_temporal_artifact(
             result = await activities.mm_skill_execute(
                 invocation_payload={
                     "id": "n1",
-                    "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                    "skill": {"name": "repo.run_tests"},
                     "inputs": {"repo_ref": "git:org/repo#main"},
                 },
                 registry_snapshot_ref=registry_artifact.artifact_id,
@@ -3670,7 +3655,6 @@ async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
             dispatcher = SkillActivityDispatcher()
             dispatcher.register_skill(
                 skill_name="repo.run_tests",
-                version="1.0.0",
                 handler=lambda inputs, _context: SkillResult(
                     status="COMPLETED",
                     outputs={"ok": inputs["repo_ref"].endswith("#main")},
@@ -3684,7 +3668,7 @@ async def test_skill_execute_uses_bound_artifact_service_when_not_passed(
             result = await activities.mm_skill_execute(
                 invocation_payload={
                     "id": "n1",
-                    "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                    "skill": {"name": "repo.run_tests"},
                     "inputs": {"repo_ref": "git:org/repo#main"},
                 },
                 registry_snapshot_ref=registry_artifact.artifact_id,
@@ -4419,7 +4403,6 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
 
     dispatcher.register_skill(
         skill_name="repo.run_tests",
-        version="1.0.0",
         handler=_run_tests_handler,
     )
     snapshot = create_registry_snapshot(
@@ -4457,7 +4440,7 @@ async def test_build_activity_bindings_mm_tool_execute_handler_supports_keyword_
                 {
                     "invocation_payload": {
                         "id": "n1",
-                        "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                        "skill": {"name": "repo.run_tests"},
                         "inputs": {"repo_ref": "git:org/repo#main"},
                     },
                     "registry_snapshot": snapshot,
@@ -4496,7 +4479,6 @@ async def test_mm_tool_execute_preserves_tool_failure_envelope() -> None:
 
     dispatcher.register_skill(
         skill_name="repo.run_tests",
-        version="1.0.0",
         handler=_failing_handler,
     )
     snapshot = create_registry_snapshot(
@@ -4512,7 +4494,6 @@ async def test_mm_tool_execute_preserves_tool_failure_envelope() -> None:
                 "tool": {
                     "type": "skill",
                     "name": "repo.run_tests",
-                    "version": "1.0.0",
                 },
                 "inputs": {"repo_ref": "git:org/repo#main"},
             },

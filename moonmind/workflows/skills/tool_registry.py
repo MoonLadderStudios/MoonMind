@@ -34,9 +34,16 @@ class ToolRegistrySnapshot:
             raise ToolRegistryError(
                 f"Invalid snapshot digest '{self.digest}': expected {REGISTRY_DIGEST_PREFIX}*"
             )
+        seen: set[str] = set()
+        for definition in self.skills:
+            if definition.name in seen:
+                raise ToolRegistryError(
+                    f"Duplicate tool definition for '{definition.name}'"
+                )
+            seen.add(definition.name)
 
     @property
-    def by_key(self) -> dict[tuple[str, str], ToolDefinition]:
+    def by_key(self) -> dict[str, ToolDefinition]:
         return {skill.key: skill for skill in self.skills}
 
     @property
@@ -44,19 +51,19 @@ class ToolRegistrySnapshot:
         return self.skills
 
     @property
-    def tools_by_key(self) -> dict[tuple[str, str], ToolDefinition]:
+    def tools_by_key(self) -> dict[str, ToolDefinition]:
         return self.by_key
 
-    def get_skill(self, *, name: str, version: str) -> ToolDefinition:
+    def get_skill(self, *, name: str) -> ToolDefinition:
         try:
-            return self.by_key[(name, version)]
+            return self.by_key[name]
         except KeyError as exc:
             raise ToolRegistryError(
-                f"Skill '{name}:{version}' was not found in pinned snapshot {self.digest}"
+                f"Tool '{name}' was not found in pinned snapshot {self.digest}"
             ) from exc
 
-    def get_tool(self, *, name: str, version: str) -> ToolDefinition:
-        return self.get_skill(name=name, version=version)
+    def get_tool(self, *, name: str) -> ToolDefinition:
+        return self.get_skill(name=name)
 
     def to_payload(self) -> dict[str, Any]:
         entries = [skill.to_payload() for skill in self.skills]
@@ -68,7 +75,7 @@ class ToolRegistrySnapshot:
         }
 
 def _canonical_registry_doc(skills: tuple[ToolDefinition, ...]) -> dict[str, Any]:
-    ordered = sorted(skills, key=lambda skill: (skill.name, skill.version))
+    ordered = sorted(skills, key=lambda skill: skill.name)
     entries = [skill.to_payload() for skill in ordered]
     return {
         "schema_version": "1.0",
@@ -91,11 +98,11 @@ def validate_tool_registry(skills: tuple[ToolDefinition, ...]) -> None:
     if not skills:
         raise ToolRegistryError("Registry is empty")
 
-    seen: set[tuple[str, str]] = set()
+    seen: set[str] = set()
     for definition in skills:
         if definition.key in seen:
             raise ToolRegistryError(
-                f"Duplicate tool definition for '{definition.name}:{definition.version}'"
+                f"Duplicate tool definition for '{definition.name}'"
             )
         seen.add(definition.key)
 

@@ -101,7 +101,6 @@ def _agent_runtime_step(
         "tool": {
             "type": "agent_runtime",
             "name": "codex_cli",
-            "version": "1.0",
         },
         "inputs": {"instructions": instructions},
         "options": {},
@@ -256,7 +255,6 @@ async def test_run_execution_stage_reads_plan_and_dispatches_steps(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -705,7 +703,6 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run repository tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -743,7 +740,6 @@ async def test_run_execution_stage_rejects_legacy_skill_registry_dispatch(
                             "tool": {
                                 "type": "skill",
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                             },
                             "inputs": {"repo_ref": "git:org/repo#branch"},
                             "options": {},
@@ -830,7 +826,6 @@ async def test_run_execution_stage_skips_empty_registry_for_agent_runtime_only_p
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "claude",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "instructions": "Adjust the dashboard pagination control.",
@@ -944,7 +939,6 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "codex_cli",
-                                "version": "1.0",
                             },
                             "inputs": {"instructions": "Check blockers."},
                         },
@@ -953,7 +947,6 @@ async def test_run_execution_stage_stops_plan_after_structured_blocked_outcome(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "codex_cli",
-                                "version": "1.0",
                             },
                             "inputs": {"instructions": "Implement changes."},
                         },
@@ -1082,8 +1075,7 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
         "skills": [
             {
                 "name": "jira.check_blockers",
-                "version": "1.0",
-                "description": "Check Jira blockers",
+                                "description": "Check Jira blockers",
                 "inputs": {"schema": {"type": "object"}},
                 "outputs": {"schema": {"type": "object"}},
                 "executor": {
@@ -1101,8 +1093,7 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
             },
             {
                 "name": "repo.run_tests",
-                "version": "1.0",
-                "description": "Run tests",
+                                "description": "Run tests",
                 "inputs": {"schema": {"type": "object"}},
                 "outputs": {"schema": {"type": "object"}},
                 "executor": {
@@ -1157,7 +1148,6 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
                             "tool": {
                                 "type": "skill",
                                 "name": "jira.check_blockers",
-                                "version": "1.0",
                             },
                             "inputs": {"targetIssueKey": "MM-686"},
                         },
@@ -1166,7 +1156,6 @@ async def test_run_execution_stage_rejects_legacy_jira_blocker_skill_plan(
                             "tool": {
                                 "type": "skill",
                                 "name": "repo.run_tests",
-                                "version": "1.0",
                             },
                             "inputs": {"instructions": "Continue after blockers."},
                         },
@@ -1410,9 +1399,8 @@ def test_compact_jira_blocker_recheck_payload_strips_large_context() -> None:
             "tool": {
                 "type": "skill",
                 "name": "jira.check_blockers",
-                "version": "1.0",
             },
-            "skill": {"name": "jira.check_blockers", "version": "1.0"},
+            "skill": {"name": "jira.check_blockers"},
             "inputs": {
                 "targetIssueKey": "MM-686",
                 "blockerPreflight": {
@@ -1728,9 +1716,8 @@ async def test_jira_blocker_wait_rechecks_with_compact_payload_and_no_manifest(
             "tool": {
                 "type": "skill",
                 "name": "jira.check_blockers",
-                "version": "1.0",
             },
-            "skill": {"name": "jira.check_blockers", "version": "1.0"},
+            "skill": {"name": "jira.check_blockers"},
             "inputs": {
                 "targetIssueKey": "MM-686",
                 "blockerPreflight": {
@@ -1896,7 +1883,6 @@ async def test_jira_blocker_recheck_applies_retry_floor_for_one_attempt_route(
             "tool": {
                 "type": "skill",
                 "name": "jira.check_blockers",
-                "version": "1.0",
             },
             "inputs": {
                 "targetIssueKey": "MM-686",
@@ -2112,7 +2098,6 @@ async def test_run_execution_stage_skips_registry_read_for_unpatched_histories(
                         "skills": [
                             {
                                 "name": "repo.run_tests",
-                                "version": "1.0.0",
                                 "description": "Run tests",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -2150,7 +2135,6 @@ async def test_run_execution_stage_skips_registry_read_for_unpatched_histories(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "claude",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "instructions": "Adjust the dashboard pagination control.",
@@ -2859,7 +2843,6 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -2897,7 +2880,6 @@ async def test_run_execution_stage_publish_mode_pr_uses_publish_overrides(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "claude",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "claude", "model": "MiniMax-M2.7"},
@@ -2995,7 +2977,6 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -3033,7 +3014,6 @@ async def test_run_execution_stage_publish_mode_pr_defaults_title_from_task_inte
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "claude",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "claude", "model": "MiniMax-M2.7"},
@@ -3131,7 +3111,6 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -3169,7 +3148,6 @@ async def test_run_execution_stage_publish_mode_pr_prefers_pushed_branch_for_nat
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "codex_cli",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "codex_cli", "model": "gpt-5.4"},
@@ -3447,7 +3425,6 @@ async def test_run_execution_stage_fail_fast_raises_provider_failure_summary(
                         "tool": {
                             "type": "agent_runtime",
                             "name": "codex_cli",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "instructions": "Resolve PR",
@@ -3596,7 +3573,6 @@ async def test_run_execution_stage_fail_fast_raises_agent_runtime_failure_summar
                         "tool": {
                             "type": "agent_runtime",
                             "name": "codex_cli",
-                            "version": "1.0",
                         },
                         "inputs": {
                             "instructions": "Resolve PR",
@@ -4230,7 +4206,6 @@ async def test_run_execution_stage_jira_implement_not_required_skips_native_pr(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "claude",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "claude"},
@@ -4358,7 +4333,6 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -4396,7 +4370,6 @@ async def test_run_execution_stage_moonspec_verify_blocks_native_pr_creation(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "codex"},
@@ -4565,7 +4538,6 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "codex"},
@@ -4579,7 +4551,6 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "codex"},
@@ -4597,7 +4568,6 @@ async def test_run_execution_stage_moonspec_verify_uses_remaining_remediation_bu
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "codex"},
@@ -4759,7 +4729,6 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
                         "skills": [
                             {
                                 "name": "jules",
-                                "version": "1.0.0",
                                 "description": "Jules",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -4797,7 +4766,6 @@ async def test_run_execution_stage_publish_mode_pr_jules_skips_native_pr(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "jules",
-                                "version": "1.0.0",
                             },
                             "inputs": {"repo_ref": "git:org/repo#branch", "runtime": {"mode": "jules"}},
                             "options": {},
@@ -4883,7 +4851,6 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
                         "skills": [
                             {
                                 "name": "jules",
-                                "version": "1.0.0",
                                 "description": "Jules",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -4921,7 +4888,6 @@ async def test_run_execution_stage_jules_pr_extracts_url_from_diagnostics_ref(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "jules",
-                                "version": "1.0.0",
                             },
                             "inputs": {
                                 "repo_ref": "git:org/repo#branch",
@@ -5022,7 +4988,6 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -5060,7 +5025,6 @@ async def test_run_execution_stage_non_jules_agent_with_session_id_creates_nativ
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "claude", "model": "MiniMax-M2.7"},
@@ -5150,7 +5114,6 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
                         "skills": [
                             {
                                 "name": "auto",
-                                "version": "1.0",
                                 "description": "Auto",
                                 "inputs": {"schema": {"type": "object"}},
                                 "outputs": {"schema": {"type": "object"}},
@@ -5188,7 +5151,6 @@ async def test_run_execution_stage_skips_native_pr_after_push_failure(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "claude"},
@@ -5281,7 +5243,6 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "claude"},
@@ -5294,7 +5255,6 @@ async def test_run_execution_stage_stops_after_publish_lease_conflict(
                             "tool": {
                                 "type": "agent_runtime",
                                 "name": "auto",
-                                "version": "1.0",
                             },
                             "inputs": {
                                 "runtime": {"mode": "claude"},

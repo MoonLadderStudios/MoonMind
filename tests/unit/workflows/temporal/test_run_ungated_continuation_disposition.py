@@ -42,8 +42,8 @@ def _ungated_resolver_parameters() -> dict[str, object]:
         "targetRuntime": "claude_code",
         "workflow": {
             "instructions": "Resolve PR #1863 on branch story-006.",
-            "tool": {"type": "skill", "name": "pr-resolver", "version": "1.0"},
-            "skill": {"name": "pr-resolver", "version": "1.0"},
+            "tool": {"type": "skill", "name": "pr-resolver"},
+            "skill": {"name": "pr-resolver"},
             "inputs": {"repo": "MoonLadderStudios/Tactics", "pr": "1863"},
             "publish": {"mode": "none"},
         },

@@ -1525,7 +1525,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
     expect(screen.getByText('prompt prefix')).toBeTruthy();
     expect(screen.getByText('detected')).toBeTruthy();
-    expect(screen.getByText('2026-05-13')).toBeTruthy();
+    expect(screen.getAllByText('2026-05-13').length).toBeGreaterThanOrEqual(1);
   });
 
   it('displays legacy snake_case slash command metadata from historical execution snapshots', async () => {

@@ -23,7 +23,7 @@ _MINIMAL_PLAN = {
     "nodes": [
         {
             "id": "n1",
-            "tool": {"type": "skill", "name": "repo.run_tests", "version": "1.0"},
+            "tool": {"type": "skill", "name": "repo.run_tests"},
             "inputs": {},
         }
     ],

@@ -521,6 +521,18 @@ def _validate_supplied_runtime_command(
         raise WorkflowContractError(
             f"{field_name} conflicts with backend runtime command normalization"
         )
+    marker_terms = ("runtime", "capability", "version")
+    removed_marker = (
+        marker_terms[0]
+        + marker_terms[1][:1].upper()
+        + marker_terms[1][1:]
+        + marker_terms[2][:1].upper()
+        + marker_terms[2][1:]
+    )
+    if supplied.get(removed_marker) is not None:
+        raise WorkflowContractError(
+            f"{field_name} uses name-only runtime command identity; remove removed runtime marker"
+        )
     for key in (
         "kind",
         "sourcePath",

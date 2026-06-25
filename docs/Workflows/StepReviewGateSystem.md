@@ -115,7 +115,7 @@ When `approval_policy` is absent or `enabled` is `false`, behavior is identical 
   "step_index": 1,
   "total_steps": 5,
   "review_attempt": 1,
-  "tool": { "type": "skill", "name": "repo.apply_patch", "version": "2.1.0" },
+  "tool": { "type": "skill", "name": "repo.apply_patch" },
   "inputs": { "...original step inputs..." },
   "execution_result": {
     "status": "SUCCEEDED",
@@ -298,7 +298,7 @@ You are a code review agent for MoonMind. Your job is to evaluate whether a
 workflow step achieved its intended outcome.
 
 ## Step Information
-- Tool: {tool_name} v{tool_version}
+- Tool: {tool_name}
 - Step {step_index} of {total_steps} in plan "{plan_title}"
 
 ## Step Inputs (what the step was asked to do)

@@ -1858,7 +1858,7 @@ def test_step_ledger_contract_models_serialize_using_public_aliases() -> None:
                     "logicalStepId": "prepare",
                     "order": 1,
                     "title": "Prepare workspace",
-                    "tool": {"type": "skill", "name": "repo.prepare", "version": "1"},
+                    "tool": {"type": "skill", "name": "repo.prepare"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -1996,6 +1996,125 @@ def test_create_task_shaped_execution_rejects_missing_workflow_payload(
     assert (
         response.json()["detail"]["message"]
         == "Workflow-shaped Temporal submit requests require payload.workflow."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_workflow_execution_rejects_task_template_version(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Run MM-916 preset submission.",
+                    "taskTemplate": {
+                        "slug": "jira-implement",
+                        "version": "1",
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "payload.workflow.taskTemplate uses slug/scope only; remove version or presetVersion."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_workflow_execution_rejects_applied_template_version(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Run MM-916 applied preset submission.",
+                    "appliedStepTemplates": [
+                        {
+                            "slug": "jira-implement",
+                            "version": "1",
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "payload.workflow.appliedStepTemplates[0] uses slug/scope only; remove version or presetVersion."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_workflow_execution_rejects_tool_version(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Run MM-916 tool submission.",
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                        "version": "1",
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "payload.workflow.tool uses name-only identity; remove version."
+    )
+    service.create_execution.assert_not_awaited()
+
+
+def test_create_workflow_execution_rejects_skill_version(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "instructions": "Run MM-916 skill submission.",
+                    "skill": {
+                        "name": "pr-resolver",
+                        "version": "1",
+                    },
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]["message"]
+        == "payload.workflow.skill uses name-only identity; remove version."
     )
     service.create_execution.assert_not_awaited()
 
@@ -2692,7 +2811,6 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_p
                     "appliedStepTemplates": [
                         {
                             "slug": "jira-orchestrate",
-                            "version": "1",
                             "stepIds": ["tpl:jira-orchestrate:1:01"],
                         }
                     ],
@@ -3555,14 +3673,13 @@ def test_create_task_shaped_execution_maps_instructions_and_tool_for_temporal(
     assert initial_parameters["instructions"] == "Fix failing Temporal run."
     assert initial_parameters["workflow"]["tool"]["type"] == "skill"
     assert initial_parameters["workflow"]["tool"]["name"] == "pr-resolver"
-    assert initial_parameters["workflow"]["tool"]["version"] == "1.0"
+    assert "version" not in initial_parameters["workflow"]["tool"]
     assert initial_parameters["workflow"]["inputs"] == {
         "repo": "MoonLadderStudios/MoonMind",
         "pr": "42",
     }
     assert initial_parameters["workflow"]["skill"] == {
         "name": "pr-resolver",
-        "version": "1.0",
     }
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr",
@@ -4212,7 +4329,6 @@ def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
                     ],
                     "taskTemplate": {
                         "slug": "jira-implement",
-                        "version": "1",
                         "scope": "global",
                     },
                     "presetSchedule": {
@@ -4225,7 +4341,6 @@ def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
                     "appliedStepTemplates": [
                         {
                             "slug": "jira-implement",
-                            "version": "1",
                             "stepIds": ["step-1"],
                         }
                     ],
@@ -4241,7 +4356,6 @@ def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
     task = initial_parameters["workflow"]
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1",
         "scope": "global",
     }
     assert task["presetSchedule"] == {
@@ -4370,14 +4484,12 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
                     "appliedStepTemplates": [
                         {
                             "slug": "root-preset",
-                            "version": "1",
                             "stepIds": [
                                 "tpl:root-preset:1:01",
                                 "tpl:child-preset:1:01",
                             ],
                             "composition": {
                                 "slug": "root-preset",
-                                "version": "1",
                                 "path": ["root-preset"],
                                 "stepIds": [
                                     "tpl:root-preset:1:01",
@@ -4386,7 +4498,6 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
                                 "includes": [
                                     {
                                         "slug": "child-preset",
-                                        "version": "1",
                                         "alias": "checks",
                                         "path": [
                                             "root-preset",
@@ -4620,7 +4731,6 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
-                        "version": "1.0",
                     },
                 }
             },
@@ -4651,7 +4761,6 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
-                        "version": "1.0",
                     },
                     "git": {"startingBranch": "feature/resolve-pr"},
                 }
@@ -4704,7 +4813,6 @@ def _pentest_workflow_payload(
                 "tool": {
                     "type": "skill",
                     "name": "security.pentest.run",
-                    "version": "1",
                     "inputs": safe_inputs,
                 },
                 "steps": [
@@ -4715,7 +4823,6 @@ def _pentest_workflow_payload(
                         "tool": {
                             "type": "skill",
                             "name": "security.pentest.run",
-                            "version": "1",
                             "inputs": step_safe_inputs,
                         },
                     }
@@ -4759,7 +4866,6 @@ def test_create_task_shaped_execution_accepts_authorized_pentest_roles(
     assert workflow["tool"] == {
         "type": "skill",
         "name": "security.pentest.run",
-        "version": "1",
         "inputs": {
             "target": "https://lab.example.test",
             "scope_artifact_ref": "art_scope_valid",
@@ -4992,7 +5098,7 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
                 "workflow": {
                     "title": "feature/example",
                     "instructions": "Resolve PR #42 on branch `feature/example`.",
-                    "skill": {"name": "pr-resolver", "version": "1.0"},
+                    "skill": {"name": "pr-resolver"},
                     "inputs": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
                 },
             },
@@ -5029,7 +5135,7 @@ def test_create_task_shaped_execution_rejects_caller_inheritance_for_user(
                 "workflow": {
                     "title": "feature/example",
                     "instructions": "Resolve PR #42 on branch `feature/example`.",
-                    "skill": {"name": "pr-resolver", "version": "1.0"},
+                    "skill": {"name": "pr-resolver"},
                     "inputs": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
                 },
             },
@@ -5356,12 +5462,11 @@ def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
                     ],
                     "storyOutput": {"mode": "jira"},
                     "authoredPresets": [
-                        {"slug": "jira-orchestrate", "version": "2026-05-08"}
+                        {"slug": "jira-orchestrate"}
                     ],
                     "appliedStepTemplates": [
                         {
                             "slug": "jira-implementation",
-                            "version": "2026-05-08",
                             "stepIds": ["step-1"],
                         }
                     ],
@@ -5384,13 +5489,10 @@ def test_create_task_shaped_execution_preserves_canonical_mm627_task_shape(
     assert task["publish"]["mode"] == "pr"
     assert task["dependsOn"] == ["mm:dep-1"]
     assert task["storyOutput"] == {"mode": "jira"}
-    assert task["authoredPresets"] == [
-        {"slug": "jira-orchestrate", "version": "2026-05-08"}
-    ]
+    assert task["authoredPresets"] == [{"slug": "jira-orchestrate"}]
     assert task["appliedStepTemplates"] == [
         {
             "slug": "jira-implementation",
-            "version": "2026-05-08",
             "stepIds": ["step-1"],
         }
     ]
@@ -5785,7 +5887,6 @@ def test_create_task_shaped_execution_derives_pr_resolver_title_from_tool_inputs
                     "tool": {
                         "type": "skill",
                         "name": "PR-Resolver",
-                        "version": "1.0",
                         "inputs": {"startingBranch": "feature/from-tool-inputs"},
                     },
                 }
@@ -7124,7 +7225,6 @@ def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> N
             "instructions": "Use the existing Jira Orchestrate workflow.",
             "taskTemplate": {
                 "slug": "jira-orchestrate",
-                "version": "1",
             },
         },
     }
@@ -7144,12 +7244,10 @@ def test_serialize_execution_prefers_preset_slug_over_child_skill_display() -> N
             "instructions": "Run Jira Implement for MM-901.",
             "taskTemplate": {
                 "slug": "jira-implement",
-                "version": "1",
             },
             "tool": {
                 "type": "skill",
                 "name": "jira-issue-updater",
-                "version": "1",
             },
             "skill": {
                 "id": "jira-issue-updater",
@@ -7158,13 +7256,12 @@ def test_serialize_execution_prefers_preset_slug_over_child_skill_display() -> N
             "appliedStepTemplates": [
                 {
                     "slug": "jira-implement",
-                    "version": "1",
-                    "stepIds": ["tpl:jira-implement:1:08"],
+                    "stepIds": ["tpl:jira-implement:08"],
                 }
             ],
             "steps": [
                 {
-                    "id": "tpl:jira-implement:1:08",
+                    "id": "tpl:jira-implement:08",
                     "title": "Finalize Jira status",
                     "instructions": "Update Jira with implementation status.",
                     "skill": {
@@ -7192,8 +7289,7 @@ def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -
             "appliedStepTemplates": [
                 {
                     "slug": "jira-orchestrate",
-                    "version": "1",
-                    "stepIds": ["tpl:jira-orchestrate:1"],
+                    "stepIds": ["tpl:jira-orchestrate"],
                 }
             ],
         },
@@ -7214,13 +7310,11 @@ def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> 
             "appliedStepTemplates": [
                 {
                     "slug": "initial-preset",
-                    "version": "1",
-                    "stepIds": ["tpl:initial-preset:1"],
+                    "stepIds": ["tpl:initial-preset"],
                 },
                 {
                     "slug": "latest-preset",
-                    "version": "1",
-                    "stepIds": ["tpl:latest-preset:1"],
+                    "stepIds": ["tpl:latest-preset"],
                 },
             ],
         },
@@ -7980,7 +8074,7 @@ def test_get_execution_steps_returns_latest_run_ledger() -> None:
                     "logicalStepId": "run-tests",
                     "order": 1,
                     "title": "Run tests",
-                    "tool": {"type": "skill", "name": "repo.run_tests", "version": "1"},
+                    "tool": {"type": "skill", "name": "repo.run_tests"},
                     "dependsOn": [],
                     "status": "running",
                     "waitingReason": None,
@@ -8071,7 +8165,6 @@ def test_get_execution_steps_enriches_missing_agent_run_ids_once() -> None:
                     if tool_type == "agent_runtime"
                     else "repo.run_tests"
                 ),
-                "version": "1",
             },
             "dependsOn": [],
             "status": "awaiting_external",
@@ -8243,7 +8336,7 @@ def test_get_execution_step_executions_returns_bounded_manifest_history() -> Non
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -8332,7 +8425,7 @@ def test_get_execution_step_executions_sanitizes_failed_attempt_summary() -> Non
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "failed",
                     "waitingReason": None,
@@ -8411,7 +8504,7 @@ def test_get_execution_step_execution_returns_bounded_detail_refs() -> None:
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -8518,7 +8611,7 @@ def test_get_execution_step_executions_degraded_older_ref_uses_per_ref_ordinal()
                     "logicalStepId": "implement",
                     "order": 1,
                     "title": "Implement",
-                    "tool": {"type": "skill", "name": "jira-implement", "version": "1"},
+                    "tool": {"type": "skill", "name": "jira-implement"},
                     "dependsOn": [],
                     "status": "succeeded",
                     "waitingReason": None,
@@ -8800,7 +8893,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
                     "id": "fetch-issue",
                     "title": "Fetch issue",
                     "type": "tool",
-                    "tool": {"id": "jira.get_issue", "version": "1"},
+                    "tool": {"id": "jira.get_issue"},
                 },
                 {
                     "id": "implement",
@@ -8840,7 +8933,6 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     assert payload["steps"][0]["tool"] == {
         "type": "tool",
         "name": "jira.get_issue",
-        "version": "1",
     }
     assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
     assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]
@@ -8866,7 +8958,7 @@ def test_get_execution_steps_fallback_prefers_structured_step_order(
                     "id": "fetch-issue",
                     "title": "Fetch issue",
                     "type": "tool",
-                    "tool": {"id": "jira.get_issue", "version": "1"},
+                    "tool": {"id": "jira.get_issue"},
                 },
                 {
                     "id": "implement",

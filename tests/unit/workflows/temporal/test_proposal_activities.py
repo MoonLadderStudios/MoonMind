@@ -237,7 +237,7 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                     "workflow": {
                         "instructions": "Investigate flaky tests",
                         "skill": {"id": "auto", "args": {}},
-                        "tool": {"type": "skill", "name": "auto", "version": "1.0"},
+                        "tool": {"type": "skill", "name": "auto"},
                         "skills": {"sets": ["runtime-quality"]},
                         "authoredPresets": [
                             {
@@ -255,7 +255,6 @@ class TestProposalGenerate(unittest.IsolatedAsyncioTestCase):
                                 "tool": {
                                     "type": "skill",
                                     "name": "fix-proposal",
-                                    "version": "1.0",
                                 },
                                 "skills": {"include": [{"name": "runtime-quality"}]},
                                 "source": {
@@ -558,7 +557,6 @@ class TestProposalSubmit(unittest.IsolatedAsyncioTestCase):
                                     "tool": {
                                         "type": "skill",
                                         "name": "fix-comments",
-                                        "version": "1.0",
                                     },
                                 }
                             ],

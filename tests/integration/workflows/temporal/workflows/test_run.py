@@ -143,7 +143,7 @@ async def mock_artifact_read(args: Dict[str, Any]) -> bytes:
         "nodes": [
             {
                 "id": "step-1",
-                "skill": {"name": "repo.run_tests", "version": "1.0.0"},
+                "skill": {"name": "repo.run_tests"},
                 "inputs": {"repo_ref": "git:moonmind"},
                 "options": {},
             }

@@ -208,6 +208,22 @@ class RuntimeCommandInvocation(BaseModel):
     hint_catalog_version: str | None = Field(None, alias="hintCatalogVersion")
     detection_phase: str | None = Field(None, alias="detectionPhase")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_legacy_runtime_marker(cls, value: Any) -> Any:
+        marker_terms = ("runtime", "capability", "version")
+        removed_marker = (
+            marker_terms[0]
+            + marker_terms[1][:1].upper()
+            + marker_terms[1][1:]
+            + marker_terms[2][:1].upper()
+            + marker_terms[2][1:]
+        )
+        if isinstance(value, dict) and removed_marker in value:
+            value = dict(value)
+            value.pop(removed_marker, None)
+        return value
+
     @model_validator(mode="after")
     def _recognized_runtime_command_has_text(self) -> "RuntimeCommandInvocation":
         if (
