@@ -72,7 +72,6 @@ _NON_REPOSITORY_SIDE_EFFECT_SKILLS = frozenset(
 )
 _REPOSITORY_PUBLISH_COMPATIBLE_SIDE_EFFECT_SKILLS = frozenset({"jira-issue-updater"})
 _JIRA_ORCHESTRATE_PRESET_SLUGS = frozenset({"jira-orchestrate"})
-_RUNTIME_COMMAND_CAPABILITY_VERSION = "2026-05-13"
 _RUNTIME_COMMAND_HINT_CATALOG_VERSION = "2026-05-13"
 _SLASH_COMMAND_PASSTHROUGH_RUNTIMES = frozenset(
     {"codex", "codex_cli", "claude", "claude_code", "gemini_cli", "universal"}
@@ -367,7 +366,6 @@ def build_runtime_command_preview_config() -> dict[str, Any]:
             ),
         }
     return {
-        "capabilityVersion": _RUNTIME_COMMAND_CAPABILITY_VERSION,
         "hintCatalogVersion": _RUNTIME_COMMAND_HINT_CATALOG_VERSION,
         "runtimes": runtimes,
         "knownRuntimeCommandHints": {
@@ -502,7 +500,6 @@ def _build_runtime_command_metadata(
             "hintStatus": hint_status,
             "recognitionMode": recognition_mode,
             "requiresRuntimeRecognition": passthrough,
-            "runtimeCapabilityVersion": _RUNTIME_COMMAND_CAPABILITY_VERSION,
             "hintCatalogVersion": _RUNTIME_COMMAND_HINT_CATALOG_VERSION,
             "detectionPhase": "submit",
         }

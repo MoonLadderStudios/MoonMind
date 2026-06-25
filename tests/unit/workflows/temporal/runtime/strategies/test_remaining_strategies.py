@@ -82,7 +82,6 @@ def _runtime_command(
         hintStatus=hint_status,
         recognitionMode=recognition_mode,
         requiresRuntimeRecognition=requires_runtime_recognition,
-        runtimeCapabilityVersion="2026-05-13",
         hintCatalogVersion="2026-05-13",
         detectionPhase="submit",
     )

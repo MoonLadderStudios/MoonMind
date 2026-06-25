@@ -151,6 +151,8 @@ PY
 fi
 
 if [[ "$RUN_PYTHON_TESTS" == "1" ]]; then
+    "$PYTHON_BIN" "$SCRIPT_DIR/check_removed_capability_semantics.py"
+
     PYTEST_DURATIONS="${MOONMIND_PYTEST_DURATIONS:-25}"
     PYTEST_REPORT_ARGS=(--durations="$PYTEST_DURATIONS")
     if [[ -n "${MOONMIND_PYTEST_JUNITXML:-}" ]]; then

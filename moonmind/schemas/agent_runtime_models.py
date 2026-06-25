@@ -205,9 +205,6 @@ class RuntimeCommandInvocation(BaseModel):
     requires_runtime_recognition: bool = Field(
         False, alias="requiresRuntimeRecognition"
     )
-    runtime_capability_version: str | None = Field(
-        None, alias="runtimeCapabilityVersion"
-    )
     hint_catalog_version: str | None = Field(None, alias="hintCatalogVersion")
     detection_phase: str | None = Field(None, alias="detectionPhase")
 

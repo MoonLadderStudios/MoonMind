@@ -167,7 +167,6 @@ type RuntimeCommandInvocation = {
     | "runtime_does_not_support_slash_commands";
 
   requiresRuntimeRecognition: boolean;
-  runtimeCapabilityVersion?: string;
   hintCatalogVersion?: string;
 
   detectionPhase: string;
@@ -190,7 +189,6 @@ Example:
   "hintStatus": "hinted",
   "recognitionMode": "hinted_runtime_passthrough",
   "requiresRuntimeRecognition": true,
-  "runtimeCapabilityVersion": "2026-05-13",
   "hintCatalogVersion": "2026-05-13",
   "detectionPhase": "submit"
 }
@@ -239,7 +237,6 @@ The authoritative workflow input snapshot should include both authored instructi
       "hintStatus": "hinted",
       "recognitionMode": "hinted_runtime_passthrough",
       "requiresRuntimeRecognition": true,
-      "runtimeCapabilityVersion": "2026-05-13",
       "hintCatalogVersion": "2026-05-13",
   "detectionPhase": "submit"
     }
@@ -271,7 +268,6 @@ For multi-step drafts, the command may appear at the workflow level or step leve
         "hintStatus": "hinted",
         "recognitionMode": "hinted_runtime_passthrough",
         "requiresRuntimeRecognition": true,
-        "runtimeCapabilityVersion": "2026-05-13",
         "hintCatalogVersion": "2026-05-13",
   "detectionPhase": "submit"
       }
@@ -550,7 +546,7 @@ When loading an existing workflow in edit mode:
 
 Rerun uses the original authored instructions and original command metadata.
 
-If the runtime capability catalog or known-command hints have changed since the original run, MoonMind may display a warning, but exact rerun should preserve the original workflow configuration unless the user chooses edit-for-rerun. Persisted command metadata should include the runtime capability version and hint catalog version used at submit time so audits can explain whether a rerun is using the same pass-through assumptions or merely the same authored text.
+If known-command hints have changed since the original run, MoonMind may display a warning, but exact rerun should preserve the original workflow configuration unless the user chooses edit-for-rerun. Persisted command metadata should include the hint catalog version used at submit time so audits can explain whether a rerun is using the same hint assumptions or merely the same authored text.
 
 ## Backend Behavior
 
@@ -727,7 +723,6 @@ Every run with a runtime command should record:
   "sourcePath": "objective.instructions",
   "hintStatus": "hinted",
   "recognitionMode": "hinted_runtime_passthrough",
-  "runtimeCapabilityVersion": "2026-05-13",
   "hintCatalogVersion": "2026-05-13"
 }
 ```

@@ -311,7 +311,6 @@ interface RuntimeCommandHint {
 }
 
 interface RuntimeCommandPreviewConfig {
-  capabilityVersion?: string;
   hintCatalogVersion?: string;
   runtimes?: Record<string, RuntimeCommandCapability>;
   knownRuntimeCommandHints?: Record<string, RuntimeCommandHint>;
@@ -1573,7 +1572,6 @@ function deriveRuntimeCommandPreview({
   const versionWarnings =
     source === "snapshot"
       ? buildRuntimeCommandVersionWarnings(storedRuntimeCommand, {
-          capabilityVersion: config.capabilityVersion,
           hintCatalogVersion: config.hintCatalogVersion,
         })
       : [];

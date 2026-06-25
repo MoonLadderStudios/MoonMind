@@ -820,7 +820,6 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "hintStatus": "hinted",
             "recognitionMode": "hinted_runtime_passthrough",
             "requiresRuntimeRecognition": True,
-            "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
             "detectionPhase": "submit",
         }

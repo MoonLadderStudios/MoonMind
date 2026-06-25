@@ -24,7 +24,6 @@ def _historical_snapshot() -> dict[str, object]:
                 "rawCommand": "/review",
                 "targetRuntime": "codex_cli",
                 "recognitionMode": "hinted_runtime_passthrough",
-                "runtimeCapabilityVersion": "2026-05-12",
                 "hintCatalogVersion": "2026-05-12",
             },
         },
@@ -42,7 +41,6 @@ def test_artifact_backed_snapshot_preserves_edit_and_detail_command_metadata() -
     assert command["command"] == "review"
     assert command["targetRuntime"] == "codex_cli"
     assert command["recognitionMode"] == "hinted_runtime_passthrough"
-    assert command["runtimeCapabilityVersion"] == "2026-05-12"
     assert command["hintCatalogVersion"] == "2026-05-12"
 
 
@@ -57,11 +55,10 @@ def test_exact_and_edit_for_rerun_keep_source_command_metadata_immutable() -> No
         **draft,
         "instructions": "/review\nCheck the branch with extra focus.",
         "currentWarnings": [
-            "Runtime command capability version changed from 2026-05-12 to 2026-05-13."
+            "Runtime command hint catalog version changed from 2026-05-12 to 2026-05-13."
         ],
     }
 
-    assert command["runtimeCapabilityVersion"] == "2026-05-12"
     assert command["hintCatalogVersion"] == "2026-05-12"
     assert editable_copy["currentWarnings"]
     assert draft["instructions"] == "/review\nCheck the branch."
@@ -75,7 +72,6 @@ def test_runtime_command_audit_events_are_operator_readable_and_secret_safe() ->
             "sourcePath": "objective.instructions",
             "hintStatus": "opaque",
             "recognitionMode": "runtime_passthrough",
-            "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
             "token": "g" + "hp_1234567890abcdef",
         },

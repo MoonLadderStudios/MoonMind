@@ -151,7 +151,6 @@ def test_authoritative_snapshot_records_task_runtime_command_metadata() -> None:
         "hintStatus": "hinted",
         "recognitionMode": "hinted_runtime_passthrough",
         "requiresRuntimeRecognition": True,
-        "runtimeCapabilityVersion": "2026-05-13",
         "hintCatalogVersion": "2026-05-13",
         "detectionPhase": "submit",
     }
@@ -183,7 +182,7 @@ def test_authoritative_snapshot_records_step_runtime_command_metadata() -> None:
     )
 
 
-def test_authoritative_snapshot_preserves_task_and_step_runtime_command_versions() -> None:
+def test_authoritative_snapshot_preserves_task_and_step_runtime_command_hint_versions() -> None:
     snapshot = build_authoritative_workflow_input_snapshot(
         task_payload={
             "instructions": "/review\nCheck this branch for regressions.",
@@ -200,10 +199,8 @@ def test_authoritative_snapshot_preserves_task_and_step_runtime_command_versions
     objective_command = snapshot["objective"]["runtimeCommand"]
     step_command = snapshot["steps"][0]["runtimeCommand"]
 
-    assert objective_command["runtimeCapabilityVersion"] == "2026-05-13"
     assert objective_command["hintCatalogVersion"] == "2026-05-13"
     assert objective_command["detectionPhase"] == "submit"
-    assert step_command["runtimeCapabilityVersion"] == "2026-05-13"
     assert step_command["hintCatalogVersion"] == "2026-05-13"
     assert step_command["detectionPhase"] == "submit"
 

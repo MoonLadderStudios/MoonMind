@@ -160,7 +160,6 @@ def test_agent_execution_request_accepts_runtime_command_metadata() -> None:
                 "invocation": "/project:review",
             },
             "requiresRuntimeRecognition": True,
-            "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
             "detectionPhase": "submit",
         },
@@ -189,7 +188,6 @@ def test_runtime_command_render_result_supports_failure_and_prompt_prefix() -> N
         hintStatus="hinted",
         recognitionMode="hinted_runtime_passthrough",
         requiresRuntimeRecognition=True,
-        runtimeCapabilityVersion="2026-05-13",
         hintCatalogVersion="2026-05-13",
         detectionPhase="submit",
     )

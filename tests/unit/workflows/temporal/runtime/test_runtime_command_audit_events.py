@@ -14,7 +14,6 @@ def test_runtime_command_audit_events_include_detected_rendered_and_passthrough(
             "sourcePath": "objective.instructions",
             "hintStatus": "hinted",
             "recognitionMode": "hinted_runtime_passthrough",
-            "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
         },
         render_result={
@@ -31,7 +30,6 @@ def test_runtime_command_audit_events_include_detected_rendered_and_passthrough(
             "sourcePath": "objective.instructions",
             "hintStatus": "hinted",
             "recognitionMode": "hinted_runtime_passthrough",
-            "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
         },
         {
@@ -73,7 +71,6 @@ def test_runtime_command_audit_events_redact_secret_like_values() -> None:
             "sourcePath": "objective.instructions",
             "hintStatus": "hinted",
             "recognitionMode": "hinted_runtime_passthrough",
-            "runtimeCapabilityVersion": "2026-05-13",
             "hintCatalogVersion": "2026-05-13",
             "token": "github" + "_pat_1234567890abcdef",
             "password": "password" + "=super-secret",
