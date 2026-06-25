@@ -53,6 +53,10 @@ When writing code that interacts with skills:
 - Executable tools are identified by **tool-name**.
 - Do not introduce internal ID aliases, display-name matching, provider-specific synonyms, or compatibility translation tables for these identities. Rename by updating every caller, test, mock, seed, and doc reference in the same change.
 
+## Pull Request Preparation
+
+- Create non-draft pull requests by default. Use a draft PR only when the user or task explicitly requests a draft.
+
 ## Testing Instructions
 
 ### Test Taxonomy
