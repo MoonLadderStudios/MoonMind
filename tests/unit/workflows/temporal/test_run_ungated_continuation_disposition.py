@@ -223,6 +223,52 @@ def test_typed_gated_continuation_records_bounded_evidence() -> None:
     }
 
 
+def test_typed_merge_automation_continuation_exposes_parent_disposition() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "Required checks are still running.",
+                }
+            }
+        },
+    )
+
+    assert workflow._merge_automation_disposition == "reenter_gate"
+    assert workflow._publish_context["mergeAutomationDisposition"] == "reenter_gate"
+
+
+def test_gated_continuation_state_is_cleared_when_next_step_has_none() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "Required checks are still running.",
+                }
+            }
+        },
+    )
+    workflow._record_execution_context(
+        node_id="summarize",
+        execution_result={"outputs": {"message": "done"}},
+    )
+
+    assert workflow._gated_continuation_request is None
+    assert workflow._merge_automation_disposition is None
+    assert "gatedContinuation" not in workflow._publish_context
+    assert "mergeAutomationDisposition" not in workflow._publish_context
+
+
 def test_unsupported_typed_gated_continuation_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

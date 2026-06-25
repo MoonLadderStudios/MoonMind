@@ -9528,20 +9528,38 @@ class MoonMindRunWorkflow:
             outputs.get("diagnostics_ref") or outputs.get("diagnosticsRef"),
             max_chars=200,
         )
+        gated_continuation = self._normalize_gated_continuation_request(
+            outputs,
+            node_id=node_id,
+        )
+        self._gated_continuation_request = gated_continuation
+        if gated_continuation:
+            self._publish_context["gatedContinuation"] = gated_continuation
+        else:
+            self._publish_context.pop("gatedContinuation", None)
         merge_automation_disposition = self._coerce_text(
             outputs.get("mergeAutomationDisposition")
             or outputs.get("merge_automation_disposition"),
             max_chars=80,
         )
-        if merge_automation_disposition:
-            self._merge_automation_disposition = merge_automation_disposition
-        gated_continuation = self._normalize_gated_continuation_request(
-            outputs,
-            node_id=node_id,
-        )
-        if gated_continuation:
-            self._gated_continuation_request = gated_continuation
-            self._publish_context["gatedContinuation"] = gated_continuation
+        if (
+            not merge_automation_disposition
+            and gated_continuation
+            and not gated_continuation.get("validationError")
+            and gated_continuation.get("gateType") == "merge_automation"
+        ):
+            typed_action = self._normalize_gate_type(
+                self._coerce_text(gated_continuation.get("action"), max_chars=80)
+            )
+            if typed_action in MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS:
+                merge_automation_disposition = typed_action
+        self._merge_automation_disposition = merge_automation_disposition or None
+        if self._merge_automation_disposition:
+            self._publish_context["mergeAutomationDisposition"] = (
+                self._merge_automation_disposition
+            )
+        else:
+            self._publish_context.pop("mergeAutomationDisposition", None)
         merge_automation_head_sha = self._coerce_text(
             outputs.get("headSha")
             or outputs.get("head_sha")
