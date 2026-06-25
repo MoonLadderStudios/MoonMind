@@ -1153,6 +1153,159 @@ h1 {
   gap: 0.75rem;
 }
 
+.schedules-detail-page {
+  min-width: 0;
+}
+
+.schedules-detail-page .page-meta a {
+  color: rgb(var(--mm-accent));
+  text-decoration: none;
+}
+
+.schedules-detail-page .page-meta a:hover {
+  text-decoration: underline;
+}
+
+.schedules-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.schedules-detail-main,
+.schedules-detail-panel,
+.schedules-config-readonly {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.schedules-detail-panel {
+  padding: 0.9rem;
+}
+
+.schedules-panel-heading {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.schedules-panel-heading h3,
+.schedules-panel-heading p {
+  margin: 0;
+}
+
+.schedules-panel-heading h3 {
+  color: rgb(var(--mm-ink));
+  font-size: 1rem;
+}
+
+.schedules-panel-heading p {
+  color: rgb(var(--mm-muted));
+  font-size: 0.86rem;
+}
+
+.schedules-facts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.schedules-facts-rail .schedules-facts-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.schedules-fact {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+  padding-block: 0.3rem;
+}
+
+.schedules-fact span {
+  color: rgb(var(--mm-muted));
+  font-size: 0.76rem;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.schedules-fact strong {
+  min-width: 0;
+  color: rgb(var(--mm-ink));
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.schedules-edit-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.schedules-edit-form label {
+  display: grid;
+  gap: 0.32rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.schedules-edit-form input,
+.schedules-edit-form textarea {
+  width: 100%;
+  min-width: 0;
+}
+
+.schedules-edit-form textarea {
+  min-height: 5.5rem;
+  resize: vertical;
+}
+
+.schedules-edit-form .schedules-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.schedules-edit-form .schedules-checkbox input {
+  width: auto;
+}
+
+.schedules-config-readonly details {
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid rgb(var(--mm-border) / 0.58);
+  border-radius: 0.55rem;
+  background: rgb(var(--mm-panel) / 0.58);
+}
+
+.schedules-config-readonly summary {
+  cursor: pointer;
+  color: rgb(var(--mm-ink));
+  font-weight: 750;
+}
+
+.schedules-config-readonly pre {
+  max-width: 100%;
+  overflow: auto;
+  margin: 0.65rem 0 0;
+  color: rgb(var(--mm-ink));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.schedules-not-found {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 42rem;
+  padding: 1rem;
+}
+
+.schedules-not-found h2,
+.schedules-not-found p {
+  margin: 0;
+}
+
 .schedules-primary-cell,
 .schedules-secondary-cell {
   display: grid;
@@ -1300,6 +1453,7 @@ h1 {
 }
 
 .schedules-edit-form input,
+.schedules-edit-form select,
 .schedules-edit-form textarea {
   width: 100%;
   border: 1px solid rgb(var(--mm-border));
@@ -1307,6 +1461,17 @@ h1 {
   background: rgb(var(--mm-panel));
   color: rgb(var(--mm-ink));
   font: inherit;
+}
+
+.schedules-edit-form input[aria-invalid="true"],
+.schedules-edit-form textarea[aria-invalid="true"] {
+  border-color: rgb(var(--mm-danger) / 0.78);
+}
+
+.schedules-field-error {
+  color: color-mix(in srgb, rgb(var(--mm-danger)) 76%, rgb(var(--mm-ink)) 24%);
+  font-size: 0.78rem;
+  font-weight: 640;
 }
 
 .schedules-checkbox-label {
