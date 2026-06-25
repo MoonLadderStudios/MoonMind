@@ -37,7 +37,6 @@ def _digest(payload: bytes) -> str:
 def _skill_entry(name: str, content_ref: str, payload: bytes) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=name,
-        version="1.0.0",
         content_ref=content_ref,
         content_digest=_digest(payload),
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),
@@ -433,6 +432,33 @@ async def test_load_resolved_skillset_round_trips() -> None:
     loaded = await load_resolved_skillset(_StaticArtifactService(payloads), "snap-ref")
     assert loaded.snapshot_id == "snap-load"
     assert [entry.skill_name for entry in loaded.skills] == ["pr-resolver"]
+
+
+@pytest.mark.asyncio
+async def test_load_resolved_skillset_strips_legacy_version_metadata() -> None:
+    payload = {
+        "snapshot_id": "snap-legacy",
+        "resolved_at": datetime.now(tz=UTC).isoformat(),
+        "skills": [
+            {
+                "skill_name": "pr-resolver",
+                "version": "1.0.0",
+                "provenance": {
+                    "source_kind": "built_in",
+                    "original_version": "1.0.0",
+                },
+            }
+        ],
+    }
+
+    loaded = await load_resolved_skillset(
+        _StaticArtifactService({"snap-ref": json.dumps(payload).encode("utf-8")}),
+        "snap-ref",
+    )
+
+    assert loaded.snapshot_id == "snap-legacy"
+    assert loaded.skills[0].skill_name == "pr-resolver"
+    assert loaded.skills[0].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
 
 
 @pytest.mark.asyncio

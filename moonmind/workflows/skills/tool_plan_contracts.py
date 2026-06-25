@@ -374,16 +374,17 @@ class ToolDefinition:
 @dataclass(frozen=True, slots=True)
 class StepSkillSelectorExact:
     name: str
-    version: str | None = None
 
     def __post_init__(self) -> None:
-        _ensure_non_empty(self.name, field_name="node.skills.include[].name")
+        name = _ensure_non_empty(self.name, field_name="node.skills.include[].name")
+        if ":" in name:
+            raise ContractValidationError(
+                "invalid_plan",
+                "node.skills.include names must not include semantic versions",
+            )
 
     def to_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"name": self.name}
-        if self.version is not None:
-            payload["version"] = self.version
-        return payload
+        return {"name": self.name}
 
 @dataclass(frozen=True, slots=True)
 class StepSkillSelectors:
@@ -1021,11 +1022,14 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
                 name = str(item.get("name") or "").strip()
                 if not name:
                     raise ContractValidationError("invalid_plan", "node.skills.include[].name is required")
-                version = item.get("version")
+                if "version" in item:
+                    raise ContractValidationError(
+                        "invalid_plan",
+                        "node.skills.include entries must not include semantic versions",
+                    )
                 parsed_include.append(
                     StepSkillSelectorExact(
                         name=name,
-                        version=val if (val := str(version or "").strip()) else None
                     )
                 )
 

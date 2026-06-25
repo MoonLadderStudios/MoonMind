@@ -3591,14 +3591,12 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
                         "minSeverityForMoonMind": "medium",
                         "defaultRuntime": "gemini_cli",
                     },
-                    "skills": {
-                        "sets": ["deployment-default", "proposal-quality"],
-                        "include": [
-                            {"name": "moonmind-doc-writer", "version": "2.3.0"}
-                        ],
-                        "exclude": ["legacy-proposer"],
-                        "materializationMode": "hybrid",
-                    },
+                        "skills": {
+                            "sets": ["deployment-default", "proposal-quality"],
+                            "include": [{"name": "moonmind-doc-writer"}],
+                            "exclude": ["legacy-proposer"],
+                            "materializationMode": "hybrid",
+                        },
                     "steps": [
                         {
                             "id": "review",
@@ -3630,7 +3628,7 @@ def test_create_task_shaped_execution_preserves_proposal_and_skill_intent(
     }
     assert initial_parameters["workflow"]["skills"] == {
         "sets": ["deployment-default", "proposal-quality"],
-        "include": [{"name": "moonmind-doc-writer", "version": "2.3.0"}],
+        "include": [{"name": "moonmind-doc-writer"}],
         "exclude": ["legacy-proposer"],
         "materializationMode": "hybrid",
     }

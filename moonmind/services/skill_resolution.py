@@ -83,7 +83,6 @@ class BuiltInSkillLoader(SkillLoader):
         results = _scan_for_skills(
             self.skills_root,
             AgentSkillSourceKind.BUILT_IN,
-            version="1.0.0",
             skip_names={"local"},
         )
         discovered = {entry.skill_name for entry in results}
@@ -104,7 +103,6 @@ class BuiltInSkillLoader(SkillLoader):
             results.append(
                 ResolvedSkillEntry(
                     skill_name=name,
-                    version="1.0.0",
                     provenance=AgentSkillProvenance(
                         source_kind=AgentSkillSourceKind.BUILT_IN
                     ),
@@ -185,7 +183,6 @@ class DeploymentSkillLoader(SkillLoader):
                 results.append(
                     ResolvedSkillEntry(
                         skill_name=definition.slug,
-                        version=latest_version.version_string,
                         format=AgentSkillFormat(latest_version.format.value),
                         content_ref=latest_version.artifact_ref,
                         content_digest=latest_version.content_digest,
@@ -204,7 +201,6 @@ def _scan_for_skills(
     skills_dir: Path,
     source_kind: AgentSkillSourceKind,
     *,
-    version: str = "latest",
     skip_names: set[str] | None = None,
 ) -> list[ResolvedSkillEntry]:
     results = []
@@ -218,7 +214,6 @@ def _scan_for_skills(
             results.append(
                 ResolvedSkillEntry(
                     skill_name=item.name,
-                    version=version,
                     provenance=AgentSkillProvenance(
                         source_kind=source_kind,
                         source_path=str(item),
@@ -579,18 +574,11 @@ class AgentSkillResolver:
 
         excluded_names = {str(name).strip() for name in selector.exclude if str(name).strip()}
 
-        # Pinning strict check
         for include_entry in selector.include:
             if include_entry.name in excluded_names:
                 raise ValueError(
                     f"selected skill '{include_entry.name}' cannot also be excluded"
                 )
-            if include_entry.version:
-                resolved = resolved_map.get(include_entry.name)
-                if not resolved or resolved.version != include_entry.version:
-                    raise ValueError(
-                        f"Could not resolve pinned version '{include_entry.name}@{include_entry.version}' across any active sources"
-                    )
 
         requested_names = {entry.name for entry in selector.include}
         # Note: Future implementation for `sets` would expand skill names here.

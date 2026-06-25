@@ -45,7 +45,6 @@ def test_materialize_run_skill_workspace_creates_cache_and_links(tmp_path):
         skills=(
             ResolvedSkill(
                 skill_name="speckit",
-                version="1.0.0",
                 source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
@@ -83,7 +82,6 @@ def test_materialize_run_skill_workspace_rejects_hash_mismatch(tmp_path):
         skills=(
             ResolvedSkill(
                 skill_name="speckit",
-                version="1.0.0",
                 source_uri=(source_root / "speckit").resolve().as_uri(),
                 content_hash="deadbeef",
             ),
@@ -111,7 +109,6 @@ def test_materialize_run_skill_workspace_requires_skill_md(tmp_path):
         skills=(
             ResolvedSkill(
                 skill_name="speckit",
-                version="1.0.0",
                 source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
@@ -137,8 +134,8 @@ def test_materialize_run_skill_workspace_rejects_duplicate_names(tmp_path):
         run_id="run-4",
         selection_source="job_override",
         skills=(
-            ResolvedSkill(skill_name="speckit", version="1", source_uri=uri),
-            ResolvedSkill(skill_name="speckit", version="2", source_uri=uri),
+            ResolvedSkill(skill_name="speckit", source_uri=uri),
+            ResolvedSkill(skill_name="speckit", source_uri=uri),
         ),
     )
 
@@ -164,7 +161,6 @@ def test_materialize_run_skill_workspace_does_not_touch_global_codex_config(tmp_
         skills=(
             ResolvedSkill(
                 skill_name="speckit",
-                version="1.0.0",
                 source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
@@ -202,7 +198,6 @@ def test_materialize_run_skill_workspace_rejects_incomplete_cache_entry(
         skills=(
             ResolvedSkill(
                 skill_name="speckit",
-                version="1.0.0",
                 source_uri=(source_root / "speckit").resolve().as_uri(),
             ),
         ),
@@ -376,7 +371,6 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
 
     entry = ResolvedSkill(
         skill_name="speckit",
-        version="1.0.0",
         source_uri="git+https://github.com/example/repo.git",
     )
 
@@ -388,7 +382,6 @@ def test_resolve_source_root_uses_git_clone_end_of_options_separator(
 def test_resolve_source_root_rejects_git_ext_transport(tmp_path):
     entry = ResolvedSkill(
         skill_name="speckit",
-        version="1.0.0",
         source_uri="git+ext::sh -c echo pwned",
     )
 
@@ -408,7 +401,6 @@ def test_resolve_source_root_rejects_git_private_host(tmp_path, monkeypatch):
     )
     entry = ResolvedSkill(
         skill_name="speckit",
-        version="1.0.0",
         source_uri="git+https://internal.example/repo.git",
     )
 

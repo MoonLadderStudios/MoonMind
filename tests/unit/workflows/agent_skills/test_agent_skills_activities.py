@@ -101,7 +101,6 @@ async def test_resolve_skills_activity_persists_file_backed_skill_content(
             skills=[
                 ResolvedSkillEntry(
                     skill_name="pr-resolver",
-                    version="1.0.0",
                     provenance=AgentSkillProvenance(
                         source_kind=AgentSkillSourceKind.BUILT_IN,
                         source_path=str(skill_dir),

@@ -100,22 +100,21 @@ def test_resolve_run_skill_selection_prefers_job_override(skills_mirror):
     resolved = resolve_run_skill_selection(
         run_id="run-2",
         context={
-            "skill_selection": ["docs-lint:1.2.0"],
-            "queue_skill_selection": ["speckit:1.0.0"],
-            "skill_sources": {"docs-lint:1.2.0": "file:///tmp/custom/docs-lint"},
+            "skill_selection": ["docs-lint"],
+            "queue_skill_selection": ["speckit"],
+            "skill_sources": {"docs-lint": "file:///tmp/custom/docs-lint"},
         },
     )
 
     assert resolved.selection_source == "job_override"
     assert [skill.skill_name for skill in resolved.skills] == ["docs-lint"]
-    assert resolved.skills[0].version == "1.2.0"
     assert resolved.skills[0].source_uri == "file:///tmp/custom/docs-lint"
 
 def test_resolve_run_skill_selection_rejects_duplicates(skills_mirror):
     with pytest.raises(SkillResolutionError, match="Duplicate skill name"):
         resolve_run_skill_selection(
             run_id="run-3",
-            context={"skill_selection": ["docs-lint:1", "docs-lint:2"]},
+            context={"skill_selection": ["docs-lint", "docs-lint"]},
         )
 
 @pytest.mark.parametrize("skill_name", ["../evil", "a/b", "a\\b", "..", "bad name"])
@@ -123,14 +122,27 @@ def test_resolve_run_skill_selection_rejects_unsafe_names(skills_mirror, skill_n
     with pytest.raises(SkillResolutionError, match="Invalid skill name"):
         resolve_run_skill_selection(
             run_id="run-invalid",
-            context={"skill_selection": [f"{skill_name}:1.0.0"]},
+            context={"skill_selection": [skill_name]},
+        )
+
+def test_resolve_run_skill_selection_rejects_versioned_inputs(skills_mirror):
+    with pytest.raises(SkillResolutionError, match="semantic versions"):
+        resolve_run_skill_selection(
+            run_id="run-versioned",
+            context={"skill_selection": ["docs-lint:1.2.0"]},
+        )
+
+    with pytest.raises(SkillResolutionError, match="semantic version fields"):
+        resolve_run_skill_selection(
+            run_id="run-version-field",
+            context={"skill_selection": [{"name": "docs-lint", "version": "1.2.0"}]},
         )
 
 def test_resolve_run_skill_selection_falls_back_to_legacy_root(skills_mirror):
     _, legacy = skills_mirror
     resolved = resolve_run_skill_selection(
         run_id="run-4",
-        context={"skill_selection": ["legacy:0.1.0"]},
+        context={"skill_selection": ["legacy"]},
     )
 
     assert resolved.skills[0].source_uri == (legacy / "legacy").resolve().as_uri()
@@ -163,7 +175,7 @@ def test_resolve_run_skill_selection_resolves_jira_issue_updater_repo_skill(
 
     resolved = resolve_run_skill_selection(
         run_id="run-jira-updater",
-        context={"skill_selection": ["jira-issue-updater:local"]},
+        context={"skill_selection": ["jira-issue-updater"]},
     )
 
     assert resolved.skills[0].skill_name == "jira-issue-updater"
@@ -187,7 +199,7 @@ def test_resolve_run_skill_selection_requires_source(monkeypatch, tmp_path):
     with pytest.raises(SkillResolutionError, match="No source URI resolved"):
         resolve_run_skill_selection(
             run_id="run-5",
-            context={"skill_selection": ["missing:1.0.0"]},
+            context={"skill_selection": ["missing"]},
         )
 
 def test_list_available_skill_names_permissive_mode_discovers_local_roots(
@@ -382,4 +394,3 @@ def test_project_root_fallback_handles_shallow_paths(monkeypatch):
     monkeypatch.setattr(resolver_module, "__file__", "/x.py", raising=False)
 
     assert resolver_module._project_root() == Path("/")
-

@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""
@@ -30,9 +30,16 @@ class SkillSelectorEntry(BaseModel):
     """An explicit include rule for a single skill."""
 
     name: str
-    version: str | None = None
     
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("name")
+    @classmethod
+    def _reject_versioned_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if ":" in normalized:
+            raise ValueError("skill selector names must not include semantic versions")
+        return normalized
 
 class SkillSelector(BaseModel):
     """Selection intent expressing which agent skills should be active."""
@@ -48,17 +55,15 @@ class AgentSkillProvenance(BaseModel):
     """Metadata explaining where a resolved skill instance came from."""
 
     source_kind: AgentSkillSourceKind
-    original_version: str | None = None
     source_path: str | None = None
     skill_set_name: str | None = None
     
     model_config = ConfigDict(extra="forbid")
 
 class ResolvedSkillEntry(BaseModel):
-    """An individual agent skill and the immutable version selected for a run."""
+    """An individual agent skill selected for a run."""
 
     skill_name: str
-    version: str | None = None
     format: AgentSkillFormat = AgentSkillFormat.MARKDOWN
     content_ref: str | None = None
     content_digest: str | None = None
@@ -114,7 +119,6 @@ SkillsOnDemandDeniedCode = Literal[
     "invalid_request",
     "snapshot_not_found",
     "skill_not_found",
-    "version_not_found",
     "policy_denied",
     "runtime_incompatible",
     "tool_policy_denied",
@@ -179,7 +183,6 @@ class SkillCatalogSearchResult(BaseModel):
     name: str
     title: str | None = None
     description: str | None = None
-    latest_version: str | None = None
     source_kind: AgentSkillSourceKind
     supported_runtimes: list[str] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
@@ -221,9 +224,16 @@ class SkillsOnDemandRequestedSkill(BaseModel):
     """A single on-demand Skill requested by a managed runtime."""
 
     name: str
-    version: str | None = None
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("name")
+    @classmethod
+    def _reject_versioned_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if ":" in normalized:
+            raise ValueError("requested skill names must not include semantic versions")
+        return normalized
 
 
 class SkillsOnDemandRequest(BaseModel):

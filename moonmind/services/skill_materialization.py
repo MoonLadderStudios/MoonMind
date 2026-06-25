@@ -13,12 +13,6 @@ from moonmind.schemas.agent_skill_models import (
     RuntimeMaterializationMode,
     RuntimeSkillMaterialization,
 )
-from moonmind.workflows.skills.workspace_links import (
-    SkillWorkspaceLinks,
-    SkillWorkspaceError,
-    ensure_shared_skill_links,
-    is_moonmind_owned_projection,
-)
 
 _CANONICAL_ALIAS = ".agents/skills"
 
@@ -149,6 +143,11 @@ class AgentSkillMaterializer:
                 ) from ex
 
             if self.project_adapter_aliases:
+                from moonmind.workflows.skills.workspace_links import (
+                    SkillWorkspaceError,
+                    ensure_shared_skill_links,
+                )
+
                 try:
                     require_agents_link = not self._is_repo_authored_skills_dir(alias_dir)
                     require_gemini_link = self._runtime_needs_gemini_projection(runtime_id)
@@ -176,6 +175,8 @@ class AgentSkillMaterializer:
                         self._projection_error_message(alias_dir, cause=str(ex))
                     ) from ex
             else:
+                from moonmind.workflows.skills.workspace_links import SkillWorkspaceLinks
+
                 alias_skipped_reason = "adapter_alias_projection_disabled"
                 visible_path = active_dir
                 links = SkillWorkspaceLinks(
@@ -273,7 +274,6 @@ class AgentSkillMaterializer:
             "content_ref": entry.content_ref,
             "name": entry.skill_name,
             "source_kind": entry.provenance.source_kind.value,
-            "version": entry.version,
         }
         if entry.required_by:
             payload["required_by"] = entry.required_by
@@ -309,6 +309,8 @@ class AgentSkillMaterializer:
 
     @staticmethod
     def _preflight_projection(alias_dir: Path, *, active_dir: Path) -> None:
+        from moonmind.workflows.skills.workspace_links import is_moonmind_owned_projection
+
         if not alias_dir.exists() and not alias_dir.is_symlink():
             return
         if alias_dir.is_symlink() and is_moonmind_owned_projection(

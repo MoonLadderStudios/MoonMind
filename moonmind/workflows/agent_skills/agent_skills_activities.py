@@ -252,15 +252,12 @@ class AgentSkillsActivities:
 
         try:
             info = activity.info()
-            active_versions = {
-                skill.skill_name: skill.version for skill in active_snapshot.skills
-            }
+            active_names = {skill.skill_name for skill in active_snapshot.skills}
             addition_selector = SkillSelector(
                 include=[
-                    SkillSelectorEntry(name=name, version=version)
-                    for name, version in requested
-                    if name not in active_versions
-                    or (version is not None and active_versions[name] != version)
+                    SkillSelectorEntry(name=name)
+                    for name in requested
+                    if name not in active_names
                 ]
             )
             context = SkillResolutionContext(
@@ -433,28 +430,16 @@ class AgentSkillsActivities:
     ) -> ResolvedSkillSet:
         active_by_name = {skill.skill_name: skill for skill in active_snapshot.skills}
         merged = dict(active_by_name)
-        requested_versions = {}
+        requested_names = set()
         for requested_skill in request.requested_skills:
             name = requested_skill.name.strip()
-            version = (
-                requested_skill.version.strip()
-                if requested_skill.version is not None
-                else None
-            )
-            if name not in requested_versions:
-                requested_versions[name] = version
+            if name:
+                requested_names.add(name)
         for skill in resolved_additions.skills:
             active_skill = active_by_name.get(skill.skill_name)
-            requested_version = requested_versions.get(skill.skill_name)
             if (
                 active_skill is not None
-                and (
-                    skill.skill_name not in requested_versions
-                    or (
-                        requested_version is None
-                        or requested_version == active_skill.version
-                    )
-                )
+                and skill.skill_name not in requested_names
             ):
                 continue
             merged[skill.skill_name] = skill.model_copy(
@@ -496,8 +481,6 @@ class AgentSkillsActivities:
 
     def _skills_on_demand_resolution_code(self, message: str) -> str:
         lowered = message.lower()
-        if "pinned version" in lowered:
-            return "version_not_found"
         if "runtime" in lowered:
             return "runtime_incompatible"
         if "policy" in lowered or "forbidden" in lowered:
@@ -536,8 +519,6 @@ class AgentSkillsActivities:
 
         for skill in resolved_skillset.skills:
             lines.append(f"## Skill: {skill.skill_name}")
-            if skill.version:
-                lines.append(f"Version: {skill.version}")
             if skill.provenance.source_kind:
                 lines.append(f"Source: {skill.provenance.source_kind.value}")
                 
