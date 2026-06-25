@@ -151,3 +151,13 @@ Implementation note (deviation from the original draft): preset `version` labels
 ## Suggested execution order
 
 Phase 1 (doctrine + guidance reconciliation) → Phase 2 (skill text) → Phase 3 (new skill) → Phase 4 (presets + handler) → Phase 5 (tests). Phases 1–3 are mergeable independently; Phase 4 should land with Phase 5 in one change.
+
+---
+
+## MM-909 self-conformance and authority-conflict record
+
+MM-909 (source design MM-900; DESIGN-REQ-019, DESIGN-REQ-020) ran the self-conformance guardrail over the docs introduced by the MoonSpec Documentation Architecture Standard effort. The full review is recorded in [`MoonSpecDocsArchitectureConformanceReview.md`](MoonSpecDocsArchitectureConformanceReview.md).
+
+- **Self-conformance review:** All non-goal conditions PASS — no new canonical doc is framed as migration/checklist/rollout/status; no imperative plan is presented as canonical architecture; no ADRs/decision logs/`decisions/` directories are introduced; module directories are not forced to be DDD bounded contexts; no hard-blocking validation or heavyweight ceremony is added; `specs/` is not treated as durable documentation; owner/module ownership surfaces are preserved.
+- **Docs validation:** `tools/check_terminology.sh` (141 files) and `python tools/verify_workflow_terminology.py --mode all` both PASS. No markdownlint/remark/link-check tooling is configured in this repository; recorded as unavailable rather than silently skipped.
+- **Unresolved documentation-authority conflicts:** **None.** `docs/DocumentationArchitecture.md` defers to `docs/Workflows/MoonSpecDocumentModel.md` for base classes and to the constitution for the desired-state/migration-backlog separation, so it creates no second authority. Any future conflict must be recorded here or in the MM-909 issue comments.
