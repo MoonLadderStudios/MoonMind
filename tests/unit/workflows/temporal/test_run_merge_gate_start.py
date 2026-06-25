@@ -303,6 +303,40 @@ def test_build_merge_gate_start_payload_carries_structured_jira_issue_key() -> N
     assert payload["mergeAutomationConfig"]["postMergeJira"]["enabled"] is True
 
 
+def test_merge_automation_uses_snake_case_applied_template_jira_key() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(
+        {
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True},
+            "workflow": {
+                "title": "Run Jira Implement for MM-904.",
+                "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
+                "instructions": (
+                    "Run Jira Implement for MM-904. Preserve source issue "
+                    "MM-900 traceability."
+                ),
+                "applied_step_templates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.1.0",
+                        "input_mapping": {
+                            "jira_issue_key": "MM-904",
+                            "constraints": "Preserve source issue MM-900 traceability.",
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    assert request is not None
+    assert request["jiraIssueKey"] == "MM-904"
+    assert request["postMergeJira"]["enabled"] is True
+    assert request["postMergeJira"]["required"] is True
+
+
 def test_merge_automation_request_does_not_guess_ambiguous_jira_issue_key() -> None:
     workflow = MoonMindRunWorkflow()
 

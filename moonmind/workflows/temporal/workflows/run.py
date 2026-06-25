@@ -10419,15 +10419,19 @@ class MoonMindRunWorkflow:
             nested = task_payload.get(key)
             if isinstance(nested, Mapping):
                 mappings.append(nested)
-        templates = task_payload.get("appliedStepTemplates")
-        if isinstance(templates, Sequence) and not isinstance(
-            templates, (str, bytes)
+        for templates in (
+            task_payload.get("appliedStepTemplates"),
+            task_payload.get("applied_step_templates"),
         ):
+            if not isinstance(templates, Sequence) or isinstance(
+                templates, (str, bytes)
+            ):
+                continue
             for template in templates:
                 if not isinstance(template, Mapping):
                     continue
                 mappings.append(template)
-                for key in ("inputs", "input", "inputMapping"):
+                for key in ("inputs", "input", "inputMapping", "input_mapping"):
                     nested = template.get(key)
                     if isinstance(nested, Mapping):
                         mappings.append(nested)
