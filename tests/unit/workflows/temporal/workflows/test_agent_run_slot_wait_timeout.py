@@ -14,6 +14,7 @@ import textwrap
 from moonmind.workflows.temporal.workflows.agent_run import (
     MANAGER_SLOT_WAIT_INSPECTION_PATCH_ID,
     MoonMindAgentRun,
+    RunStatus,
     _SLOT_WAIT_TIMEOUT_SECONDS,
     _SLOT_WAIT_MAX_RESETS,
 )
@@ -95,6 +96,25 @@ class TestSlotWaitRetryBehavior:
             "the slot_assigned_event wait_condition so that awaiting time "
             "does not count against the execution timeout"
         )
+
+    def test_pause_gate_blocks_launch_after_slot_acquisition(self):
+        """A paused AgentRun must not cross from slot assignment into launch."""
+        source = inspect.getsource(MoonMindAgentRun.run)
+        slot_wait_index = source.index("slot_assigned_event.is_set()")
+        pause_gate_index = source.index("await workflow.wait_condition(lambda: not self._paused)")
+        launch_index = source.index("self.run_status = RunStatus.launching")
+
+        assert slot_wait_index < pause_gate_index < launch_index
+
+    def test_pause_resume_update_toggles_agent_run_overlay(self):
+        run = MoonMindAgentRun()
+        run.run_status = RunStatus.awaiting_slot
+
+        run.pause()
+        assert run._paused is True
+
+        run.resume()
+        assert run._paused is False
 
     def test_slot_wait_constants_are_sane(self):
         """Verify the slot wait constants have reasonable values."""

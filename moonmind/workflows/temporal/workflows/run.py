@@ -13965,9 +13965,10 @@ class MoonMindRunWorkflow:
         return None
 
     @workflow.update(name="Pause")
-    def pause(self) -> None:
+    async def pause(self) -> None:
         self._paused = True
         self._waiting_reason = "Paused by user"
+        await self._forward_lifecycle_update_to_active_child("Pause")
         self._update_search_attributes()
 
     @pause.validator
@@ -13981,6 +13982,7 @@ class MoonMindRunWorkflow:
     async def resume(self, payload: dict[str, Any] | None = None) -> None:
         self._paused = False
         self._waiting_reason = None
+        await self._forward_lifecycle_update_to_active_child("Resume")
         await self._forward_operator_message_to_active_child(payload)
         if self._awaiting_external:
             self._recovery_requested = True
@@ -14178,6 +14180,24 @@ class MoonMindRunWorkflow:
         await handle.signal("operator_message", {"message": message})
         self._summary = "Operator clarification sent to Jules."
         self._update_memo()
+        return True
+
+    async def _forward_lifecycle_update_to_active_child(self, update_name: str) -> bool:
+        if not self._active_agent_child_workflow_id:
+            return False
+        handle = workflow.get_external_workflow_handle(
+            self._active_agent_child_workflow_id
+        )
+        try:
+            await handle.execute_update(update_name)
+        except Exception as exc:
+            self._get_logger().warning(
+                "Failed to forward %s update to active child workflow %s: %s",
+                update_name,
+                self._active_agent_child_workflow_id,
+                exc,
+            )
+            return False
         return True
 
     @staticmethod

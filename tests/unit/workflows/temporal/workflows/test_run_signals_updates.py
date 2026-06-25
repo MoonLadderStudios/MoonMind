@@ -1,5 +1,5 @@
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -364,6 +364,29 @@ async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypa
         {"message": "Please rename it to Provider Profiles."},
     )
     assert workflow_instance._recovery_requested is True
+
+@pytest.mark.asyncio
+async def test_pause_resume_forwards_lifecycle_updates_to_active_child(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:agent:implement"
+    workflow_instance._active_agent_id = "codex"
+
+    mock_handle = type("MockHandle", (), {"execute_update": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+
+    await workflow_instance.pause()
+    await workflow_instance.resume()
+
+    assert workflow_instance._paused is False
+    assert mock_handle.execute_update.await_args_list == [
+        call("Pause"),
+        call("Resume"),
+    ]
 
 @pytest.mark.asyncio
 async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):
