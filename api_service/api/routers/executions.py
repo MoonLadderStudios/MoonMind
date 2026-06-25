@@ -145,6 +145,7 @@ from moonmind.workflows.executions.execution_contract import (
     is_non_repository_side_effect_skill,
     is_self_managed_publish_skill,
     resolve_publish_mode_for_skill,
+    strip_workflow_capability_identity_versions,
 )
 from api_service.api.schemas import CreateJobRequest
 from moonmind.workflows import get_temporal_artifact_service
@@ -4946,37 +4947,10 @@ def _invalid_workflow_request(message: str) -> HTTPException:
         },
     )
 
-def _reject_submit_version_identity(task_payload: Mapping[str, Any]) -> None:
-    task_template = task_payload.get("taskTemplate") or task_payload.get(
-        "task_template"
-    )
-    if isinstance(task_template, Mapping) and (
-        task_template.get("version") is not None
-        or task_template.get("presetVersion") is not None
-    ):
-        raise _invalid_workflow_request(
-            "payload.workflow.taskTemplate uses slug/scope only; remove version or presetVersion."
-        )
-
-    applied_templates = task_payload.get("appliedStepTemplates") or task_payload.get(
-        "applied_step_templates"
-    )
-    if isinstance(applied_templates, list):
-        for index, item in enumerate(applied_templates):
-            if not isinstance(item, Mapping):
-                continue
-            if item.get("version") is not None or item.get("presetVersion") is not None:
-                raise _invalid_workflow_request(
-                    "payload.workflow.appliedStepTemplates"
-                    f"[{index}] uses slug/scope only; remove version or presetVersion."
-                )
-
-    for field_name in ("tool", "skill"):
-        selected = task_payload.get(field_name)
-        if isinstance(selected, Mapping) and selected.get("version") is not None:
-            raise _invalid_workflow_request(
-                f"payload.workflow.{field_name} uses name-only identity; remove version."
-            )
+def _strip_submit_version_identity(task_payload: dict[str, Any]) -> None:
+    sanitized = strip_workflow_capability_identity_versions(task_payload)
+    task_payload.clear()
+    task_payload.update(sanitized)
 
 def _validation_error_code(message: str) -> str:
     if message.startswith("Dependency not found:"):
@@ -7071,7 +7045,7 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             f"{shape_name} Temporal submit requests require {required_field}."
         )
-    _reject_submit_version_identity(task_payload)
+    _strip_submit_version_identity(task_payload)
 
     # Resolve child-agent runtime inheritance before downstream normalization
     # consumes targetRuntime / task.runtime fields.  When inheritance applies,
@@ -7153,7 +7127,7 @@ async def _create_execution_from_workflow_request(
             session=session,
             user_id=user.id,
         )
-        _reject_submit_version_identity(task_payload)
+        _strip_submit_version_identity(task_payload)
 
     (
         objective_attachment_refs,

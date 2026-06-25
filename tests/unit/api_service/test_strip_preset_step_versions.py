@@ -2,8 +2,8 @@
 
 Covers both the pure sanitization helper and the real expansion boundary: a
 preset whose persisted steps still carry the now-removed version fields (as the
-327 migration copied them verbatim from ``preset_versions``) must expand once
-the version fields are stripped.
+327 migration copied them verbatim from ``preset_versions``) must expand without
+surfacing those fields.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from api_service.db.models import (
 from api_service.services.presets.catalog import (
     ExpandOptions,
     PresetCatalogService,
-    PresetValidationError,
 )
 
 migration = importlib.import_module(
@@ -211,18 +210,18 @@ async def test_expansion_repaired_after_stripping_persisted_versions(tmp_path) -
             )
             await session.commit()
 
-        # Before cleanup: expansion is rejected because of the include version.
+        # Before cleanup: expansion tolerates the legacy include version.
         async with maker() as session:
-            with pytest.raises(PresetValidationError) as exc_info:
-                await PresetCatalogService(session).expand_template(
-                    slug="parent-preset",
-                    scope="global",
-                    scope_ref=None,
-                    inputs={},
-                    context={},
-                    options=ExpandOptions(should_enforce_step_limit=True),
-                )
-            assert "remove version" in str(exc_info.value)
+            expanded = await PresetCatalogService(session).expand_template(
+                slug="parent-preset",
+                scope="global",
+                scope_ref=None,
+                inputs={},
+                context={},
+                options=ExpandOptions(should_enforce_step_limit=True),
+            )
+            assert len(expanded["steps"]) == 2
+            assert "version" not in expanded["appliedTemplate"]
 
         # Apply the migration's sanitization to the persisted steps.
         async with maker() as session:

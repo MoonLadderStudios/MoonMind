@@ -1973,10 +1973,6 @@ def _iter_requested_registry_tools(
             continue
         if tool_name.lower() in JIRA_AGENT_SKILLS:
             continue
-        if "version" in selected_payload:
-            raise ValueError(
-                "tool.version is not supported; executable tools are identified by name only"
-            )
         if tool_name in seen:
             continue
         seen.add(tool_name)

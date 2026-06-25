@@ -416,7 +416,7 @@ def test_skill_dispatcher_routes_mm_skill_execute_and_activity_handlers():
         execute_skill_activity(
             invocation_payload={
                 "id": "n1",
-                "skill": {"name": "repo.run_tests"},
+                "skill": {"name": "repo.run_tests", "version": "1.0.0"},
                 "inputs": {"repo_ref": "git:org/repo#branch"},
             },
             registry_snapshot=snapshot,
@@ -459,7 +459,11 @@ def test_skill_dispatcher_accepts_tool_payload_alias():
         execute_skill_activity(
             invocation_payload={
                 "id": "n1",
-                "tool": {"type": "skill", "name": "repo.run_tests"},
+                "tool": {
+                    "type": "skill",
+                    "name": "repo.run_tests",
+                    "version": "1.0.0",
+                },
                 "inputs": {"repo_ref": "git:org/repo#branch"},
             },
             registry_snapshot=snapshot,

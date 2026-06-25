@@ -1048,15 +1048,6 @@ def _dedupe_repeated_step_entries(
 def _selected_step_type(step_entry: Mapping[str, Any]) -> str:
     return str(step_entry.get("type") or "").strip().lower()
 
-def _reject_selected_step_tool_version(step_entry: Mapping[str, Any]) -> None:
-    step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
-        step_entry.get("skill")
-    )
-    if "version" in step_tool:
-        raise RuntimeError(
-            "task step tool.version is not supported; executable tools are identified by name only"
-        )
-
 def _selected_step_tool_type(step_entry: Mapping[str, Any]) -> str:
     if _selected_step_tool_name(step_entry).lower() in _STORY_OUTPUT_TASK_TOOLS:
         return "skill"
@@ -1225,7 +1216,6 @@ def _build_runtime_planner():
         selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
             task_payload.get("skill")
         )
-        _reject_selected_step_tool_version({"tool": selected_skill_payload})
         selected_skill_name = str(
             selected_skill_payload.get("name")
             or selected_skill_payload.get("id")
@@ -1508,10 +1498,6 @@ def _build_runtime_planner():
                     if is_legacy_agent_skill_plan_entry
                     else authored_tool_name
                 )
-                if "version" in tool_payload:
-                    raise RuntimeError(
-                        "task.plan tool.version is not supported; executable tools are identified by name only"
-                    )
                 node_inputs = _coerce_mapping(plan_entry.get("inputs"))
                 if not node_inputs:
                     node_inputs = _coerce_mapping(
@@ -1689,7 +1675,6 @@ def _build_runtime_planner():
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
                 tool_type = _selected_step_tool_type(step_entry)
-                _reject_selected_step_tool_version(step_entry)
                 is_agent_runtime_step = tool_type == "agent_runtime"
                 step_metadata_inputs = _authored_step_metadata_inputs(
                     step_entry,
@@ -1894,8 +1879,6 @@ def _build_runtime_planner():
             node_tool_name = (
                 selected_skill_name if is_story_output_tool else runtime_mode
             )
-            if is_story_output_tool:
-                _reject_selected_step_tool_version({"tool": selected_skill_payload})
             if is_story_output_tool:
                 node_inputs.pop("selectedSkill", None)
                 node_inputs["publishMode"] = "none"

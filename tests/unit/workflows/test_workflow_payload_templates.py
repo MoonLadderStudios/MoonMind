@@ -28,7 +28,7 @@ def test_compile_workflow_payload_templates_merges_capabilities_and_metadata() -
     assert "version" not in compiled["task"]["appliedStepTemplates"][0]
     assert "appliedAt" in compiled["task"]["appliedStepTemplates"][0]
 
-def test_compile_workflow_payload_templates_rejects_template_versions() -> None:
+def test_compile_workflow_payload_templates_strips_template_versions() -> None:
     payload = {
         "task": {
             "appliedStepTemplates": [
@@ -40,9 +40,7 @@ def test_compile_workflow_payload_templates_rejects_template_versions() -> None:
         },
     }
 
-    try:
-        compile_workflow_payload_templates(payload)
-    except ValueError as exc:
-        assert "remove version or presetVersion" in str(exc)
-    else:
-        raise AssertionError("Expected semantic preset version rejection.")
+    compiled = compile_workflow_payload_templates(payload)
+
+    assert compiled["task"]["appliedStepTemplates"][0]["slug"] == "pr-code-change"
+    assert "version" not in compiled["task"]["appliedStepTemplates"][0]

@@ -19,11 +19,10 @@ def _normalize_capabilities(values: list[Any] | None) -> list[str]:
     return normalized
 
 def _sanitize_template_application(entry: dict[str, Any]) -> dict[str, Any] | None:
+    entry = dict(entry)
+    entry.pop("version", None)
+    entry.pop("presetVersion", None)
     slug = str(entry.get("slug") or "").strip()
-    if entry.get("version") is not None or entry.get("presetVersion") is not None:
-        raise ValueError(
-            "Applied step templates use slug/scope only; remove version or presetVersion."
-        )
     if not slug:
         return None
     inputs = entry.get("inputs")

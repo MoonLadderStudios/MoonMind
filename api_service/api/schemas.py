@@ -425,13 +425,12 @@ class PresetStepToolSchema(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_version_identity(cls, value: object) -> object:
-        if isinstance(value, dict) and (
-            value.get("version") is not None or value.get("toolVersion") is not None
-        ):
-            raise ValueError(
-                "Tool steps use tool names only; remove version or toolVersion."
-            )
+    def strip_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("toolVersion", None)
+            return payload
         return value
 
 class PresetStepBlueprintSchema(BaseModel):
@@ -453,13 +452,12 @@ class PresetStepBlueprintSchema(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_preset_version_identity(cls, value: object) -> object:
-        if isinstance(value, dict) and (
-            value.get("version") is not None or value.get("presetVersion") is not None
-        ):
-            raise ValueError(
-                "Preset includes use slug/scope only; remove version or presetVersion."
-            )
+    def strip_preset_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("presetVersion", None)
+            return payload
         return value
 
 class PresetSummarySchema(BaseModel):
@@ -520,13 +518,12 @@ class PresetCreateRequestSchema(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_version_identity(cls, value: object) -> object:
-        if isinstance(value, dict) and (
-            value.get("version") is not None or value.get("presetVersion") is not None
-        ):
-            raise ValueError(
-                "Preset definitions use slug/scope only; remove version or presetVersion."
-            )
+    def strip_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("presetVersion", None)
+            return payload
         return value
 
 class PresetExpandOptionsSchema(BaseModel):
@@ -549,13 +546,12 @@ class PresetExpandRequestSchema(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_version_identity(cls, value: object) -> object:
-        if isinstance(value, dict) and (
-            value.get("version") is not None or value.get("presetVersion") is not None
-        ):
-            raise ValueError(
-                "Preset expansion uses slug/scope only; remove version or presetVersion."
-            )
+    def strip_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("presetVersion", None)
+            return payload
         return value
 
 class PresetAppliedMetadataSchema(BaseModel):
