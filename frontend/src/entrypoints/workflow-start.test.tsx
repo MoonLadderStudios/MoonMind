@@ -2573,8 +2573,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "Jira Orchestrate",
         description: "Jira preset.",
-        latestVersion: "1",
-        version: "1",
       },
       {
         key: "global::::speckit-orchestrate",
@@ -2582,8 +2580,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
-        latestVersion: "1",
-        version: "1",
       },
       {
         key: "global::::moonspec-orchestrate",
@@ -2591,8 +2587,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "MoonSpec Orchestrate",
         description: "MoonSpec preset.",
-        latestVersion: "1",
-        version: "1",
       },
     ]);
 
@@ -2608,8 +2602,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
-        latestVersion: "1",
-        version: "1",
       },
       {
         key: "global::::moonspec-orchestrate",
@@ -2617,8 +2609,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "MoonSpec Orchestrate",
         description: "MoonSpec preset.",
-        latestVersion: "1",
-        version: "1",
       },
     ]);
 
@@ -2634,8 +2624,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "Other Template",
         description: "Other preset.",
-        latestVersion: "1",
-        version: "1",
       },
       {
         key: "global::::speckit-orchestrate",
@@ -2643,8 +2631,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
-        latestVersion: "1",
-        version: "1",
       },
     ]);
 
@@ -10452,7 +10438,7 @@ describe.skip("Task Create Entrypoint", () => {
       resolveObjectiveInstructions("", "", [
         {
           slug: "objective-demo",
-          version: "2",
+          presetDigest: "sha256:objective-demo",
           appliedAt: "2026-04-03T00:00:00Z",
           inputs: {
             request: "Restore the legacy Start Workflow objective handling.",
