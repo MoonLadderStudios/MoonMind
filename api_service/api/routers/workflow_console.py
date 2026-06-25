@@ -738,6 +738,7 @@ async def task_settings_route(
         "settings",
         "/settings",
         initial_data=initial_data,
+        data_wide_panel=True,
         session=session,
         user=_user,
     )

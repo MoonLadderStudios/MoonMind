@@ -1177,6 +1177,46 @@ describe('ProviderProfilesManager form controls', () => {
     expect(screen.queryByText(/sk-ant/)).toBeNull();
   });
 
+  it('condenses verbose status diagnostics behind a disclosure without losing detail', () => {
+    renderProviderProfilesManager([profileWithReadiness]);
+
+    const statusCell = document.querySelector('td[data-label="Status"]');
+    expect(statusCell).not.toBeNull();
+
+    // The readiness pill stays in the compact, always-visible summary so the
+    // Status column no longer needs to render its full diagnostic stack inline.
+    const readinessPill = screen.getByText('Readiness: Blocked');
+
+    const disclosure = statusCell?.querySelector<HTMLDetailsElement>(
+      'details.provider-profile-status-details',
+    );
+    expect(disclosure).not.toBeNull();
+    // Collapsed by default to reduce width/height pressure.
+    expect(disclosure?.open).toBe(false);
+    // The pill is part of the visible summary, not buried in the disclosure.
+    expect(disclosure?.contains(readinessPill)).toBe(false);
+    // No information is lost: the dense diagnostics live inside the disclosure.
+    expect(disclosure?.textContent).toContain('Provider profile has launch blockers.');
+    expect(disclosure?.textContent).toContain('Validation failed');
+  });
+
+  it('omits the diagnostics disclosure for a healthy connected profile with no other details', () => {
+    renderProviderProfilesManager([profile]);
+
+    const statusCell = document.querySelector('td[data-label="Status"]');
+    expect(statusCell).not.toBeNull();
+
+    // A fully healthy, connected profile resolves to a 'Connected' activation
+    // label and no other diagnostics. Rendering the disclosure here would only
+    // produce an empty "Diagnostics" dropdown containing the word "Connected",
+    // so the disclosure should be omitted entirely.
+    const disclosure = statusCell?.querySelector<HTMLDetailsElement>(
+      'details.provider-profile-status-details',
+    );
+    expect(disclosure).toBeNull();
+    expect(screen.queryByText('Diagnostics')).toBeNull();
+  });
+
   it('describes SecretRef role bindings without plaintext values', () => {
     const rawSecret = 'sk-test-plaintext-never-render';
     renderProviderProfilesManager([
