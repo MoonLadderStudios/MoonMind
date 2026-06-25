@@ -5172,15 +5172,15 @@ class MoonMindRunWorkflow:
 
         try:
             await self._reconcile_dependencies(dependency_ids)
-            while (
-                not self._cancel_requested
-                and self._dependency_failure is None
-                and (self._unresolved_dependency_ids or self._paused)
+            while not self._cancel_requested and (
+                self._unresolved_dependency_ids
+                or self._paused
+                or (self._dependency_failure is not None and self._paused)
             ):
                 try:
                     await workflow.wait_condition(
                         lambda: self._cancel_requested
-                        or self._dependency_failure is not None
+                        or (self._dependency_failure is not None and not self._paused)
                         or (
                             not self._paused
                             and not self._unresolved_dependency_ids
@@ -5291,12 +5291,19 @@ class MoonMindRunWorkflow:
                 now = workflow.now()
                 delay = target_dt - now
                 if delay.total_seconds() <= 0:
-                    break
+                    if not self._paused:
+                        break
+                    await self._wait_if_paused_at_safe_boundary()
+                    if self._cancel_requested:
+                        break
+                    continue
 
                 self._reschedule_requested = False
                 try:
                     await workflow.wait_condition(
-                        lambda: self._reschedule_requested or self._cancel_requested,
+                        lambda: self._reschedule_requested
+                        or self._cancel_requested
+                        or self._paused,
                         timeout=delay,
                     )
                 except asyncio.TimeoutError:
@@ -5307,6 +5314,11 @@ class MoonMindRunWorkflow:
 
                 if self._cancel_requested:
                     break
+                if self._paused:
+                    await self._wait_if_paused_at_safe_boundary()
+                    if self._cancel_requested:
+                        break
+                    continue
 
         if self._cancel_requested:
             await self._run_finalizing_stage(

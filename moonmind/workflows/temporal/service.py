@@ -1576,7 +1576,6 @@ class TemporalExecutionService:
                 waiting_reason="operator_paused",
                 attention_required=True,
             )
-            self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
             self._set_wait_metadata(
                 record,
                 waiting_reason="operator_paused",
@@ -1587,7 +1586,8 @@ class TemporalExecutionService:
         elif update_name == "Resume":
             record.paused = False
             self._clear_waiting_metadata(record)
-            self._set_state(record, MoonMindWorkflowState.EXECUTING)
+            self._clear_wait_metadata(record)
+            self._touch(record)
             self._update_summary(record, "Execution resumed.")
             response = {"accepted": True, "applied": "async"}
         elif update_name == "Approve":
@@ -1715,7 +1715,6 @@ class TemporalExecutionService:
                     waiting_reason="operator_paused",
                     attention_required=True,
                 )
-                self._set_state(record, MoonMindWorkflowState.AWAITING_EXTERNAL)
                 self._set_wait_metadata(
                     record,
                     waiting_reason="operator_paused",
@@ -1731,7 +1730,8 @@ class TemporalExecutionService:
             elif signal_name == "Resume":
                 record.paused = False
                 self._clear_waiting_metadata(record)
-                self._set_state(record, MoonMindWorkflowState.EXECUTING)
+                self._clear_wait_metadata(record)
+                self._touch(record)
                 self._append_intervention_audit(
                     record,
                     action="resume",

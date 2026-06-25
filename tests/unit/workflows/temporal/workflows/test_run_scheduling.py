@@ -153,6 +153,46 @@ async def test_run_workflow_scheduled(mock_run_environment):
             assert result["status"] == "success"
 
 @pytest.mark.asyncio
+async def test_run_workflow_scheduled_pause_blocks_due_dispatch(mock_run_environment):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-sched-pause",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            future_time = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                    "scheduled_for": future_time,
+                },
+                id="test-wf-sched-pause",
+                task_queue="test-task-queue-sched-pause",
+            )
+
+            for _ in range(20):
+                status = await handle.query("get_status")
+                if status.get("state") == "scheduled":
+                    break
+                await env.sleep(1)
+            assert status.get("state") == "scheduled"
+
+            await handle.execute_update("Pause")
+            await env.sleep(timedelta(hours=2))
+
+            status = await handle.query("get_status")
+            assert status.get("state") == "scheduled"
+            assert status.get("paused") is True
+
+            await handle.execute_update("Resume")
+            result = await handle.result()
+            assert result["status"] == "success"
+
+@pytest.mark.asyncio
 async def test_run_workflow_rescheduled(mock_run_environment):
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
