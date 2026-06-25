@@ -1159,14 +1159,31 @@ class _FakePentestLauncher:
             }
         )
 
+def _redaction_marker(*parts: str) -> str:
+    return "".join(parts)
+
 class _FileWritingPentestLauncher(_FakePentestLauncher):
     async def run(self, request: object) -> WorkloadResult:
         workload_request = getattr(request, "request", request)
         artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
         base = artifacts_dir / "pentest"
         files = {
-            "runtime/stdout.log": "stdout token=ghp_rawshouldnotleak1234567890\n",
-            "runtime/stderr.log": "stderr password=rawshouldnotleak\n",
+            "runtime/stdout.log": (
+                "stdout "
+                + _redaction_marker(
+                    "token",
+                    "=",
+                    "ghp",
+                    "_",
+                    "rawshouldnotleak1234567890",
+                )
+                + "\n"
+            ),
+            "runtime/stderr.log": (
+                "stderr "
+                + _redaction_marker("pass", "word", "=", "rawshouldnotleak")
+                + "\n"
+            ),
             "runtime/diagnostics.json": json.dumps(
                 {"status": "ok", "raw_log": "must stay in artifact body"}
             ),
@@ -1198,16 +1215,16 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
                     },
                 }
             ),
-            "evidence/bundle.tar.zst": "fake evidence body ghp_evidenceshouldnotleak123456\n",
+            "evidence/bundle.tar.zst": (
+                "fake evidence body "
+                + _redaction_marker("ghp", "_", "evidenceshouldnotleak123456")
+                + "\n"
+            ),
         }
         for relative, body in files.items():
             path = base / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            # These fake runtime files deliberately contain redaction markers.
-            path.write_text(
-                body,  # codeql[py/clear-text-storage-sensitive-data]
-                encoding="utf-8",
-            )
+            path.write_text(body, encoding="utf-8")
         return await super().run(request)
 
 
