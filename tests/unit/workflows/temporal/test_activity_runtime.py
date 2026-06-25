@@ -21,6 +21,10 @@ from temporalio import exceptions as temporal_exceptions
 
 from api_service.db.models import Base
 from moonmind.config.settings import PentestSettings, settings
+from moonmind.integrations.pentest.models import (
+    PENTEST_CLAUDE_OAUTH_PROFILE_ID,
+    PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+)
 from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.jules_models import JulesTaskResponse
@@ -1041,7 +1045,7 @@ def _approved_pentest_scope() -> dict[str, object]:
         "prohibited_actions": [],
         "requires_manual_approval": False,
         "approval_recorded": False,
-        "allowed_runner_profiles": ["pentestgpt-safe"],
+        "allowed_runner_profiles": [PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID],
         "required_network_attachment_type": None,
         "authorized_principals": ["user-security"],
         "metadata": {"jira": "MM-470"},
@@ -1057,8 +1061,8 @@ def _pentest_activity_payload(**overrides: object) -> dict[str, object]:
         "operation_mode": "validate_hypothesis",
         "objective": "Validate auth bypass hypothesis.",
         "scope_artifact_ref": "art:sha256:scope",
-        "runner_profile_id": "pentestgpt-safe",
-        "execution_profile_ref": "pentestgpt_anthropic_api_team",
+        "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+        "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
         "time_budget_minutes": 60,
         "evidence_level": "standard",
         "artifacts_dir": "/tmp/artifacts",
@@ -1079,8 +1083,8 @@ def _pentest_artifact_activity_payload(**overrides: object) -> dict[str, object]
         "operation_mode": "validate_hypothesis",
         "objective": "Validate auth bypass hypothesis.",
         "scope_artifact_ref": "art_scope_valid",
-        "runner_profile_id": "pentestgpt-safe",
-        "execution_profile_ref": "pentestgpt_anthropic_api_team",
+        "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+        "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
         "time_budget_minutes": 60,
         "evidence_level": "standard",
         "artifacts_dir": "/tmp/artifacts",
@@ -1139,7 +1143,7 @@ class _FakePentestLauncher:
         return WorkloadResult.model_validate(
             {
                 "requestId": "workload-run-123",
-                "profileId": "pentestgpt-safe",
+                "profileId": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
                 "status": self.status,
                 "exitCode": 0 if self.status == "succeeded" else 2,
                 "stdoutRef": "file:/tmp/artifacts/pentest/runtime/stdout.log",
@@ -1174,8 +1178,8 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
                     "target": "https://lab.example.test",
                     "scope_artifact_ref": "art:sha256:scope",
                     "operation_mode": "validate_hypothesis",
-                    "runner_profile_id": "pentestgpt-safe",
-                    "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                    "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+                    "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
                     "produced_at": "2026-06-14T00:00:00Z",
                     "findings": [
                         {
@@ -1344,7 +1348,7 @@ class _SupervisedPentestHandle:
         return WorkloadResult.model_validate(
             {
                 "requestId": "supervised-run-123",
-                "profileId": "pentestgpt-safe",
+                "profileId": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
                 "status": self.result_status,
                 "exitCode": 0 if self.result_status == "succeeded" else 2,
                 "stdoutRef": "file:/tmp/artifacts/pentest/runtime/stdout.log",
@@ -1402,7 +1406,7 @@ async def test_temporal_pentest_provider_lease_manager_acquires_slot_with_update
         ) -> dict[str, object]:
             self.updates.append((workflow_id, update_name, arg))
             return {
-                "profile_id": "pentestgpt_anthropic_api_team",
+                "profile_id": "claude_anthropic",
                 "lease_id": "owner-1",
             }
 
@@ -1415,8 +1419,8 @@ async def test_temporal_pentest_provider_lease_manager_acquires_slot_with_update
     manager = TemporalPentestProviderLeaseManager(client)
 
     lease_id = await manager.acquire(
-        runtime_id="pentestgpt",
-        profile_id="pentestgpt_anthropic_api_team",
+        runtime_id="claude_code",
+        profile_id="claude_anthropic",
         owner="owner-1",
         metadata={"target_hash": "hash-1"},
     )
@@ -1425,12 +1429,12 @@ async def test_temporal_pentest_provider_lease_manager_acquires_slot_with_update
     assert client.signals == []
     assert client.updates == [
         (
-            "provider-profile-manager:pentestgpt",
+            "provider-profile-manager:claude_code",
             "AcquireSlot",
             {
                 "requester_workflow_id": "owner-1",
-                "runtime_id": "pentestgpt",
-                "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                "runtime_id": "claude_code",
+                "execution_profile_ref": "claude_anthropic",
                 "metadata": {"target_hash": "hash-1"},
             },
         )
@@ -1447,8 +1451,8 @@ async def test_temporal_pentest_provider_lease_manager_fails_closed_without_upda
 
     with pytest.raises(RuntimeError, match="workflow updates"):
         await manager.acquire(
-            runtime_id="pentestgpt",
-            profile_id="pentestgpt_anthropic_api_team",
+            runtime_id="claude_code",
+            profile_id="claude_anthropic",
             owner="owner-1",
             metadata={},
         )
@@ -1639,7 +1643,7 @@ async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan(
 
     assert artifact_service.reads == [("art_scope_valid", "user-security")]
     assert result["status"] == "completed"
-    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
 
 async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
     monkeypatch: pytest.MonkeyPatch,
@@ -1683,8 +1687,8 @@ async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
                     "target": "https://lab.example.test",
                     "operation_mode": "validate_hypothesis",
                     "scope_artifact_ref": "art_scope_valid",
-                    "runner_profile_id": "pentestgpt-safe",
-                    "execution_profile_ref": "pentestgpt_anthropic_api_team",
+                    "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+                    "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
                     "time_budget_minutes": 60,
                     "evidence_level": "standard",
                     "agent_run_id": "caller-supplied-run",
@@ -1709,7 +1713,7 @@ async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
 
     assert artifact_service.reads == [("art_scope_valid", "user-security")]
     assert result["status"] == "completed"
-    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
     assert len(launcher.requests) == 1
     assert len(materialized_requests) == 1
     request = materialized_requests[0]
@@ -1791,7 +1795,7 @@ async def test_security_pentest_execute_allows_trusted_internal_inline_scope():
     )
 
     assert result["status"] == "completed"
-    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
 
 
 async def test_security_pentest_execute_ignores_caller_supplied_trust_flag():
@@ -1828,7 +1832,7 @@ async def test_security_pentest_execute_ignores_caller_supplied_trust_flag():
             "target_outside_scope",
         ),
         (
-            {"allowed_runner_profiles": ["pentestgpt-vpn-lab"]},
+            {"allowed_runner_profiles": ["missing-profile"]},
             {},
             "UNSUPPORTED_PROFILE",
             "runner_profile_not_allowed",
@@ -1903,7 +1907,7 @@ async def test_security_pentest_execute_reaches_launch_plan_after_scope_validati
     )
 
     assert result["status"] == "completed"
-    assert result["launch_plan"]["profile_id"] == "pentestgpt-safe"
+    assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
     assert len(launcher.requests) == 1
     # The registry must validate the parsed request before the launcher runs it,
     # and the launcher must receive the validated request (not the raw one).
@@ -1923,9 +1927,9 @@ async def test_security_pentest_execute_returns_safe_launch_plan_after_scope_val
 
     assert result["status"] == "completed"
     assert result["target"] == "https://lab.example.test"
-    assert result["runner_profile_id"] == "pentestgpt-safe"
+    assert result["runner_profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
     launch_plan = result["launch_plan"]
-    assert launch_plan["profile_id"] == "pentestgpt-safe"
+    assert launch_plan["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
     assert launch_plan["container_name"] == "mm-pentest-run-123-step-pentest-1"
     assert launch_plan["network_policy"] == "bridge_approved_lab"
     assert launch_plan["linux_capabilities"] == []
@@ -1944,44 +1948,39 @@ async def test_security_pentest_execute_includes_secret_safe_provider_preparatio
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            execution_profile_ref="pentestgpt_anthropic_api_team",
-        )
+        _pentest_activity_payload()
     )
 
     provider_profile = result["provider_profile"]
-    assert provider_profile["profile_id"] == "pentestgpt_anthropic_api_team"
+    assert provider_profile["profile_id"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
     assert provider_profile["runtime_id"] == "pentestgpt"
     assert provider_profile["provider_id"] == "anthropic"
-    assert provider_profile["env"] == {
-        "PENTESTGPT_AUTH_MODE": "anthropic",
-        "LANGFUSE_ENABLED": "false",
+    assert provider_profile["env"]["PENTESTGPT_AUTH_MODE"] == "manual"
+    assert provider_profile["env"]["LANGFUSE_ENABLED"] == "false"
+    assert provider_profile["env"]["CLAUDE_HOME"] == "/home/pentester/.claude"
+    assert provider_profile["secret_env"] == {}
+    assert provider_profile["secret_refs"] == {}
+    assert set(provider_profile["clear_env_keys"]) == {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CLAUDE_API_KEY",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "OPENAI_API_KEY",
     }
-    assert provider_profile["secret_env"] == {
-        "ANTHROPIC_API_KEY": "anthropic_api_key"
-    }
-    assert provider_profile["secret_refs"] == {
-        "anthropic_api_key": {
-            "secret_id": "sec_pentestgpt_anthropic_team",
-            "backend_type": "db_encrypted",
-        }
-    }
-    assert provider_profile["clear_env_keys"] == ["OPENROUTER_API_KEY"]
     assert provider_profile["force_non_interactive"] is True
-    assert result["provider_lease"]["runtime_id"] == "pentestgpt"
-    assert result["provider_lease"]["profile_id"] == "pentestgpt_anthropic_api_team"
+    assert result["provider_lease"]["runtime_id"] == "claude_code"
+    assert result["provider_lease"]["profile_id"] == "claude_anthropic"
     assert result["provider_lease"]["lease_required"] is True
     assert "sk-" not in str(result)
 
-async def test_security_pentest_execute_resolves_mapping_secret_refs(
+async def test_security_pentest_execute_does_not_resolve_secret_refs_for_oauth(
     monkeypatch: pytest.MonkeyPatch,
 ):
     resolved_refs: list[object] = []
 
     async def _fake_resolver(ref: object, *, field_name: str) -> str:
         resolved_refs.append(ref)
-        assert field_name == "pentest.ANTHROPIC_API_KEY"
-        return "sk-resolved-provider-value"
+        raise AssertionError("OAuth Pentest path must not resolve API key secrets")
 
     monkeypatch.setattr(
         "moonmind.workflows.temporal.activity_runtime.resolve_managed_api_key_reference",
@@ -1994,23 +1993,16 @@ async def test_security_pentest_execute_resolves_mapping_secret_refs(
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
-        _pentest_activity_payload(
-            execution_profile_ref="pentestgpt_anthropic_api_team",
-        )
+        _pentest_activity_payload()
     )
 
     assert result["status"] == "completed"
-    assert resolved_refs == [
-        {
-            "secret_id": "sec_pentestgpt_anthropic_team",
-            "backend_type": "db_encrypted",
-        }
-    ]
+    assert resolved_refs == []
     request = launcher.requests[0].request
-    assert request.env_overrides["ANTHROPIC_API_KEY"] == "sk-resolved-provider-value"
-    assert "sk-resolved-provider-value" not in str(result)
+    assert "ANTHROPIC_API_KEY" not in request.env_overrides
+    assert request.env_overrides["PENTESTGPT_AUTH_MODE"] == "manual"
 
-async def test_security_pentest_execute_filters_provider_runtime_state():
+async def test_security_pentest_execute_honors_oauth_provider_runtime_state():
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=_FakePentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
@@ -2019,20 +2011,21 @@ async def test_security_pentest_execute_filters_provider_runtime_state():
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
             execution_profile_ref=None,
-            provider_selector={"tags_any": ["api-key"]},
+            provider_selector={"tags_all": ["oauth"]},
             provider_runtime_state={
-                "pentestgpt_anthropic_api_team": {
-                    "profile_id": "pentestgpt_anthropic_api_team",
-                    "current_leases": ["wf-1", "wf-2"],
+                PENTEST_CLAUDE_OAUTH_PROFILE_ID: {
+                    "profile_id": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
+                    "auth_state": "connected",
+                    "oauth_volume_present": True,
                 }
             },
         )
     )
 
-    assert result["provider_profile"]["profile_id"] == "pentestgpt_openrouter_default"
-    assert result["provider_lease"]["profile_id"] == "pentestgpt_openrouter_default"
+    assert result["provider_profile"]["profile_id"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
+    assert result["provider_lease"]["profile_id"] == "claude_anthropic"
 
-async def test_security_pentest_execute_acquires_lease_after_scope_validation_before_secret_resolution(
+async def test_security_pentest_execute_acquires_lease_after_scope_validation_without_secret_resolution(
     monkeypatch: pytest.MonkeyPatch,
 ):
     order: list[str] = []
@@ -2073,21 +2066,21 @@ async def test_security_pentest_execute_acquires_lease_after_scope_validation_be
     )
 
     assert result["status"] == "completed"
-    assert order[:3] == ["scope_read", "lease_acquire", "secret_resolve"]
+    assert order == ["scope_read", "lease_acquire"]
     acquire_event = lease_manager.events[0]
     assert acquire_event[0] == "acquire"
     payload = acquire_event[1]
     assert payload["owner"] == "pentest:run-123:step-pentest:1"
     assert payload["metadata"] == {
         "tool": "security.pentest.run",
-        "runtime_id": "pentestgpt",
-        "profile_id": "pentestgpt_anthropic_api_team",
+        "runtime_id": "claude_code",
+        "profile_id": "claude_anthropic",
         "agent_run_id": "run-123",
         "step_id": "step-pentest",
         "attempt": 1,
         "target_hash": "af009b45becaa02be2c95bfdd8a055c52fc3c0ec440b24d73fb14783c9b7786e",
         "mode": "validate_hypothesis",
-        "runner_profile": "pentestgpt-safe",
+        "runner_profile": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
     }
     assert "https://lab.example.test" not in str(payload["metadata"])
     assert "sk-resolved-provider-value" not in str(result)
@@ -2155,14 +2148,13 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
-            execution_profile_ref="pentestgpt_openrouter_default",
             provider_failure={"category": "provider_429"},
         )
     )
 
     assert result["status"] == "provider_cooldown"
     assert result["provider_cooldown"] == {
-        "profile_id": "pentestgpt_openrouter_default",
+        "profile_id": "claude_anthropic",
         "cooldown_seconds": 300,
         "failure_category": "provider_429",
         "retry_allowed": False,
@@ -2176,7 +2168,7 @@ async def test_security_pentest_execute_reports_secret_safe_provider_cooldown():
     assert lease_manager.events[1][1]["reason"] == "provider_429"
     assert result["terminal_cleanup"]["provider_lease_released"] is True
     assert "OPENROUTER_API_KEY" not in str(result["provider_cooldown"])
-    assert "token" not in str(result).lower()
+    assert "sk-" not in str(result)
 
 async def test_security_pentest_execute_classifies_lease_manager_failure_as_provider_capacity():
     class _FailingLeaseManager(_FakePentestLeaseManager):
@@ -2265,7 +2257,7 @@ async def test_security_pentest_execute_includes_publication_metadata_without_se
             findings_payload={
                 "target": "https://lab.example.test",
                 "operation_mode": "validate_hypothesis",
-                "runner_profile_id": "pentestgpt-safe",
+                "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
                 "findings": [
                     {
                         "finding_id": "finding-1",
@@ -2797,7 +2789,7 @@ async def test_pentest_orphan_cleanup_uses_deterministic_label_selector():
         janitor,
         agent_run_id="run-123",
         step_id="step-pentest",
-        runner_profile_id="pentestgpt-safe",
+        runner_profile_id=PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
     )
 
     assert janitor.selector == {
@@ -2806,7 +2798,7 @@ async def test_pentest_orphan_cleanup_uses_deterministic_label_selector():
         "moonmind.runtime_id": "pentestgpt",
         "moonmind.agent_run_id": "run-123",
         "moonmind.step_id": "step-pentest",
-        "moonmind.workload_profile": "pentestgpt-safe",
+        "moonmind.workload_profile": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
     }
     assert janitor.removed == ["container-1", "container-2"]
     assert result["removed_count"] == 2
@@ -2833,7 +2825,7 @@ async def test_security_pentest_execute_coerces_string_publication_flags():
 async def test_pentest_settings_parse_safe_policy_csv_values():
     parsed = PentestSettings(
         MOONMIND_PENTEST_ENABLED="true",
-        MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe,pentestgpt-vpn-lab",
+        MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-claude-oauth",
         MOONMIND_PENTEST_ALLOWED_OPERATION_MODES="recon_only,validate_hypothesis",
         MOONMIND_PENTEST_ALLOWED_EVIDENCE_LEVELS="minimal,standard",
         MOONMIND_PENTEST_MAX_TIME_BUDGET_MINUTES="120",
@@ -2842,8 +2834,7 @@ async def test_pentest_settings_parse_safe_policy_csv_values():
 
     assert parsed.enabled is True
     assert parsed.allowed_runner_profiles == (
-        "pentestgpt-safe",
-        "pentestgpt-vpn-lab",
+        PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
     )
     assert parsed.allowed_operation_modes == ("recon_only", "validate_hypothesis")
     assert parsed.allowed_evidence_levels == ("minimal", "standard")
@@ -2869,21 +2860,22 @@ async def test_pentest_settings_rejects_defaults_outside_allowlists():
         )
     with pytest.raises(ValueError, match="default pentest runner profile"):
         PentestSettings(
-            MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE="pentestgpt-vpn-lab",
-            MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-safe",
+            MOONMIND_PENTEST_DEFAULT_RUNNER_PROFILE="missing-profile",
+            MOONMIND_PENTEST_ALLOWED_RUNNER_PROFILES="pentestgpt-claude-oauth",
         )
 
-async def test_pentest_workload_profile_registry_includes_safe_runner():
+async def test_pentest_workload_profile_registry_includes_claude_oauth_runner():
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
         workspace_root="/work/agent_jobs",
     )
 
-    profile = registry.get("pentestgpt-safe")
+    profile = registry.get(PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID)
     assert profile is not None
     assert profile.image == PENTEST_RUNNER_IMAGE
     assert profile.network_policy == "bridge"
-    assert "ANTHROPIC_API_KEY" in profile.env_allowlist
+    assert "ANTHROPIC_API_KEY" not in profile.env_allowlist
+    assert "CLAUDE_HOME" in profile.env_allowlist
 
 async def test_security_pentest_execute_rejects_configured_profiles_missing_from_registry(
     monkeypatch: pytest.MonkeyPatch,
@@ -2900,7 +2892,7 @@ async def test_security_pentest_execute_rejects_configured_profiles_missing_from
     monkeypatch.setattr(
         settings.pentest,
         "allowed_runner_profiles",
-        ("pentestgpt-safe", "pentestgpt-missing"),
+        (PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID, "pentestgpt-missing"),
     )
 
     result = await activities._security_pentest_execute_trusted_internal(
@@ -2923,7 +2915,7 @@ async def test_security_pentest_execute_rejects_registered_runner_image_drift(
             {
                 "profiles": [
                     {
-                        "id": "pentestgpt-safe",
+                        "id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
                         "kind": "one_shot",
                         "image": "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0-drift",
                         "workdirTemplate": "/work/agent_jobs/${agent_run_id}/repo",
@@ -2971,17 +2963,17 @@ async def test_security_pentest_execute_rejects_registered_runner_image_drift(
         PENTEST_RUNNER_IMAGE,
     )
     monkeypatch.setattr(
-        settings.pentest, "allowed_runner_profiles", ("pentestgpt-safe",)
+        settings.pentest,
+        "allowed_runner_profiles",
+        (PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,),
     )
-    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", False)
-
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload()
     )
 
     assert result["status"] == "validation_failed"
     assert "runner_profile_image_drift" in str(result["diagnostics"])
-    assert "pentestgpt-safe" in str(result["diagnostics"])
+    assert PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID in str(result["diagnostics"])
     assert launcher.requests == []
 
 async def test_security_pentest_execute_validates_safe_profile_against_registry(
@@ -2992,7 +2984,9 @@ async def test_security_pentest_execute_validates_safe_profile_against_registry(
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
         workspace_root=tmp_path,
-        profile_image_overrides={"pentestgpt-safe": PENTEST_RUNNER_IMAGE},
+        profile_image_overrides={
+            PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID: PENTEST_RUNNER_IMAGE
+        },
     )
     activities = TemporalAgentRuntimeActivities(
         workload_launcher=launcher,
@@ -3003,13 +2997,16 @@ async def test_security_pentest_execute_validates_safe_profile_against_registry(
         "runner_image",
         PENTEST_RUNNER_IMAGE,
     )
-    monkeypatch.setattr(settings.pentest, "safe_profile_id", "pentestgpt-safe")
-    monkeypatch.setattr(settings.pentest, "default_runner_profile", "pentestgpt-safe")
     monkeypatch.setattr(
-        settings.pentest, "allowed_runner_profiles", ("pentestgpt-safe",)
+        settings.pentest,
+        "default_runner_profile",
+        PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
     )
-    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", False)
-
+    monkeypatch.setattr(
+        settings.pentest,
+        "allowed_runner_profiles",
+        (PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,),
+    )
     payload = _pentest_activity_payload()
     payload["request"]["repo_dir"] = str(tmp_path / "run-123" / "repo")
     payload["request"]["artifacts_dir"] = str(
@@ -3047,10 +3044,10 @@ async def test_security_pentest_execute_materializes_input_files_without_secrets
     provider_snapshot = json.loads(provider_file.read_text(encoding="utf-8"))
     scope_snapshot = json.loads(scope_file.read_text(encoding="utf-8"))
     assert manifest["provider_snapshot_ref"] == f"file:{provider_file}"
-    assert provider_snapshot["profile_id"] == "pentestgpt_anthropic_api_team"
+    assert provider_snapshot["profile_id"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
     assert "secret_env_keys" not in provider_snapshot
-    assert provider_snapshot["credential_env_key_count"] == 1
-    assert provider_snapshot["missing_credential_env_key_count"] == 1
+    assert provider_snapshot["credential_env_key_count"] == 0
+    assert provider_snapshot["missing_credential_env_key_count"] == 0
     assert scope_snapshot["scope_id"] == "scope-123"
     assert "hunter2" not in provider_file.read_text(encoding="utf-8")
     assert "hunter2" not in manifest_file.read_text(encoding="utf-8")
@@ -3104,8 +3101,8 @@ async def test_security_pentest_execute_uses_runner_normalized_findings_after_la
             "target": "https://lab.example.test",
             "scope_artifact_ref": "art:sha256:approved-scope",
             "operation_mode": "validate_hypothesis",
-            "runner_profile_id": "pentestgpt-safe",
-            "execution_profile_ref": "pentestgpt_anthropic_api_team",
+            "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+            "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
             "produced_at": "2026-01-01T00:00:00Z",
             "findings": [
                 {
@@ -3175,7 +3172,6 @@ async def test_provider_cooldown_does_not_return_clean_findings():
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
-            execution_profile_ref="pentestgpt_openrouter_default",
             provider_failure={"category": "provider_429"},
         )
     )
@@ -3201,29 +3197,27 @@ async def test_workload_failure_does_not_return_clean_findings():
     assert result["normalized_findings"]["normalization_status"] == "runner_failed"
     assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
 
-async def test_security_pentest_execute_fails_closed_before_vpn_lab_launch_without_network_approval(
+async def test_security_pentest_execute_fails_closed_before_unknown_runner_launch(
     monkeypatch: pytest.MonkeyPatch,
 ):
     launcher = _FakePentestLauncher()
     activities = TemporalAgentRuntimeActivities(workload_launcher=launcher)
     monkeypatch.setattr(
-        settings.pentest, "allowed_runner_profiles", ("pentestgpt-vpn-lab",)
+        settings.pentest, "allowed_runner_profiles", ("missing-profile",)
     )
-    monkeypatch.setattr(settings.pentest, "allow_vpn_lab_profile", True)
 
     result = await activities._security_pentest_execute_trusted_internal(
         _pentest_activity_payload(
-            runner_profile_id="pentestgpt-vpn-lab",
+            runner_profile_id="missing-profile",
             approved_scope={
                 **_approved_pentest_scope(),
-                "allowed_runner_profiles": ["pentestgpt-vpn-lab"],
-                "required_network_attachment_type": "vpn",
+                "allowed_runner_profiles": ["missing-profile"],
             },
         )
     )
 
     assert result["status"] == "validation_failed"
-    assert "network_attachment_required" in str(result["diagnostics"])
+    assert "unknown Pentest runner profile" in str(result["diagnostics"])
     assert launcher.requests == []
 
 async def test_security_pentest_execute_returns_structured_runtime_failure_with_cleanup():
@@ -3271,7 +3265,7 @@ class _NoOutputRefsPentestLauncher:
         return WorkloadResult.model_validate(
             {
                 "requestId": "workload-run-123",
-                "profileId": "pentestgpt-safe",
+                "profileId": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
                 "status": "succeeded",
                 "exitCode": 0,
             }
@@ -3473,7 +3467,7 @@ async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
                                         "target": "https://lab.example.test",
                                         "scope_artifact_ref": "art_scope_valid",
                                         "operation_mode": "recon_only",
-                                        "runner_profile_id": "pentestgpt-safe",
+                                        "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
                                         "time_budget_minutes": 60,
                                         "evidence_level": "standard",
                                     },
@@ -3500,7 +3494,7 @@ async def test_plan_generate_direct_skill_step_uses_only_authored_tool_inputs(
                 "target": "https://lab.example.test",
                 "scope_artifact_ref": "art_scope_valid",
                 "operation_mode": "recon_only",
-                "runner_profile_id": "pentestgpt-safe",
+                "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
                 "time_budget_minutes": 60,
                 "evidence_level": "standard",
             }

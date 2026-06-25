@@ -1,36 +1,4 @@
 profiles:
-  - id: pentestgpt-safe
-    kind: one_shot
-    image: ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0@sha256:a9e35914533968d4f6e394ea8b08f3c5b885eb136ecfacf4990bfeb04d3a11f6
-    workdirTemplate: /work/agent_jobs/${task_run_id}/repo
-    requiredMounts:
-      - type: volume
-        source: agent_workspaces
-        target: /work/agent_jobs
-    envAllowlist:
-      - PENTESTGPT_AUTH_MODE
-      - ANTHROPIC_API_KEY
-      - OPENROUTER_API_KEY
-      - LANGFUSE_ENABLED
-      - MM_PENTEST_TARGET
-      - MM_PENTEST_MODE
-      - MM_PENTEST_INSTRUCTION_FILE
-    networkPolicy: bridge
-    resources:
-      cpu: "4"
-      memory: 8g
-      shmSize: 1g
-      maxCpu: "4"
-      maxMemory: 8g
-      maxShmSize: 1g
-    timeoutSeconds: 28800
-    maxTimeoutSeconds: 28800
-    maxConcurrency: 1
-    cleanup:
-      removeContainerOnExit: true
-      killGraceSeconds: 30
-    devicePolicy:
-      mode: none
   - id: pentestgpt-claude-oauth
     kind: one_shot
     image: ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0@sha256:a9e35914533968d4f6e394ea8b08f3c5b885eb136ecfacf4990bfeb04d3a11f6

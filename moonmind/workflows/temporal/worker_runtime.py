@@ -2024,8 +2024,7 @@ def _positive_int_env(name: str) -> int | None:
 def _pentest_runner_image_overrides() -> dict[str, str]:
     pentest = settings.pentest
     return {
-        pentest.safe_profile_id: pentest.runner_image,
-        pentest.vpn_lab_profile_id: pentest.runner_image,
+        pentest.claude_oauth_runner_profile_id: pentest.runner_image,
     }
 
 def _build_agent_runtime_deps(

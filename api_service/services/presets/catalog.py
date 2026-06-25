@@ -81,7 +81,7 @@ _JIRA_BREAKDOWN_PROJECT_DEFAULT_SLUGS = frozenset(
     }
 )
 _JIRA_BREAKDOWN_PROJECT_INPUT = "jira_project_key"
-_JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS = frozenset({"TOOL", "MM"})
+_JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS = frozenset({"TOOL"})
 _SLUG_PATTERN = re.compile(r"[^a-z0-9-]+")
 _UNRESOLVED_PLACEHOLDER_PATTERN = re.compile(r"{{\s*[^}]+\s*}}")
 _NATIVE_BOOLEAN_TEMPLATE_PATTERN = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
@@ -660,7 +660,8 @@ def _effective_inputs_schema(
         return inputs_schema
 
     repository = _repository_from_context(context)
-    project_key = _jira_project_default_for_context(repository)
+    repository_project_key = _jira_project_default_for_repository(repository)
+    project_key = repository_project_key or _single_allowed_jira_project_key()
     repository_default = (
         repository if slug in _JIRA_BREAKDOWN_COMPOSITE_SLUGS else None
     )
@@ -878,7 +879,8 @@ def _apply_contextual_input_overrides(
         return adjusted
 
     repository = _repository_from_context(context)
-    project_key = _jira_project_default_for_context(repository)
+    repository_project_key = _jira_project_default_for_repository(repository)
+    project_key = repository_project_key or _single_allowed_jira_project_key()
     if not repository and not project_key:
         return submitted
 
@@ -897,7 +899,10 @@ def _apply_contextual_input_overrides(
         schema_project = schema_defaults.get(_JIRA_BREAKDOWN_PROJECT_INPUT, "")
         if (
             not submitted_project
-            or submitted_project == schema_project
+            or (
+                bool(repository_project_key)
+                and submitted_project in {schema_project, "MM"}
+            )
             or submitted_project in _JIRA_BREAKDOWN_REPLACEABLE_PROJECT_DEFAULTS
         ):
             adjusted[_JIRA_BREAKDOWN_PROJECT_INPUT] = project_key

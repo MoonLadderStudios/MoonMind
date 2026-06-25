@@ -240,7 +240,7 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
 - GitHub token permission scoping.
 - PR publishing gated on MoonSpec verification.
 - Deliberately gated exceptional workloads.
-- PentestGPT safety posture — approved-scope artifact requirement, conservative default operation modes, safe runner profile allowlist, manual approval required for external targets by default, telemetry disabled by default, no arbitrary image/host-mount/raw Docker arguments, and report-first artifacts.
+- PentestGPT safety posture — approved-scope artifact requirement, conservative default operation modes, Claude OAuth runner profile allowlist, manual approval required for external targets by default, telemetry disabled by default, no arbitrary image/host-mount/raw Docker arguments, and report-first artifacts.
 - PentestGPT runner supply-chain gates — provenance labels, tag-drift checks, runner self-test, upstream CLI contract check, and vulnerability threshold gate.
 
 ### Remaining work
@@ -254,7 +254,7 @@ All items shipped: per-step runtime/model/effort selection, cost tracking and bi
   *Done means:* every send/post/push/publish boundary invokes the scan in high-security mode, with block-on-match tests per boundary.
 - [ ] **12.5** Risk-gated action review policy — classify risky actions before execution and route them through deterministic policy, optional second-model review, or human approval. This must cover generic risky actions plus PentestGPT `full_authorized` and external-target enablement.
   *Done means:* risky actions classified pre-execution; review decision and rationale recorded as governance telemetry (12.2).
-- [ ] **12.6** Restricted-egress profile for curated security workloads — `pentestgpt-safe` currently runs on Docker `bridge` and relies on approved-scope validation, not enforced egress. Add a reviewed network profile, egress proxy, firewall sidecar, or equivalent restricted-egress boundary before external-target operation is considered production-safe.
+- [ ] **12.6** Restricted-egress profile for curated security workloads — `pentestgpt-claude-oauth` currently runs on Docker `bridge` and relies on approved-scope validation, not enforced egress. Add a reviewed network profile, egress proxy, firewall sidecar, or equivalent restricted-egress boundary before external-target operation is considered production-safe.
   *Done means:* operators can enable an approved restricted-egress runner profile whose network boundary is enforced and documented.
 
 ---
