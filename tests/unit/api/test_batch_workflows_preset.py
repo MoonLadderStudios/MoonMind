@@ -19,7 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, Preset, PresetScopeType
-from api_service.services.presets.catalog import PresetCatalogService
+from api_service.services.presets.catalog import (
+    PresetCatalogService,
+    PresetValidationError,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -109,6 +112,8 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
                 "target_preset_scope_ref",
             ):
                 assert name in schema["properties"]
+            assert "target_preset_version" not in schema["properties"]
+            assert "target_preset_version" not in schema["required"]
 
             # Single shared publish policy normalized around none/branch/pr.
             assert schema["properties"]["publish_mode"]["enum"] == [
@@ -218,3 +223,37 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             # GitHub-only batches must not be gated on Jira readiness, so the
             # parent preset no longer advertises the jira capability.
             assert "jira" not in expanded["capabilities"]
+
+
+async def test_batch_workflows_rejects_removed_target_preset_version_input(tmp_path):
+    async with _catalog_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
+
+            with pytest.raises(PresetValidationError) as excinfo:
+                await service.expand_template(
+                    slug="batch-workflows",
+                    scope="global",
+                    scope_ref=None,
+                    inputs={
+                        "source_kind": "jira_board_column",
+                        "jira_board_id": "42",
+                        "jira_column": "In Progress",
+                        "target_preset_slug": "jira-implement",
+                        "target_preset_version": "1.1.0",
+                        "publish_mode": "pr",
+                    },
+                )
+
+    assert excinfo.value.errors == [
+        {
+            "path": "preset.inputs.target_preset_version",
+            "message": (
+                "Input 'target_preset_version' is no longer supported; select the "
+                "target preset by slug and scope only."
+            ),
+            "code": "invalid_input",
+            "recoverable": True,
+        }
+    ]
