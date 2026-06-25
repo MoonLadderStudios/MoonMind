@@ -3231,7 +3231,11 @@ function LiveLogsPanel({
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
-  const [expanded, setExpanded] = useState(false);
+  // When rendered without disclosure chrome the panel is always visible, so it
+  // must start expanded; otherwise honor autoExpand. This avoids delaying the
+  // initial log fetch by a render cycle and prevents the embedded toolbar from
+  // being permanently hidden when autoExpand is not set.
+  const [expanded, setExpanded] = useState(!disclosure || autoExpand);
   const isVisible = usePageVisibility();
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
