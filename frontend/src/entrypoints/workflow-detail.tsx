@@ -5630,8 +5630,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       {execution?.recurrence?.definitionId ? (
         <div className="page-meta">
           Created by schedule{' '}
-          <a href={execution.recurrence.href || `/schedules/${encodeURIComponent(execution.recurrence.definitionId)}`}>
-            {execution.recurrence.definitionId}
+          <a
+            href={
+              execution.recurrence?.href ||
+              `/schedules/${encodeURIComponent(execution.recurrence?.definitionId || '')}`
+            }
+          >
+            {execution.recurrence?.definitionId}
           </a>
         </div>
       ) : null}

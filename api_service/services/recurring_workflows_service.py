@@ -932,6 +932,8 @@ class RecurringWorkflowsService:
         ).where(
             TemporalExecutionRecord.workflow_id.in_(normalized_ids),
             TemporalExecutionRecord.started_at.is_not(None),
+        ).order_by(
+            TemporalExecutionRecord.started_at.asc(),
         )
         rows = (await self._session.execute(stmt)).all()
         return {

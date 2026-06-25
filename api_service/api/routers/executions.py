@@ -2146,7 +2146,7 @@ def _serialize_execution(
         actions=actions,
         resume=resume_summary,
         related_runs=related_runs,
-        recurrence=_execution_recurrence_provenance(params),
+        recurrence=_execution_recurrence_provenance(params, memo),
         target_diagnostics=target_diagnostics,
         run_metrics=run_metrics,
         improvement_signals=improvement_signals,
@@ -2781,15 +2781,22 @@ def _execution_related_run_metadata(record: TemporalExecutionRecord) -> dict[str
 
 
 def _execution_recurrence_provenance(
-    params: Mapping[str, Any],
+    params: Mapping[str, Any] | None,
+    memo: Mapping[str, Any] | None = None,
 ) -> dict[str, str] | None:
+    if not isinstance(params, Mapping):
+        params = {}
     system_payload = params.get("system")
-    if not isinstance(system_payload, Mapping):
-        return None
-    recurrence_payload = system_payload.get("recurrence")
-    if not isinstance(recurrence_payload, Mapping):
-        return None
-    definition_id = str(recurrence_payload.get("definitionId") or "").strip()
+    recurrence_payload = (
+        system_payload.get("recurrence") if isinstance(system_payload, Mapping) else None
+    )
+    definition_id = (
+        str(recurrence_payload.get("definitionId") or "").strip()
+        if isinstance(recurrence_payload, Mapping)
+        else ""
+    )
+    if not definition_id and isinstance(memo, Mapping):
+        definition_id = str(memo.get("definitionId") or "").strip()
     if not definition_id:
         return None
     return {
