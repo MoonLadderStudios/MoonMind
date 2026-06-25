@@ -62,7 +62,6 @@ class MaterializedSkill:
     """Materialized skill metadata for one run."""
 
     name: str
-    version: str
     source_uri: str
     content_hash: str
     cache_path: Path
@@ -85,7 +84,6 @@ class MaterializedSkillWorkspace:
             "skills": [
                 {
                     "name": skill.name,
-                    "version": skill.version,
                     "sourceUri": skill.source_uri,
                     "contentHash": skill.content_hash,
                     "cachePath": str(skill.cache_path),
@@ -549,7 +547,7 @@ def _ensure_signature(entry: ResolvedSkill, *, verify_signatures: bool) -> None:
     if verify_signatures and not entry.signature:
         raise SkillMaterializationError(
             "signature_missing",
-            f"Skill '{entry.skill_name}:{entry.version}' is missing a required signature",
+            f"Skill '{entry.skill_name}' is missing a required signature",
         )
 
 def _materialize_cache_entry(
@@ -566,7 +564,7 @@ def _materialize_cache_entry(
         if entry.content_hash and entry.content_hash != computed_hash:
             raise SkillMaterializationError(
                 "hash_mismatch",
-                f"Hash mismatch for '{skill_name}:{entry.version}' "
+                f"Hash mismatch for '{skill_name}' "
                 f"(expected {entry.content_hash}, got {computed_hash})",
             )
 
@@ -585,12 +583,11 @@ def _materialize_cache_entry(
         if not (skill_cache_dir / "SKILL.md").is_file():
             raise SkillMaterializationError(
                 "cache_entry_incomplete",
-                f"Cache entry for '{skill_name}:{entry.version}' is incomplete",
+                f"Cache entry for '{skill_name}' is incomplete",
             )
 
     return MaterializedSkill(
         name=skill_name,
-        version=entry.version,
         source_uri=entry.source_uri,
         content_hash=computed_hash,
         cache_path=skill_cache_dir,

@@ -2833,7 +2833,6 @@ def _build_skill_snapshot_artifact(
         entries.append(
             ResolvedSkillEntry(
                 skill_name=name,
-                version="1.0.0",
                 content_ref=ref,
                 content_digest="sha256:" + hashlib.sha256(body).hexdigest(),
                 provenance=AgentSkillProvenance(

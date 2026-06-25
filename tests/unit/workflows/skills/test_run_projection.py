@@ -37,7 +37,6 @@ def _digest(payload: bytes) -> str:
 def _skill_entry(name: str, content_ref: str, payload: bytes) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=name,
-        version="1.0.0",
         content_ref=content_ref,
         content_digest=_digest(payload),
         provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT),

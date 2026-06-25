@@ -175,15 +175,12 @@ class SkillsOnDemandToolRegistry:
             return initial_result
 
         requested = service.normalized_requested_skills(request)
-        active_versions = {
-            skill.skill_name: skill.version for skill in active_snapshot.skills
-        }
+        active_names = {skill.skill_name for skill in active_snapshot.skills}
         addition_selector = SkillSelector(
             include=[
-                SkillSelectorEntry(name=name, version=version)
-                for name, version in requested
-                if name not in active_versions
-                or (version is not None and active_versions[name] != version)
+                SkillSelectorEntry(name=name)
+                for name in requested
+                if name not in active_names
             ]
         )
         snapshot_id = f"skillset_mcp_{active_snapshot.snapshot_id}_derived"

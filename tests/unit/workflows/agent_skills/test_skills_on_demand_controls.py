@@ -34,13 +34,11 @@ def _entry(
     name: str,
     *,
     source_kind: AgentSkillSourceKind = AgentSkillSourceKind.BUILT_IN,
-    version: str | None = "1.0.0",
     content_ref: str | None = None,
     source_path: str | None = None,
 ) -> ResolvedSkillEntry:
     return ResolvedSkillEntry(
         skill_name=name,
-        version=version,
         content_ref=content_ref,
         content_digest="sha256:secret-digest" if content_ref else None,
         provenance=AgentSkillProvenance(
@@ -113,7 +111,6 @@ async def test_enabled_query_returns_metadata_only_results() -> None:
     assert result.results == [
         SkillCatalogSearchResult(
             name="jira-issue-updater",
-            latest_version="1.0.0",
             source_kind=AgentSkillSourceKind.BUILT_IN,
             eligible=True,
             in_current_snapshot=False,
