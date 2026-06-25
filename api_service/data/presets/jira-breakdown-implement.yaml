@@ -1,6 +1,6 @@
 slug: jira-breakdown-implement
 title: Jira Breakdown and Implement
-description: Break a broad Jira or design input into stories, create Jira issues, then create dependent Jira Implement tasks for each generated issue.
+description: Break a preferred source input into stories, create Jira issues, then create dependent Jira Implement tasks for each generated issue.
 scope: global
 tags:
   - jira
@@ -16,9 +16,15 @@ annotations:
   output: dependent-jira-implement-tasks
 inputs:
   - name: feature_request
-    label: Declarative Design Path or Text
+    label: Workflow Instructions
     type: markdown
-    required: true
+    required: false
+    default: ""
+  - name: source_design_path
+    label: Declarative Document Path
+    type: repo_path
+    required: false
+    default: ""
   - name: jira_project_key
     label: Jira Project Key
     type: text
@@ -56,13 +62,40 @@ inputs:
     required: false
     default: ""
 steps:
-  - title: Break down declarative design
+  - title: Load source Jira issue description
+    type: tool
+    enabled: "{{ (inputs.source_issue_key or '') | trim != '' and (inputs.source_design_path or '') | trim == '' }}"
     instructions: |-
-      Run moonspec-breakdown for this declarative design:
+      Fetch source Jira issue {{ inputs.source_issue_key }} through the deterministic trusted Jira tool surface.
 
+      Build a compact source brief from the issue key, summary, description, and acceptance criteria. The following breakdown step may use this trusted Jira issue description only when no declarative document path is provided.
+    tool:
+      id: jira.load_preset_brief
+      requiredCapabilities:
+        - jira
+      args: {}
+      inputs:
+        issueKey: "{{ inputs.source_issue_key }}"
+  - title: Break down preferred source input
+    instructions: |-
+      Run moonspec-breakdown using this input preference chain:
+
+      1. If Source declarative document path is non-empty, read that repo path and use it as the source design.
+      2. Otherwise, if trusted Jira previous output from the prior step is available, use its jiraPresetBrief as the source design.
+      3. Otherwise, use Workflow instructions as the source design.
+
+      Source declarative document path:
+      {{ inputs.source_design_path }}
+
+      Source Jira issue key:
+      {{ inputs.source_issue_key }}
+
+      Workflow instructions:
       {{ inputs.feature_request }}
 
       If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
+      If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, and set each story's sourceReference.path to null.
+      If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, and set each story's sourceReference.path to null.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
       Classify the input before extracting stories. If it is primarily an imperative checklist, status tracker, or migration plan and no explicit imperative override was given, fail fast with the moonspec-breakdown imperative-input error instead of decomposing it.
       Record sourceDocumentClass in the breakdown output.
@@ -92,7 +125,7 @@ steps:
       Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each eligible story from the reconciled MoonSpec breakdown.
 
       Use the runtime-provided story breakdown JSON path.
-      Every Jira issue must include the Source Document path from the story breakdown.
+      Every Jira issue must include the Source Document path from the story breakdown when present; otherwise include the source title and Source Jira issue key when present.
       Do not create Jira issues for stories where jiraCreation.action is skip or manual_review.
       For stories where jiraCreation.action is create_remaining_work_issue, create the Jira issue from the story's remainingWork while preserving the original story traceability.
       {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}

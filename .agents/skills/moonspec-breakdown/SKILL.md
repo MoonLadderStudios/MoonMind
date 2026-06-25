@@ -19,17 +19,20 @@ Good inputs include:
 - A pasted technical design.
 - A declarative design document.
 - A file path to a design artifact.
+- A trusted Jira issue brief or description when no declarative document path is provided.
 - A request to run or reproduce `/speckit.breakdown`.
 
 Do not use this skill for a single natural-language feature request. Use `moonspec-specify` for one clearly scoped story.
 
 ## Inputs
 
-- Treat the user's request text as the source design unless it names a readable file path.
-- If a file path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
-- If no design text or readable design path is provided, stop with: `ERROR "No technical design provided"`.
+- Select breakdown input content using this preference chain:
+  1. Declarative document path: if an explicit source or declarative document path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
+  2. Jira issue description: if no declarative document path is provided and trusted Jira issue context is available from MoonMind previous outputs, use `jiraPresetBrief` or the Jira issue description/acceptance criteria from that trusted context.
+  3. Workflow instructions: if neither of the above is available, use the workflow instructions or user request text as the source design.
+- If no selected input content is available after applying the preference chain, stop with: `ERROR "No technical design provided"`.
 - Preserve the original design text verbatim in the breakdown output so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
-- Preserve the source document reference path whenever the source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. This reference is required downstream so every Jira story can point back to the original declarative document.
+- Preserve the source document reference path whenever the selected source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. If the selected source is trusted Jira context or workflow instructions, set source and story reference paths to `null` and preserve the source title/key instead.
 - The canonical source document, not the breakdown output, remains the source of truth for desired state. Breakdown output is a temporary derived view (see `docs/Workflows/MoonSpecDocumentModel.md`).
 - Do not implement, plan, generate tasks, create Jira issues, create `spec.md`, or create directories under `specs/`.
 
@@ -38,7 +41,7 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
 Classify the source design before extracting coverage points, using the document classes in `docs/Workflows/MoonSpecDocumentModel.md`:
 
 - `canonical-declarative`: a readable repo path under `docs/` (or `.specify/memory/constitution.md`) describing desired state.
-- `declarative-text`: pasted declarative design text, or a file-backed declarative design outside `docs/`.
+- `declarative-text`: pasted declarative design text, trusted Jira issue description, workflow instructions, or a file-backed declarative design outside `docs/`.
 - `imperative-override`: a document whose primary framing is steps, phases, checkboxes, status, or migration sequencing, accepted only with an explicit user override.
 
 A document is declarative when it describes what the system is or should be; it is imperative when its primary framing is steps, phases, checkboxes, or status. Mixed documents are classified by their primary framing.
@@ -183,7 +186,7 @@ Never name any breakdown output `spec.md`. Never write to `specs/` during breakd
 
 The JSON file must be an object with:
 
-- `source`: object containing `title`, `path`, `referencePath`, `sourceDocumentClass`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For pasted designs without a file path, set them to `null` and use a clear title such as `inline user request`. `sourceDocumentClass` must be `canonical-declarative`, `declarative-text`, or `imperative-override` per the Input Classification section.
+- `source`: object containing `title`, `path`, `referencePath`, `sourceDocumentClass`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For trusted Jira issue descriptions or pasted workflow instructions without a file path, set paths to `null` and use a clear title such as the Jira issue key/summary or `inline workflow instructions`. `sourceDocumentClass` must be `canonical-declarative`, `declarative-text`, or `imperative-override` per the Input Classification section.
 - `extractedAt`: ISO-8601 timestamp.
 - `coverageGate`: exactly `PASS - every major design point is owned by at least one story.`
 - `stories`: ordered list of story objects.
@@ -194,7 +197,7 @@ Each story object must include:
 - `id`: stable story ID, such as `STORY-001`.
 - `summary`: concise title suitable for a Jira issue summary.
 - `description`: user-story or task narrative.
-- `sourceReference`: object containing `path`, `title`, `sections`, and `coverageIds`. For file-backed designs, `path` must be the same original design document path from `source.referencePath`; do not omit it from any story.
+- `sourceReference`: object containing `path`, `title`, `sections`, and `coverageIds`. For file-backed designs, `path` must be the same original design document path from `source.referencePath`; do not omit it from any story. For trusted Jira issue descriptions or workflow instructions, set `path` to `null` and preserve the selected source title.
 - `independentTest`: how this story can be validated independently.
 - `acceptanceCriteria`: concrete acceptance criteria.
 - `requirements`: functional requirements owned by the story.
@@ -206,7 +209,7 @@ Each story object must include:
 The markdown file must include the same substance for human review:
 
 - Source design title or path.
-- Original source document reference path for the breakdown and for each story.
+- Original source document reference path for the breakdown and for each story when a file path exists; otherwise show the selected Jira issue key/summary or workflow instruction title.
 - Story extraction date.
 - Design summary.
 - Coverage points.
@@ -268,7 +271,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - The canonical source document remains the source of truth for desired state; breakdown output is a temporary derived view and is never cited as authority over its source.
 - Classify the input per `docs/Workflows/MoonSpecDocumentModel.md` and fail fast on imperative inputs without an explicit override.
 - Preserve the original technical or declarative design verbatim in the breakdown output for later specify.
-- Every story candidate must carry a `sourceReference.path` back to the original declarative document when the source came from a file.
+- Every story candidate must carry a `sourceReference.path` back to the original declarative document when the source came from a file; otherwise it must carry the selected source title/key with `path: null`.
 - Prefer vertical user or operational outcomes over technical-layer slices.
 - Extract stable `DESIGN-REQ-*` coverage points before drafting story candidates.
 - Do not write specs in this skill.

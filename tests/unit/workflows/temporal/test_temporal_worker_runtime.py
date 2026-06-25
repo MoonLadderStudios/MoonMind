@@ -519,7 +519,7 @@ async def test_child_jira_breakdown_implement_expands_workflow_runtime_context(
             )
 
     task = expanded_parameters["workflow"]
-    downstream_task = task["steps"][3]["jiraOrchestration"]["task"]
+    downstream_task = task["steps"][4]["jiraOrchestration"]["task"]
     assert downstream_task["repository"] == "MoonLadderStudios/MoonMind"
     assert downstream_task["runtime"] == {"mode": "codex_cli"}
     assert downstream_task["publish"] == {
@@ -1780,7 +1780,7 @@ def test_runtime_planner_dedupes_repeated_identical_preset_steps():
     )
     breakdown_step = {
         "id": "tpl:jira-breakdown-orchestrate:1.0.0:01:6bfb1360",
-        "title": "Break down declarative design",
+        "title": "Break down preferred source input",
         "type": "skill",
         "skill": {"id": "moonspec-breakdown", "requiredCapabilities": ["git"]},
         "instructions": "Extract MoonSpec stories.",
