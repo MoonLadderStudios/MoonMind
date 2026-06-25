@@ -221,7 +221,7 @@ def test_registry_snapshot_indexes_tools_by_name_only():
             version="1.0.0",
         )
 
-def test_parse_plan_definition_rejects_tool_version_field():
+def test_parse_plan_definition_ignores_legacy_tool_version_field():
     store = InMemoryArtifactStore()
     snapshot = _snapshot(store)
     plan_payload = _plan_payload(
@@ -235,8 +235,10 @@ def test_parse_plan_definition_rejects_tool_version_field():
     }
     del plan_payload["nodes"][0]["skill"]
 
-    with pytest.raises(ValueError, match="node.tool.version"):
-        parse_plan_definition(plan_payload)
+    plan = parse_plan_definition(plan_payload)
+
+    assert plan.nodes[0].skill_name == "repo.run_tests"
+    assert "version" not in plan.nodes[0].to_payload()["tool"]
 
 def test_validate_plan_payload_rejects_invalid_reference_pointer():
     store = InMemoryArtifactStore()

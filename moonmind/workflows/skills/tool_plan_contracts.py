@@ -967,18 +967,8 @@ def parse_step(payload: Mapping[str, Any]) -> Step:
                 "invalid_plan",
                 f"node.tool.type must be 'skill' or 'agent_runtime', got '{tool_type}'",
             )
-        if "version" in tool_payload:
-            raise ContractValidationError(
-                "invalid_plan",
-                "node.tool.version is not supported; executable tools are identified by name only",
-            )
         node_payload = tool_payload
     elif isinstance(skill_payload, Mapping):
-        if "version" in skill_payload:
-            raise ContractValidationError(
-                "invalid_plan",
-                "node.skill.version is not supported; executable tools are identified by name only",
-            )
         node_payload = skill_payload
     else:
         raise ContractValidationError(

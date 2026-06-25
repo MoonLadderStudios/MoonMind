@@ -61,7 +61,6 @@ def _registry_payload() -> dict[str, object]:
         "skills": [
             {
                 "name": "repo.run_tests",
-                "version": "1.0.0",
                 "description": "Run tests",
                 "inputs": {"schema": {"type": "object", "properties": {}}},
                 "outputs": {"schema": {"type": "object", "properties": {}}},
@@ -116,7 +115,6 @@ async def test_activity_worker_topology_routes_one_activity_per_family(
             dispatcher = SkillActivityDispatcher()
             dispatcher.register_skill(
                 skill_name="repo.run_tests",
-                version="1.0.0",
                 handler=lambda inputs, _context: SkillResult(
                     status="COMPLETED",
                     outputs={"repo_ref": inputs["repo_ref"]},
