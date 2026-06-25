@@ -17,7 +17,6 @@ class GoalPresetSchedule:
 
     goal: str
     slug: str
-    version: str
     inputs: dict[str, Any]
     reason: str
     issue_key: str | None = None
@@ -135,7 +134,6 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
         return GoalPresetSchedule(
             goal=normalized_goal,
             slug=slug,
-            version="1.1.0" if slug == "jira-implement" else "1.0.0",
             issue_key=issue_key,
             inputs={
                 "jira_issue_key": issue_key,
@@ -150,7 +148,6 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
         return GoalPresetSchedule(
             goal=normalized_goal,
             slug="github-issue-implement",
-            version="1.0.0",
             issue_key=f"{repository}#{number}",
             inputs={
                 "github_issue": {"repository": repository, "number": number},
@@ -163,7 +160,6 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
         return GoalPresetSchedule(
             goal=normalized_goal,
             slug="jira-breakdown-orchestrate",
-            version="1.0.0",
             inputs={
                 "feature_request": normalized_goal,
                 "jira_project_key": _jira_project_key(normalized_goal),
@@ -179,7 +175,6 @@ def schedule_preset_from_goal(goal: str) -> GoalPresetSchedule | None:
     return GoalPresetSchedule(
         goal=normalized_goal,
         slug="moonspec-orchestrate",
-        version="1.0.0",
         inputs={
             "feature_request": normalized_goal,
             "source_design_path": "",

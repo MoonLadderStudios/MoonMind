@@ -71,7 +71,6 @@ _GITHUB_TARGET: dict[str, Any] = {
 def _jira_config(module, **overrides):
     defaults = dict(
         preset_slug="jira-implement",
-        preset_version="1.1.0",
         preset_scope="global",
         publish_mode="pr",
         constraints="Be careful",
@@ -83,7 +82,6 @@ def _jira_config(module, **overrides):
 def _github_config(module, **overrides):
     defaults = dict(
         preset_slug="github-issue-implement",
-        preset_version="1.0.0",
         preset_scope="global",
         publish_mode="branch",
         constraints="",
@@ -162,8 +160,8 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     # The selected preset is authored as the child taskTemplate (read by the
     # execution API), not inert batchTargetPreset metadata.
     assert payload["task"]["taskTemplate"]["slug"] == "jira-implement"
-    assert payload["task"]["taskTemplate"]["version"] == "1.1.0"
     assert payload["task"]["taskTemplate"]["scope"] == "global"
+    assert "version" not in payload["task"]["taskTemplate"]
     assert "batchTargetPreset" not in payload["task"]
     # Stable, length-bounded idempotency key.
     key = payload["idempotencyKey"]
@@ -171,16 +169,15 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     assert len(key) <= module["IDEMPOTENCY_KEY_MAX_LENGTH"]
 
 
-def test_build_child_request_authors_selected_preset_version_scope_and_ref():
-    # A non-default preset version / personal scope / scopeRef must be carried
-    # into the child taskTemplate so the execution API expands the exact
-    # selected preset instead of the goal scheduler's hard-coded global version.
+def test_build_child_request_authors_selected_preset_scope_and_ref():
+    # Personal scope / scopeRef must be carried into the child taskTemplate so
+    # the execution API expands the exact selected preset instead of the goal
+    # scheduler's global default.
     module = _load_module()
     request = module["build_child_request"](
         _JIRA_TARGET,
         config=_jira_config(
             module,
-            preset_version="2.3.0",
             preset_scope="personal",
             preset_scope_ref="user-123",
         ),
@@ -190,9 +187,9 @@ def test_build_child_request_authors_selected_preset_version_scope_and_ref():
     )
     template = request["payload"]["task"]["taskTemplate"]
     assert template["slug"] == "jira-implement"
-    assert template["version"] == "2.3.0"
     assert template["scope"] == "personal"
     assert template["scopeRef"] == "user-123"
+    assert "version" not in template
     assert "batchTargetPreset" not in request["payload"]["task"]
 
 
@@ -206,6 +203,30 @@ def test_build_child_request_omits_scope_ref_when_blank():
         inherit_runtime_from_caller=True,
     )
     assert "scopeRef" not in request["payload"]["task"]["taskTemplate"]
+
+
+def test_parse_args_accepts_slug_scope_without_preset_version(tmp_path):
+    module = _load_module()
+    targets = tmp_path / "targets.json"
+    targets.write_text("[]", encoding="utf-8")
+
+    args = module["_parse_args"](
+        [
+            "--targets",
+            str(targets),
+            "--target-preset-slug",
+            "jira-implement",
+            "--target-preset-scope",
+            "global",
+            "--publish-mode",
+            "pr",
+            "--max-workflows",
+            "1",
+        ]
+    )
+
+    assert args.target_preset_slug == "jira-implement"
+    assert not hasattr(args, "target_preset_version")
 
 
 def test_build_child_request_without_caller_omits_inheritance_directive():

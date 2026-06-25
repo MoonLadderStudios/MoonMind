@@ -26,6 +26,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import httpx
 from moonmind.workflows.executions.execution_contract import SUPPORTED_PUBLISH_MODES
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
@@ -65,7 +69,6 @@ class RuntimeSelection:
 @dataclass
 class TargetConfig:
     preset_slug: str
-    preset_version: str
     preset_scope: str = "global"
     preset_scope_ref: str | None = None
     publish_mode: str = "pr"
@@ -229,14 +232,13 @@ def build_child_request(
         "inputs": inputs,
         "publish": {"mode": publish_mode},
         # Author the child with the selected preset via ``taskTemplate`` so the
-        # execution API expands the exact slug/version/scope/scopeRef (see
+        # execution API expands the exact slug/scope/scopeRef (see
         # expand_preset_for_child_run). Without this the child is goal-only and
-        # the server goal scheduler silently substitutes a hard-coded global
-        # preset version, dropping any non-default version, personal scope, or
-        # scopeRef. ``batchTargetPreset`` has no readers, so it is not emitted.
+        # the server goal scheduler silently substitutes a global preset,
+        # dropping any personal scope or scopeRef. ``batchTargetPreset`` has no
+        # readers, so it is not emitted.
         "taskTemplate": {
             "slug": config.preset_slug,
-            "version": config.preset_version,
             "scope": config.preset_scope,
             **(
                 {"scopeRef": config.preset_scope_ref}
@@ -621,7 +623,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--targets", required=True, help="Path to resolved targets JSON."
     )
     parser.add_argument("--target-preset-slug", required=True)
-    parser.add_argument("--target-preset-version", required=True)
     parser.add_argument("--target-preset-scope", default="global")
     parser.add_argument("--target-preset-scope-ref", default=None)
     parser.add_argument("--publish-mode", default="pr")
@@ -646,7 +647,6 @@ async def main(argv: list[str] | None = None) -> int:
 
     config = TargetConfig(
         preset_slug=str(args.target_preset_slug).strip(),
-        preset_version=str(args.target_preset_version).strip(),
         preset_scope=str(args.target_preset_scope or "global").strip() or "global",
         preset_scope_ref=_text(args.target_preset_scope_ref),
         publish_mode=_normalize_publish_mode(args.publish_mode),
@@ -668,7 +668,6 @@ async def main(argv: list[str] | None = None) -> int:
         "actor": os.getenv("GITHUB_ACTOR") or os.getenv("USER") or "unknown",
         "targetPreset": {
             "slug": config.preset_slug,
-            "version": config.preset_version,
             "scope": config.preset_scope,
             "scopeRef": config.preset_scope_ref,
         },
@@ -708,7 +707,7 @@ async def main(argv: list[str] | None = None) -> int:
     print(json.dumps(payload, indent=2))
     print(
         f"queued={payload['created']} skipped={len(skipped)} errors={len(errors)} "
-        f"preset={config.preset_slug}@{config.preset_version}"
+        f"preset={config.preset_slug}"
     )
     return 1 if errors else 0
 

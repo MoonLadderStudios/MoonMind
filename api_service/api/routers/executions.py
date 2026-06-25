@@ -5566,7 +5566,13 @@ def _apply_goal_schedule_metadata(
     )
     applied_template_payload = {
         "slug": str(applied_template.get("slug") or schedule.slug),
-        "version": str(applied_template.get("version") or schedule.version),
+        **(
+            {
+                "presetDigest": str(applied_template.get("presetDigest")).strip(),
+            }
+            if str(applied_template.get("presetDigest") or "").strip()
+            else {}
+        ),
         "inputs": (
             dict(applied_template.get("inputs"))
             if isinstance(applied_template.get("inputs"), Mapping)
@@ -5592,16 +5598,17 @@ def _apply_goal_schedule_metadata(
     task_payload["appliedStepTemplates"] = [applied_template_payload]
     task_payload["taskTemplate"] = {
         "slug": str(applied_template.get("slug") or schedule.slug),
-        "version": str(applied_template.get("version") or schedule.version),
         "scope": "global",
     }
     task_payload["presetSchedule"] = {
         "source": "goal",
         "reason": schedule.reason,
         "presetSlug": schedule.slug,
-        "presetVersion": schedule.version,
         "jiraIssueKey": schedule.issue_key,
     }
+    preset_digest = str(applied_template.get("presetDigest") or "").strip()
+    if preset_digest:
+        task_payload["taskTemplate"]["presetDigest"] = preset_digest
 
 
 async def _expand_goal_preset_for_workflow_submission(
@@ -5651,7 +5658,6 @@ async def _expand_goal_preset_for_workflow_submission(
         "slug": schedule.slug,
         "scope": "global",
         "scope_ref": None,
-        "version": schedule.version,
         "inputs": template_inputs,
         "context": context,
         "options": ExpandOptions(should_enforce_step_limit=True),

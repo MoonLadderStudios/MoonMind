@@ -126,7 +126,7 @@ def _build_workflow_preview(
             for key in (
                 "presetId",
                 "presetSlug",
-                "presetVersion",
+                "presetDigest",
                 "includePath",
                 "originalStepId",
             ):

@@ -553,13 +553,13 @@ def _mm639_authored_task_payload() -> dict[str, Any]:
         "appliedStepTemplates": [
             {
                 "slug": "jira-orchestrate",
-                "version": "1.0.0",
+                "version": "1",
                 "inputs": {"issueKey": "MM-639"},
                 "stepIds": ["step-1", "step-2"],
                 "composition": {
                     "slug": "jira-orchestrate",
                     "includes": [
-                        {"slug": "jira-fetch", "version": "1.0.0"},
+                        {"slug": "jira-fetch", "version": "1"},
                     ],
                 },
             }
@@ -567,7 +567,7 @@ def _mm639_authored_task_payload() -> dict[str, Any]:
         "authoredPresets": [
             {
                 "presetSlug": "jira-orchestrate",
-                "presetVersion": "1.0.0",
+                "presetDigest": "digest-1",
                 "inputBindings": {"issueKey": "MM-639"},
             }
         ],
@@ -580,7 +580,7 @@ def _mm639_authored_task_payload() -> dict[str, Any]:
                 "templateStepId": "tpl:jira-orchestrate:fetch",
                 "presetProvenance": {
                     "presetSlug": "jira-orchestrate",
-                    "presetVersion": "1.0.0",
+                    "presetDigest": "digest-1",
                 },
             },
             {
@@ -598,7 +598,7 @@ def _mm639_authored_task_payload() -> dict[str, Any]:
                 ],
                 "presetProvenance": {
                     "presetSlug": "jira-orchestrate",
-                    "presetVersion": "1.0.0",
+                    "presetDigest": "digest-1",
                     "sourceStepId": "tpl:jira-orchestrate:implement",
                 },
                 "detachedFromPreset": True,
@@ -635,8 +635,8 @@ async def test_goal_preset_submission_expands_before_planner(tmp_path) -> None:
 
     assert task_payload["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1.1.0",
         "scope": "global",
+        "presetDigest": task_payload["appliedStepTemplates"][0]["presetDigest"],
     }
     assert task_payload["inputs"]["jira_issue_key"] == "MM-747"
     assert task_payload["presetSchedule"]["presetSlug"] == "jira-implement"
@@ -2683,7 +2683,7 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_p
                     "publish": {"mode": "pr"},
                     "steps": [
                         {
-                            "id": "tpl:jira-orchestrate:1.0.0:01",
+                            "id": "tpl:jira-orchestrate:1:01",
                             "title": "Move Jira issue",
                             "instructions": "Transition THOR-352 to In Progress.",
                             "skill": {"id": "jira-issue-updater", "args": {}},
@@ -2692,8 +2692,8 @@ def test_create_task_shaped_execution_allows_jira_orchestrate_first_step_skill_p
                     "appliedStepTemplates": [
                         {
                             "slug": "jira-orchestrate",
-                            "version": "1.0.0",
-                            "stepIds": ["tpl:jira-orchestrate:1.0.0:01"],
+                            "version": "1",
+                            "stepIds": ["tpl:jira-orchestrate:1:01"],
                         }
                     ],
                 },
@@ -4214,20 +4214,20 @@ def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
                     ],
                     "taskTemplate": {
                         "slug": "jira-implement",
-                        "version": "1.0.0",
+                        "version": "1",
                         "scope": "global",
                     },
                     "presetSchedule": {
                         "source": "goal",
                         "reason": "jira_issue_goal",
                         "presetSlug": "jira-implement",
-                        "presetVersion": "1.0.0",
+                        "presetDigest": "digest-1",
                         "jiraIssueKey": "MM-747",
                     },
                     "appliedStepTemplates": [
                         {
                             "slug": "jira-implement",
-                            "version": "1.0.0",
+                            "version": "1",
                             "stepIds": ["step-1"],
                         }
                     ],
@@ -4243,14 +4243,14 @@ def test_create_task_shaped_execution_preserves_preset_schedule_provenance(
     task = initial_parameters["workflow"]
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1.0.0",
+        "version": "1",
         "scope": "global",
     }
     assert task["presetSchedule"] == {
         "source": "goal",
         "reason": "jira_issue_goal",
         "presetSlug": "jira-implement",
-        "presetVersion": "1.0.0",
+        "presetDigest": "digest-1",
         "jiraIssueKey": "MM-747",
     }
     assert task["appliedStepTemplates"][0]["slug"] == "jira-implement"
@@ -4274,7 +4274,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                     },
                     "steps": [
                         {
-                            "id": "tpl:demo:1.0.0:01",
+                            "id": "tpl:demo:1:01",
                             "title": "Clarify the create-task recovery plan",
                             "instructions": "Audit the regression and list the missing controls.",
                             "skill": {
@@ -4284,7 +4284,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
                             },
                         },
                         {
-                            "id": "tpl:demo:1.0.0:02",
+                            "id": "tpl:demo:1:02",
                             "title": "Implement the restored builder",
                             "instructions": "Restore presets and multi-step submission.",
                             "runtime": {
@@ -4311,7 +4311,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
     assert initial_parameters["stepCount"] == 2
     assert initial_parameters["workflow"]["steps"] == [
         {
-            "id": "tpl:demo:1.0.0:01",
+            "id": "tpl:demo:1:01",
             "title": "Clarify the create-task recovery plan",
             "instructions": "Audit the regression and list the missing controls.",
             "skill": {
@@ -4321,7 +4321,7 @@ def test_create_task_shaped_execution_preserves_steps_and_uses_step_title_defaul
             },
         },
         {
-            "id": "tpl:demo:1.0.0:02",
+            "id": "tpl:demo:1:02",
             "title": "Implement the restored builder",
             "instructions": "Restore presets and multi-step submission.",
             "runtime": {
@@ -4355,46 +4355,46 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
                     "authoredPresets": [
                         {
                             "presetSlug": "root-preset",
-                            "presetVersion": "1.0.0",
-                            "includePath": ["root-preset@1.0.0"],
+                            "presetDigest": "digest-1",
+                            "includePath": ["root-preset"],
                         },
                         {
                             "presetSlug": "child-preset",
-                            "presetVersion": "1.0.0",
+                            "presetDigest": "digest-1",
                             "alias": "checks",
                             "inputMapping": {"target": "recursive presets"},
                             "includePath": [
-                                "root-preset@1.0.0",
-                                "checks:child-preset@1.0.0",
+                                "root-preset",
+                                "checks:child-preset",
                             ],
                         },
                     ],
                     "appliedStepTemplates": [
                         {
                             "slug": "root-preset",
-                            "version": "1.0.0",
+                            "version": "1",
                             "stepIds": [
-                                "tpl:root-preset:1.0.0:01",
-                                "tpl:child-preset:1.0.0:01",
+                                "tpl:root-preset:1:01",
+                                "tpl:child-preset:1:01",
                             ],
                             "composition": {
                                 "slug": "root-preset",
-                                "version": "1.0.0",
-                                "path": ["root-preset@1.0.0"],
+                                "version": "1",
+                                "path": ["root-preset"],
                                 "stepIds": [
-                                    "tpl:root-preset:1.0.0:01",
-                                    "tpl:child-preset:1.0.0:01",
+                                    "tpl:root-preset:1:01",
+                                    "tpl:child-preset:1:01",
                                 ],
                                 "includes": [
                                     {
                                         "slug": "child-preset",
-                                        "version": "1.0.0",
+                                        "version": "1",
                                         "alias": "checks",
                                         "path": [
-                                            "root-preset@1.0.0",
-                                            "checks:child-preset@1.0.0",
+                                            "root-preset",
+                                            "checks:child-preset",
                                         ],
-                                        "stepIds": ["tpl:child-preset:1.0.0:01"],
+                                        "stepIds": ["tpl:child-preset:1:01"],
                                     }
                                 ],
                             },
@@ -4402,28 +4402,28 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
                     ],
                     "steps": [
                         {
-                            "id": "tpl:root-preset:1.0.0:01",
+                            "id": "tpl:root-preset:1:01",
                             "title": "Prepare task",
                             "instructions": "Prepare the task context.",
                             "source": {
                                 "kind": "preset-derived",
                                 "presetSlug": "root-preset",
-                                "presetVersion": "1.0.0",
-                                "includePath": ["root-preset@1.0.0"],
+                                "presetDigest": "digest-1",
+                                "includePath": ["root-preset"],
                                 "originalStepId": "prepare-task",
                             },
                         },
                         {
-                            "id": "tpl:child-preset:1.0.0:01",
+                            "id": "tpl:child-preset:1:01",
                             "title": "Run checks",
                             "instructions": "Run recursive preset checks.",
                             "source": {
                                 "kind": "preset-derived",
                                 "presetSlug": "child-preset",
-                                "presetVersion": "1.0.0",
+                                "presetDigest": "digest-1",
                                 "includePath": [
-                                    "root-preset@1.0.0",
-                                    "checks:child-preset@1.0.0",
+                                    "root-preset",
+                                    "checks:child-preset",
                                 ],
                                 "originalStepId": "run-checks",
                             },
@@ -4439,8 +4439,8 @@ def test_create_task_shaped_execution_preserves_recursive_preset_metadata(
     assert task["steps"][0]["source"]["presetSlug"] == "root-preset"
     assert task["steps"][0]["source"]["originalStepId"] == "prepare-task"
     assert task["steps"][1]["source"]["includePath"] == [
-        "root-preset@1.0.0",
-        "checks:child-preset@1.0.0",
+        "root-preset",
+        "checks:child-preset",
     ]
     assert task["steps"][1]["source"]["originalStepId"] == "run-checks"
     assert [preset["presetSlug"] for preset in task["authoredPresets"]] == [
@@ -4473,8 +4473,8 @@ def test_create_task_shaped_execution_preserves_manual_and_preset_step_order(
                     "authoredPresets": [
                         {
                             "presetSlug": "parent-flow",
-                            "presetVersion": "1.0.0",
-                            "includePath": ["parent-flow@1.0.0"],
+                            "presetDigest": "digest-1",
+                            "includePath": ["parent-flow"],
                         }
                     ],
                     "steps": [
@@ -4485,28 +4485,28 @@ def test_create_task_shaped_execution_preserves_manual_and_preset_step_order(
                             "skill": {"id": "auto"},
                         },
                         {
-                            "id": "tpl:parent-flow:1.0.0:01:abcdef12",
+                            "id": "tpl:parent-flow:1:01:abcdef12",
                             "type": "skill",
                             "instructions": "Preset one.",
                             "skill": {"id": "auto"},
                             "source": {
                                 "kind": "preset-derived",
                                 "presetSlug": "parent-flow",
-                                "presetVersion": "1.0.0",
-                                "includePath": ["parent-flow@1.0.0"],
+                                "presetDigest": "digest-1",
+                                "includePath": ["parent-flow"],
                                 "originalStepId": "preset-derived-1",
                             },
                         },
                         {
-                            "id": "tpl:parent-flow:1.0.0:02:abcdef12",
+                            "id": "tpl:parent-flow:1:02:abcdef12",
                             "type": "skill",
                             "instructions": "Preset two.",
                             "skill": {"id": "auto"},
                             "source": {
                                 "kind": "preset-derived",
                                 "presetSlug": "parent-flow",
-                                "presetVersion": "1.0.0",
-                                "includePath": ["parent-flow@1.0.0"],
+                                "presetDigest": "digest-1",
+                                "includePath": ["parent-flow"],
                                 "originalStepId": "preset-derived-2",
                             },
                         },
@@ -4526,8 +4526,8 @@ def test_create_task_shaped_execution_preserves_manual_and_preset_step_order(
     task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
     assert [step["id"] for step in task["steps"]] == [
         "manual-before",
-        "tpl:parent-flow:1.0.0:01:abcdef12",
-        "tpl:parent-flow:1.0.0:02:abcdef12",
+        "tpl:parent-flow:1:01:abcdef12",
+        "tpl:parent-flow:1:02:abcdef12",
         "manual-after",
     ]
     assert task["steps"][0].get("source") in (None, {"kind": "manual"})
@@ -4545,8 +4545,8 @@ def test_create_task_shaped_execution_preserves_detached_edited_step_source(
     detached_source = {
         "kind": "detached",
         "presetSlug": "quality-flow",
-        "presetVersion": "1.0.0",
-        "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
+        "presetDigest": "digest-1",
+        "includePath": ["root-flow", "quality-flow"],
         "originalStepId": "lint-target",
     }
     response = test_client.post(
@@ -4706,7 +4706,7 @@ def _pentest_workflow_payload(
                 "tool": {
                     "type": "skill",
                     "name": "security.pentest.run",
-                    "version": "1.0.0",
+                    "version": "1",
                     "inputs": safe_inputs,
                 },
                 "steps": [
@@ -4717,7 +4717,7 @@ def _pentest_workflow_payload(
                         "tool": {
                             "type": "skill",
                             "name": "security.pentest.run",
-                            "version": "1.0.0",
+                            "version": "1",
                             "inputs": step_safe_inputs,
                         },
                     }
@@ -4761,7 +4761,7 @@ def test_create_task_shaped_execution_accepts_authorized_pentest_roles(
     assert workflow["tool"] == {
         "type": "skill",
         "name": "security.pentest.run",
-        "version": "1.0.0",
+        "version": "1",
         "inputs": {
             "target": "https://lab.example.test",
             "scope_artifact_ref": "art_scope_valid",
@@ -7126,7 +7126,7 @@ def test_serialize_execution_surfaces_task_template_slug_as_primary_skill() -> N
             "instructions": "Use the existing Jira Orchestrate workflow.",
             "taskTemplate": {
                 "slug": "jira-orchestrate",
-                "version": "1.0.0",
+                "version": "1",
             },
         },
     }
@@ -7146,12 +7146,12 @@ def test_serialize_execution_prefers_preset_slug_over_child_skill_display() -> N
             "instructions": "Run Jira Implement for MM-901.",
             "taskTemplate": {
                 "slug": "jira-implement",
-                "version": "1.0.0",
+                "version": "1",
             },
             "tool": {
                 "type": "skill",
                 "name": "jira-issue-updater",
-                "version": "1.0.0",
+                "version": "1",
             },
             "skill": {
                 "id": "jira-issue-updater",
@@ -7160,13 +7160,13 @@ def test_serialize_execution_prefers_preset_slug_over_child_skill_display() -> N
             "appliedStepTemplates": [
                 {
                     "slug": "jira-implement",
-                    "version": "1.0.0",
-                    "stepIds": ["tpl:jira-implement:1.0.0:08"],
+                    "version": "1",
+                    "stepIds": ["tpl:jira-implement:1:08"],
                 }
             ],
             "steps": [
                 {
-                    "id": "tpl:jira-implement:1.0.0:08",
+                    "id": "tpl:jira-implement:1:08",
                     "title": "Finalize Jira status",
                     "instructions": "Update Jira with implementation status.",
                     "skill": {
@@ -7194,7 +7194,7 @@ def test_serialize_execution_surfaces_applied_template_slug_as_primary_skill() -
             "appliedStepTemplates": [
                 {
                     "slug": "jira-orchestrate",
-                    "version": "1.0.0",
+                    "version": "1",
                     "stepIds": ["tpl:jira-orchestrate:1"],
                 }
             ],
@@ -7216,12 +7216,12 @@ def test_serialize_execution_uses_latest_applied_template_as_primary_skill() -> 
             "appliedStepTemplates": [
                 {
                     "slug": "initial-preset",
-                    "version": "1.0.0",
+                    "version": "1",
                     "stepIds": ["tpl:initial-preset:1"],
                 },
                 {
                     "slug": "latest-preset",
-                    "version": "1.0.0",
+                    "version": "1",
                     "stepIds": ["tpl:latest-preset:1"],
                 },
             ],
@@ -7315,7 +7315,7 @@ def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
                 {"name": "pr-resolver", "version": "1.2.0"},
                 {
                     "name": "fix-ci",
-                    "version": "2.0.0",
+                    "version": "2",
                     "source_kind": "deployment",
                     "source_path": ".agents/skills/fix-ci",
                 },
@@ -8802,7 +8802,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
                     "id": "fetch-issue",
                     "title": "Fetch issue",
                     "type": "tool",
-                    "tool": {"id": "jira.get_issue", "version": "1.0.0"},
+                    "tool": {"id": "jira.get_issue", "version": "1"},
                 },
                 {
                     "id": "implement",
@@ -8842,7 +8842,7 @@ def test_get_execution_steps_falls_back_to_stored_task_steps_when_temporal_query
     assert payload["steps"][0]["tool"] == {
         "type": "tool",
         "name": "jira.get_issue",
-        "version": "1.0.0",
+        "version": "1",
     }
     assert payload["steps"][1]["tool"]["name"] == "moonspec-implement"
     assert payload["steps"][1]["dependsOn"] == ["fetch-issue"]
@@ -8868,7 +8868,7 @@ def test_get_execution_steps_fallback_prefers_structured_step_order(
                     "id": "fetch-issue",
                     "title": "Fetch issue",
                     "type": "tool",
-                    "tool": {"id": "jira.get_issue", "version": "1.0.0"},
+                    "tool": {"id": "jira.get_issue", "version": "1"},
                 },
                 {
                     "id": "implement",
@@ -9696,9 +9696,9 @@ def test_original_task_input_snapshot_payload_preserves_mm639_authored_fields() 
     assert authored["includeTreeSummary"] == [
         {
             "presetSlug": "jira-orchestrate",
-            "presetVersion": "1.0.0",
+            "presetDigest": None,
             "includedSlug": "jira-fetch",
-            "includedVersion": "1.0.0",
+            "includedDigest": None,
         }
     ]
     assert authored["finalSubmittedOrder"] == [

@@ -58,8 +58,6 @@ def test_list_templates_success() -> None:
             "scopeRef": None,
             "title": "Example",
             "description": "desc",
-            "latestVersion": "1.0.0",
-            "version": "1.0.0",
             "tags": ["demo"],
             "isFavorite": False,
             "recentAppliedAt": None,
@@ -95,14 +93,12 @@ def test_expand_template_success() -> None:
         "steps": [{"id": "tpl:demo:1.0.0:01:abcd1234", "instructions": "do work"}],
         "composition": {
             "slug": "demo",
-            "version": "1.0.0",
             "scope": "global",
             "stepIds": ["tpl:demo:1.0.0:01:abcd1234"],
             "includes": [],
         },
         "appliedTemplate": {
             "slug": "demo",
-            "version": "1.0.0",
             "inputs": {},
             "stepIds": ["tpl:demo:1.0.0:01:abcd1234"],
             "appliedAt": "2026-02-18T00:00:00+00:00",
@@ -114,7 +110,7 @@ def test_expand_template_success() -> None:
     response = client.post(
         "/api/presets/demo:expand",
         params={"scope": "global"},
-        json={"version": "1.0.0", "inputs": {}, "options": {"enforceStepLimit": True}},
+        json={"inputs": {}, "options": {"enforceStepLimit": True}},
     )
 
     assert response.status_code == 200
@@ -131,8 +127,6 @@ def test_save_from_workflow_success() -> None:
         "scopeRef": str(uuid4()),
         "title": "Saved Template",
         "description": "Saved",
-        "latestVersion": "1.0.0",
-        "version": "1.0.0",
         "tags": [],
         "isFavorite": False,
         "recentAppliedAt": None,

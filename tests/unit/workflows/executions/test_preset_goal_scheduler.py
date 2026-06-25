@@ -10,7 +10,6 @@ def test_schedule_preset_from_goal_selects_jira_implement_for_issue_goal() -> No
 
     assert schedule is not None
     assert schedule.slug == "jira-implement"
-    assert schedule.version == "1.1.0"
     assert schedule.issue_key == "MM-747"
     assert schedule.inputs["jira_issue_key"] == "MM-747"
 
@@ -31,7 +30,6 @@ def test_schedule_preset_from_goal_selects_github_issue_implement_for_issue_url(
 
     assert schedule is not None
     assert schedule.slug == "github-issue-implement"
-    assert schedule.version == "1.0.0"
     assert schedule.issue_key == "MoonLadderStudios/MoonMind#123"
     assert schedule.inputs["github_issue"] == {
         "repository": "MoonLadderStudios/MoonMind",

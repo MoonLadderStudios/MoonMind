@@ -513,7 +513,6 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
                 "authoredPresets": [
                     {
                         "presetId": "runtime-quality-followup",
-                        "version": "2026-04-17",
                     }
                 ],
                 "steps": [
@@ -524,7 +523,6 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
                         "source": {
                             "kind": "preset-derived",
                             "presetId": "runtime-quality-followup",
-                            "version": "2026-04-17",
                         },
                     }
                 ],
@@ -536,13 +534,11 @@ def test_canonical_task_payload_accepts_legacy_preset_version_keys() -> None:
     assert task["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
-            "presetVersion": "2026-04-17",
         }
     ]
     assert task["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetId": "runtime-quality-followup",
-        "presetVersion": "2026-04-17",
     }
 
 def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
@@ -562,7 +558,6 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
                     "source": {
                         "kind": "preset-derived",
                         "presetId": "jira-flow",
-                        "presetVersion": "2026-04-24",
                         "includePath": ["root", "fetch"],
                         "originalStepId": "fetch-jira-issue",
                     },
@@ -588,7 +583,6 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
     assert dumped_steps[0]["source"] == {
         "kind": "preset-derived",
         "presetId": "jira-flow",
-        "presetVersion": "2026-04-24",
         "includePath": ["root", "fetch"],
         "originalStepId": "fetch-jira-issue",
     }
@@ -603,12 +597,10 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
         {
             "kind": "preset-derived",
             "presetId": "stale-preset",
-            "presetVersion": "missing-from-catalog",
         },
         {
             "kind": "preset-include",
             "presetSlug": "parent-flow",
-            "presetVersion": "2026-04-24",
             "includePath": ["root", "child"],
             "originalStepId": "child-step",
         },
@@ -652,7 +644,6 @@ def test_task_steps_preserve_detached_template_source_provenance() -> None:
                     "source": {
                         "kind": "detached",
                         "presetSlug": "quality-flow",
-                        "presetVersion": "1.0.0",
                         "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
                         "originalStepId": "lint-target",
                     },
@@ -665,7 +656,6 @@ def test_task_steps_preserve_detached_template_source_provenance() -> None:
     assert dumped["source"] == {
         "kind": "detached",
         "presetSlug": "quality-flow",
-        "presetVersion": "1.0.0",
         "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
         "originalStepId": "lint-target",
     }
@@ -680,13 +670,11 @@ def test_canonical_task_payload_preserves_recursive_preset_source_original_step_
                 "authoredPresets": [
                     {
                         "presetSlug": "parent-flow",
-                        "presetVersion": "1.0.0",
                         "scope": "global",
                         "includePath": ["parent-flow@1.0.0"],
                     },
                     {
                         "presetSlug": "child-checks",
-                        "presetVersion": "1.0.0",
                         "alias": "quality",
                         "scope": "global",
                         "includePath": [
@@ -705,7 +693,6 @@ def test_canonical_task_payload_preserves_recursive_preset_source_original_step_
                         "source": {
                             "kind": "preset-derived",
                             "presetSlug": "child-checks",
-                            "presetVersion": "1.0.0",
                             "includePath": [
                                 "parent-flow@1.0.0",
                                 "quality:child-checks@1.0.0",
@@ -740,7 +727,6 @@ def test_canonical_task_payload_preserves_detached_template_source_provenance() 
                         "source": {
                             "kind": "detached",
                             "presetSlug": "quality-flow",
-                            "presetVersion": "1.0.0",
                             "includePath": [
                                 "root-flow@1.0.0",
                                 "quality-flow@1.0.0",
@@ -757,7 +743,6 @@ def test_canonical_task_payload_preserves_detached_template_source_provenance() 
     assert task["steps"][0]["source"] == {
         "kind": "detached",
         "presetSlug": "quality-flow",
-        "presetVersion": "1.0.0",
         "includePath": ["root-flow@1.0.0", "quality-flow@1.0.0"],
         "originalStepId": "lint-target",
     }
@@ -771,13 +756,11 @@ def test_task_authored_presets_accept_recursive_bindings() -> None:
                 "authoredPresets": [
                     {
                         "presetSlug": "parent-flow",
-                        "presetVersion": "1.0.0",
                         "scope": "global",
                         "includePath": ["parent-flow@1.0.0"],
                     },
                     {
                         "presetSlug": "child-checks",
-                        "presetVersion": "1.0.0",
                         "alias": "quality",
                         "scope": "global",
                         "includePath": [
@@ -795,7 +778,6 @@ def test_task_authored_presets_accept_recursive_bindings() -> None:
                         "source": {
                             "kind": "preset-derived",
                             "presetSlug": "child-checks",
-                            "presetVersion": "1.0.0",
                             "includePath": [
                                 "parent-flow@1.0.0",
                                 "quality:child-checks@1.0.0",
@@ -810,7 +792,6 @@ def test_task_authored_presets_accept_recursive_bindings() -> None:
     task = payload.model_dump(by_alias=True, exclude_none=True)["workflow"]
     assert task["authoredPresets"][1] == {
         "presetSlug": "child-checks",
-        "presetVersion": "1.0.0",
         "alias": "quality",
         "includePath": [
             "parent-flow@1.0.0",
@@ -1106,7 +1087,7 @@ def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() ->
                 "publish": {"mode": "pr"},
                 "steps": [
                     {
-                        "id": "tpl:jira-orchestrate:1.0.0:01",
+                        "id": "tpl:jira-orchestrate:01",
                         "title": "Move Jira issue",
                         "instructions": "Transition THOR-352 to In Progress.",
                         "skill": {"id": "jira-issue-updater", "args": {}},
@@ -1115,8 +1096,7 @@ def test_jira_orchestrate_preset_context_allows_first_step_skill_pr_publish() ->
                 "appliedStepTemplates": [
                     {
                         "slug": "jira-orchestrate",
-                        "version": "1.0.0",
-                        "stepIds": ["tpl:jira-orchestrate:1.0.0:01"],
+                        "stepIds": ["tpl:jira-orchestrate:01"],
                     }
                 ],
             },

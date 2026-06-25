@@ -238,37 +238,37 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
     authored_presets = [
         {
             "presetSlug": "parent-flow",
-            "presetVersion": "1.0.0",
+            "presetDigest": "digest-parent",
             "scope": "global",
-            "includePath": ["parent-flow@1.0.0"],
+            "includePath": ["parent-flow"],
         },
         {
             "presetSlug": "child-checks",
-            "presetVersion": "1.0.0",
+            "presetDigest": "digest-child",
             "alias": "quality",
             "scope": "global",
             "includePath": [
-                "parent-flow@1.0.0",
-                "quality:child-checks@1.0.0",
+                "parent-flow",
+                "quality:child-checks",
             ],
             "inputMapping": {"target": "preset composition"},
         },
     ]
     composition = {
         "slug": "parent-flow",
-        "version": "1.0.0",
+        "digest": "digest-parent",
         "scope": "global",
-        "path": ["parent-flow@1.0.0"],
+        "path": ["parent-flow"],
         "stepIds": ["tpl:parent-flow:1.0.0:01"],
         "includes": [
             {
                 "slug": "child-checks",
-                "version": "1.0.0",
+                "digest": "digest-child",
                 "scope": "global",
                 "alias": "quality",
                 "path": [
-                    "parent-flow@1.0.0",
-                    "quality:child-checks@1.0.0",
+                    "parent-flow",
+                    "quality:child-checks",
                 ],
                 "inputMapping": {"target": "preset composition"},
                 "stepIds": ["tpl:parent-flow:1.0.0:01"],
@@ -298,10 +298,10 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
                                 "source": {
                                     "kind": "preset-derived",
                                     "presetSlug": "child-checks",
-                                    "presetVersion": "1.0.0",
+                                    "presetDigest": "digest-child",
                                     "includePath": [
-                                        "parent-flow@1.0.0",
-                                        "quality:child-checks@1.0.0",
+                                        "parent-flow",
+                                        "quality:child-checks",
                                     ],
                                     "originalStepId": "lint-target",
                                 },
@@ -311,7 +311,7 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
                         "appliedStepTemplates": [
                             {
                                 "slug": "parent-flow",
-                                "version": "1.0.0",
+                                "presetDigest": "digest-parent",
                                 "stepIds": ["tpl:parent-flow:1.0.0:01"],
                                 "composition": composition,
                                 "authoredPresets": authored_presets,
@@ -328,8 +328,8 @@ def test_task_shaped_submission_boundary_preserves_recursive_preset_metadata(
     assert task["appliedStepTemplates"][0]["composition"] == composition
     assert task["appliedStepTemplates"][0]["authoredPresets"] == authored_presets
     assert task["steps"][0]["source"]["includePath"] == [
-        "parent-flow@1.0.0",
-        "quality:child-checks@1.0.0",
+        "parent-flow",
+        "quality:child-checks",
     ]
     assert task["steps"][0]["source"]["originalStepId"] == "lint-target"
     assert all(step.get("kind") != "include" for step in task["steps"])
@@ -380,8 +380,8 @@ def test_mm569_task_shaped_submission_preserves_flat_tool_skill_provenance(
         step["source"] = {
             "kind": "preset-derived",
             "presetSlug": "mm569-parent",
-            "presetVersion": "1.0.0",
-            "includePath": ["mm569-parent@1.0.0"],
+            "presetDigest": "digest-mm569-parent",
+            "includePath": ["mm569-parent"],
         }
 
     with test_client:

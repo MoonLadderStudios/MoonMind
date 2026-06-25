@@ -173,21 +173,6 @@ def _skill_metadata_required_capabilities(skill_id: object) -> tuple[str, ...]:
     return tuple(required)
 
 
-def _normalize_preset_version_alias(value: object) -> object:
-    if not isinstance(value, Mapping):
-        return value
-    if "version" not in value:
-        return value
-    normalized = dict(value)
-    legacy_version = _clean_optional_str(normalized.pop("version"))
-    current_version = _clean_optional_str(normalized.get("presetVersion"))
-    if legacy_version and current_version and legacy_version != current_version:
-        raise WorkflowContractError("presetVersion conflicts with legacy version")
-    if legacy_version and not current_version:
-        normalized["presetVersion"] = legacy_version
-    return normalized
-
-
 def _contains_data_image_url(value: object) -> bool:
     if isinstance(value, str):
         return _DATA_IMAGE_URL_PATTERN.match(value.strip()) is not None
@@ -1349,17 +1334,12 @@ class WorkflowStepSource(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_version(cls, value: object) -> object:
-        return _normalize_preset_version_alias(value)
-
     kind: Literal["manual", "preset-derived", "preset-include", "detached"] | None = (
         Field(None, alias="kind")
     )
     preset_id: str | None = Field(None, alias="presetId")
     preset_slug: str | None = Field(None, alias="presetSlug")
-    preset_version: str | None = Field(None, alias="presetVersion")
+    preset_digest: str | None = Field(None, alias="presetDigest")
     include_path: list[str] | None = Field(None, alias="includePath")
     original_step_id: str | None = Field(None, alias="originalStepId")
 
@@ -1367,7 +1347,7 @@ class WorkflowStepSource(BaseModel):
         "kind",
         "preset_id",
         "preset_slug",
-        "preset_version",
+        "preset_digest",
         "original_step_id",
         mode="before",
     )
@@ -1394,14 +1374,9 @@ class AuthoredPresetBinding(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    @model_validator(mode="before")
-    @classmethod
-    def _accept_legacy_version(cls, value: object) -> object:
-        return _normalize_preset_version_alias(value)
-
     preset_id: str | None = Field(None, alias="presetId")
     preset_slug: str | None = Field(None, alias="presetSlug")
-    preset_version: str | None = Field(None, alias="presetVersion")
+    preset_digest: str | None = Field(None, alias="presetDigest")
     alias: str | None = Field(None, alias="alias")
     include_path: list[str] | None = Field(None, alias="includePath")
     input_mapping: dict[str, Any] | None = Field(None, alias="inputMapping")
@@ -1410,7 +1385,7 @@ class AuthoredPresetBinding(BaseModel):
     @field_validator(
         "preset_id",
         "preset_slug",
-        "preset_version",
+        "preset_digest",
         "alias",
         "scope",
         mode="before",
@@ -2605,9 +2580,7 @@ def _include_tree_summary(
         parent_slug = _clean_optional_str(
             template.get("slug") or template.get("presetSlug")
         )
-        parent_version = _clean_optional_str(
-            template.get("version") or template.get("presetVersion")
-        )
+        parent_digest = _clean_optional_str(template.get("presetDigest"))
         composition = template.get("composition")
         candidates: list[Any] = []
         if isinstance(composition, Mapping):
@@ -2619,13 +2592,11 @@ def _include_tree_summary(
             summary.append(
                 {
                     "presetSlug": parent_slug,
-                    "presetVersion": parent_version,
+                    "presetDigest": parent_digest,
                     "includedSlug": _clean_optional_str(
                         include.get("slug") or include.get("presetSlug")
                     ),
-                    "includedVersion": _clean_optional_str(
-                        include.get("version") or include.get("presetVersion")
-                    ),
+                    "includedDigest": _clean_optional_str(include.get("presetDigest")),
                 }
             )
     return summary

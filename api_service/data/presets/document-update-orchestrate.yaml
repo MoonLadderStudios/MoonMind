@@ -2,7 +2,6 @@ slug: document-update-orchestrate
 title: Document Update Orchestrate
 description: Scan a document directory for .md, .txt, and .tex files, then create a document-update task for each discovered document.
 scope: global
-version: 1.0.0
 tags:
   - documentation
   - document-update
