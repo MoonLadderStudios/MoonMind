@@ -398,6 +398,42 @@ async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_child_run_task_template_without_version_uses_latest_seeded_preset(
+    tmp_path,
+):
+    async with _template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            expanded_parameters = await _expand_preset_for_child_run(
+                session=session,
+                initial_parameters={
+                    "requestType": "task",
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                    "publishMode": "pr",
+                    "task": {
+                        "title": "Run Jira Implement for MM-747",
+                        "instructions": "Implement Jira issue MM-747.",
+                        "inputs": {"jira_issue_key": "MM-747"},
+                        "taskTemplate": {
+                            "slug": "jira-implement",
+                            "scope": "global",
+                        },
+                    },
+                },
+            )
+
+    task = expanded_parameters["task"]
+    assert task["taskTemplate"] == {
+        "slug": "jira-implement",
+        "scope": "global",
+        "version": "1.1.0",
+    }
+    assert task["appliedStepTemplates"][0]["version"] == "1.1.0"
+    assert task["authoredPresets"][0]["presetVersion"] == "1.1.0"
+    assert task["steps"][0]["title"] == "Load Jira preset brief"
+
+
+@pytest.mark.asyncio
 async def test_child_run_goal_scheduled_breakdown_preserves_target_runtime(tmp_path):
     async with _template_db(tmp_path) as session_maker:
         async with session_maker() as session:

@@ -119,7 +119,12 @@ async def expand_preset_for_child_run(
         PresetNotFoundError,
     )
 
-    template_version = str(template_payload.get("version") or "1.0.0").strip()
+    raw_template_version = template_payload.get("version")
+    template_version = (
+        str(raw_template_version).strip()
+        if raw_template_version is not None and str(raw_template_version).strip()
+        else None
+    )
     template_scope = str(template_payload.get("scope") or "global").strip() or "global"
     template_scope_ref = (
         str(template_payload.get("scopeRef") or template_payload.get("scope_ref") or "")
@@ -169,7 +174,7 @@ async def expand_preset_for_child_run(
     applied_template = _coerce_mapping(expanded.get("appliedTemplate"))
     applied_template_payload: dict[str, Any] = {
         "slug": str(applied_template.get("slug") or template_slug),
-        "version": str(applied_template.get("version") or template_version),
+        "version": str(applied_template.get("version") or template_version or ""),
         "inputs": _coerce_mapping(applied_template.get("inputs")) or template_inputs,
         "stepIds": list(applied_template.get("stepIds") or []),
         "appliedAt": str(applied_template.get("appliedAt") or ""),
@@ -191,7 +196,7 @@ async def expand_preset_for_child_run(
     task_payload["taskTemplate"] = {
         **template_payload,
         "slug": str(applied_template.get("slug") or template_slug),
-        "version": str(applied_template.get("version") or template_version),
+        "version": str(applied_template.get("version") or template_version or ""),
         "scope": template_scope,
     }
     parameters[payload_key] = task_payload

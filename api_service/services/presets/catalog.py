@@ -1669,10 +1669,15 @@ class PresetCatalogService:
         return validated
 
     def _select_template_version(
-        self, template: Preset, version: str
+        self, template: Preset, version: str | None
     ) -> PresetVersion:
+        version_label = "" if version is None else str(version).strip()
+        if not version_label:
+            if template.latest_version is not None:
+                return template.latest_version
+            raise PresetNotFoundError("Template version not found.")
         for candidate in template.versions:
-            if candidate.version == version:
+            if candidate.version == version_label:
                 return candidate
         raise PresetNotFoundError("Template version not found.")
 
@@ -1987,7 +1992,7 @@ class PresetCatalogService:
         slug: str,
         scope: str,
         scope_ref: str | None,
-        version: str,
+        version: str | None,
         inputs: dict[str, Any],
         context: dict[str, Any] | None = None,
         options: ExpandOptions | None = None,
