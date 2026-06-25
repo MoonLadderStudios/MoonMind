@@ -1,11 +1,9 @@
-"""Unit tests for the batch-workflows fan-out helper (MM-885, MM-913).
+"""Unit tests for the batch-workflows fan-out helper (MM-885).
 
 Covers the deterministic per-target child-request construction: issue bindings,
 runtime inheritance, shared publish policy, idempotency, the max-workflows cap,
 and unsupported-preset skips. The goal text is validated against the real
 server-side goal scheduler so a queued child expands the intended child preset.
-MM-913 preserves MM-901 traceability by ensuring children select target presets
-by slug/scope only, without stale target preset versions.
 """
 
 from __future__ import annotations
@@ -171,9 +169,10 @@ def test_build_child_request_sets_runtime_inheritance_publish_and_idempotency():
     assert len(key) <= module["IDEMPOTENCY_KEY_MAX_LENGTH"]
 
 
-def test_build_child_request_authors_selected_preset_scope_and_ref_without_version():
-    # MM-913/MM-901: target presets are selected by slug/scope/scopeRef only so
-    # a stale version cannot break queued child runs.
+def test_build_child_request_authors_selected_preset_scope_and_ref():
+    # Personal scope / scopeRef must be carried into the child taskTemplate so
+    # the execution API expands the exact selected preset instead of the goal
+    # scheduler's global default.
     module = _load_module()
     request = module["build_child_request"](
         _JIRA_TARGET,
@@ -206,22 +205,28 @@ def test_build_child_request_omits_scope_ref_when_blank():
     assert "scopeRef" not in request["payload"]["task"]["taskTemplate"]
 
 
-def test_parse_args_rejects_removed_target_preset_version_flag(tmp_path):
+def test_parse_args_accepts_slug_scope_without_preset_version(tmp_path):
     module = _load_module()
-    targets_path = tmp_path / "targets.json"
-    targets_path.write_text("[]", encoding="utf-8")
+    targets = tmp_path / "targets.json"
+    targets.write_text("[]", encoding="utf-8")
 
-    with pytest.raises(SystemExit):
-        module["_parse_args"](
-            [
-                "--targets",
-                str(targets_path),
-                "--target-preset-slug",
-                "jira-implement",
-                "--target-preset-version",
-                "1.1.0",
-            ]
-        )
+    args = module["_parse_args"](
+        [
+            "--targets",
+            str(targets),
+            "--target-preset-slug",
+            "jira-implement",
+            "--target-preset-scope",
+            "global",
+            "--publish-mode",
+            "pr",
+            "--max-workflows",
+            "1",
+        ]
+    )
+
+    assert args.target_preset_slug == "jira-implement"
+    assert not hasattr(args, "target_preset_version")
 
 
 def test_build_child_request_without_caller_omits_inheritance_directive():

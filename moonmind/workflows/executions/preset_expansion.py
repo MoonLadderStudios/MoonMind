@@ -97,7 +97,6 @@ async def expand_preset_for_child_run(
         template_slug = schedule.slug
         template_payload = {
             "slug": schedule.slug,
-            "version": schedule.version,
             "scope": "global",
         }
         existing_inputs = _coerce_mapping(task_payload.get("inputs"))
@@ -109,7 +108,6 @@ async def expand_preset_for_child_run(
             "source": "goal",
             "reason": schedule.reason,
             "presetSlug": schedule.slug,
-            "presetVersion": schedule.version,
             "jiraIssueKey": schedule.issue_key,
         }
 
@@ -119,12 +117,6 @@ async def expand_preset_for_child_run(
         PresetNotFoundError,
     )
 
-    raw_template_version = template_payload.get("version")
-    template_version = (
-        str(raw_template_version).strip()
-        if raw_template_version is not None and str(raw_template_version).strip()
-        else None
-    )
     template_scope = str(template_payload.get("scope") or "global").strip() or "global"
     template_scope_ref = (
         str(template_payload.get("scopeRef") or template_payload.get("scope_ref") or "")
@@ -154,7 +146,6 @@ async def expand_preset_for_child_run(
         "slug": template_slug,
         "scope": template_scope,
         "scope_ref": template_scope_ref,
-        "version": template_version,
         "inputs": template_inputs,
         "context": template_context,
         "options": ExpandOptions(should_enforce_step_limit=True),
@@ -174,12 +165,14 @@ async def expand_preset_for_child_run(
     applied_template = _coerce_mapping(expanded.get("appliedTemplate"))
     applied_template_payload: dict[str, Any] = {
         "slug": str(applied_template.get("slug") or template_slug),
-        "version": str(applied_template.get("version") or template_version or ""),
         "inputs": _coerce_mapping(applied_template.get("inputs")) or template_inputs,
         "stepIds": list(applied_template.get("stepIds") or []),
         "appliedAt": str(applied_template.get("appliedAt") or ""),
         "capabilities": list(expanded.get("capabilities") or []),
     }
+    preset_digest = str(applied_template.get("presetDigest") or "").strip()
+    if preset_digest:
+        applied_template_payload["presetDigest"] = preset_digest
     composition = applied_template.get("composition") or expanded.get("composition")
     if isinstance(composition, Mapping):
         applied_template_payload["composition"] = dict(composition)
@@ -196,7 +189,6 @@ async def expand_preset_for_child_run(
     task_payload["taskTemplate"] = {
         **template_payload,
         "slug": str(applied_template.get("slug") or template_slug),
-        "version": str(applied_template.get("version") or template_version or ""),
         "scope": template_scope,
     }
     parameters[payload_key] = task_payload

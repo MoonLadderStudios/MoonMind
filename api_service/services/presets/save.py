@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     Preset,
-    PresetVersion,
     PresetScopeType,
 )
 from api_service.services.presets.catalog import (
@@ -181,7 +180,6 @@ class PresetSaveService:
                 annotations={},
                 required_capabilities=[],
                 created_by=created_by,
-                version="1.0.0",
                 auto_commit=False,
             )
             if created_by is not None:
@@ -192,27 +190,22 @@ class PresetSaveService:
                     scope_ref=normalized_scope_ref,
                     auto_commit=False,
                 )
-                version_id = (
+                preset_id = (
                     await self._session.execute(
-                        select(PresetVersion.id)
-                        .join(
-                            Preset,
-                            Preset.id == PresetVersion.template_id,
-                        )
+                        select(Preset.id)
                         .where(
                             Preset.slug == unique_slug,
                             Preset.scope_type
                             == PresetScopeType(normalized_scope),
                             Preset.scope_ref == normalized_scope_ref,
                         )
-                        .order_by(PresetVersion.created_at.desc())
                         .limit(1)
                     )
                 ).scalar_one_or_none()
-                if version_id is not None:
+                if preset_id is not None:
                     await self._catalog.record_recent(
                         user_id=created_by,
-                        template_version_id=version_id,
+                        template_id=preset_id,
                         auto_commit=False,
                     )
             await self._session.commit()

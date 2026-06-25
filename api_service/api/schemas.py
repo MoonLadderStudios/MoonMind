@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 if TYPE_CHECKING:
     pass
@@ -368,7 +368,7 @@ class WorkerPauseSnapshotResponse(BaseModel):
     signal_status: Optional[str] = Field(None, alias="signalStatus")
 
 class PresetInputSchema(BaseModel):
-    """Input definition used by preset versions."""
+    """Input definition used by presets."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -442,6 +442,14 @@ class PresetStepBlueprintSchema(BaseModel):
     skill: Optional[PresetStepSkillSchema] = None
     annotations: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def reject_preset_version_identity(self) -> "PresetStepBlueprintSchema":
+        if self.version is not None:
+            raise ValueError(
+                "Preset includes use slug/scope only; remove version."
+            )
+        return self
+
 class PresetSummarySchema(BaseModel):
     """List response model for presets."""
 
@@ -452,8 +460,7 @@ class PresetSummarySchema(BaseModel):
     scope_ref: Optional[str] = Field(None, alias="scopeRef")
     title: str
     description: str
-    latest_version: str = Field(..., alias="latestVersion")
-    version: str
+    preset_digest: Optional[str] = Field(None, alias="presetDigest")
     tags: list[str] = Field(default_factory=list)
     is_favorite: bool = Field(False, alias="isFavorite")
     recent_applied_at: Optional[str] = Field(None, alias="recentAppliedAt")
@@ -470,7 +477,7 @@ class PresetListResponseSchema(BaseModel):
     items: list[PresetSummarySchema] = Field(default_factory=list)
 
 class PresetResponseSchema(PresetSummarySchema):
-    """Detail response model for one template version."""
+    """Detail response model for one preset."""
 
     inputs: list[PresetInputSchema] = Field(default_factory=list)
     input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
@@ -499,6 +506,17 @@ class PresetCreateRequestSchema(BaseModel):
         default_factory=list, alias="requiredCapabilities"
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict) and (
+            value.get("version") is not None or value.get("presetVersion") is not None
+        ):
+            raise ValueError(
+                "Preset definitions use slug/scope only; remove version or presetVersion."
+            )
+        return value
+
 class PresetExpandOptionsSchema(BaseModel):
     """Optional expansion flags."""
 
@@ -511,12 +529,22 @@ class PresetExpandRequestSchema(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    version: str
     inputs: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
     options: PresetExpandOptionsSchema = Field(
         default_factory=PresetExpandOptionsSchema
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict) and (
+            value.get("version") is not None or value.get("presetVersion") is not None
+        ):
+            raise ValueError(
+                "Preset expansion uses slug/scope only; remove version or presetVersion."
+            )
+        return value
 
 class PresetAppliedMetadataSchema(BaseModel):
     """Audit metadata describing one template application."""
@@ -524,7 +552,7 @@ class PresetAppliedMetadataSchema(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     slug: str
-    version: str
+    preset_digest: Optional[str] = Field(None, alias="presetDigest")
     inputs: dict[str, Any] = Field(default_factory=dict)
     step_ids: list[str] = Field(default_factory=list, alias="stepIds")
     applied_at: Optional[str] = Field(None, alias="appliedAt")

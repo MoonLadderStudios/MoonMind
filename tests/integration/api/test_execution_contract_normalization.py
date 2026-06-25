@@ -165,15 +165,15 @@ def test_mm569_flat_executable_steps_preserve_preset_provenance_without_lookup()
     tool["source"] = {
         "kind": "preset-derived",
         "presetSlug": "mm569-parent",
-        "presetVersion": "1.0.0",
-        "includePath": ["mm569-parent@1.0.0"],
+        "presetDigest": "digest-mm569-parent",
+        "includePath": ["mm569-parent"],
     }
     skill = skill_step()
     skill["source"] = {
         "kind": "preset-derived",
         "presetSlug": "mm569-parent",
-        "presetVersion": "1.0.0",
-        "includePath": ["mm569-parent@1.0.0"],
+        "presetDigest": "digest-mm569-parent",
+        "includePath": ["mm569-parent"],
     }
 
     result = build_canonical_workflow_view(

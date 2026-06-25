@@ -1,12 +1,10 @@
-"""Catalog-boundary tests for the MM-885/MM-913 ``batch-workflows`` seed preset.
+"""Catalog-boundary tests for the MM-885 ``batch-workflows`` seed preset.
 
 These exercise the real preset validation + expansion path (the adapter boundary
 for presets): the seed YAML must validate, expose the documented batch contract
 (source discriminator, both source field sets, target-preset selector, default
 issue bindings, runtimeInheritance=caller, and a single shared publish policy),
 and expand into an orchestration step that queues child workflows.
-MM-913 preserves MM-901 traceability by rejecting stale target preset version
-inputs and selecting target presets by slug/scope only.
 """
 
 from __future__ import annotations
@@ -18,7 +16,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import selectinload, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, Preset, PresetScopeType
 from api_service.services.presets.catalog import (
@@ -62,10 +60,8 @@ async def _load_preset(session) -> Preset:
             Preset.scope_type == PresetScopeType.GLOBAL,
             Preset.scope_ref.is_(None),
         )
-        .options(selectinload(Preset.latest_version))
     )
     template = result.scalar_one()
-    assert template.latest_version is not None
     return template
 
 
@@ -76,8 +72,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
 
             template = await _load_preset(session)
-            version = template.latest_version
-            annotations = version.annotations or {}
+            annotations = template.annotations or {}
 
             assert template.title == "Batch Workflows"
             assert template.scope_type is PresetScopeType.GLOBAL
@@ -110,9 +105,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             ):
                 assert name in schema["properties"]
 
-            # Target preset selector (slug/scope/scopeRef); MM-913 removes
-            # target_preset_version so stale preset versions cannot break child
-            # runs.
+            # Target preset selector (slug/scope/scopeRef).
             for name in (
                 "target_preset_slug",
                 "target_preset_scope",
@@ -160,14 +153,14 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             # The board input keeps the existing jira_board input type.
             board_input = next(
                 item
-                for item in version.inputs_schema
+                for item in template.inputs_schema
                 if item["name"] == "jira_board_id"
             )
             assert board_input["type"] == "jira_board"
 
             # Orchestration step references the batch-workflows skill.
-            assert len(version.steps) == 1
-            step = version.steps[0]
+            assert len(template.steps) == 1
+            step = template.steps[0]
             assert step["skill"]["id"] == "batch-workflows"
             # The parent only orchestrates/queues; it must not hard-require the
             # jira capability or GitHub-only batches would be blocked at launch
@@ -189,7 +182,6 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
                 slug="batch-workflows",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "source_kind": "jira_board_column",
                     "jira_board_id": "42",
@@ -244,7 +236,6 @@ async def test_batch_workflows_rejects_removed_target_preset_version_input(tmp_p
                     slug="batch-workflows",
                     scope="global",
                     scope_ref=None,
-                    version="1.0.0",
                     inputs={
                         "source_kind": "jira_board_column",
                         "jira_board_id": "42",

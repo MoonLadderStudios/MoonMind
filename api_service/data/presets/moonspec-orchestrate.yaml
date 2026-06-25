@@ -2,7 +2,6 @@ slug: moonspec-orchestrate
 title: MoonSpec Orchestrate
 description: Run the full Moon Spec lifecycle from a preselected single-story request or active feature context through specification, planning, alignment, implementation, and verification.
 scope: global
-version: 1.0.0
 tags:
   - moonspec
   - orchestration

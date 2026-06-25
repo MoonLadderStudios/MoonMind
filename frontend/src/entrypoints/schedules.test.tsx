@@ -53,6 +53,7 @@ const detailRuns = {
       outcome: "enqueued",
       dispatchAttempts: 1,
       dispatchAfter: null,
+      startedAt: "2026-06-24T02:00:02Z",
       temporalWorkflowId: "workflow-from-schedule",
       temporalRunId: "temporal-run-1",
       message: "Started",
@@ -81,11 +82,36 @@ const detailPayload: BootPayload = {
   },
 };
 
+const detailPayloadWithDelete: BootPayload = {
+  ...detailPayload,
+  initialData: {
+    dashboardConfig: {
+      initialPath: "/schedules/schedule-alpha",
+      sources: {
+        schedules: {
+          list: "/console/schedules?scope=personal",
+          detail: "/console/schedules/{definitionId}",
+          update: "/console/schedules/{definitionId}",
+          runNow: "/console/schedules/{definitionId}/run",
+          runs: "/console/schedules/{definitionId}/runs?limit=200",
+          delete: "/console/schedules/{definitionId}",
+        },
+      },
+    },
+  },
+};
+
 function mockScheduleDetailFetch(fetchSpy: MockInstance, overrides: Record<string, unknown> = {}) {
   const schedule = { ...detailSchedule, ...overrides };
   fetchSpy.mockImplementation(async (input, init) => {
     const url = String(input);
     const method = String(init?.method || "GET").toUpperCase();
+    if (url === "/console/schedules/schedule-alpha" && method === "DELETE") {
+      return {
+        ok: true,
+        json: async () => ({}),
+      } as Response;
+    }
     if (url === "/console/schedules/schedule-alpha" && method === "PATCH") {
       return {
         ok: true,
@@ -283,19 +309,35 @@ describe("SchedulesPage", () => {
   });
 
   it("loads the recurring schedule detail route by the routed definition id", async () => {
-    mockScheduleDetailFetch(fetchSpy);
+    mockScheduleDetailFetch(fetchSpy, {
+      permissions: {
+        canEdit: true,
+        canRunNow: true,
+        canDelete: true,
+      },
+    });
 
     renderWithClient(<SchedulesPage payload={detailPayload} />);
 
     expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Temporal Schedule ID")).not.toBeNull();
     expect(screen.getByText("temporal-schedule-alpha")).not.toBeNull();
     expect(screen.getByText("MoonLadderStudios/MoonMind")).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Actual Start" })).not.toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Status" })).not.toBeNull();
     expect(screen.getByText("Started")).not.toBeNull();
     expect(screen.getByRole("link", { name: "workflow-from-schedule" }).getAttribute("href")).toBe(
       "/workflows/workflow-from-schedule?source=temporal",
     );
+    expect(screen.queryByRole("heading", { name: "Steps" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Artifacts" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Logs" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Diagnostics" })).toBeNull();
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules?scope=personal")).toBe(false);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/console/schedules/schedule-alpha/runs?limit=200")).toBe(true);
@@ -303,6 +345,205 @@ describe("SchedulesPage", () => {
     expect(screen.getByRole("button", { name: "Run now" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Pause schedule" })).not.toBeNull();
     expect(screen.queryByRole("button", { name: /delete schedule/i })).toBeNull();
+  });
+
+  it("allows global operator schedule details to expose edit and run actions", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      scopeType: "global",
+      scopeRef: "global",
+      permissions: {
+        canEdit: true,
+        canRunNow: true,
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(screen.getByText("global / global")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("maps forbidden detail responses to the normal unauthorized state without schedule disclosure", async () => {
+    fetchSpy.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: true, json: async () => detailRuns } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha") {
+        return { ok: false, status: 403, statusText: "Forbidden", json: async () => ({}) } as Response;
+      }
+      throw new Error(`Unexpected fetch GET ${url}`);
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByText("You do not have access to this recurring schedule.")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Back to schedules" }).getAttribute("href")).toBe("/schedules");
+    expect(screen.queryByRole("heading", { name: "Nightly detail sweep" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Edit schedule" })).toBeNull();
+  });
+
+  it("maps missing detail responses to the normal not-found state without schedule disclosure", async () => {
+    fetchSpy.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: true, json: async () => detailRuns } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha") {
+        return { ok: false, status: 404, statusText: "Not Found", json: async () => ({}) } as Response;
+      }
+      throw new Error(`Unexpected fetch GET ${url}`);
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByText("Recurring schedule not found.")).not.toBeNull();
+    expect(screen.queryByRole("heading", { name: "Nightly detail sweep" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run now" })).toBeNull();
+  });
+
+  it("keeps read-only schedule details visible while disabling edit and run actions with an explanation", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      permissions: {
+        canEdit: false,
+        canRunNow: false,
+        disabledReasons: {
+          canEdit: "Operator access is required to edit this schedule.",
+          canRunNow: "Operator access is required to run this schedule.",
+        },
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(screen.getByText("Operator access is required to edit this schedule. Operator access is required to run this schedule.")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Pause schedule" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
+  });
+
+  it("allows personal schedule owners to delete when the delete contract is available", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockScheduleDetailFetch(fetchSpy, {
+      permissions: {
+        canEdit: true,
+        canRunNow: true,
+        canDelete: true,
+      },
+    });
+    const detailFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input, init) => {
+      const url = String(input);
+      const method = String(init?.method || "GET").toUpperCase();
+      if (url === "/console/schedules/schedule-alpha" && method === "DELETE") {
+        return new Promise<Response>(() => undefined);
+      }
+      return detailFetch?.(input, init) as ReturnType<typeof window.fetch>;
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayloadWithDelete} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    const deleteButton = screen.getByRole("button", { name: "Delete schedule" }) as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(false);
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, init]) => (
+          String(url) === "/console/schedules/schedule-alpha"
+          && String(init?.method || "GET").toUpperCase() === "DELETE"
+        )),
+      ).toBe(true);
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("explains missing delete permission when the delete contract is available", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      permissions: {
+        canEdit: true,
+        canRunNow: true,
+        canDelete: false,
+        disabledReasons: {
+          canDelete: "Only the schedule owner can delete this schedule.",
+        },
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayloadWithDelete} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete schedule" })).toBeNull();
+    expect(screen.getByText("Only the schedule owner can delete this schedule.")).not.toBeNull();
+  });
+
+  it("does not let disabled schedule state override read-only action visibility", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      enabled: false,
+      permissions: {
+        canEdit: false,
+        canRunNow: false,
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByText("Paused")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("does not let attention state override authorized edit and run actions", async () => {
+    mockScheduleDetailFetch(fetchSpy, {
+      lastDispatchStatus: "dispatch_error",
+      lastDispatchError: "Adapter rejected schedule",
+      permissions: {
+        canEdit: true,
+        canRunNow: true,
+      },
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByText("Needs attention")).not.toBeNull();
+    expect(screen.getByText("Adapter rejected schedule")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps read-only action gates when run history has a partial error", async () => {
+    fetchSpy.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/console/schedules/schedule-alpha/runs?limit=200") {
+        return { ok: false, statusText: "Runs unavailable", json: async () => ({}) } as Response;
+      }
+      if (url === "/console/schedules/schedule-alpha") {
+        return {
+          ok: true,
+          json: async () => ({
+            ...detailSchedule,
+            permissions: {
+              canEdit: false,
+              canRunNow: false,
+            },
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch GET ${url}`);
+    });
+
+    renderWithClient(<SchedulesPage payload={detailPayload} />);
+
+    expect(await screen.findByRole("heading", { name: "Nightly detail sweep" })).not.toBeNull();
+    expect(await screen.findByText("Failed to fetch schedule runs: Runs unavailable")).not.toBeNull();
+    expect((screen.getByRole("button", { name: "Edit schedule" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Run now" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("ignores malformed schedule route ids instead of throwing during render", async () => {

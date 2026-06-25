@@ -54,7 +54,6 @@ def preset_step(
     step_id: str = "run-preset",
     title: str = "Run preset",
     slug: str = "child-flow",
-    version: str = "1.0.0",
     inputs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a valid draft Preset step payload."""
@@ -66,7 +65,6 @@ def preset_step(
         "instructions": "Apply the child preset.",
         "preset": {
             "slug": slug,
-            "version": version,
             "inputs": inputs or {"issue_key": "MM-569"},
         },
     }

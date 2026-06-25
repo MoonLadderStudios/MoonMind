@@ -378,7 +378,6 @@ __all__ = [
     "PresetScopeType",
     "PresetReleaseStatus",
     "Preset",
-    "PresetVersion",
     "PresetFavorite",
     "PresetRecent",
     "SecretStatus",
@@ -559,7 +558,7 @@ class PresetScopeType(str, enum.Enum):
     PERSONAL = "personal"
 
 class PresetReleaseStatus(str, enum.Enum):
-    """Release lifecycle for preset versions."""
+    """Lifecycle state for current preset definitions."""
 
     DRAFT = "draft"
     ACTIVE = "active"
@@ -598,74 +597,14 @@ class Preset(Base):
     required_capabilities: Mapped[list[str]] = mapped_column(
         mutable_json_list(), default=list
     )
-    latest_version_id: Mapped[Optional[UUID]] = mapped_column(
-        Uuid,
-        ForeignKey(
-            "preset_versions.id",
-            name="fk_preset_latest_version",
-            use_alter=True,
-            ondelete="SET NULL",
-        ),
-        nullable=True,
-    )
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_by: Mapped[Optional[UUID]] = mapped_column(
-        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    latest_version: Mapped[Optional["PresetVersion"]] = relationship(
-        "PresetVersion", foreign_keys=[latest_version_id], post_update=True
-    )
-    versions: Mapped[list["PresetVersion"]] = relationship(
-        "PresetVersion",
-        back_populates="template",
-        foreign_keys="PresetVersion.template_id",
-        cascade="all, delete-orphan",
-        order_by="PresetVersion.created_at",
-    )
-    favorites: Mapped[list["PresetFavorite"]] = relationship(
-        "PresetFavorite",
-        back_populates="template",
-        cascade="all, delete-orphan",
-    )
-
-class PresetVersion(Base):
-    """Immutable release of a template blueprint."""
-
-    # legacy_run contract: table/index/constraint names rename in WP7
-    __tablename__ = "preset_versions"
-    __table_args__ = (
-        UniqueConstraint(
-            "template_id", "version", name="uq_preset_version_label"
-        ),
-        Index("ix_preset_versions_template", "template_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    template_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("presets.id", ondelete="CASCADE"), nullable=False
-    )
-    version: Mapped[str] = mapped_column(String(32), nullable=False)
     inputs_schema: Mapped[list[dict[str, Any]]] = mapped_column(
-        mutable_json_list(), nullable=False
+        mutable_json_list(), nullable=False, default=list
     )
     steps: Mapped[list[dict[str, Any]]] = mapped_column(
-        mutable_json_list(), nullable=False
+        mutable_json_list(), nullable=False, default=list
     )
     annotations: Mapped[Optional[dict[str, Any]]] = mapped_column(
         mutable_json_dict(), nullable=True
-    )
-    required_capabilities: Mapped[list[str]] = mapped_column(
-        mutable_json_list(), default=list
     )
     max_step_count: Mapped[int] = mapped_column(Integer, nullable=False, default=25)
     release_status: Mapped[PresetReleaseStatus] = mapped_column(
@@ -685,6 +624,10 @@ class PresetVersion(Base):
     reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     seed_source: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[Optional[UUID]] = mapped_column(
+        Uuid, ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -695,14 +638,9 @@ class PresetVersion(Base):
         onupdate=func.now(),
     )
 
-    template: Mapped[Preset] = relationship(
-        "Preset",
-        back_populates="versions",
-        foreign_keys=[template_id],
-    )
-    recents: Mapped[list["PresetRecent"]] = relationship(
-        "PresetRecent",
-        back_populates="template_version",
+    favorites: Mapped[list["PresetFavorite"]] = relationship(
+        "PresetFavorite",
+        back_populates="template",
         cascade="all, delete-orphan",
     )
 
@@ -740,8 +678,8 @@ class PresetRecent(Base):
         Index("ix_preset_recents_user", "user_id"),
         UniqueConstraint(
             "user_id",
-            "template_version_id",
-            name="uq_preset_recent_user_version",
+            "template_id",
+            name="uq_preset_recent_user_template",
         ),
     )
 
@@ -749,18 +687,16 @@ class PresetRecent(Base):
     user_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("user.id", ondelete="CASCADE"), nullable=False
     )
-    template_version_id: Mapped[UUID] = mapped_column(
+    template_id: Mapped[UUID] = mapped_column(
         Uuid,
-        ForeignKey("preset_versions.id", ondelete="CASCADE"),
+        ForeignKey("presets.id", ondelete="CASCADE"),
         nullable=False,
     )
     applied_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
-    template_version: Mapped[PresetVersion] = relationship(
-        "PresetVersion", back_populates="recents"
-    )
+    template: Mapped[Preset] = relationship("Preset")
 
 class WorkflowRunStatus(str, enum.Enum):
     """Lifecycle states tracked for Spec workflow runs."""

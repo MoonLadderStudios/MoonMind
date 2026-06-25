@@ -377,14 +377,12 @@ async def test_child_run_auto_sequences_jira_goal_through_implement_preset(tmp_p
     task = expanded_parameters["task"]
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1.1.0",
         "scope": "global",
     }
     assert task["presetSchedule"] == {
         "source": "goal",
         "reason": "jira_issue_goal",
         "presetSlug": "jira-implement",
-        "presetVersion": "1.1.0",
         "jiraIssueKey": "MM-747",
     }
     assert task["inputs"]["jira_issue_key"] == "MM-747"
@@ -426,10 +424,9 @@ async def test_child_run_task_template_without_version_uses_latest_seeded_preset
     assert task["taskTemplate"] == {
         "slug": "jira-implement",
         "scope": "global",
-        "version": "1.1.0",
     }
-    assert task["appliedStepTemplates"][0]["version"] == "1.1.0"
-    assert task["authoredPresets"][0]["presetVersion"] == "1.1.0"
+    assert "version" not in task["appliedStepTemplates"][0]
+    assert "presetVersion" not in task["authoredPresets"][0]
     assert task["steps"][0]["title"] == "Load Jira preset brief"
 
 
@@ -556,7 +553,6 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
                         "source": {
                             "kind": "preset-derived",
                             "presetId": "jira-flow",
-                            "presetVersion": "catalog-version-that-need-not-exist",
                             "includePath": ["root", "fetch"],
                             "originalStepId": "fetch-jira-issue",
                         },
@@ -579,7 +575,6 @@ def test_runtime_planner_maps_explicit_tool_step_to_typed_tool_node():
     assert plan["nodes"][0]["inputs"]["source"] == {
         "kind": "preset-derived",
         "presetId": "jira-flow",
-        "presetVersion": "catalog-version-that-need-not-exist",
         "includePath": ["root", "fetch"],
         "originalStepId": "fetch-jira-issue",
     }
@@ -609,7 +604,6 @@ def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runti
                         "source": {
                             "kind": "preset-derived",
                             "presetSlug": "jira-orchestrate",
-                            "presetVersion": "1.0.0",
                         },
                     }
                 ],
@@ -630,7 +624,6 @@ def test_runtime_planner_maps_explicit_skill_step_with_provenance_to_agent_runti
     assert plan["nodes"][0]["inputs"]["source"] == {
         "kind": "preset-derived",
         "presetSlug": "jira-orchestrate",
-        "presetVersion": "1.0.0",
     }
 
 
@@ -659,7 +652,6 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
                         "source": {
                             "kind": "preset-derived",
                             "presetSlug": "jira-orchestrate",
-                            "presetVersion": "1.0.0",
                         },
                     },
                     {
@@ -674,7 +666,6 @@ def test_runtime_planner_orders_flattened_tool_and_skill_steps_with_provenance()
                         "source": {
                             "kind": "preset-derived",
                             "presetSlug": "jira-orchestrate",
-                            "presetVersion": "1.0.0",
                         },
                     },
                 ],
@@ -1123,7 +1114,6 @@ def test_detect_host_project_dir_returns_none_after_exhausting_retries(
         {
             "kind": "preset-derived",
             "presetId": "removed-preset",
-            "presetVersion": "stale",
         },
     ],
 )
@@ -1976,7 +1966,6 @@ async def test_child_jira_orchestrate_run_expands_seeded_template_steps(tmp_path
     assert task["appliedStepTemplates"][0]["slug"] == "jira-orchestrate"
     assert len(task["appliedStepTemplates"][0]["stepIds"]) == 26
     assert task["authoredPresets"][0]["presetSlug"] == "jira-orchestrate"
-    assert task["authoredPresets"][0]["presetVersion"] == "1.0.0"
     assert "authoredPresets" not in task["appliedStepTemplates"][0]
     assert task["appliedStepTemplates"][0]["composition"]["slug"] == "jira-orchestrate"
     assert all(step["type"] != "preset" for step in task["steps"])
@@ -2041,7 +2030,7 @@ async def test_child_jira_orchestrate_workflow_payload_expands_seeded_template_s
     )
 
     first_node = plan["nodes"][0]
-    assert first_node["id"].startswith("tpl:jira-orchestrate:1.0.0:01")
+    assert first_node["id"].startswith("tpl:jira-orchestrate:01")
     assert first_node["tool"] == {
         "type": "agent_runtime",
         "name": "codex_cli",
@@ -2127,7 +2116,6 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
             "authoredPresets": [
                 {
                     "presetSlug": "jira-orchestrate",
-                    "presetVersion": "1.0.0",
                     "inputBindings": {"issueKey": "MM-501"},
                 }
             ],
@@ -2138,7 +2126,6 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
                     "instructions": "Do the first step.",
                     "presetProvenance": {
                         "presetSlug": "jira-orchestrate",
-                        "presetVersion": "1.0.0",
                     },
                 }
             ],
@@ -2275,9 +2262,9 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
     assert authored["includeTreeSummary"] == [
         {
             "presetSlug": "jira-orchestrate",
-            "presetVersion": "1.0.0",
+            "presetDigest": None,
             "includedSlug": "jira-fetch",
-            "includedVersion": "1.0.0",
+            "includedDigest": None,
         }
     ]
     assert authored["perStepProvenance"] == [
@@ -2286,7 +2273,6 @@ async def test_child_jira_orchestrate_run_persists_original_task_input_snapshot(
             "ordinal": 0,
             "presetProvenance": {
                 "presetSlug": "jira-orchestrate",
-                "presetVersion": "1.0.0",
             },
         }
     ]

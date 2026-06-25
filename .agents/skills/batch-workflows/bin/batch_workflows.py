@@ -26,6 +26,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import httpx
 from moonmind.workflows.executions.execution_contract import SUPPORTED_PUBLISH_MODES
 from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
@@ -228,11 +232,11 @@ def build_child_request(
         "inputs": inputs,
         "publish": {"mode": publish_mode},
         # Author the child with the selected preset via ``taskTemplate`` so the
-        # execution API expands the selected slug/scope/scopeRef (see
+        # execution API expands the exact slug/scope/scopeRef (see
         # expand_preset_for_child_run). Without this the child is goal-only and
-        # the server goal scheduler silently substitutes a hard-coded global
-        # preset, dropping any personal scope or scopeRef. ``batchTargetPreset``
-        # has no readers, so it is not emitted.
+        # the server goal scheduler silently substitutes a global preset,
+        # dropping any personal scope or scopeRef. ``batchTargetPreset`` has no
+        # readers, so it is not emitted.
         "taskTemplate": {
             "slug": config.preset_slug,
             "scope": config.preset_scope,

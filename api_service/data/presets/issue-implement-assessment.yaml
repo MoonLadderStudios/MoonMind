@@ -3,7 +3,6 @@ title: Issue Implement Assessment
 description: Assess whether an issue brief is already implemented before provider-specific
   lifecycle updates run.
 scope: global
-version: 1.0.0
 tags:
 - implementation
 - assessment

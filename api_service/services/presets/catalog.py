@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -29,7 +30,6 @@ from api_service.db.models import (
     Preset,
     PresetFavorite,
     PresetRecent,
-    PresetVersion,
     PresetReleaseStatus,
     PresetScopeType,
 )
@@ -119,7 +119,6 @@ _INCLUDE_STEP_KEYS = frozenset(
     {
         "kind",
         "slug",
-        "version",
         "alias",
         "scope",
         "inputMapping",
@@ -482,15 +481,13 @@ def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
             message="Preset steps require preset.slug or preset.id.",
             code="required",
         )
-    version = str(
-        raw_preset.get("version") or raw_preset.get("presetVersion") or ""
-    ).strip()
-    if not version:
+    if raw_preset.get("version") is not None or raw_preset.get("presetVersion") is not None:
         raise _step_validation_error(
             index=index,
             path="preset.version",
-            message="Preset steps require preset.version.",
-            code="required",
+            message="Preset steps use slug/scope only; remove preset.version or presetVersion.",
+            code="preset_version_not_supported",
+            recoverable=False,
         )
     inputs = raw_preset.get("inputs", raw_preset.get("inputMapping", {}))
     if inputs is None:
@@ -503,7 +500,6 @@ def _normalize_preset_payload(raw_preset: Any, *, index: int) -> dict[str, Any]:
         )
     preset_payload: dict[str, Any] = {
         "slug": _normalize_slug(preset_slug),
-        "version": version,
         "inputs": dict(inputs),
     }
     scope = raw_preset.get("scope")
@@ -525,7 +521,6 @@ def _preset_step_to_include(
     include_payload: dict[str, Any] = {
         "kind": _INCLUDE_KIND,
         "slug": preset["slug"],
-        "version": preset["version"],
         "alias": _normalize_slug(str(alias_source)),
         "inputMapping": dict(preset["inputs"]),
     }
@@ -543,15 +538,29 @@ def _hash_from_inputs(values: dict[str, Any]) -> str:
     normalized = repr(sorted(values.items())).encode("utf-8")
     return hashlib.sha1(normalized).hexdigest()[:8]
 
-def _build_step_id(
-    *, slug: str, version: str, index: int, inputs: dict[str, Any]
-) -> str:
-    return f"tpl:{slug}:{version}:{index:02d}:{_hash_from_inputs(inputs)}"
+def _preset_digest(template: Preset) -> str:
+    payload = json.dumps(
+        {
+            "slug": template.slug,
+            "scope": template.scope_type.value,
+            "scopeRef": template.scope_ref,
+            "inputs": template.inputs_schema or [],
+            "steps": template.steps or [],
+            "annotations": template.annotations or {},
+            "requiredCapabilities": template.required_capabilities or [],
+            "maxStepCount": template.max_step_count,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
 
-def _template_path_label(
-    *, slug: str, version: str, alias: str | None = None
-) -> str:
-    label = f"{slug}@{version}"
+
+def _build_step_id(*, slug: str, index: int, inputs: dict[str, Any]) -> str:
+    return f"tpl:{slug}:{index:02d}:{_hash_from_inputs(inputs)}"
+
+def _template_path_label(*, slug: str, alias: str | None = None) -> str:
+    label = slug
     if alias:
         return f"{alias}:{label}"
     return label
@@ -581,7 +590,7 @@ def _authored_presets_from_composition(node: dict[str, Any]) -> list[dict[str, A
     def visit(candidate: dict[str, Any]) -> None:
         entry: dict[str, Any] = {
             "presetSlug": str(candidate.get("slug") or "").strip(),
-            "presetVersion": str(candidate.get("version") or "").strip(),
+            "presetDigest": str(candidate.get("digest") or "").strip(),
             "scope": str(candidate.get("scope") or "").strip(),
             "includePath": [
                 str(item).strip()
@@ -1066,13 +1075,12 @@ def _normalize_seed_annotations(item: Mapping[str, Any]) -> dict[str, Any]:
 def _serialize_template(
     *,
     template: Preset,
-    version: PresetVersion,
     is_favorite: bool,
     recent_applied_at: datetime | None,
 ) -> dict[str, Any]:
     input_schema, ui_schema, defaults = _capability_contract_from_inputs(
-        inputs_schema=version.inputs_schema or [],
-        annotations=version.annotations or {},
+        inputs_schema=template.inputs_schema or [],
+        annotations=template.annotations or {},
     )
     return {
         "slug": template.slug,
@@ -1081,28 +1089,22 @@ def _serialize_template(
         "title": template.title,
         "description": template.description,
         "tags": list(template.tags or []),
-        "version": version.version,
-        "latestVersion": (
-            template.latest_version.version
-            if template.latest_version
-            else version.version
-        ),
         "inputs": _effective_inputs_schema(
             slug=template.slug,
-            inputs_schema=version.inputs_schema or [],
+            inputs_schema=template.inputs_schema or [],
         ),
         "inputSchema": input_schema,
         "uiSchema": ui_schema,
         "defaults": defaults,
-        "steps": list(version.steps or []),
-        "annotations": dict(version.annotations or {}),
+        "steps": list(template.steps or []),
+        "annotations": dict(template.annotations or {}),
         "requiredCapabilities": _normalize_capabilities(
             list(template.required_capabilities or [])
-            + list(version.required_capabilities or [])
         ),
-        "releaseStatus": version.release_status.value,
-        "reviewedBy": str(version.reviewed_by) if version.reviewed_by else None,
-        "reviewedAt": version.reviewed_at.isoformat() if version.reviewed_at else None,
+        "releaseStatus": template.release_status.value,
+        "reviewedBy": str(template.reviewed_by) if template.reviewed_by else None,
+        "reviewedAt": template.reviewed_at.isoformat() if template.reviewed_at else None,
+        "presetDigest": _preset_digest(template),
         "isFavorite": is_favorite,
         "recentAppliedAt": (
             recent_applied_at.astimezone(UTC).isoformat() if recent_applied_at else None
@@ -1155,10 +1157,6 @@ class PresetCatalogService:
                 Preset.scope_type == scope,
                 Preset.scope_ref == scope_ref,
             )
-            .options(
-                selectinload(Preset.latest_version),
-                selectinload(Preset.versions),
-            )
             .limit(1)
         )
         if not include_inactive:
@@ -1180,9 +1178,7 @@ class PresetCatalogService:
         user_id: UUID | None = None,
         include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
-        stmt = select(Preset).options(
-            selectinload(Preset.latest_version)
-        )
+        stmt = select(Preset)
         if not include_inactive:
             stmt = stmt.where(Preset.is_active.is_(True))
         if scope is not None:
@@ -1217,13 +1213,8 @@ class PresetCatalogService:
             recent_rows = (
                 await self._session.execute(
                     select(
-                        PresetVersion.template_id,
+                        PresetRecent.template_id,
                         PresetRecent.applied_at,
-                    )
-                    .join(
-                        PresetVersion,
-                        PresetVersion.id
-                        == PresetRecent.template_version_id,
                     )
                     .where(PresetRecent.user_id == user_id)
                     .order_by(PresetRecent.applied_at.desc())
@@ -1235,11 +1226,6 @@ class PresetCatalogService:
 
         serialized: list[dict[str, Any]] = []
         for template in template_rows:
-            version = template.latest_version
-            if version is None and template.versions:
-                version = template.versions[-1]
-            if version is None:
-                continue
             if lowered_tag and lowered_tag not in {
                 str(item).lower() for item in template.tags or []
             }:
@@ -1261,7 +1247,6 @@ class PresetCatalogService:
             serialized.append(
                 _serialize_template(
                     template=template,
-                    version=version,
                     is_favorite=is_favorite,
                     recent_applied_at=recents_map.get(template.id),
                 )
@@ -1291,7 +1276,6 @@ class PresetCatalogService:
         slug: str,
         scope: str,
         scope_ref: str | None,
-        version: str | None = None,
         user_id: UUID | None = None,
     ) -> dict[str, Any]:
         scope_type = _normalize_scope(scope)
@@ -1301,15 +1285,6 @@ class PresetCatalogService:
             scope=scope_type,
             scope_ref=normalized_scope_ref,
         )
-        version_model = template.latest_version
-        if version is not None:
-            for candidate in template.versions:
-                if candidate.version == version:
-                    version_model = candidate
-                    break
-        if version_model is None:
-            raise PresetNotFoundError("Template version not found.")
-
         is_favorite = False
         recent_applied_at = None
         if user_id is not None:
@@ -1324,7 +1299,7 @@ class PresetCatalogService:
                 select(PresetRecent.applied_at)
                 .where(
                     PresetRecent.user_id == user_id,
-                    PresetRecent.template_version_id == version_model.id,
+                    PresetRecent.template_id == template.id,
                 )
                 .order_by(PresetRecent.applied_at.desc())
                 .limit(1)
@@ -1333,7 +1308,6 @@ class PresetCatalogService:
 
         return _serialize_template(
             template=template,
-            version=version_model,
             is_favorite=is_favorite,
             recent_applied_at=recent_applied_at,
         )
@@ -1352,7 +1326,6 @@ class PresetCatalogService:
         annotations: dict[str, Any] | None = None,
         required_capabilities: list[Any] | None = None,
         created_by: UUID | None = None,
-        version: str = "1.0.0",
         release_status: PresetReleaseStatus = PresetReleaseStatus.DRAFT,
         seed_source: str | None = None,
         auto_commit: bool = True,
@@ -1389,7 +1362,6 @@ class PresetCatalogService:
                 for cap in _extract_step_capabilities(step)
             ]
         )
-        version_label = str(version or "").strip() or "1.0.0"
         template = Preset(
             id=uuid4(),
             slug=normalized_slug,
@@ -1399,24 +1371,16 @@ class PresetCatalogService:
             description=normalized_description,
             tags=_normalize_tag_list(tags),
             required_capabilities=derived_capabilities,
-            is_active=True,
-            created_by=created_by,
-        )
-        version_model = PresetVersion(
-            id=uuid4(),
-            template=template,
-            version=version_label,
             inputs_schema=validated_inputs,
             steps=validated_steps,
             annotations=dict(annotations or {}),
-            required_capabilities=derived_capabilities,
             max_step_count=max(25, len(validated_steps)),
             release_status=release_status,
             seed_source=seed_source,
+            is_active=True,
+            created_by=created_by,
         )
-        template.latest_version = version_model
         self._session.add(template)
-        self._session.add(version_model)
         await self._session.flush()
         if auto_commit:
             await self._session.commit()
@@ -1425,13 +1389,11 @@ class PresetCatalogService:
                 extra={
                     "slug": normalized_slug,
                     "scope": normalized_scope.value,
-                    "version": version_label,
                 },
             )
             _METRICS.increment("create")
         return _serialize_template(
             template=template,
-            version=version_model,
             is_favorite=False,
             recent_applied_at=None,
         )
@@ -1543,6 +1505,10 @@ class PresetCatalogService:
                     f"Step {index} kind must be one of: {_STEP_KIND}, {_INCLUDE_KIND}."
                 )
             if kind == _INCLUDE_KIND:
+                if raw_step.get("version") is not None:
+                    raise PresetValidationError(
+                        f"Step {index} include uses slug/scope only; remove version."
+                    )
                 unsupported = sorted(
                     key
                     for key in raw_step
@@ -1554,16 +1520,7 @@ class PresetCatalogService:
                         f"{', '.join(unsupported)}."
                     )
                 include_slug = _normalize_slug(str(raw_step.get("slug") or ""))
-                include_version = str(raw_step.get("version") or "").strip()
                 include_alias = _normalize_slug(str(raw_step.get("alias") or ""))
-                if not include_version:
-                    raise PresetValidationError(
-                        f"Step {index} include requires a pinned version."
-                    )
-                if _UNRESOLVED_PLACEHOLDER_PATTERN.search(include_version):
-                    raise PresetValidationError(
-                        f"Step {index} include version must be a literal pinned version."
-                    )
                 if include_alias in include_aliases:
                     raise PresetValidationError(
                         f"Step {index} include alias '{include_alias}' is duplicated."
@@ -1573,7 +1530,6 @@ class PresetCatalogService:
                 include_payload: dict[str, Any] = {
                     "kind": _INCLUDE_KIND,
                     "slug": include_slug,
-                    "version": include_version,
                     "alias": include_alias,
                 }
                 if include_scope is not None:
@@ -1668,48 +1624,32 @@ class PresetCatalogService:
             validated.append(step_payload)
         return validated
 
-    def _select_template_version(
-        self, template: Preset, version: str | None
-    ) -> PresetVersion:
-        version_label = "" if version is None else str(version).strip()
-        if not version_label:
-            if template.latest_version is not None:
-                return template.latest_version
-            raise PresetNotFoundError("Template version not found.")
-        for candidate in template.versions:
-            if candidate.version == version_label:
-                return candidate
-        raise PresetNotFoundError("Template version not found.")
-
-    async def _expand_version_steps(
+    async def _expand_preset_steps(
         self,
         *,
         template: Preset,
-        version_model: PresetVersion,
         scope: PresetScopeType,
         scope_ref: str | None,
         variables: dict[str, Any],
         root_slug: str,
-        root_version: str,
         root_inputs: dict[str, Any],
         root_max_step_count: int,
         enforce_limit: bool,
         path: list[str],
-        visited: set[tuple[str, str, str]],
+        visited: set[tuple[str, str, str | None]],
         resolved_steps: list[dict[str, Any]],
         alias: str | None = None,
         input_mapping: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         node: dict[str, Any] = {
             "slug": template.slug,
-            "version": version_model.version,
+            "digest": _preset_digest(template),
             "scope": scope.value,
             "path": list(path),
             "stepIds": [],
             "includes": [],
             "requiredCapabilities": _normalize_capabilities(
                 list(template.required_capabilities or [])
-                + list(version_model.required_capabilities or [])
             ),
         }
         if alias:
@@ -1717,7 +1657,7 @@ class PresetCatalogService:
         if input_mapping:
             node["inputMapping"] = dict(input_mapping)
 
-        for source_index, source_step in enumerate(version_model.steps or [], start=1):
+        for source_index, source_step in enumerate(template.steps or [], start=1):
             rendered = _render_value(
                 self._template_env, source_step, variables=variables
             )
@@ -1735,7 +1675,23 @@ class PresetCatalogService:
                 kind = _INCLUDE_KIND
             if kind == _INCLUDE_KIND:
                 include_slug = _normalize_slug(str(rendered.get("slug") or ""))
-                include_version = str(rendered.get("version") or "").strip()
+                if rendered.get("version") is not None:
+                    include_path = [
+                        *path,
+                        _template_path_label(
+                            slug=include_slug,
+                            alias=_normalize_slug(str(rendered.get("alias") or "")),
+                        ),
+                    ]
+                    raise _include_tree_error(
+                        message=(
+                            "Preset includes use slug/scope only; remove version at "
+                            f"{_format_include_path(include_path)}."
+                        ),
+                        code="preset_include_version_not_supported",
+                        include_path=include_path,
+                        recoverable=False,
+                    )
                 include_alias = _normalize_slug(str(rendered.get("alias") or ""))
                 include_scope = _normalize_scope(str(rendered.get("scope") or scope.value))
                 include_scope_ref = (
@@ -1747,7 +1703,6 @@ class PresetCatalogService:
                     *path,
                     _template_path_label(
                         slug=include_slug,
-                        version=include_version,
                         alias=include_alias,
                     ),
                 ]
@@ -1761,7 +1716,7 @@ class PresetCatalogService:
                         code="preset_include_scope_violation",
                         include_path=include_path,
                     )
-                target_key = (include_scope.value, include_slug, include_version)
+                target_key = (include_scope.value, include_slug, include_scope_ref)
                 if target_key in visited:
                     message = (
                         "Preset include cycle detected at "
@@ -1788,22 +1743,7 @@ class PresetCatalogService:
                         code="preset_include_missing",
                         include_path=include_path,
                     ) from exc
-                try:
-                    child_version = self._select_template_version(
-                        child_template, include_version
-                    )
-                except PresetNotFoundError as exc:
-                    message = (
-                        f"Preset include version mismatch at "
-                        f"{_format_include_path(include_path)}: requested version "
-                        f"{include_version!r} is not available."
-                    )
-                    raise _include_tree_error(
-                        message=message,
-                        code="preset_include_version_mismatch",
-                        include_path=include_path,
-                    ) from exc
-                if child_version.release_status is PresetReleaseStatus.INACTIVE:
+                if child_template.release_status is PresetReleaseStatus.INACTIVE:
                     message = (
                         f"Preset include target is inactive at "
                         f"{_format_include_path(include_path)}."
@@ -1827,7 +1767,7 @@ class PresetCatalogService:
                 try:
                     child_schema = _effective_inputs_schema(
                         slug=child_template.slug,
-                        inputs_schema=child_version.inputs_schema or [],
+                        inputs_schema=child_template.inputs_schema or [],
                         context=variables.get("context"),
                     )
                     submitted_child_inputs = _apply_contextual_input_overrides(
@@ -1835,7 +1775,7 @@ class PresetCatalogService:
                         inputs_schema=child_schema,
                         submitted=dict(input_mapping),
                         context=variables.get("context"),
-                        annotations=child_version.annotations or {},
+                        annotations=child_template.annotations or {},
                     )
                     child_inputs = self._resolve_inputs(
                         schema=child_schema,
@@ -1860,14 +1800,12 @@ class PresetCatalogService:
                     **variables,
                     "inputs": child_inputs,
                 }
-                child_node = await self._expand_version_steps(
+                child_node = await self._expand_preset_steps(
                     template=child_template,
-                    version_model=child_version,
                     scope=include_scope,
                     scope_ref=include_scope_ref,
                     variables=child_variables,
                     root_slug=root_slug,
-                    root_version=root_version,
                     root_inputs=root_inputs,
                     root_max_step_count=root_max_step_count,
                     enforce_limit=enforce_limit,
@@ -1914,17 +1852,16 @@ class PresetCatalogService:
             step_payload: dict[str, Any] = {
                 "id": _build_step_id(
                     slug=root_slug,
-                    version=root_version,
                     index=next_index,
                     inputs=root_inputs,
                 ),
                 "type": step_type,
                 "instructions": instructions,
                 "presetProvenance": {
-                    "root": {"slug": root_slug, "version": root_version},
+                    "root": {"slug": root_slug},
                     "source": {
                         "slug": template.slug,
-                        "version": version_model.version,
+                        "presetDigest": _preset_digest(template),
                         "scope": scope.value,
                         "stepIndex": source_index,
                     },
@@ -1933,7 +1870,7 @@ class PresetCatalogService:
                 "source": {
                     "kind": "preset-derived",
                     "presetSlug": template.slug,
-                    "presetVersion": version_model.version,
+                    "presetDigest": _preset_digest(template),
                     "includePath": list(path),
                 },
             }
@@ -1992,7 +1929,6 @@ class PresetCatalogService:
         slug: str,
         scope: str,
         scope_ref: str | None,
-        version: str | None,
         inputs: dict[str, Any],
         context: dict[str, Any] | None = None,
         options: ExpandOptions | None = None,
@@ -2005,7 +1941,6 @@ class PresetCatalogService:
             scope=normalized_scope,
             scope_ref=normalized_scope_ref,
         )
-        selected_version = self._select_template_version(template, version)
 
         effective_context = dict(context or {})
         if not _repository_from_context(effective_context):
@@ -2017,13 +1952,13 @@ class PresetCatalogService:
                 effective_context["repo"] = input_repository.strip()
         effective_schema = _effective_inputs_schema(
             slug=template.slug,
-            inputs_schema=selected_version.inputs_schema or [],
+            inputs_schema=template.inputs_schema or [],
             context=effective_context,
         )
-        annotated_schema = (selected_version.annotations or {}).get("inputSchema")
+        annotated_schema = (template.annotations or {}).get("inputSchema")
         if isinstance(annotated_schema, Mapping):
-            annotated_ui_schema = (selected_version.annotations or {}).get("uiSchema")
-            annotated_defaults = (selected_version.annotations or {}).get("defaults")
+            annotated_ui_schema = (template.annotations or {}).get("uiSchema")
+            annotated_defaults = (template.annotations or {}).get("defaults")
             contract_definitions = _schema_contract_input_definitions(
                 input_schema=annotated_schema,
                 ui_schema=annotated_ui_schema
@@ -2050,7 +1985,7 @@ class PresetCatalogService:
             inputs_schema=effective_schema,
             submitted=dict(inputs or {}),
             context=effective_context,
-            annotations=selected_version.annotations or {},
+            annotations=template.annotations or {},
         )
         removed_batch_inputs = sorted(
             name
@@ -2092,30 +2027,27 @@ class PresetCatalogService:
         resolved_steps: list[dict[str, Any]] = []
         warnings: list[str] = []
         enforce_limit = options.should_enforce_step_limit if options else True
-        max_step_count = max(int(selected_version.max_step_count or 25), 1)
+        max_step_count = max(int(template.max_step_count or 25), 1)
         root_path = [
-            _template_path_label(slug=template.slug, version=selected_version.version)
+            _template_path_label(slug=template.slug)
         ]
-        composition = await self._expand_version_steps(
+        composition = await self._expand_preset_steps(
             template=template,
-            version_model=selected_version,
             scope=normalized_scope,
             scope_ref=normalized_scope_ref,
             variables=variables,
             root_slug=template.slug,
-            root_version=selected_version.version,
             root_inputs=validated_inputs,
             root_max_step_count=max_step_count,
             enforce_limit=enforce_limit,
             path=root_path,
-            visited={(normalized_scope.value, template.slug, selected_version.version)},
+            visited={(normalized_scope.value, template.slug, normalized_scope_ref)},
             resolved_steps=resolved_steps,
         )
         authored_presets = _authored_presets_from_composition(composition)
 
         template_caps = _normalize_capabilities(
             list(template.required_capabilities or [])
-            + list(selected_version.required_capabilities or [])
             + _composition_capabilities(composition)
             + [
                 cap
@@ -2123,13 +2055,13 @@ class PresetCatalogService:
                 for cap in _extract_step_capabilities(step)
             ]
         )
-        if selected_version.release_status is PresetReleaseStatus.INACTIVE:
-            warnings.append("Template version is marked inactive.")
+        if template.release_status is PresetReleaseStatus.INACTIVE:
+            warnings.append("Template is marked inactive.")
 
         if user_id is not None:
             await self.record_recent(
                 user_id=user_id,
-                template_version_id=selected_version.id,
+                template_id=template.id,
             )
 
         applied_at = datetime.now(UTC).isoformat()
@@ -2138,7 +2070,6 @@ class PresetCatalogService:
             extra={
                 "slug": template.slug,
                 "scope": normalized_scope.value,
-                "version": selected_version.version,
                 "steps": len(resolved_steps),
             },
         )
@@ -2149,7 +2080,7 @@ class PresetCatalogService:
             "authoredPresets": authored_presets,
             "appliedTemplate": {
                 "slug": template.slug,
-                "version": selected_version.version,
+                "presetDigest": _preset_digest(template),
                 "inputs": validated_inputs,
                 "stepIds": [step["id"] for step in resolved_steps],
                 "appliedAt": applied_at,
@@ -2354,7 +2285,7 @@ class PresetCatalogService:
         self,
         *,
         user_id: UUID,
-        template_version_id: UUID,
+        template_id: UUID,
         auto_commit: bool = True,
     ) -> None:
         dialect_name = self._session.bind.dialect.name if self._session.bind else ""
@@ -2363,10 +2294,10 @@ class PresetCatalogService:
                 pg_insert(PresetRecent)
                 .values(
                     user_id=user_id,
-                    template_version_id=template_version_id,
+                    template_id=template_id,
                 )
                 .on_conflict_do_update(
-                    index_elements=["user_id", "template_version_id"],
+                    index_elements=["user_id", "template_id"],
                     set_={"applied_at": datetime.now(UTC)},
                 )
             )
@@ -2374,7 +2305,7 @@ class PresetCatalogService:
             self._session.add(
                 PresetRecent(
                     user_id=user_id,
-                    template_version_id=template_version_id,
+                    template_id=template_id,
                 )
             )
         await self._session.flush()
@@ -2399,7 +2330,7 @@ class PresetCatalogService:
             await self._session.flush()
         logger.info(
             "preset_catalog.recent",
-            extra={"template_version_id": str(template_version_id)},
+            extra={"template_id": str(template_id)},
         )
         _METRICS.increment("recent")
 
@@ -2474,7 +2405,6 @@ class PresetCatalogService:
         slug: str,
         scope: str,
         scope_ref: str | None,
-        version: str,
         release_status: PresetReleaseStatus,
         reviewer_id: UUID | None = None,
     ) -> dict[str, Any]:
@@ -2486,33 +2416,22 @@ class PresetCatalogService:
             scope_ref=normalized_scope_ref,
             include_inactive=True,
         )
-        target = None
-        for candidate in template.versions:
-            if candidate.version == version:
-                target = candidate
-                break
-        if target is None:
-            raise PresetNotFoundError("Template version not found.")
-        target.release_status = release_status
+        template.release_status = release_status
         if reviewer_id is not None:
-            target.reviewed_by = reviewer_id
-            target.reviewed_at = datetime.now(UTC)
-        if release_status is PresetReleaseStatus.ACTIVE:
-            template.latest_version = target
+            template.reviewed_by = reviewer_id
+            template.reviewed_at = datetime.now(UTC)
         await self._session.commit()
         logger.info(
             "preset_catalog.review",
             extra={
                 "slug": template.slug,
                 "scope": scope_type.value,
-                "version": target.version,
                 "release_status": release_status.value,
             },
         )
         _METRICS.increment("review")
         return _serialize_template(
             template=template,
-            version=target,
             is_favorite=False,
             recent_applied_at=None,
         )
@@ -2527,7 +2446,10 @@ class PresetCatalogService:
         created = 0
         for item in loaded:
             scope = str(item.get("scope", "global")).strip() or "global"
-            version = str(item.get("version", "1.0.0")).strip() or "1.0.0"
+            if item.get("version") is not None:
+                raise PresetValidationError(
+                    "Seed presets use slug/scope only; remove version."
+                )
             try:
                 await self.create_template(
                     slug=str(
@@ -2544,7 +2466,6 @@ class PresetCatalogService:
                     annotations=_normalize_seed_annotations(item),
                     required_capabilities=item.get("requiredCapabilities") or [],
                     created_by=None,
-                    version=version,
                     release_status=PresetReleaseStatus.ACTIVE,
                     seed_source=item.get("seedSource"),
                     auto_commit=False,
@@ -2574,7 +2495,10 @@ class PresetCatalogService:
             normalized_slug = _normalize_slug(slug)
             title = str(item.get("title") or "").strip()
             description = str(item.get("description") or "").strip() or "Seed template."
-            version_label = str(item.get("version", "1.0.0")).strip() or "1.0.0"
+            if item.get("version") is not None:
+                raise PresetValidationError(
+                    "Seed presets use slug/scope only; remove version."
+                )
             validated_inputs = self._validate_inputs_schema(item.get("inputs") or [])
             validated_steps = self._validate_template_steps(item.get("steps") or [])
             annotations = _normalize_seed_annotations(item)
@@ -2595,8 +2519,6 @@ class PresetCatalogService:
                     Preset.scope_ref == scope_ref,
                 )
                 .options(
-                    selectinload(Preset.latest_version),
-                    selectinload(Preset.versions),
                 )
                 .limit(1)
             )
@@ -2615,7 +2537,6 @@ class PresetCatalogService:
                     annotations=annotations,
                     required_capabilities=derived_capabilities,
                     created_by=None,
-                    version=version_label,
                     release_status=PresetReleaseStatus.ACTIVE,
                     seed_source=item.get("seedSource"),
                     auto_commit=False,
@@ -2641,57 +2562,24 @@ class PresetCatalogService:
                 template.is_active = True
                 updated = True
 
-            version_model = next(
-                (
-                    candidate
-                    for candidate in template.versions
-                    if candidate.version == version_label
-                ),
-                None,
-            )
-            if version_model is None:
-                version_model = PresetVersion(
-                    id=uuid4(),
-                    template=template,
-                    version=version_label,
-                    inputs_schema=validated_inputs,
-                    steps=validated_steps,
-                    annotations=annotations,
-                    required_capabilities=derived_capabilities,
-                    max_step_count=max(25, len(validated_steps)),
-                    release_status=PresetReleaseStatus.ACTIVE,
-                    seed_source=item.get("seedSource"),
-                )
-                self._session.add(version_model)
+            if list(template.inputs_schema or []) != validated_inputs:
+                template.inputs_schema = validated_inputs
                 updated = True
-            else:
-                if list(version_model.inputs_schema or []) != validated_inputs:
-                    version_model.inputs_schema = validated_inputs
-                    updated = True
-                if list(version_model.steps or []) != validated_steps:
-                    version_model.steps = validated_steps
-                    updated = True
-                if dict(version_model.annotations or {}) != annotations:
-                    version_model.annotations = annotations
-                    updated = True
-                if list(version_model.required_capabilities or []) != list(
-                    derived_capabilities
-                ):
-                    version_model.required_capabilities = list(derived_capabilities)
-                    updated = True
-                max_step_count = max(25, len(validated_steps))
-                if int(version_model.max_step_count or 0) != max_step_count:
-                    version_model.max_step_count = max_step_count
-                    updated = True
-                if version_model.release_status is not PresetReleaseStatus.ACTIVE:
-                    version_model.release_status = PresetReleaseStatus.ACTIVE
-                    updated = True
-                if version_model.seed_source != item.get("seedSource"):
-                    version_model.seed_source = item.get("seedSource")
-                    updated = True
-
-            if template.latest_version_id != version_model.id:
-                template.latest_version = version_model
+            if list(template.steps or []) != validated_steps:
+                template.steps = validated_steps
+                updated = True
+            if dict(template.annotations or {}) != annotations:
+                template.annotations = annotations
+                updated = True
+            max_step_count = max(25, len(validated_steps))
+            if int(template.max_step_count or 0) != max_step_count:
+                template.max_step_count = max_step_count
+                updated = True
+            if template.release_status is not PresetReleaseStatus.ACTIVE:
+                template.release_status = PresetReleaseStatus.ACTIVE
+                updated = True
+            if template.seed_source != item.get("seedSource"):
+                template.seed_source = item.get("seedSource")
                 updated = True
             if updated:
                 result.updated += 1

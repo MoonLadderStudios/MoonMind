@@ -2105,7 +2105,6 @@ async def test_create_jira_implement_tasks_targets_jira_implement_preset():
     first_task = first_request["initial_parameters"]["workflow"]
     assert first_task["taskTemplate"] == {
         "slug": "jira-implement",
-        "version": "1.1.0",
     }
     assert first_task["title"].startswith("Run Jira Implement for MM-501")
     assert "Run Jira Implement for MM-501" in first_task["instructions"]

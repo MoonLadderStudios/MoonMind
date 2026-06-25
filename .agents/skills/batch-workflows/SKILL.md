@@ -85,6 +85,7 @@ in the In Progress column of the THOR board" with a single batch run.
      --targets artifacts/batch-workflows-targets.json \
      --target-preset-slug <slug> \
      --target-preset-scope <global|personal> \
+     --target-preset-scope-ref <scope-ref-or-empty> \
      --publish-mode <none|branch|pr> \
      --constraints-file <optional path to shared constraints> \
      --max-workflows <cap>

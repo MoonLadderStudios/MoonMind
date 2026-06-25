@@ -591,7 +591,6 @@ async def test_promote_proposal_applies_runtime_override() -> None:
                     "authoredPresets": [
                         {
                             "presetId": "runtime-quality-followup",
-                            "presetVersion": "2026-04-17",
                         }
                     ],
                     "steps": [
@@ -602,7 +601,6 @@ async def test_promote_proposal_applies_runtime_override() -> None:
                             "source": {
                                 "kind": "preset-derived",
                                 "presetId": "runtime-quality-followup",
-                                "presetVersion": "2026-04-17",
                             },
                         }
                     ],
@@ -627,13 +625,11 @@ async def test_promote_proposal_applies_runtime_override() -> None:
     assert final_request["payload"]["workflow"]["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
-            "presetVersion": "2026-04-17",
         }
     ]
     assert final_request["payload"]["workflow"]["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetId": "runtime-quality-followup",
-        "presetVersion": "2026-04-17",
     }
     assert (
         updated_proposal.workflow_create_request["payload"]["workflow"]["runtime"]["mode"]
@@ -728,7 +724,6 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
                     "authoredPresets": [
                         {
                             "presetId": "runtime-quality-followup",
-                            "presetVersion": "2026-04-17",
                             "includePath": ["root", "regression-coverage"],
                         }
                     ],
@@ -744,7 +739,6 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
                             "source": {
                                 "kind": "preset-derived",
                                 "presetId": "runtime-quality-followup",
-                                "presetVersion": "2026-04-17",
                                 "includePath": ["root", "regression-coverage"],
                                 "originalStepId": "add-regression-test",
                             },
@@ -768,14 +762,12 @@ async def test_promote_proposal_preserves_preset_provenance() -> None:
     assert task["authoredPresets"] == [
         {
             "presetId": "runtime-quality-followup",
-            "presetVersion": "2026-04-17",
             "includePath": ["root", "regression-coverage"],
         }
     ]
     assert task["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetId": "runtime-quality-followup",
-        "presetVersion": "2026-04-17",
         "includePath": ["root", "regression-coverage"],
         "originalStepId": "add-regression-test",
     }
@@ -797,7 +789,6 @@ async def test_promote_proposal_uses_reviewed_flattened_payload_without_reexpans
             "source": {
                 "kind": "preset-derived",
                 "presetSlug": "jira-orchestrate",
-                "presetVersion": "reviewed-version",
                 "originalStepId": "implement-story",
             },
         }
@@ -822,7 +813,6 @@ async def test_promote_proposal_uses_reviewed_flattened_payload_without_reexpans
                     "authoredPresets": [
                         {
                             "presetSlug": "jira-orchestrate",
-                            "presetVersion": "reviewed-version",
                         }
                     ],
                     "steps": reviewed_steps,
@@ -845,7 +835,7 @@ async def test_promote_proposal_uses_reviewed_flattened_payload_without_reexpans
     assert task["steps"][0]["id"] == reviewed_steps[0]["id"]
     assert task["steps"][0]["type"] == reviewed_steps[0]["type"]
     assert task["steps"][0]["skill"] == reviewed_steps[0]["skill"]
-    assert task["steps"][0]["source"]["presetVersion"] == "reviewed-version"
+    assert "presetVersion" not in task["steps"][0]["source"]
     assert task["taskTemplate"]["version"] == "live-version-that-must-not-be-expanded"
 
 
@@ -911,7 +901,6 @@ async def test_promote_proposal_rejects_preset_derived_steps_without_flat_type()
                             "source": {
                                 "kind": "preset-derived",
                                 "presetId": "runtime-quality-followup",
-                                "presetVersion": "2026-04-17",
                             },
                         }
                     ],

@@ -723,6 +723,14 @@ const ExecutionDetailSchema = z
       )
       .default([])
       .optional(),
+    recurrence: z
+      .object({
+        definitionId: z.string(),
+        href: z.string(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     targetDiagnostics: TargetDiagnosticsSchema.nullable().optional(),
     recoveryEligibility: RecoveryEligibilitySchema.nullable().optional(),
     interventionAudit: z
@@ -5617,6 +5625,20 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           current={detailSubroute}
           search={search}
         />
+      ) : null}
+
+      {execution?.recurrence?.definitionId ? (
+        <div className="page-meta">
+          Created by schedule{' '}
+          <a
+            href={
+              execution.recurrence?.href ||
+              `/schedules/${encodeURIComponent(execution.recurrence?.definitionId || '')}`
+            }
+          >
+            {execution.recurrence?.definitionId}
+          </a>
+        </div>
       ) : null}
 
       {actionsOn && actions ? (

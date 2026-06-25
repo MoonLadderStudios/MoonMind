@@ -648,8 +648,8 @@ describe.skip("Task Create Entrypoint", () => {
                   scope: "personal",
                   title: "Personal Demo",
                   description: "A user-owned preset.",
-                  latestVersion: "1.0.0",
-                  version: "1.0.0",
+                  latestVersion: "1",
+                  version: "1",
                 },
               ],
             }),
@@ -674,16 +674,16 @@ describe.skip("Task Create Entrypoint", () => {
                   title: "Objective Request Demo",
                   description:
                     "Use template inputs to derive the task objective.",
-                  latestVersion: "2.0.0",
-                  version: "2.0.0",
+                  latestVersion: "2",
+                  version: "2",
                 },
                 {
                   slug: "pr-resolver",
                   scope: "global",
                   title: "PR Resolver",
                   description: "Resolve pull request checks and feedback.",
-                  latestVersion: "1.0.0",
-                  version: "1.0.0",
+                  latestVersion: "1",
+                  version: "1",
                 },
               ],
             }),
@@ -742,8 +742,8 @@ describe.skip("Task Create Entrypoint", () => {
               scope: "global",
               title: "Objective Request Demo",
               description: "Use template inputs to derive the task objective.",
-              latestVersion: "2.0.0",
-              version: "2.0.0",
+              latestVersion: "2",
+              version: "2",
               inputs: [
                 {
                   name: "request",
@@ -763,8 +763,8 @@ describe.skip("Task Create Entrypoint", () => {
               scope: "global",
               title: "PR Resolver",
               description: "Resolve pull request checks and feedback.",
-              latestVersion: "1.0.0",
-              version: "1.0.0",
+              latestVersion: "1",
+              version: "1",
               inputs: [],
             }),
           } as Response);
@@ -811,7 +811,7 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({
               steps: [
                 {
-                  id: "tpl:objective-demo:2.0.0:01",
+                  id: "tpl:objective-demo:2:01",
                   title: "Clarify request",
                   instructions: "",
                   skill: {
@@ -820,14 +820,14 @@ describe.skip("Task Create Entrypoint", () => {
                   },
                 },
                 {
-                  id: "tpl:objective-demo:2.0.0:02",
+                  id: "tpl:objective-demo:2:02",
                   title: "Review objective",
                   instructions: "Review the resulting task objective.",
                 },
               ],
               appliedTemplate: {
                 slug: "objective-demo",
-                version: "2.0.0",
+                version: "2",
               },
               warnings: [],
             }),
@@ -843,14 +843,14 @@ describe.skip("Task Create Entrypoint", () => {
             json: async () => ({
               steps: [
                 {
-                  id: "tpl:pr-resolver:1.0.0:01",
+                  id: "tpl:pr-resolver:1:01",
                   title: "Resolve PR",
                   instructions: "Resolve the current branch PR.",
                 },
               ],
               appliedTemplate: {
                 slug: "pr-resolver",
-                version: "1.0.0",
+                version: "1",
               },
               warnings: [],
             }),
@@ -1371,7 +1371,7 @@ describe.skip("Task Create Entrypoint", () => {
                   },
                   steps: [
                     {
-                      id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                      id: "tpl:jira-breakdown-orchestrate:1:01",
                       title: "Break down declarative design",
                       instructions: "Break down the Grid UI overlay plan.",
                       skill: {
@@ -1380,7 +1380,7 @@ describe.skip("Task Create Entrypoint", () => {
                       },
                     },
                     {
-                      id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                      id: "tpl:jira-breakdown-orchestrate:1:02",
                       title: "Create Jira stories",
                       skill: { id: "story.create_jira_issues" },
                       storyOutput: {
@@ -1394,7 +1394,7 @@ describe.skip("Task Create Entrypoint", () => {
                       },
                     },
                     {
-                      id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                      id: "tpl:jira-breakdown-orchestrate:1:03",
                       title: "Create dependent Jira Orchestrate tasks",
                       skill: { id: "story.create_jira_orchestrate_tasks" },
                       jiraOrchestration: {
@@ -1971,7 +1971,7 @@ describe.skip("Task Create Entrypoint", () => {
               slug: "saved-preset",
               scope: "personal",
               title: "Saved preset",
-              latestVersion: "1.0.0",
+              latestVersion: "1",
             }),
           } as Response);
         }
@@ -2216,7 +2216,7 @@ describe.skip("Task Create Entrypoint", () => {
                     appliedStepTemplates: [
                       {
                         slug: "jira-breakdown-orchestrate",
-                        version: "1.0.0",
+                        version: "1",
                         inputs: {
                           feature_request: "Break down the Grid UI overlay plan.",
                           jira_project_key: "MM",
@@ -2228,9 +2228,9 @@ describe.skip("Task Create Entrypoint", () => {
                           source_issue_key: "",
                         },
                         stepIds: [
-                          "tpl:jira-breakdown-orchestrate:1.0.0:01",
-                          "tpl:jira-breakdown-orchestrate:1.0.0:02",
-                          "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                          "tpl:jira-breakdown-orchestrate:1:01",
+                          "tpl:jira-breakdown-orchestrate:1:02",
+                          "tpl:jira-breakdown-orchestrate:1:03",
                         ],
                         appliedAt: "2026-04-26T19:29:23.784091+00:00",
                         capabilities: ["git"],
@@ -2238,7 +2238,7 @@ describe.skip("Task Create Entrypoint", () => {
                     ],
                     steps: [
                       {
-                        id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                        id: "tpl:jira-breakdown-orchestrate:1:01",
                         title: "Break down declarative design",
                         instructions: "Break down the Grid UI overlay plan.",
                         tool: {
@@ -2254,7 +2254,7 @@ describe.skip("Task Create Entrypoint", () => {
                         },
                       },
                       {
-                        id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                        id: "tpl:jira-breakdown-orchestrate:1:02",
                         title: "Create Jira stories",
                         tool: {
                           type: "skill",
@@ -2277,7 +2277,7 @@ describe.skip("Task Create Entrypoint", () => {
                         },
                       },
                       {
-                        id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                        id: "tpl:jira-breakdown-orchestrate:1:03",
                         title: "Create dependent Jira Orchestrate tasks",
                         tool: {
                           type: "skill",
@@ -2316,15 +2316,15 @@ describe.skip("Task Create Entrypoint", () => {
                 task: {
                   steps: [
                     {
-                      id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                      id: "tpl:jira-breakdown-orchestrate:1:01",
                       instructions: "Break down the Grid UI overlay plan.",
                     },
                     {
-                      id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                      id: "tpl:jira-breakdown-orchestrate:1:02",
                       instructions: "Create Jira stories from recovered input.",
                     },
                     {
-                      id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                      id: "tpl:jira-breakdown-orchestrate:1:03",
                       instructions:
                         "Create dependent orchestrate tasks from recovered input.",
                     },
@@ -2573,8 +2573,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "Jira Orchestrate",
         description: "Jira preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
       },
       {
         key: "global::::speckit-orchestrate",
@@ -2582,8 +2580,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
       },
       {
         key: "global::::moonspec-orchestrate",
@@ -2591,8 +2587,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "MoonSpec Orchestrate",
         description: "MoonSpec preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
       },
     ]);
 
@@ -2608,8 +2602,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
       },
       {
         key: "global::::moonspec-orchestrate",
@@ -2617,8 +2609,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "MoonSpec Orchestrate",
         description: "MoonSpec preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
       },
     ]);
 
@@ -2634,8 +2624,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "Other Template",
         description: "Other preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
       },
       {
         key: "global::::speckit-orchestrate",
@@ -2643,8 +2631,6 @@ describe.skip("Task Create Entrypoint", () => {
         scope: "global",
         title: "SpecKit Orchestrate",
         description: "Legacy preset.",
-        latestVersion: "1.0.0",
-        version: "1.0.0",
       },
     ]);
 
@@ -4266,15 +4252,15 @@ describe.skip("Task Create Entrypoint", () => {
                 publish_mode: "pr",
               }),
               stepIds: [
-                "tpl:jira-breakdown-orchestrate:1.0.0:01",
-                "tpl:jira-breakdown-orchestrate:1.0.0:02",
-                "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                "tpl:jira-breakdown-orchestrate:1:01",
+                "tpl:jira-breakdown-orchestrate:1:02",
+                "tpl:jira-breakdown-orchestrate:1:03",
               ],
             }),
           ],
           steps: [
             expect.objectContaining({
-              id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+              id: "tpl:jira-breakdown-orchestrate:1:01",
               tool: expect.objectContaining({
                 name: "moonspec-breakdown",
                 requiredCapabilities: ["git"],
@@ -4285,7 +4271,7 @@ describe.skip("Task Create Entrypoint", () => {
               }),
             }),
             expect.objectContaining({
-              id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+              id: "tpl:jira-breakdown-orchestrate:1:02",
               instructions: "Create Jira stories from recovered input.",
               storyOutput: {
                 mode: "jira",
@@ -4298,7 +4284,7 @@ describe.skip("Task Create Entrypoint", () => {
               },
             }),
             expect.objectContaining({
-              id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+              id: "tpl:jira-breakdown-orchestrate:1:03",
               instructions:
                 "Create dependent orchestrate tasks from recovered input.",
               jiraOrchestration: {
@@ -6650,16 +6636,16 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Jira Breakdown",
                 description: "Create Jira stories from a breakdown.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
               {
                 slug: "moonspec-orchestrate",
                 scope: "global",
                 title: "MoonSpec Orchestrate",
                 description: "Keep the default preset off Jira Breakdown.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -6714,16 +6700,16 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
               {
                 slug: "moonspec-orchestrate",
                 scope: "global",
                 title: "MoonSpec Orchestrate",
                 description: "Default preset.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -6774,8 +6760,8 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Jira Orchestrate",
                 description: "Run MoonSpec from a Jira issue.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -6791,8 +6777,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "Jira Orchestrate",
             description: "Run MoonSpec from a Jira issue.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "jira_issue_key",
@@ -6866,8 +6852,8 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "MoonSpec Orchestrate",
                 description: "Run MoonSpec.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -6883,8 +6869,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "MoonSpec Orchestrate",
             description: "Run MoonSpec.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -6956,8 +6942,8 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Jira Orchestrate",
                 description: "Run MoonSpec from a Jira issue.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -6971,8 +6957,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "Jira Orchestrate",
             description: "Run MoonSpec from a Jira issue.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "jira_issue_key",
@@ -7002,7 +6988,7 @@ describe.skip("Task Create Entrypoint", () => {
             ],
             appliedTemplate: {
               slug: "jira-orchestrate",
-              version: "1.0.0",
+              version: "1",
               inputs: { jira_issue_key: "THOR-352" },
               stepIds: ["tpl:jira-orchestrate:1"],
             },
@@ -7081,8 +7067,8 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -7100,8 +7086,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "Jira Breakdown and Orchestrate",
             description: "Create dependent Jira Orchestrate tasks.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -7165,8 +7151,8 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Jira Breakdown",
                 description: "Create Jira stories from a breakdown.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -7180,8 +7166,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "Jira Breakdown",
             description: "Create Jira stories from a breakdown.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -7224,14 +7210,14 @@ describe.skip("Task Create Entrypoint", () => {
           json: async () => ({
             steps: [
               {
-                id: "tpl:jira-breakdown:1.0.0:01",
+                id: "tpl:jira-breakdown:1:01",
                 title: "Create Jira stories",
                 instructions: `Selected Jira board ID: ${body.inputs.jira_board_id}`,
               },
             ],
             appliedTemplate: {
               slug: "jira-breakdown",
-              version: "1.0.0",
+              version: "1",
               inputs: body.inputs,
             },
             warnings: [],
@@ -7284,8 +7270,8 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Option Demo",
                 description: "Preset options.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -7299,8 +7285,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "Option Demo",
             description: "Preset options.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -7332,14 +7318,14 @@ describe.skip("Task Create Entrypoint", () => {
           json: async () => ({
             steps: [
               {
-                id: "tpl:option-demo:1.0.0:01",
+                id: "tpl:option-demo:1:01",
                 title: "Options",
                 instructions: JSON.stringify(body.inputs),
               },
             ],
             appliedTemplate: {
               slug: "option-demo",
-              version: "1.0.0",
+              version: "1",
               inputs: body.inputs,
             },
             warnings: [],
@@ -7388,16 +7374,16 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Preset A",
                 description: "First preset.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
               {
                 slug: "preset-b",
                 scope: "global",
                 title: "Preset B",
                 description: "Second preset.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -7411,8 +7397,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "Preset A",
             description: "First preset.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -7440,8 +7426,8 @@ describe.skip("Task Create Entrypoint", () => {
             scope: "global",
             title: "Preset B",
             description: "Second preset.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -7468,14 +7454,14 @@ describe.skip("Task Create Entrypoint", () => {
           json: async () => ({
             steps: [
               {
-                id: "tpl:preset-b:1.0.0:01",
+                id: "tpl:preset-b:1:01",
                 title: "Preset B",
                 instructions: body.inputs.jira_dependency_mode,
               },
             ],
             appliedTemplate: {
               slug: "preset-b",
-              version: "1.0.0",
+              version: "1",
               inputs: body.inputs,
             },
             warnings: [],
@@ -7536,8 +7522,8 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Jira Breakdown",
                 description: "Create Jira stories from a breakdown.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -8282,8 +8268,8 @@ describe.skip("Task Create Entrypoint", () => {
           scope: "global",
           title: label,
           description: `${label} detail.`,
-          latestVersion: "1.0.0",
-          version: "1.0.0",
+          latestVersion: "1",
+          version: "1",
           inputs: [
             {
               name: `${slug}_input`,
@@ -8306,16 +8292,16 @@ describe.skip("Task Create Entrypoint", () => {
                 scope: "global",
                 title: "Preset A",
                 description: "First preset.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
               {
                 slug: "preset-b",
                 scope: "global",
                 title: "Preset B",
                 description: "Second preset.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -10452,7 +10438,7 @@ describe.skip("Task Create Entrypoint", () => {
       resolveObjectiveInstructions("", "", [
         {
           slug: "objective-demo",
-          version: "2.0.0",
+          presetDigest: "sha256:objective-demo",
           appliedAt: "2026-04-03T00:00:00Z",
           inputs: {
             request: "Restore the legacy Start Workflow objective handling.",
@@ -14020,8 +14006,8 @@ describe("Task Create MM-578 Preset expansion", () => {
               scope: "global",
               title: "MM-578 Preset",
               description: "Expand Preset steps.",
-              latestVersion: "1.0.0",
-              version: "1.0.0",
+              latestVersion: "1",
+              version: "1",
             },
           ],
         }),
@@ -14035,8 +14021,8 @@ describe("Task Create MM-578 Preset expansion", () => {
           scope: "global",
           title: "MM-578 Preset",
           description: "Expand Preset steps.",
-          latestVersion: "1.0.0",
-          version: "1.0.0",
+          latestVersion: "1",
+          version: "1",
           inputs: [
             {
               name: "issue_key",
@@ -14058,7 +14044,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         json: async () => ({
           steps: [
             {
-              id: "tpl:mm-578-preset:1.0.0:01",
+              id: "tpl:mm-578-preset:1:01",
               title: "Fetch Jira issue",
               instructions: "Fetch MM-578.",
               tool: {
@@ -14069,13 +14055,13 @@ describe("Task Create MM-578 Preset expansion", () => {
               source: {
                 kind: "preset-derived",
                 presetId: "mm-578-preset",
-                presetVersion: "1.0.0",
+                presetDigest: "digest-1",
                 includePath: ["root", "fetch"],
                 originalStepId: "fetch-jira-issue",
               },
             },
             {
-              id: "tpl:mm-578-preset:1.0.0:02",
+              id: "tpl:mm-578-preset:1:02",
               title: "Implement preset story",
               instructions: "Implement MM-578.",
               skill: {
@@ -14085,7 +14071,7 @@ describe("Task Create MM-578 Preset expansion", () => {
               source: {
                 kind: "preset-derived",
                 presetId: "mm-578-preset",
-                presetVersion: "1.0.0",
+                presetDigest: "digest-1",
                 includePath: ["root", "implement"],
                 originalStepId: "implement-preset-story",
               },
@@ -14093,26 +14079,26 @@ describe("Task Create MM-578 Preset expansion", () => {
           ],
           appliedTemplate: {
             slug: "mm-578-preset",
-            version: "1.0.0",
+            version: "1",
             stepIds: [
-              "tpl:mm-578-preset:1.0.0:01",
-              "tpl:mm-578-preset:1.0.0:02",
+              "tpl:mm-578-preset:1:01",
+              "tpl:mm-578-preset:1:02",
             ],
             composition: {
               slug: "mm-578-preset",
-              version: "1.0.0",
-              path: ["mm-578-preset@1.0.0"],
+              version: "1",
+              path: ["mm-578-preset"],
               stepIds: [
-                "tpl:mm-578-preset:1.0.0:01",
-                "tpl:mm-578-preset:1.0.0:02",
+                "tpl:mm-578-preset:1:01",
+                "tpl:mm-578-preset:1:02",
               ],
               includes: [],
             },
             authoredPresets: [
               {
                 presetSlug: "mm-578-preset",
-                presetVersion: "1.0.0",
-                includePath: ["mm-578-preset@1.0.0"],
+                presetDigest: "digest-1",
+                includePath: ["mm-578-preset"],
               },
             ],
           },
@@ -14165,7 +14151,7 @@ describe("Task Create MM-578 Preset expansion", () => {
                   preset: {
                     id: "global::::mm-578-preset",
                     slug: "mm-578-preset",
-                    version: "1.0.0",
+                    version: "1",
                     inputs: { issue_key: "MM-578" },
                   },
                 },
@@ -14201,21 +14187,21 @@ describe("Task Create MM-578 Preset expansion", () => {
               publish: { mode: "pr" },
               taskTemplate: {
                 slug: "jira-implement",
-                version: "1.0.0",
+                version: "1",
               },
               appliedStepTemplates: [
                 {
                   slug: "jira-implement",
-                  version: "1.0.0",
+                  version: "1",
                   stepIds: [
-                    "tpl:jira-implement:1.0.0:01",
-                    "tpl:jira-implement:1.0.0:02",
+                    "tpl:jira-implement:1:01",
+                    "tpl:jira-implement:1:02",
                   ],
                 },
               ],
               steps: [
                 {
-                  id: "tpl:jira-implement:1.0.0:01",
+                  id: "tpl:jira-implement:1:01",
                   title: "Fetch Jira issue",
                   instructions: "Fetch MM-901.",
                   tool: {
@@ -14225,7 +14211,7 @@ describe("Task Create MM-578 Preset expansion", () => {
                   },
                 },
                 {
-                  id: "tpl:jira-implement:1.0.0:02",
+                  id: "tpl:jira-implement:1:02",
                   title: "Implement preset story",
                   instructions: "Implement MM-901.",
                   skill: {
@@ -14295,8 +14281,8 @@ describe("Task Create MM-578 Preset expansion", () => {
                 scope: "global",
                 title: "Jira Orchestrate",
                 description: "Run MoonSpec from a Jira issue.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -14310,8 +14296,8 @@ describe("Task Create MM-578 Preset expansion", () => {
             scope: "global",
             title: "Jira Orchestrate",
             description: "Run MoonSpec from a Jira issue.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "jira_issue_key",
@@ -14333,7 +14319,7 @@ describe("Task Create MM-578 Preset expansion", () => {
           json: async () => ({
             steps: [
               {
-                id: "tpl:jira-orchestrate:1.0.0:01",
+                id: "tpl:jira-orchestrate:1:01",
                 title: "Move Jira issue",
                 instructions: "Transition THOR-352 to In Progress.",
                 skill: { id: "jira-issue-updater", args: {} },
@@ -14341,9 +14327,9 @@ describe("Task Create MM-578 Preset expansion", () => {
             ],
             appliedTemplate: {
               slug: "jira-orchestrate",
-              version: "1.0.0",
+              version: "1",
               inputs: { jira_issue_key: "THOR-352" },
-              stepIds: ["tpl:jira-orchestrate:1.0.0:01"],
+              stepIds: ["tpl:jira-orchestrate:1:01"],
             },
             warnings: [],
           }),
@@ -14410,8 +14396,8 @@ describe("Task Create MM-578 Preset expansion", () => {
                 scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -14429,8 +14415,8 @@ describe("Task Create MM-578 Preset expansion", () => {
             scope: "global",
             title: "Jira Breakdown and Orchestrate",
             description: "Create dependent Jira Orchestrate tasks.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -14460,19 +14446,19 @@ describe("Task Create MM-578 Preset expansion", () => {
           json: async () => ({
             steps: [
               {
-                id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                id: "tpl:jira-breakdown-orchestrate:1:01",
                 title: "Break down declarative design",
                 instructions: "Break down the feature request.",
                 skill: { id: "moonspec-breakdown", args: {} },
               },
               {
-                id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                id: "tpl:jira-breakdown-orchestrate:1:02",
                 title: "Create Jira stories",
                 instructions: "Create Jira stories.",
                 skill: { id: "story.create_jira_issues", args: {} },
               },
               {
-                id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                id: "tpl:jira-breakdown-orchestrate:1:03",
                 title: "Create dependent Jira Orchestrate tasks",
                 instructions: "Create one Jira Orchestrate task per story.",
                 skill: { id: "story.create_jira_orchestrate_tasks", args: {} },
@@ -14490,7 +14476,7 @@ describe("Task Create MM-578 Preset expansion", () => {
             ],
             appliedTemplate: {
               slug: "jira-breakdown-orchestrate",
-              version: "1.0.0",
+              version: "1",
             },
             capabilities: ["git"],
             warnings: [],
@@ -14573,8 +14559,8 @@ describe("Task Create MM-578 Preset expansion", () => {
                 scope: "global",
                 title: "Jira Breakdown and Orchestrate",
                 description: "Create dependent Jira Orchestrate tasks.",
-                latestVersion: "1.0.0",
-                version: "1.0.0",
+                latestVersion: "1",
+                version: "1",
               },
             ],
           }),
@@ -14592,8 +14578,8 @@ describe("Task Create MM-578 Preset expansion", () => {
             scope: "global",
             title: "Jira Breakdown and Orchestrate",
             description: "Create dependent Jira Orchestrate tasks.",
-            latestVersion: "1.0.0",
-            version: "1.0.0",
+            latestVersion: "1",
+            version: "1",
             inputs: [
               {
                 name: "feature_request",
@@ -14615,19 +14601,19 @@ describe("Task Create MM-578 Preset expansion", () => {
           json: async () => ({
             steps: [
               {
-                id: "tpl:jira-breakdown-orchestrate:1.0.0:01",
+                id: "tpl:jira-breakdown-orchestrate:1:01",
                 title: "Break down declarative design",
                 instructions: "Break down the feature request.",
                 skill: { id: "moonspec-breakdown", args: {} },
               },
               {
-                id: "tpl:jira-breakdown-orchestrate:1.0.0:02",
+                id: "tpl:jira-breakdown-orchestrate:1:02",
                 title: "Create Jira stories",
                 instructions: "Create Jira stories.",
                 skill: { id: "story.create_jira_issues", args: {} },
               },
               {
-                id: "tpl:jira-breakdown-orchestrate:1.0.0:03",
+                id: "tpl:jira-breakdown-orchestrate:1:03",
                 title: "Create dependent Jira Orchestrate tasks",
                 instructions: "Create one Jira Orchestrate task per story.",
                 skill: { id: "story.create_jira_orchestrate_tasks", args: {} },
@@ -14635,7 +14621,7 @@ describe("Task Create MM-578 Preset expansion", () => {
             ],
             appliedTemplate: {
               slug: "jira-breakdown-orchestrate",
-              version: "1.0.0",
+              version: "1",
             },
             capabilities: ["git"],
             warnings: [],
@@ -14787,7 +14773,6 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(submittedStep.source).toMatchObject({
       kind: "detached",
       presetId: "mm-578-preset",
-      presetVersion: "1.0.0",
       includePath: ["root", "fetch"],
       originalStepId: "fetch-jira-issue",
     });
@@ -14829,7 +14814,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       };
     };
     expect(request.payload.task.steps[0]).toEqual({
-      id: "tpl:mm-578-preset:1.0.0:01",
+      id: "tpl:mm-578-preset:1:01",
       title: "Fetch Jira issue",
       type: "tool",
       instructions: "Fetch MM-578.",
@@ -14841,14 +14826,14 @@ describe("Task Create MM-578 Preset expansion", () => {
       source: {
         kind: "preset-derived",
         presetId: "mm-578-preset",
-        presetVersion: "1.0.0",
+        presetDigest: "digest-1",
         includePath: ["root", "fetch"],
         originalStepId: "fetch-jira-issue",
       },
     });
     expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();
     expect(request.payload.task.steps[1]).toEqual({
-      id: "tpl:mm-578-preset:1.0.0:02",
+      id: "tpl:mm-578-preset:1:02",
       title: "Implement preset story",
       type: "skill",
       instructions: "Implement MM-578.",
@@ -14859,7 +14844,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       source: {
         kind: "preset-derived",
         presetId: "mm-578-preset",
-        presetVersion: "1.0.0",
+        presetDigest: "digest-1",
         includePath: ["root", "implement"],
         originalStepId: "implement-preset-story",
       },
@@ -14868,8 +14853,8 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(request.payload.task.authoredPresets).toEqual([
       {
         presetSlug: "mm-578-preset",
-        presetVersion: "1.0.0",
-        includePath: ["mm-578-preset@1.0.0"],
+        presetDigest: "digest-1",
+        includePath: ["mm-578-preset"],
       },
     ]);
     expect(request.payload.task.appliedStepTemplates?.[0]).toMatchObject({
@@ -14877,14 +14862,14 @@ describe("Task Create MM-578 Preset expansion", () => {
       composition: {
         slug: "mm-578-preset",
         stepIds: [
-          "tpl:mm-578-preset:1.0.0:01",
-          "tpl:mm-578-preset:1.0.0:02",
+          "tpl:mm-578-preset:1:01",
+          "tpl:mm-578-preset:1:02",
         ],
       },
       authoredPresets: [
         {
           presetSlug: "mm-578-preset",
-          presetVersion: "1.0.0",
+          presetDigest: "digest-1",
         },
       ],
     });
@@ -14916,7 +14901,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     expect(steps[0]?.source).toEqual({
       kind: "preset-derived",
       presetId: "mm-578-preset",
-      presetVersion: "1.0.0",
+      presetDigest: "digest-1",
       includePath: ["root", "fetch"],
       originalStepId: "fetch-jira-issue",
     });
@@ -14934,8 +14919,8 @@ describe("Task Create MM-578 Preset expansion", () => {
     ).toEqual([
       {
         presetSlug: "mm-578-preset",
-        presetVersion: "1.0.0",
-        includePath: ["mm-578-preset@1.0.0"],
+        presetDigest: "digest-1",
+        includePath: ["mm-578-preset"],
       },
     ]);
     expect(
@@ -14999,12 +14984,12 @@ describe("Task Create MM-578 Preset expansion", () => {
           ?.originalStepId,
       ]),
     ).toEqual([
-      ["tpl:mm-578-preset:1.0.0:01", "tool", "fetch-jira-issue"],
-      ["tpl:mm-578-preset:1.0.0:02", "skill", "implement-preset-story"],
-      ["tpl:mm-578-preset:1.0.0:01", "tool", "fetch-jira-issue"],
-      ["tpl:mm-578-preset:1.0.0:02", "skill", "implement-preset-story"],
-      ["tpl:mm-578-preset:1.0.0:01", "tool", "fetch-jira-issue"],
-      ["tpl:mm-578-preset:1.0.0:02", "skill", "implement-preset-story"],
+      ["tpl:mm-578-preset:1:01", "tool", "fetch-jira-issue"],
+      ["tpl:mm-578-preset:1:02", "skill", "implement-preset-story"],
+      ["tpl:mm-578-preset:1:01", "tool", "fetch-jira-issue"],
+      ["tpl:mm-578-preset:1:02", "skill", "implement-preset-story"],
+      ["tpl:mm-578-preset:1:01", "tool", "fetch-jira-issue"],
+      ["tpl:mm-578-preset:1:02", "skill", "implement-preset-story"],
     ]);
   });
 
@@ -15025,7 +15010,7 @@ describe("Task Create MM-578 Preset expansion", () => {
               steps: [],
               appliedTemplate: {
                 slug: "mm-578-preset",
-                version: "1.0.0",
+                version: "1",
               },
               warnings: [],
             }),
@@ -15244,7 +15229,7 @@ describe("Task Create MM-578 Preset expansion", () => {
           json: async () => ({
             steps: [
               {
-                id: "tpl:mm-578-preset:1.0.0:01",
+                id: "tpl:mm-578-preset:1:01",
                 title: "Fetch Jira issue",
                 instructions: "Fetch MM-578.",
                 tool: {
@@ -15349,7 +15334,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       json: async () => ({
         steps: [
           {
-            id: "tpl:mm-578-preset:1.0.0:01",
+            id: "tpl:mm-578-preset:1:01",
             title: "Fetch Jira issue",
             instructions: "Fetch MM-578.",
             tool: {
@@ -15361,7 +15346,7 @@ describe("Task Create MM-578 Preset expansion", () => {
         ],
         appliedTemplate: {
           slug: "mm-578-preset",
-          version: "1.0.0",
+          version: "1",
         },
       }),
     } as Response);
@@ -15494,24 +15479,24 @@ describe("Task Create schema-driven capability inputs", () => {
               scope: "global",
               title: "Jira Schema Preset",
               description: "Schema-driven Jira preset.",
-              latestVersion: "1.0.0",
-              version: "1.0.0",
+              latestVersion: "1",
+              version: "1",
             },
             {
               slug: "github-schema-preset",
               scope: "global",
               title: "GitHub Schema Preset",
               description: "Schema-driven GitHub preset.",
-              latestVersion: "1.0.0",
-              version: "1.0.0",
+              latestVersion: "1",
+              version: "1",
             },
             {
               slug: "generic-schema-preset",
               scope: "global",
               title: "Generic Schema Preset",
               description: "Schema-driven generic preset.",
-              latestVersion: "1.0.0",
-              version: "1.0.0",
+              latestVersion: "1",
+              version: "1",
             },
           ],
         }),
@@ -15525,8 +15510,8 @@ describe("Task Create schema-driven capability inputs", () => {
           scope: "global",
           title: "Jira Schema Preset",
           description: "Schema-driven Jira preset.",
-          latestVersion: "1.0.0",
-          version: "1.0.0",
+          latestVersion: "1",
+          version: "1",
           inputSchema: {
             type: "object",
             required: ["jira_issue"],
@@ -15561,8 +15546,8 @@ describe("Task Create schema-driven capability inputs", () => {
           scope: "global",
           title: "GitHub Schema Preset",
           description: "Schema-driven GitHub preset.",
-          latestVersion: "1.0.0",
-          version: "1.0.0",
+          latestVersion: "1",
+          version: "1",
           inputSchema: {
             type: "object",
             required: ["github_issue"],
@@ -15602,8 +15587,8 @@ describe("Task Create schema-driven capability inputs", () => {
           scope: "global",
           title: "Generic Schema Preset",
           description: "Schema-driven generic preset.",
-          latestVersion: "1.0.0",
-          version: "1.0.0",
+          latestVersion: "1",
+          version: "1",
           inputSchema: {
             type: "object",
             required: ["summary", "urgent"],
@@ -15669,13 +15654,13 @@ describe("Task Create schema-driven capability inputs", () => {
         json: async () => ({
           steps: [
             {
-              id: "tpl:github-schema-preset:1.0.0:01",
+              id: "tpl:github-schema-preset:1:01",
               title: "Use GitHub issue",
               instructions: "Use GitHub issue.",
               tool: { type: "tool", id: "github.load_issue_preset_brief", inputs: payload.inputs },
             },
           ],
-          appliedTemplate: { slug: "github-schema-preset", version: "1.0.0", inputs: payload.inputs },
+          appliedTemplate: { slug: "github-schema-preset", version: "1", inputs: payload.inputs },
           capabilities: ["gh"],
           warnings: [],
         }),
@@ -15690,7 +15675,7 @@ describe("Task Create schema-driven capability inputs", () => {
         json: async () => ({
           steps: [
             {
-              id: "tpl:jira-schema-preset:1.0.0:01",
+              id: "tpl:jira-schema-preset:1:01",
               title: "Use Jira issue",
               instructions: `Use ${(payload.inputs?.jira_issue as { key?: string })?.key || ""}.`,
               tool: {
@@ -15702,7 +15687,7 @@ describe("Task Create schema-driven capability inputs", () => {
           ],
           appliedTemplate: {
             slug: "jira-schema-preset",
-            version: "1.0.0",
+            version: "1",
             inputs: payload.inputs,
           },
           capabilities: ["jira"],

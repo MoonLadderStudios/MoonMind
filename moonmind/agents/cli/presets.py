@@ -51,7 +51,6 @@ class PresetClient:
         *,
         slug: str,
         scope: str,
-        version: str,
         inputs: dict[str, Any],
         scope_ref: str | None = None,
         context: dict[str, Any] | None = None,
@@ -64,7 +63,6 @@ class PresetClient:
             headers=self._headers(),
             params=params,
             json={
-                "version": version,
                 "inputs": dict(inputs or {}),
                 "context": dict(context or {}),
                 "options": {"enforceStepLimit": True},

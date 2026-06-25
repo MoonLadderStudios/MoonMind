@@ -2629,17 +2629,16 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/presets/{slug}/versions/{version}": {
+    "/api/presets/{slug}/review": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Template Version */
-        get: operations["get_template_version_api_presets__slug__versions__version__get"];
-        /** Review Template Version */
-        put: operations["review_template_version_api_presets__slug__versions__version__put"];
+        get?: never;
+        /** Review Template */
+        put: operations["review_template_api_presets__slug__review_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -4766,6 +4765,7 @@ export interface components {
             resume?: components["schemas"]["ExecutionResumeSummaryModel"] | null;
             /** Relatedruns */
             relatedRuns?: components["schemas"]["ExecutionRelatedRunModel"][];
+            recurrence?: components["schemas"]["ExecutionRecurrenceProvenanceModel"] | null;
             targetDiagnostics?: components["schemas"]["ExecutionTargetDiagnosticsModel"] | null;
             /** Runmetrics */
             runMetrics?: {
@@ -4969,6 +4969,16 @@ export interface components {
             remediation?: string | null;
             /** Cause */
             cause?: string | null;
+        };
+        /**
+         * ExecutionRecurrenceProvenanceModel
+         * @description Schedule provenance for executions spawned by recurring definitions.
+         */
+        ExecutionRecurrenceProvenanceModel: {
+            /** Definitionid */
+            definitionId: string;
+            /** Href */
+            href: string;
         };
         /**
          * ExecutionRefreshEnvelope
@@ -6156,8 +6166,8 @@ export interface components {
         PresetAppliedMetadataSchema: {
             /** Slug */
             slug: string;
-            /** Version */
-            version: string;
+            /** Presetdigest */
+            presetDigest?: string | null;
             /** Inputs */
             inputs?: {
                 [key: string]: unknown;
@@ -6215,8 +6225,6 @@ export interface components {
          * @description Request model for template expansion.
          */
         PresetExpandRequestSchema: {
-            /** Version */
-            version: string;
             /** Inputs */
             inputs?: {
                 [key: string]: unknown;
@@ -6261,7 +6269,7 @@ export interface components {
         };
         /**
          * PresetInputSchema
-         * @description Input definition used by preset versions.
+         * @description Input definition used by presets.
          */
         PresetInputSchema: {
             /** Name */
@@ -6295,7 +6303,7 @@ export interface components {
         };
         /**
          * PresetResponseSchema
-         * @description Detail response model for one template version.
+         * @description Detail response model for one preset.
          */
         PresetResponseSchema: {
             /** Slug */
@@ -6311,10 +6319,8 @@ export interface components {
             title: string;
             /** Description */
             description: string;
-            /** Latestversion */
-            latestVersion: string;
-            /** Version */
-            version: string;
+            /** Presetdigest */
+            presetDigest?: string | null;
             /** Tags */
             tags?: string[];
             /**
@@ -6514,10 +6520,8 @@ export interface components {
             title: string;
             /** Description */
             description: string;
-            /** Latestversion */
-            latestVersion: string;
-            /** Version */
-            version: string;
+            /** Presetdigest */
+            presetDigest?: string | null;
             /** Tags */
             tags?: string[];
             /**
@@ -7073,6 +7077,25 @@ export interface components {
             evidence?: components["schemas"]["EvidenceRefStatusModel"][];
         };
         /**
+         * RecurringWorkflowActionPermissionsModel
+         * @description Action availability for a recurring schedule visible to the caller.
+         */
+        RecurringWorkflowActionPermissionsModel: {
+            /** Canedit */
+            canEdit: boolean;
+            /** Canrunnow */
+            canRunNow: boolean;
+            /**
+             * Candelete
+             * @default false
+             */
+            canDelete: boolean;
+            /** Disabledreasons */
+            disabledReasons?: {
+                [key: string]: string;
+            };
+        };
+        /**
          * RecurringWorkflowDefinitionListResponse
          * @description List response for recurring definitions.
          */
@@ -7126,6 +7149,8 @@ export interface components {
             policy?: {
                 [key: string]: unknown;
             };
+            permissions: components["schemas"]["RecurringWorkflowActionPermissionsModel"];
+            actions: components["schemas"]["RecurringWorkflowActionPermissionsModel"];
             /** Version */
             version: number;
             /**
@@ -7175,6 +7200,8 @@ export interface components {
             dispatchAttempts: number;
             /** Dispatchafter */
             dispatchAfter?: string | null;
+            /** Startedat */
+            startedAt?: string | null;
             /** Temporalworkflowid */
             temporalWorkflowId?: string | null;
             /** Temporalrunid */
@@ -14390,7 +14417,7 @@ export interface operations {
             };
         };
     };
-    get_template_version_api_presets__slug__versions__version__get: {
+    review_template_api_presets__slug__review_put: {
         parameters: {
             query: {
                 scope: string;
@@ -14399,42 +14426,6 @@ export interface operations {
             header?: never;
             path: {
                 slug: string;
-                version: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PresetResponseSchema"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    review_template_version_api_presets__slug__versions__version__put: {
-        parameters: {
-            query: {
-                scope: string;
-                scopeRef?: string | null;
-            };
-            header?: never;
-            path: {
-                slug: string;
-                version: string;
             };
             cookie?: never;
         };

@@ -2224,7 +2224,7 @@ class MoonMindRunWorkflow:
                 if not isinstance(preset, Mapping):
                     continue
                 compact_preset: dict[str, Any] = {}
-                for key in ("id", "name", "version", "source", "presetId"):
+                for key in ("id", "name", "source", "presetId", "presetDigest"):
                     value = self._coerce_text(preset.get(key), max_chars=160)
                     if value:
                         compact_preset[key] = value
@@ -2295,7 +2295,7 @@ class MoonMindRunWorkflow:
             "kind",
             "presetId",
             "presetSlug",
-            "presetVersion",
+            "presetDigest",
             "originalStepId",
         ):
             text = self._coerce_text(value.get(key), max_chars=160)

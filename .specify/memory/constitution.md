@@ -1,8 +1,8 @@
 # MoonMind Constitution
 
-**Version:** 2.0.0 · **Last amended:** 2026-06-16
+**Version:** 2.1.0 · **Last amended:** 2026-06-25
 
-> Principles are cited **by name**, not by number — ordering and numbering may change across amendments. See **Governance** at the end of this document for the versioning policy, amendment procedure, and amendment log. This revision adds three execution-model principles (**Safety and Governance by Construction**, **Temporal-Native Durable Orchestration**, **Artifacts Are the Durable Evidence Layer**), updates four existing principles, and relocates the former *Product & Operational Constraints* into their owning principles so each rule lives in exactly one place.
+> Principles are cited **by name**, not by number — ordering and numbering may change across amendments. See **Governance** at the end of this document for the versioning policy, amendment procedure, and amendment log. This revision adds explicit simplicity-as-safety, name-only internal capability identity for skill-name, preset-slug, and tool-name references, and narrowed short-lived internal workflow cutover guidance while preserving durable-execution safety.
 
 ## Core Principles
 
@@ -32,6 +32,7 @@ MoonMind MUST constrain autonomous agents through enforceable runtime, credentia
 Non-negotiable rules (enforced today):
 
 - Launch, control, publish, push, comment, artifact-publication, and external-tool boundaries MUST enforce the policy in effect for the run. Policy violations MUST fail fast with actionable errors, never silent degradation.
+- Simplicity is a safety property. MoonMind MUST prefer one explicit canonical path over parallel aliases, layered fallbacks, duplicate identity fields, or compatibility wrappers that make policy, routing, billing, or audit behavior ambiguous.
 - MoonMind MUST NOT silently substitute a credential source, switch provider profiles, rewrite billing-relevant values (e.g., model identifiers, effort), or fall back to a less-constrained execution path. Missing or revoked credentials MUST produce explicit, actionable failures — fail-fast, not fall-back.
 - Provider Profiles MUST be treated as execution-target **policy contracts** (runtime + provider + credential source + materialization mode + model defaults + concurrency/cooldown + routing), not merely auth records.
 - Secrets MUST be carried as **references**, never raw values, in durable contracts, profile rows, workflow payloads, logs, and artifacts. Secret values MUST be resolved only at controlled launch/proxy boundaries and MUST be redacted from observable output (logs, artifacts, outbound text, PR/issue text).
@@ -49,7 +50,7 @@ Gate (a prohibition, enforced today):
 
 - Autonomous remediation and other high-autonomy actions MUST NOT be enabled until the substrate they depend on — enforced policy, governance telemetry, secret auditability, and sufficient forensic observability — is in place. Autonomy MUST NOT outrun its guardrails.
 
-Rationale: Granting an agent your credentials and a shell is a liability unless something constrains it. Building the constraints into the substrate — and making them auditable — is what lets MoonMind grant autonomy without granting trust.
+Rationale: Granting an agent your credentials and a shell is a liability unless something constrains it. Building the constraints into the substrate — and making them auditable — is what lets MoonMind grant autonomy without granting trust. Avoiding unnecessary indirection is part of that safety model: operators cannot govern what they cannot clearly identify, route, or audit.
 
 ### III. Temporal-Native Durable Orchestration
 
@@ -61,9 +62,10 @@ Non-negotiable rules:
 - Side-effecting Activities MUST be idempotent or guarded by durable idempotency keys (e.g., `workflow_id`, `run_id`, `session_id`, `session_epoch`, `turn_id`, `request_id`, or a lease ID).
 - Workflow payloads, Search Attributes, Workflow IDs, Memos, Signals, Updates, Queries, and Activity inputs/results MUST contain only compact, non-sensitive metadata. Large content and evidence MUST be represented by artifact references (see **Artifacts Are the Durable Evidence Layer**). Secret values MUST NOT traverse the Temporal control plane unless an explicit Payload Codec / Data Converter encryption policy is enabled for that payload class.
 - Long-lived workflows MUST bound history and preserve replay compatibility through Continue-As-New, Temporal patch/version markers, Worker Versioning, or an explicit reset/migration plan. Changes that add, remove, or reorder workflow commands MUST use these mechanisms whenever in-flight histories or persisted payloads depend on them.
+- Short-lived internal pre-release workflows MAY be cut over without compatibility shims when operators can drain, cancel, reset, or allow completion of affected runs and when no durable histories or persisted payloads are expected to replay under both old and new command shapes. This is a controlled cutover decision, not permission to break live durable execution.
 - Compatibility-sensitive orchestration changes MUST ship with boundary-level regression coverage (worker-binding, Temporal activity-invocation, replay-style, or in-flight payload compatibility tests), not only isolated unit tests.
 
-Rationale: Temporal is the durable envelope that makes fire-and-forget execution and clean recovery possible. Determinism, payload discipline, and replay compatibility are correctness requirements, not stylistic preferences — they are what allow the system to be deleted-and-rebuilt aggressively (see **Pre-Release Velocity: Delete, Don't Deprecate**) without corrupting live executions.
+Rationale: Temporal is the durable envelope that makes fire-and-forget execution and clean recovery possible. Determinism, payload discipline, and replay compatibility are correctness requirements, not stylistic preferences. Short-lived internal workflows can be cut over aggressively when active executions are explicitly handled, but durable histories and persisted payloads remain correctness boundaries that must not be corrupted.
 
 ### IV. Artifacts Are the Durable Evidence Layer
 
@@ -153,8 +155,13 @@ Non-negotiable rules:
   - external dependencies,
   - failure modes and expected operator actions.
 - Skill execution SHOULD be runtime-neutral at the workflow level (with runtime adapters implementing the specifics).
+- Internal capability identity MUST be name-only and canonical:
+  - agent instruction bundles are identified by **skill-name**,
+  - task presets are identified by **preset-slug**,
+  - executable tools are identified by **tool-name**.
+- MoonMind MUST NOT introduce internal ID aliases, display-name matching, provider-specific synonyms, or compatibility translation tables for those capability identities. Renames MUST update every caller, test, mock, seed, and doc reference in the same cohesive change.
 
-Rationale: Skills are the unit of scale for MoonMind automation.
+Rationale: Skills are the unit of scale for MoonMind automation. Name-only identity keeps capability routing understandable across agents, workflows, presets, and tools; parallel IDs and aliases create ambiguity exactly where safety, auditability, and operator intent need crisp boundaries.
 
 ### IX. The Bittersweet Lesson: AI scaffolds are useful, but they must constantly evolve.
 
@@ -299,7 +306,7 @@ Non-negotiable rules:
 
 Durable-execution carve-out (this is a correctness boundary, not legacy compatibility):
 
-- "Delete, don't deprecate" MUST NOT be read to permit Temporal nondeterminism, broken replay, orphaned in-flight executions, or unreadable persisted payloads. Internal compatibility shims for code-level contracts are unnecessary, but replay / version / migration paths are **required** when durable workflow histories, persisted payloads, or live executions depend on them (see **Temporal-Native Durable Orchestration** and **Resilient by Default**).
+- "Delete, don't deprecate" MUST NOT be read to permit Temporal nondeterminism, broken replay, orphaned in-flight executions, or unreadable persisted payloads. Internal compatibility shims for code-level contracts are unnecessary. Replay / version / migration paths are **required** when durable workflow histories, persisted payloads, or live executions must cross the change boundary; short-lived internal pre-release workflows MAY instead use an explicit drain/cancel/reset/complete cutover when that preserves durable-execution safety (see **Temporal-Native Durable Orchestration** and **Resilient by Default**).
 - Breaking changes to any future **public** API/contract MUST include a migration plan. Deprecation windows and compatibility aliases are NOT required for internal contracts — remove cleanly and immediately. If a public API surface is later introduced, deprecation windows MUST be defined at that time.
 
 Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds the cost of a clean break. Every stale alias, orphaned model, or outdated doc section is a future debugging trap. The one thing a clean break must never break is a durable workflow that is already running.
@@ -313,6 +320,8 @@ Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds
   - Each feature MUST define at least one independent validation path (automated tests or a deterministic quickstart/manual validation).
 - **Clarity over cleverness**:
   - Prefer explicit contracts, explicit adapters, and explicit errors over implicit fallback behavior.
+- **Simplicity gate**:
+  - Plans and implementations MUST reject unnecessary aliases, duplicate identity systems, speculative abstractions, and generated context bulk that obscures the canonical path. Added complexity MUST be justified by a concrete safety, durability, or operator-value need.
 - **Exceptions must be visible**:
   - If a plan violates a MUST principle, it MUST be documented as a violation with a mitigation and a path back to compliance.
 
@@ -326,5 +335,6 @@ Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds
   - **PATCH** — clarifications, wording, or non-semantic fixes.
 - **Amendment procedure.** Amendments MUST update the version and `Last amended` date, summarize the change in the amendment log below, and propagate any renamed principles to dependent references (e.g., agent instruction files, `docs/` cross-references) in the same change, per **Pre-Release Velocity: Delete, Don't Deprecate**.
 - **Amendment log.**
+  - **2.1.0 (2026-06-25)** — Added explicit simplicity-as-safety language to **Safety and Governance by Construction**, name-only internal capability identity for skill-name, preset-slug, and tool-name references under **Skills Are First-Class and Easy to Add**, and narrowed **Temporal-Native Durable Orchestration** / **Pre-Release Velocity: Delete, Don't Deprecate** guidance so short-lived internal pre-release workflows may use explicit cutover without compatibility shims while durable histories and persisted payloads remain protected. Added a simplicity gate to quality gates. Traceability: MM-911, source issue MM-901.
   - **2.0.0 (2026-06-16)** — Added **Safety and Governance by Construction**, **Temporal-Native Durable Orchestration**, and **Artifacts Are the Durable Evidence Layer**. Updated **Orchestrate, Don't Recreate** (three execution classes; session-capability claim discipline), **Resilient by Default** (evidence-based/typed remediation; autonomous-repair gate), **Docs-First Development and Traceability** (release-metadata hygiene; constitution as a versioned doc surface), and **Pre-Release Velocity: Delete, Don't Deprecate** (durable-execution carve-out). Reordered so the execution-model principles follow **Orchestrate, Don't Recreate**, with Safety leading. Relocated the former *Non-Negotiable Product & Operational Constraints* (security/secret hygiene, observability/Mission Control, compatibility/migration) into their owning principles so each rule lives once. Established versioning and the cite-by-name convention.
   - **1.x (unversioned)** — Original thirteen-principle constitution prior to the introduction of version metadata.

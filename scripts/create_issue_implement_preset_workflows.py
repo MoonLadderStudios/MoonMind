@@ -15,8 +15,6 @@ from urllib.parse import quote, urlparse
 
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 DEFAULT_RUNTIME = "codex_cli"
-DEFAULT_PRESET_VERSION = "1.0.0"
-PROVIDER_DEFAULT_PRESET_VERSIONS = {"jira": "1.1.0", "github": "1.0.0"}
 PROVIDER_PRESETS = {"jira": "jira-implement", "github": "github-issue-implement"}
 
 
@@ -44,9 +42,9 @@ def normalize_issue_ref(*, provider: str, issue: str, repository: str) -> tuple[
     return ref, {"github_issue": {"repository": repo, "number": number}, "constraints": ""}
 
 
-def build_idempotency_key(*, provider: str, issue_ref: str, repository: str, runtime: str, preset_version: str, model: str | None = None, effort: str | None = None) -> str:
+def build_idempotency_key(*, provider: str, issue_ref: str, repository: str, runtime: str, model: str | None = None, effort: str | None = None) -> str:
     preset_slug = PROVIDER_PRESETS[provider]
-    parts = [preset_slug, issue_ref, repository.strip(), runtime.strip(), preset_version.strip()]
+    parts = [preset_slug, issue_ref, repository.strip(), runtime.strip()]
     model = (model or "").strip()
     effort = (effort or "").strip()
     if model or effort:
@@ -74,7 +72,7 @@ def build_runtime_block(*, runtime: str, model: str | None = None, effort: str |
     return runtime_block
 
 
-def build_payload(*, provider: str, issue_ref: str, repository: str, runtime: str, expanded_steps: list[dict[str, Any]], applied_template: dict[str, Any] | None = None, preset_version: str = DEFAULT_PRESET_VERSION, model: str | None = None, effort: str | None = None) -> dict[str, Any]:
+def build_payload(*, provider: str, issue_ref: str, repository: str, runtime: str, expanded_steps: list[dict[str, Any]], applied_template: dict[str, Any] | None = None, model: str | None = None, effort: str | None = None) -> dict[str, Any]:
     preset_slug = PROVIDER_PRESETS[provider]
     title_provider = "Jira" if provider == "jira" else "GitHub Issue"
     task: dict[str, Any] = {
@@ -84,12 +82,11 @@ def build_payload(*, provider: str, issue_ref: str, repository: str, runtime: st
         "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}},
         "inputs": normalize_issue_ref(provider=provider, issue=issue_ref, repository=repository)[1],
         "steps": expanded_steps,
-        "taskTemplate": {"slug": preset_slug, "version": preset_version, "scope": "global"},
+        "taskTemplate": {"slug": preset_slug, "scope": "global"},
         "presetSchedule": {
             "source": "batch",
             "reason": f"{provider}_issue_batch",
             "presetSlug": preset_slug,
-            "presetVersion": preset_version,
             "issueProvider": provider,
             "issueRef": issue_ref,
         },
@@ -98,7 +95,10 @@ def build_payload(*, provider: str, issue_ref: str, repository: str, runtime: st
         task["inputs"]["jira_issue_key"] = issue_ref
         task["presetSchedule"]["jiraIssueKey"] = issue_ref
     if applied_template:
-        task["appliedStepTemplates"] = [applied_template]
+        cleaned_applied_template = dict(applied_template)
+        cleaned_applied_template.pop("version", None)
+        cleaned_applied_template.pop("presetVersion", None)
+        task["appliedStepTemplates"] = [cleaned_applied_template]
     return {
         "type": "task",
         "payload": {
@@ -106,17 +106,16 @@ def build_payload(*, provider: str, issue_ref: str, repository: str, runtime: st
             "targetRuntime": runtime,
             "publishMode": "pr",
             "mergeAutomation": {"enabled": True},
-            "idempotencyKey": build_idempotency_key(provider=provider, issue_ref=issue_ref, repository=repository, runtime=runtime, preset_version=preset_version, model=model, effort=effort),
+            "idempotencyKey": build_idempotency_key(provider=provider, issue_ref=issue_ref, repository=repository, runtime=runtime, model=model, effort=effort),
             "integration": provider,
             "task": task,
         },
     }
 
 
-def build_expand_payload(*, provider: str, issue: str, repository: str, runtime: str, preset_version: str = DEFAULT_PRESET_VERSION) -> dict[str, Any]:
+def build_expand_payload(*, provider: str, issue: str, repository: str, runtime: str) -> dict[str, Any]:
     _ref, inputs = normalize_issue_ref(provider=provider, issue=issue, repository=repository)
     return {
-        "version": preset_version,
         "inputs": inputs,
         "context": {"repository": repository, "targetRuntime": runtime},
         "options": {"enforceStepLimit": True},
@@ -136,9 +135,9 @@ def post_json(*, base_url: str, payload: dict[str, Any], timeout: float) -> dict
         return {"status": 0, "error": str(exc)}
 
 
-def expand_issue_implement(*, base_url: str, provider: str, issue: str, repository: str, runtime: str, preset_version: str, timeout: float) -> dict[str, Any]:
+def expand_issue_implement(*, base_url: str, provider: str, issue: str, repository: str, runtime: str, timeout: float) -> dict[str, Any]:
     preset_slug = PROVIDER_PRESETS[provider]
-    payload = build_expand_payload(provider=provider, issue=issue, repository=repository, runtime=runtime, preset_version=preset_version)
+    payload = build_expand_payload(provider=provider, issue=issue, repository=repository, runtime=runtime)
     data = json.dumps(payload).encode("utf-8")
     req = request.Request(f"{base_url.rstrip('/')}/api/presets/{preset_slug}:expand?scope=global", data=data, headers={"Content-Type": "application/json"}, method="POST")
     with request.urlopen(req, timeout=timeout) as response:
@@ -196,7 +195,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--board-id", default=None, help="Discover issues from this Jira board id instead of (or in addition to) positional args.")
     parser.add_argument("--column", default="To Do", help="Board column name to pull issues from when --board-id is set (default: 'To Do').")
     parser.add_argument("--project-key", default=None, help="Optional Jira project key passed as the projectKey query param for board discovery.")
-    parser.add_argument("--preset-version", default=None)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -204,8 +202,6 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.preset_version is None:
-        args.preset_version = PROVIDER_DEFAULT_PRESET_VERSIONS[args.provider]
 
     issues: list[str] = list(args.issues)
     discovery: dict[str, Any] | None = None
@@ -241,10 +237,10 @@ def main() -> int:
             record = {"issue": raw_issue, "status": 0, "error": f"Invalid issue reference: {exc}"}
             failures.append(record); results.append(record); continue
         if args.dry_run:
-            results.append({"issue": issue_ref, "expandPayload": build_expand_payload(provider=args.provider, issue=raw_issue, repository=args.repository, runtime=args.runtime, preset_version=args.preset_version)})
+            results.append({"issue": issue_ref, "expandPayload": build_expand_payload(provider=args.provider, issue=raw_issue, repository=args.repository, runtime=args.runtime)})
             continue
         try:
-            expanded = expand_issue_implement(base_url=args.base_url, provider=args.provider, issue=raw_issue, repository=args.repository, runtime=args.runtime, preset_version=args.preset_version, timeout=args.timeout)
+            expanded = expand_issue_implement(base_url=args.base_url, provider=args.provider, issue=raw_issue, repository=args.repository, runtime=args.runtime, timeout=args.timeout)
         except Exception as exc:
             record = {"issue": issue_ref, "status": 0, "error": f"Expansion failed: {exc}"}
             failures.append(record); results.append(record); continue
@@ -252,14 +248,14 @@ def main() -> int:
         if not isinstance(raw_steps, list) or len(raw_steps) != 8:
             record = {"issue": issue_ref, "error": f"Expected {PROVIDER_PRESETS[args.provider]} expansion to produce 8 steps; got {len(raw_steps) if isinstance(raw_steps, list) else 0}."}
             failures.append(record); results.append(record); continue
-        payload = build_payload(provider=args.provider, issue_ref=issue_ref, repository=args.repository, runtime=args.runtime, expanded_steps=raw_steps, applied_template=expanded.get("appliedTemplate") if isinstance(expanded.get("appliedTemplate"), dict) else None, preset_version=args.preset_version, model=args.model, effort=args.effort)
+        payload = build_payload(provider=args.provider, issue_ref=issue_ref, repository=args.repository, runtime=args.runtime, expanded_steps=raw_steps, applied_template=expanded.get("appliedTemplate") if isinstance(expanded.get("appliedTemplate"), dict) else None, model=args.model, effort=args.effort)
         response = post_json(base_url=args.base_url, payload=payload, timeout=args.timeout)
         body = response.get("body") if isinstance(response.get("body"), dict) else {}
         record = {"issue": issue_ref, "status": response.get("status"), "workflowId": body.get("workflowId") or body.get("id"), "runId": body.get("runId"), "title": body.get("title"), "state": body.get("state") or body.get("status")}
         if response.get("status") != 201:
             record["error"] = response.get("error", ""); failures.append(record)
         results.append(record)
-    print(json.dumps({"submittedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "apiBase": args.base_url, "repository": args.repository, "targetRuntime": args.runtime, "model": args.model, "effort": args.effort, "discovery": discovery, "preset": {"slug": PROVIDER_PRESETS[args.provider], "version": args.preset_version}, "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}}, "results": results, "failures": failures}, indent=2))
+    print(json.dumps({"submittedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "apiBase": args.base_url, "repository": args.repository, "targetRuntime": args.runtime, "model": args.model, "effort": args.effort, "discovery": discovery, "preset": {"slug": PROVIDER_PRESETS[args.provider]}, "publish": {"mode": "pr", "mergeAutomation": {"enabled": True}}, "results": results, "failures": failures}, indent=2))
     return 1 if failures else 0
 
 

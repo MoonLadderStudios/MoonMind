@@ -2,7 +2,6 @@ slug: jira-breakdown
 title: Jira Breakdown
 description: Break a declarative design into MoonSpec story candidates, then create Jira Story issues from the generated breakdown.
 scope: global
-version: 1.0.0
 tags:
   - jira
   - moonspec
