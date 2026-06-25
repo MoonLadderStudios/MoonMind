@@ -4924,6 +4924,31 @@ def _invalid_workflow_request(message: str) -> HTTPException:
         },
     )
 
+def _reject_preset_version_identity(task_payload: Mapping[str, Any]) -> None:
+    task_template = task_payload.get("taskTemplate") or task_payload.get(
+        "task_template"
+    )
+    if isinstance(task_template, Mapping) and (
+        task_template.get("version") is not None
+        or task_template.get("presetVersion") is not None
+    ):
+        raise _invalid_workflow_request(
+            "payload.workflow.taskTemplate uses slug/scope only; remove version or presetVersion."
+        )
+
+    applied_templates = task_payload.get("appliedStepTemplates") or task_payload.get(
+        "applied_step_templates"
+    )
+    if isinstance(applied_templates, list):
+        for index, item in enumerate(applied_templates):
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("version") is not None or item.get("presetVersion") is not None:
+                raise _invalid_workflow_request(
+                    "payload.workflow.appliedStepTemplates"
+                    f"[{index}] uses slug/scope only; remove version or presetVersion."
+                )
+
 def _validation_error_code(message: str) -> str:
     if message.startswith("Dependency not found:"):
         return "dependency_not_found"
@@ -7019,6 +7044,7 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             f"{shape_name} Temporal submit requests require {required_field}."
         )
+    _reject_preset_version_identity(task_payload)
 
     # Resolve child-agent runtime inheritance before downstream normalization
     # consumes targetRuntime / task.runtime fields.  When inheritance applies,
@@ -7100,6 +7126,7 @@ async def _create_execution_from_workflow_request(
             session=session,
             user_id=user.id,
         )
+        _reject_preset_version_identity(task_payload)
 
     (
         objective_attachment_refs,

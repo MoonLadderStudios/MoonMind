@@ -224,7 +224,6 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
           appliedStepTemplates: [
             {
               slug: "jira-implement",
-              version: "1.0.0",
               stepIds: [
                 "tpl:jira-implement:1.0.0:01",
                 "tpl:jira-implement:1.0.0:02",
@@ -261,7 +260,6 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
     expect(draft.appliedTemplates).toEqual([
       {
         slug: "jira-implement",
-        version: "1.0.0",
         inputs: {},
         stepIds: [
           "tpl:jira-implement:1.0.0:01",
@@ -310,7 +308,6 @@ describe("buildTemporalSubmissionDraftFromExecution runtime command metadata", (
             appliedStepTemplates: [
               {
                 slug: "jira-implement",
-                version: "1.0.0",
                 stepIds: [
                   "tpl:jira-implement:1.0.0:01",
                   "tpl:jira-implement:1.0.0:02",

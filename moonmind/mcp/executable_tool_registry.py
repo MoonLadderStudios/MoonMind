@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from moonmind.config.settings import settings
-from moonmind.integrations.pentest.models import PENTEST_TOOL_NAME, PENTEST_TOOL_VERSION
+from moonmind.integrations.pentest.models import PENTEST_TOOL_NAME
 from moonmind.mcp.tool_registry import ToolMetadata
 
 
@@ -142,7 +142,6 @@ class ExecutableToolDiscoveryRegistry:
                 ),
                 input_schema={
                     **_pentest_run_input_schema(),
-                    "x-moonmind-tool-version": PENTEST_TOOL_VERSION,
                     "x-moonmind-invocation": "temporal_task_submission",
                 },
             )

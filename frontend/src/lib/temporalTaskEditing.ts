@@ -96,7 +96,6 @@ export type TemporalSubmissionDraftPresetPayload = {
   id?: string;
   slug?: string;
   name?: string;
-  version?: string;
   inputs?: Record<string, unknown>;
   [key: string]: unknown;
 };
@@ -150,7 +149,6 @@ export type TemporalSubmissionDraft = {
   }>;
   appliedTemplates: Array<{
     slug: string;
-    version: string;
     inputs: Record<string, unknown>;
     stepIds: string[];
     appliedAt: string;
@@ -693,7 +691,6 @@ function normalizeAppliedTemplates(
     .map((entry) => objectValue(entry))
     .map((entry) => ({
       slug: stringValue(entry.slug),
-      version: stringValue(entry.version),
       inputs: objectValue(entry.inputs),
       stepIds: Array.isArray(entry.stepIds)
         ? entry.stepIds.map((item) => String(item || '').trim()).filter(Boolean)

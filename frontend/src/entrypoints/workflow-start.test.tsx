@@ -2837,7 +2837,6 @@ describe.skip("Task Create Entrypoint", () => {
           appliedStepTemplates: [
             {
               slug: "speckit-demo",
-              version: "1.2.3",
               inputs: { feature_name: "Task Editing" },
               stepIds: ["tpl:speckit-demo:1.2.3:01"],
               appliedAt: "2026-04-12T00:00:00Z",
@@ -2863,7 +2862,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(draft.appliedTemplates).toEqual([
       expect.objectContaining({
         slug: "speckit-demo",
-        version: "1.2.3",
         inputs: { feature_name: "Task Editing" },
       }),
     ]);
@@ -8656,9 +8654,6 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(within(step).getByLabelText("Tool ID"), {
       target: { value: "jira.get_issue" },
     });
-    fireEvent.change(within(step).getByLabelText("Tool Version (optional)"), {
-      target: { value: "1.0" },
-    });
     fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
       target: { value: '{"issueKey":"MM-563"}' },
     });
@@ -10014,7 +10009,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.payload.task.appliedStepTemplates).toEqual([
       expect.objectContaining({
         slug: "speckit-demo",
-        version: "1.2.3",
       }),
     ]);
   });
@@ -14187,12 +14181,10 @@ describe("Task Create MM-578 Preset expansion", () => {
               publish: { mode: "pr" },
               taskTemplate: {
                 slug: "jira-implement",
-                version: "1",
               },
               appliedStepTemplates: [
                 {
                   slug: "jira-implement",
-                  version: "1",
                   stepIds: [
                     "tpl:jira-implement:1:01",
                     "tpl:jira-implement:1:02",
@@ -16138,24 +16130,6 @@ describe("Task Create governed Tool authoring", () => {
     );
     expect((within(step).getByLabelText("Tool ID") as HTMLInputElement).value)
       .toBe("github.create_pull_request");
-  });
-
-  it("hides Tool Version behind Advanced mode for MM-871", async () => {
-    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
-
-    const step = (await screen.findByText("Step 1")).closest(
-      "section",
-    ) as HTMLElement;
-    selectStepType(step, "Tool");
-
-    expect(await within(step).findByLabelText("Tool ID")).toBeTruthy();
-    expect(within(step).queryByLabelText("Tool Version (optional)")).toBeNull();
-
-    fireEvent.click(screen.getByLabelText("Advanced mode"));
-    expect(within(step).getByLabelText("Tool Version (optional)")).toBeTruthy();
-
-    fireEvent.click(screen.getByLabelText("Advanced mode"));
-    expect(within(step).queryByLabelText("Tool Version (optional)")).toBeNull();
   });
 
   it("submits an authored MM-577 Skill step with agentic controls", async () => {

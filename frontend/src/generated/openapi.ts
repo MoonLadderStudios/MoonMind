@@ -6416,8 +6416,6 @@ export interface components {
             title?: string | null;
             /** Instructions */
             instructions?: string | null;
-            /** Version */
-            version?: string | null;
             /** Alias */
             alias?: string | null;
             /** Scope */
@@ -6475,8 +6473,6 @@ export interface components {
             id?: string | null;
             /** Name */
             name?: string | null;
-            /** Version */
-            version?: string | null;
             /** Inputs */
             inputs?: {
                 [key: string]: unknown;

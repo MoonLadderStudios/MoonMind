@@ -412,7 +412,6 @@ class PresetStepToolSchema(BaseModel):
 
     id: Optional[str] = None
     name: Optional[str] = None
-    version: Optional[str] = None
     inputs: dict[str, Any] = Field(default_factory=dict)
     args: dict[str, Any] = Field(default_factory=dict)
     required_authorization: Any = Field(None, alias="requiredAuthorization")
@@ -424,6 +423,17 @@ class PresetStepToolSchema(BaseModel):
     execution: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict) and (
+            value.get("version") is not None or value.get("toolVersion") is not None
+        ):
+            raise ValueError(
+                "Tool steps use tool names only; remove version or toolVersion."
+            )
+        return value
+
 class PresetStepBlueprintSchema(BaseModel):
     """Template step blueprint definition."""
 
@@ -434,7 +444,6 @@ class PresetStepBlueprintSchema(BaseModel):
     slug: Optional[str] = None
     title: Optional[str] = None
     instructions: Optional[str] = None
-    version: Optional[str] = None
     alias: Optional[str] = None
     scope: Optional[Literal["global", "personal"]] = None
     input_mapping: dict[str, Any] = Field(default_factory=dict, alias="inputMapping")
@@ -442,13 +451,16 @@ class PresetStepBlueprintSchema(BaseModel):
     skill: Optional[PresetStepSkillSchema] = None
     annotations: dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode="after")
-    def reject_preset_version_identity(self) -> "PresetStepBlueprintSchema":
-        if self.version is not None:
+    @model_validator(mode="before")
+    @classmethod
+    def reject_preset_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict) and (
+            value.get("version") is not None or value.get("presetVersion") is not None
+        ):
             raise ValueError(
-                "Preset includes use slug/scope only; remove version."
+                "Preset includes use slug/scope only; remove version or presetVersion."
             )
-        return self
+        return value
 
 class PresetSummarySchema(BaseModel):
     """List response model for presets."""

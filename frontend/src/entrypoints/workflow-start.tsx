@@ -756,7 +756,6 @@ interface StepState {
   stepType: StepType;
   instructions: string;
   toolId: string;
-  toolVersion: string;
   toolInputs: string;
   toolInputValues: Record<string, unknown>;
   toolInputErrors: Record<string, string>;
@@ -1411,7 +1410,6 @@ function createStepStateEntry(
     stepType: "skill",
     instructions: "",
     toolId: "",
-    toolVersion: "",
     toolInputs: "{}",
     toolInputValues: {},
     toolInputErrors: {},
@@ -1733,10 +1731,6 @@ function createStepStateEntriesFromTemporalDraft(
         step.stepType === "tool"
           ? String(toolPayload.id || toolPayload.name || step.skillId || "").trim()
           : "",
-      toolVersion:
-        step.stepType === "tool"
-          ? String(toolPayload.version || "").trim()
-          : "",
       toolInputs:
         step.stepType === "tool"
           ? JSON.stringify(toolInputs, null, 2)
@@ -1913,7 +1907,6 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
     !step.id.trim() &&
     !step.instructions.trim() &&
     !step.toolId.trim() &&
-    !step.toolVersion.trim() &&
     (!step.toolInputs.trim() || step.toolInputs.trim() === "{}") &&
     !step.skillId.trim() &&
     !step.skillArgs.trim() &&
@@ -2010,11 +2003,9 @@ function manualToolPayload(
   if (!toolId) {
     return null;
   }
-  const toolVersion = step.toolVersion.trim();
   return {
     type: "tool",
     id: toolId,
-    ...(toolVersion ? { version: toolVersion } : {}),
     inputs,
   };
 }
@@ -2540,7 +2531,6 @@ function mapExpandedStepToState(
     stepType: isToolStep ? "tool" : "skill",
     instructions,
     toolId: isToolStep ? String(tool.id || tool.name || "").trim() : "",
-    toolVersion: isToolStep ? String(tool.version || "").trim() : "",
     toolInputs: isToolStep ? JSON.stringify(inlineInputs, null, 2) : "{}",
     toolInputValues: isToolStep
       ? (inlineInputs as Record<string, unknown>)
@@ -6421,7 +6411,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           ...step,
           stepType: "tool",
           toolId,
-          toolVersion: String(tool?.inputSchema?.["x-moonmind-tool-version"] || ""),
           toolInputValues: nextValues,
           toolInputs: serializeToolInputValues(nextValues),
           toolInputErrors: {},
@@ -6754,11 +6743,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         if (
           step.stepType === "tool" &&
           (step.toolId.trim() ||
-            step.toolVersion.trim() ||
             (step.toolInputs.trim() && step.toolInputs.trim() !== "{}"))
         ) {
           nextStep.toolId = "";
-          nextStep.toolVersion = "";
           nextStep.toolInputs = "{}";
           nextStep.toolInputValues = {};
           nextStep.toolInputErrors = {};
@@ -8191,7 +8178,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         stepAttachmentFiles.length > 0 ||
         step.inputAttachments.length > 0 ||
         (stepIsTool && Boolean(step.toolId.trim())) ||
-        (stepIsTool && Boolean(step.toolVersion.trim())) ||
         hasAuthoredToolInputs ||
         (stepIsTool && Object.keys(step.toolInputValues).length > 0) ||
         Boolean(stepSkillId) ||
@@ -9794,22 +9780,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                       <p className="small">
                         {toolContractSummary(selectedTrustedTool)}
                       </p>
-                      {showAdvancedStepOptions ? (
-                        <label>
-                          Tool Version (optional)
-                          <input
-                            data-step-field="toolVersion"
-                            data-step-index={String(index)}
-                            placeholder="1.0"
-                            value={step.toolVersion}
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                toolVersion: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      ) : null}
                       {isPentestTool ? (
                         <div className="notice small">
                           Runs require an approved scope artifact. Inline scope is

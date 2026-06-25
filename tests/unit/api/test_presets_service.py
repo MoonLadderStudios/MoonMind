@@ -107,6 +107,37 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
     assert "version" not in expanded["appliedTemplate"]
 
+async def test_create_template_rejects_tool_version_identity(tmp_path):
+    user_id = uuid4()
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            with pytest.raises(PresetValidationError, match="Tool steps use tool names only"):
+                await service.create_template(
+                    slug="tool-version",
+                    title="Tool Version",
+                    description="Rejects semantic tool versions.",
+                    scope="personal",
+                    scope_ref=str(user_id),
+                    tags=[],
+                    inputs_schema=[],
+                    steps=[
+                        {
+                            "type": "tool",
+                            "title": "Fetch issue",
+                            "instructions": "Fetch issue.",
+                            "tool": {
+                                "id": "jira.get_issue",
+                                "version": "1.0.0",
+                                "inputs": {"issueKey": "MM-916"},
+                            },
+                        }
+                    ],
+                    annotations={},
+                    required_capabilities=[],
+                    created_by=user_id,
+                )
+
 @pytest.mark.parametrize("slug", ["jira-orchestrate", "moonspec-orchestrate"])
 async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
     tmp_path, slug: str
