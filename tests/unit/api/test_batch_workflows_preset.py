@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import selectinload, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, Preset, PresetScopeType
 from api_service.services.presets.catalog import PresetCatalogService
@@ -57,10 +57,8 @@ async def _load_preset(session) -> Preset:
             Preset.scope_type == PresetScopeType.GLOBAL,
             Preset.scope_ref.is_(None),
         )
-        .options(selectinload(Preset.latest_version))
     )
     template = result.scalar_one()
-    assert template.latest_version is not None
     return template
 
 
@@ -71,8 +69,7 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             await service.sync_seed_templates(seed_dir=_seed_dir(tmp_path))
 
             template = await _load_preset(session)
-            version = template.latest_version
-            annotations = version.annotations or {}
+            annotations = template.annotations or {}
 
             assert template.title == "Batch Workflows"
             assert template.scope_type is PresetScopeType.GLOBAL
@@ -105,10 +102,9 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             ):
                 assert name in schema["properties"]
 
-            # Target preset selector (slug/version/scope/scopeRef).
+            # Target preset selector (slug/scope/scopeRef).
             for name in (
                 "target_preset_slug",
-                "target_preset_version",
                 "target_preset_scope",
                 "target_preset_scope_ref",
             ):
@@ -152,14 +148,14 @@ async def test_batch_workflows_seed_validates_and_exposes_batch_contract(tmp_pat
             # The board input keeps the existing jira_board input type.
             board_input = next(
                 item
-                for item in version.inputs_schema
+                for item in template.inputs_schema
                 if item["name"] == "jira_board_id"
             )
             assert board_input["type"] == "jira_board"
 
             # Orchestration step references the batch-workflows skill.
-            assert len(version.steps) == 1
-            step = version.steps[0]
+            assert len(template.steps) == 1
+            step = template.steps[0]
             assert step["skill"]["id"] == "batch-workflows"
             # The parent only orchestrates/queues; it must not hard-require the
             # jira capability or GitHub-only batches would be blocked at launch
@@ -181,13 +177,11 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
                 slug="batch-workflows",
                 scope="global",
                 scope_ref=None,
-                version="1.0.0",
                 inputs={
                     "source_kind": "jira_board_column",
                     "jira_board_id": "42",
                     "jira_column": "In Progress",
                     "target_preset_slug": "jira-implement",
-                    "target_preset_version": "1.1.0",
                     "publish_mode": "pr",
                     "constraints": "Be careful",
                     "max_workflows": "10",
@@ -204,7 +198,7 @@ async def test_batch_workflows_expands_orchestration_step(tmp_path):
             assert orchestration["source"]["jiraBoardColumn"]["boardId"] == "42"
             assert orchestration["source"]["jiraBoardColumn"]["column"] == "In Progress"
             assert orchestration["targetPreset"]["slug"] == "jira-implement"
-            assert orchestration["targetPreset"]["version"] == "1.1.0"
+            assert "version" not in orchestration["targetPreset"]
             assert orchestration["publish"]["mode"] == "pr"
             # Every child inherits the caller runtime.
             assert orchestration["runtime"]["inherit"] == "caller"

@@ -101,11 +101,11 @@ async def test_create_and_expand_template_deterministic_ids(tmp_path):
             )
 
     assert len(expanded["steps"]) == 1
-    assert expanded["steps"][0]["id"].startswith("tpl:pr-check:1.0.0:01:")
+    assert expanded["steps"][0]["id"].startswith("tpl:pr-check:01:")
     assert "fix failing tests" in expanded["steps"][0]["instructions"]
     assert set(expanded["capabilities"]) >= {"codex", "docker"}
     assert expanded["appliedTemplate"]["slug"] == "pr-check"
-    assert expanded["appliedTemplate"]["version"] == "1.0.0"
+    assert "version" not in expanded["appliedTemplate"]
 
 @pytest.mark.parametrize("slug", ["jira-orchestrate", "moonspec-orchestrate"])
 async def test_expand_template_normalizes_legacy_orchestrate_mode_to_runtime(
@@ -549,19 +549,20 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
         "Lint target",
         "Test target",
     ]
-    assert expanded["steps"][0]["id"].startswith("tpl:parent-flow:1.0.0:01:")
-    assert expanded["steps"][1]["id"].startswith("tpl:parent-flow:1.0.0:02:")
+    assert expanded["steps"][0]["id"].startswith("tpl:parent-flow:01:")
+    assert expanded["steps"][1]["id"].startswith("tpl:parent-flow:02:")
     assert "preset composition" in expanded["steps"][0]["instructions"]
     assert set(expanded["capabilities"]) >= {"codex", "docker"}
     provenance = expanded["steps"][0]["presetProvenance"]
-    assert provenance["root"] == {"slug": "parent-flow", "version": "1.0.0"}
+    assert provenance["root"] == {"slug": "parent-flow"}
     assert provenance["source"]["slug"] == "child-checks"
-    assert provenance["source"]["version"] == "1.0.0"
+    assert "version" not in provenance["source"]
+    assert provenance["source"]["presetDigest"]
     assert provenance["source"]["originalStepId"] == "lint-target"
     assert provenance["alias"] == "quality"
     assert provenance["path"] == [
-        "parent-flow@1.0.0",
-        "quality:child-checks@1.0.0",
+        "parent-flow",
+        "quality:child-checks",
     ]
     assert expanded["composition"]["includes"][0]["alias"] == "quality"
     assert expanded["composition"]["includes"][0]["stepIds"] == [
@@ -570,16 +571,18 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["authoredPresets"] == [
         {
             "presetSlug": "parent-flow",
+            "presetDigest": expanded["composition"]["digest"],
             "scope": "global",
-            "includePath": ["parent-flow@1.0.0"],
+            "includePath": ["parent-flow"],
         },
         {
             "presetSlug": "child-checks",
+            "presetDigest": expanded["composition"]["includes"][0]["digest"],
             "alias": "quality",
             "scope": "global",
             "includePath": [
-                "parent-flow@1.0.0",
-                "quality:child-checks@1.0.0",
+                "parent-flow",
+                "quality:child-checks",
             ],
             "inputMapping": {"target": "preset composition"},
         },
@@ -591,9 +594,10 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["steps"][0]["source"] == {
         "kind": "preset-derived",
         "presetSlug": "child-checks",
+        "presetDigest": expanded["composition"]["includes"][0]["digest"],
         "includePath": [
-            "parent-flow@1.0.0",
-            "quality:child-checks@1.0.0",
+            "parent-flow",
+            "quality:child-checks",
         ],
         "originalStepId": "lint-target",
     }
@@ -603,9 +607,10 @@ async def test_expand_template_flattens_pinned_include_with_provenance(tmp_path)
     assert expanded["steps"][1]["source"] == {
         "kind": "preset-derived",
         "presetSlug": "child-checks",
+        "presetDigest": expanded["composition"]["includes"][0]["digest"],
         "includePath": [
-            "parent-flow@1.0.0",
-            "quality:child-checks@1.0.0",
+            "parent-flow",
+            "quality:child-checks",
         ],
         "originalStepId": "test-target",
     }
@@ -886,37 +891,41 @@ async def test_expand_template_flattens_multi_level_include_tree_with_provenance
     assert deep_step["source"] == {
         "kind": "preset-derived",
         "presetSlug": "deep-child",
+        "presetDigest": expanded["composition"]["includes"][0]["includes"][0]["digest"],
         "includePath": [
-            "parent-flow@1.0.0",
-            "middle:middle-flow@1.0.0",
-            "deep:deep-child@1.0.0",
+            "parent-flow",
+            "middle:middle-flow",
+            "deep:deep-child",
         ],
         "originalStepId": "deep-child-step",
     }
     assert expanded["authoredPresets"] == [
         {
             "presetSlug": "parent-flow",
+            "presetDigest": expanded["composition"]["digest"],
             "scope": "global",
-            "includePath": ["parent-flow@1.0.0"],
+            "includePath": ["parent-flow"],
         },
         {
             "presetSlug": "middle-flow",
+            "presetDigest": expanded["composition"]["includes"][0]["digest"],
             "alias": "middle",
             "scope": "global",
             "includePath": [
-                "parent-flow@1.0.0",
-                "middle:middle-flow@1.0.0",
+                "parent-flow",
+                "middle:middle-flow",
             ],
             "inputMapping": {"target": "recursive provenance"},
         },
         {
             "presetSlug": "deep-child",
+            "presetDigest": expanded["composition"]["includes"][0]["includes"][0]["digest"],
             "alias": "deep",
             "scope": "global",
             "includePath": [
-                "parent-flow@1.0.0",
-                "middle:middle-flow@1.0.0",
-                "deep:deep-child@1.0.0",
+                "parent-flow",
+                "middle:middle-flow",
+                "deep:deep-child",
             ],
             "inputMapping": {"target": "recursive provenance"},
         },
@@ -995,7 +1004,7 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
 
             with pytest.raises(
                 PresetValidationError,
-                match="missing:missing-child@1.0.0",
+                match="missing:missing-child",
             ) as excinfo:
                 await service.expand_template(
                     slug="missing-target-parent",
@@ -1007,12 +1016,12 @@ async def test_expand_template_rejects_missing_include_target(tmp_path):
 
     assert excinfo.value.errors[0]["code"] == "preset_include_missing"
     assert excinfo.value.errors[0]["includePath"] == [
-        "missing-target-parent@1.0.0",
-        "missing:missing-child@1.0.0",
+        "missing-target-parent",
+        "missing:missing-child",
     ]
 
 
-async def test_expand_template_rejects_include_version_mismatch_with_explicit_error(
+async def test_expand_template_rejects_include_version_with_explicit_error(
     tmp_path,
 ):
     async with template_db(tmp_path) as session_maker:
@@ -1044,7 +1053,7 @@ async def test_expand_template_rejects_include_version_mismatch_with_explicit_er
                         {
                             "kind": "include",
                             "slug": "child-checks",
-                            "version": "2.0.0",
+                            "version": "2",
                             "alias": "child",
                             "scope": "global",
                         }
@@ -1138,7 +1147,7 @@ async def test_create_template_rejects_templated_include_version(tmp_path):
 
             with pytest.raises(
                 PresetValidationError,
-                match="include version must be a literal pinned version",
+                match="slug/scope only",
             ):
                 await service.create_template(
                     slug="runtime-selected-parent",
@@ -1227,7 +1236,7 @@ async def test_expand_template_rejects_global_parent_personal_include(tmp_path):
 
             with pytest.raises(
                 PresetValidationError,
-                match="Global presets cannot include personal presets.*private:personal-child@1.0.0",
+                match="Global presets cannot include personal presets.*private:personal-child",
             ) as excinfo:
                 await service.expand_template(
                     slug="global-parent",
@@ -1287,7 +1296,7 @@ async def test_expand_template_rejects_include_cycles_with_path(tmp_path):
 
             with pytest.raises(
                 PresetValidationError,
-                match="Preset include cycle detected.*preset-a@1.0.0.*b:preset-b@1.0.0.*a:preset-a@1.0.0",
+                match="Preset include cycle detected.*preset-a.*b:preset-b.*a:preset-a",
             ) as excinfo:
                 await service.expand_template(
                     slug="preset-a",
@@ -1381,7 +1390,7 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
 
             with pytest.raises(
                 PresetValidationError,
-                match="inactive.*inactive:inactive-child@1.0.0",
+                match="inactive.*inactive:inactive-child",
             ) as inactive_excinfo:
                 await service.expand_template(
                     slug="bad-parent",
@@ -1394,7 +1403,7 @@ async def test_expand_template_rejects_inactive_and_incompatible_includes(tmp_pa
 
             with pytest.raises(
                 PresetValidationError,
-                match="requires-topic:input-child@1.0.0.*Missing required template input 'topic'",
+                match="requires-topic:input-child.*Missing required template input 'topic'",
             ) as input_excinfo:
                 await service.expand_template(
                     slug="input-parent",
@@ -1462,7 +1471,7 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
 
             with pytest.raises(
                 PresetValidationError,
-                match="max_step_count=1.*two:two-step-child@1.0.0",
+                match="max_step_count=1.*two:two-step-child",
             ):
                 await service.expand_template(
                     slug="limited-parent",
@@ -1473,13 +1482,13 @@ async def test_expand_template_enforces_flattened_limit_with_include_path(tmp_pa
                     options=ExpandOptions(should_enforce_step_limit=True),
                 )
 
-async def test_template_recents_declares_unique_user_version_constraint() -> None:
+async def test_template_recents_declares_unique_user_template_constraint() -> None:
     constraint_names = {
         constraint.name
         for constraint in PresetRecent.__table__.constraints
         if isinstance(constraint, UniqueConstraint)
     }
-    assert "uq_preset_recent_user_version" in constraint_names
+    assert "uq_preset_recent_user_template" in constraint_names
 
 async def test_save_from_workflow_rejects_secret_patterns(tmp_path):
     user_id = uuid4()
@@ -1832,8 +1841,13 @@ async def test_import_seed_templates_success(tmp_path):
             )
             assert template.title == "Seed Test"
             assert template.description == "A test seed template"
-            assert len(template.versions) == 1
-            assert template.versions[0].version == "1.0.0"
+            assert template.steps == [
+                {
+                    "type": "skill",
+                        "instructions": "seed step",
+                    "skill": {"id": "auto", "args": {}},
+                }
+            ]
 
 async def test_import_seed_templates_skips_existing(tmp_path):
     seed_dir = tmp_path / "seeds"

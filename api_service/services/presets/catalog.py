@@ -1276,10 +1276,6 @@ class PresetCatalogService:
         scope_ref: str | None,
         user_id: UUID | None = None,
     ) -> dict[str, Any]:
-        if version is not None:
-            raise PresetValidationError(
-                "Preset lookup uses slug/scope only; remove version."
-            )
         scope_type = _normalize_scope(scope)
         normalized_scope_ref = _normalize_scope_ref(scope_type, scope_ref)
         template = await self._get_template_for_scope(

@@ -435,7 +435,7 @@ def test_get_proposal_preview_includes_preset_provenance(
                 "authoredPresets": [
                     {
                         "presetId": "runtime-quality-followup",
-                        "presetVersion": "2026-04-17",
+                        "presetDigest": "digest-2026-04-17",
                         "includePath": ["root", "regression-coverage"],
                     }
                 ],
@@ -445,7 +445,7 @@ def test_get_proposal_preview_includes_preset_provenance(
                         "source": {
                             "kind": "preset-derived",
                             "presetId": "runtime-quality-followup",
-                            "presetVersion": "2026-04-17",
+                            "presetDigest": "digest-2026-04-17",
                             "includePath": ["root", "regression-coverage"],
                             "originalStepId": "add-regression-test",
                         },
@@ -465,12 +465,12 @@ def test_get_proposal_preview_includes_preset_provenance(
     assert preview["authoredPresetCount"] == 1
     assert preview["stepSourceKinds"] == ["preset-derived"]
     assert preview["presetSourceMetadata"] == [
-        {
-            "kind": "preset-derived",
-            "presetId": "runtime-quality-followup",
-            "presetVersion": "2026-04-17",
-            "includePath": ["root", "regression-coverage"],
-            "originalStepId": "add-regression-test",
+            {
+                "kind": "preset-derived",
+                "presetId": "runtime-quality-followup",
+                "presetDigest": "digest-2026-04-17",
+                "includePath": ["root", "regression-coverage"],
+                "originalStepId": "add-regression-test",
         }
     ]
 

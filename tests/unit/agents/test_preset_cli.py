@@ -25,18 +25,17 @@ def test_list_templates_and_expand(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def fake_get(url, headers, params, timeout):
         calls.append(("GET", url, params))
-        return _FakeResponse({"items": [{"slug": "demo", "latestVersion": "1.0.0"}]})
+        return _FakeResponse({"items": [{"slug": "demo"}]})
 
     def fake_post(url, headers, params, json, timeout):
         calls.append(("POST", url, params, json))
         return _FakeResponse(
             {
-                "steps": [{"id": "tpl:demo:1.0.0:01:abcd1234", "instructions": "run"}],
+                "steps": [{"id": "tpl:demo:01:abcd1234", "instructions": "run"}],
                 "appliedTemplate": {
                     "slug": "demo",
-                    "version": "1.0.0",
                     "inputs": {},
-                    "stepIds": ["tpl:demo:1.0.0:01:abcd1234"],
+                    "stepIds": ["tpl:demo:01:abcd1234"],
                 },
                 "capabilities": ["codex"],
                 "warnings": [],
@@ -51,7 +50,6 @@ def test_list_templates_and_expand(monkeypatch: pytest.MonkeyPatch) -> None:
     expanded = client.expand_template(
         slug="demo",
         scope="global",
-        version="1.0.0",
         inputs={},
     )
 

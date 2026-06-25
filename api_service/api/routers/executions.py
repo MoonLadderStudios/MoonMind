@@ -5540,7 +5540,13 @@ def _apply_goal_schedule_metadata(
     )
     applied_template_payload = {
         "slug": str(applied_template.get("slug") or schedule.slug),
-        "version": str(applied_template.get("version") or schedule.version),
+        **(
+            {
+                "presetDigest": str(applied_template.get("presetDigest")).strip(),
+            }
+            if str(applied_template.get("presetDigest") or "").strip()
+            else {}
+        ),
         "inputs": (
             dict(applied_template.get("inputs"))
             if isinstance(applied_template.get("inputs"), Mapping)
@@ -5626,7 +5632,6 @@ async def _expand_goal_preset_for_workflow_submission(
         "slug": schedule.slug,
         "scope": "global",
         "scope_ref": None,
-        "version": schedule.version,
         "inputs": template_inputs,
         "context": context,
         "options": ExpandOptions(should_enforce_step_limit=True),

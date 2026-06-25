@@ -586,8 +586,7 @@ interface PresetSummary {
   scopeRef?: string | null;
   title: string;
   description: string;
-  latestVersion: string;
-  version: string;
+  presetDigest?: string | null;
 }
 
 interface PresetDetail extends PresetSummary {
@@ -645,7 +644,7 @@ interface PresetExpandResponse {
   steps?: ExpandedStepPayload[];
   appliedTemplate?: {
     slug?: string;
-    version?: string;
+    presetDigest?: string;
     inputs?: Record<string, unknown>;
     stepIds?: string[];
     appliedAt?: string;
@@ -798,7 +797,6 @@ interface PresetSubmitExpansionState {
 interface PresetExpansionState {
   presetKey: string;
   presetTitle: string;
-  version: string;
   expandedSteps: ExpandedStepPayload[];
   inputs: Record<string, unknown>;
   assumptions: string[];
@@ -809,7 +807,7 @@ interface PresetExpansionState {
 
 interface AppliedTemplateState {
   slug: string;
-  version: string;
+  presetDigest?: string;
   inputs: Record<string, unknown>;
   stepIds: string[];
   appliedAt: string;
@@ -931,11 +929,11 @@ function compactSourceFromPresetProvenance(
     ? provenance.path.map((entry) => String(entry).trim()).filter(Boolean)
     : [];
   const presetSlug = String(source.slug || "").trim();
-  const presetVersion = String(source.version || "").trim();
+  const presetDigest = String(source.presetDigest || source.digest || "").trim();
   const originalStepId = String(source.originalStepId || "").trim();
   const compact: Record<string, unknown> = { kind: "preset-derived" };
   if (presetSlug) compact.presetSlug = presetSlug;
-  if (presetVersion) compact.presetVersion = presetVersion;
+  if (presetDigest) compact.presetDigest = presetDigest;
   if (path.length > 0) compact.includePath = path;
   if (originalStepId) compact.originalStepId = originalStepId;
   return Object.keys(compact).length > 1 ? compact : undefined;
@@ -2524,16 +2522,12 @@ function mapExpandedStepToState(
   const source =
     nonEmptyRecordValue(step.source) ||
     compactSourceFromPresetProvenance(nonEmptyRecordValue(step.presetProvenance));
-  const normalizedSource = source
-    ? {
-        ...source,
-        ...(!source.presetVersion && source.version
-          ? { presetVersion: source.version }
-          : {}),
-      }
-    : undefined;
+  const normalizedSource = source ? { ...source } : undefined;
   if (normalizedSource && "version" in normalizedSource) {
     delete normalizedSource.version;
+  }
+  if (normalizedSource && "presetVersion" in normalizedSource) {
+    delete normalizedSource.presetVersion;
   }
   const templateAttachments = Array.isArray(step.inputAttachments)
     ? step.inputAttachments
@@ -7099,8 +7093,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           inputValues,
           featureRequestOverride,
         );
-    const version =
-      detail.version || detail.latestVersion || preset.latestVersion || "1.0.0";
     const presetRuntime = runtime.trim().toLowerCase();
     const expandResponse = await fetch(
       withQueryParams(
@@ -7116,7 +7108,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           Accept: "application/json",
         },
         body: JSON.stringify({
-          version,
           inputs,
           context: {
             repository: repository.trim() || defaultRepository,
@@ -7143,7 +7134,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     return {
       presetKey: preset.key,
       presetTitle: preset.title,
-      version,
       expandedSteps,
       inputs,
       assumptions,
@@ -7171,12 +7161,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const appliedTemplate = expansion.appliedTemplate || {};
     return {
       slug: String(appliedTemplate.slug || preset.slug),
-      version: String(
-        appliedTemplate.version ||
-          detail.version ||
-          preset.latestVersion ||
-          "1.0.0",
-      ),
+      ...(String(appliedTemplate.presetDigest || detail.presetDigest || preset.presetDigest || "").trim()
+        ? {
+            presetDigest: String(
+              appliedTemplate.presetDigest || detail.presetDigest || preset.presetDigest,
+            ).trim(),
+          }
+        : {}),
       inputs:
         appliedTemplate.inputs && typeof appliedTemplate.inputs === "object"
           ? appliedTemplate.inputs
