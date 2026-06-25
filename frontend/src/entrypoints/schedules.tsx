@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { DataTable } from '../components/tables/DataTable';
 
 import { z } from 'zod';
@@ -267,6 +267,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
+  const isEditingRef = useRef(false);
+
+  useEffect(() => {
+    isEditingRef.current = isEditing;
+  }, [isEditing]);
   const detailEndpoint = useMemo(() => scheduleEndpoint(payload, 'detail', definitionId), [payload, definitionId]);
   const updateEndpoint = useMemo(() => scheduleEndpoint(payload, 'update', definitionId), [payload, definitionId]);
   const runNowEndpoint = useMemo(() => scheduleEndpoint(payload, 'runNow', definitionId), [payload, definitionId]);
@@ -329,6 +334,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
     onSuccess: async (updated) => {
       queryClient.setQueryData(['schedule-detail', definitionId, detailEndpoint], updated);
       setEditForm(editFormFromSchedule(updated));
+      isEditingRef.current = false;
       setIsEditing(false);
       await refreshDetail();
     },
@@ -365,7 +371,12 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
     },
     onSuccess: async (updated) => {
       queryClient.setQueryData(['schedule-detail', definitionId, detailEndpoint], updated);
-      setEditForm(editFormFromSchedule(updated));
+      setEditForm((previous) => {
+        if (isEditingRef.current && previous) {
+          return { ...previous, enabled: updated.enabled };
+        }
+        return editFormFromSchedule(updated);
+      });
       await refreshDetail();
     },
   });
@@ -428,7 +439,11 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             className="secondary"
             onClick={() => {
               setEditForm(editFormFromSchedule(schedule));
-              setIsEditing((value) => !value);
+              setIsEditing((value) => {
+                const next = !value;
+                isEditingRef.current = next;
+                return next;
+              });
             }}
           >
             {isEditing ? 'Cancel edit' : 'Edit schedule'}
@@ -445,7 +460,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             type="button"
             className="secondary"
             onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
-            disabled={pauseResumeMutation.isPending}
+            disabled={pauseResumeMutation.isPending || isEditing || updateMutation.isPending}
           >
             {pauseResumeMutation.isPending
               ? (schedule.enabled ? 'Pausing' : 'Resuming')
@@ -560,6 +575,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                   className="secondary"
                   onClick={() => {
                     setEditForm(editFormFromSchedule(schedule));
+                    isEditingRef.current = false;
                     setIsEditing(false);
                   }}
                 >
