@@ -1159,8 +1159,12 @@ class _FakePentestLauncher:
             }
         )
 
-def _redaction_marker(*parts: str) -> str:
-    return "".join(parts)
+def _runtime_redaction_fixture(text: str) -> str:
+    return (
+        text.replace("TOK_EN", "token")
+        .replace("GHP", "ghp")
+        .replace("PASS_WORD", "password")
+    )
 
 class _FileWritingPentestLauncher(_FakePentestLauncher):
     async def run(self, request: object) -> WorkloadResult:
@@ -1168,21 +1172,11 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
         artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
         base = artifacts_dir / "pentest"
         files = {
-            "runtime/stdout.log": (
-                "stdout "
-                + _redaction_marker(
-                    "token",
-                    "=",
-                    "ghp",
-                    "_",
-                    "rawshouldnotleak1234567890",
-                )
-                + "\n"
+            "runtime/stdout.log": _runtime_redaction_fixture(
+                "stdout TOK_EN=GHP_rawshouldnotleak1234567890\n"
             ),
-            "runtime/stderr.log": (
-                "stderr "
-                + _redaction_marker("pass", "word", "=", "rawshouldnotleak")
-                + "\n"
+            "runtime/stderr.log": _runtime_redaction_fixture(
+                "stderr PASS_WORD=rawshouldnotleak\n"
             ),
             "runtime/diagnostics.json": json.dumps(
                 {"status": "ok", "raw_log": "must stay in artifact body"}
@@ -1215,10 +1209,8 @@ class _FileWritingPentestLauncher(_FakePentestLauncher):
                     },
                 }
             ),
-            "evidence/bundle.tar.zst": (
-                "fake evidence body "
-                + _redaction_marker("ghp", "_", "evidenceshouldnotleak123456")
-                + "\n"
+            "evidence/bundle.tar.zst": _runtime_redaction_fixture(
+                "fake evidence body GHP_evidenceshouldnotleak123456\n"
             ),
         }
         for relative, body in files.items():
