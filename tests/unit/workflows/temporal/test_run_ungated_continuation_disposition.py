@@ -154,6 +154,211 @@ def test_gated_reenter_gate_disposition_is_allowed(
     )
 
 
+def test_legacy_reenter_gate_maps_to_typed_gated_continuation() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "mergeAutomationDisposition": "reenter_gate",
+                "headSha": "abc123",
+            }
+        },
+    )
+
+    assert workflow._gated_continuation_request == {
+        "schemaVersion": "gated-continuation/v1",
+        "source": "legacy_merge_automation_disposition",
+        "logicalStepId": "resolve-pr",
+        "gateType": "merge_automation",
+        "action": "reenter_gate",
+        "targetLogicalStepId": "resolve-pr",
+        "reason": (
+            "Legacy pr-resolver merge automation disposition requires the "
+            "workflow-owned merge gate to continue."
+        ),
+        "sideEffects": {"externalPullRequest": True},
+    }
+    assert (
+        workflow._publish_context["gatedContinuation"]
+        == workflow._gated_continuation_request
+    )
+
+
+def test_typed_gated_continuation_records_bounded_evidence() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="deploy",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "merge-automation",
+                    "action": "reenter_gate",
+                    "targetLogicalStepId": "deploy",
+                    "reason": "CI still pending.",
+                    "evidenceRefs": {
+                        "gateSnapshot": "artifact://gate/snapshot",
+                        "ignoredList": ["artifact://not-compact"],
+                    },
+                    "sideEffects": {"externalPullRequest": True},
+                    "budget": {"maxAttempts": 3, "remaining": 2},
+                }
+            }
+        },
+    )
+
+    assert workflow._gated_continuation_request == {
+        "schemaVersion": "gated-continuation/v1",
+        "source": "typed",
+        "logicalStepId": "deploy",
+        "gateType": "merge_automation",
+        "action": "reenter_gate",
+        "targetLogicalStepId": "deploy",
+        "reason": "CI still pending.",
+        "evidenceRefs": {"gateSnapshot": "artifact://gate/snapshot"},
+        "sideEffects": {"externalPullRequest": True},
+        "budget": {"maxAttempts": 3, "remaining": 2},
+    }
+
+
+def test_typed_merge_automation_continuation_exposes_parent_disposition() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "Required checks are still running.",
+                }
+            }
+        },
+    )
+
+    assert workflow._merge_automation_disposition == "reenter_gate"
+    assert workflow._publish_context["mergeAutomationDisposition"] == "reenter_gate"
+
+
+def test_gated_continuation_state_is_cleared_when_next_step_has_none() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "Required checks are still running.",
+                }
+            }
+        },
+    )
+    workflow._record_execution_context(
+        node_id="summarize",
+        execution_result={"outputs": {"message": "done"}},
+    )
+
+    assert workflow._gated_continuation_request is None
+    assert workflow._merge_automation_disposition is None
+    assert "gatedContinuation" not in workflow._publish_context
+    assert "mergeAutomationDisposition" not in workflow._publish_context
+
+
+def test_unsupported_typed_gated_continuation_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    workflow._record_execution_context(
+        node_id="migration",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "database_migration",
+                    "action": "wait_for_replica",
+                    "reason": "Replica lag has not cleared.",
+                }
+            }
+        },
+    )
+
+    message = workflow._continuation_disposition_failure_message(
+        _ungated_resolver_parameters()
+    )
+
+    assert message is not None
+    assert "unsupported_gate_type" in message
+    assert "database_migration" in message
+    assert "wait_for_replica" in message
+
+
+def test_typed_merge_automation_continuation_requires_owning_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    workflow = MoonMindRunWorkflow()
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "Required checks are still running.",
+                }
+            }
+        },
+    )
+
+    message = workflow._continuation_disposition_failure_message(
+        _ungated_resolver_parameters()
+    )
+
+    assert message is not None
+    assert "gateType='merge_automation'" in message
+    assert "action='reenter_gate'" in message
+    assert "not owned by that gate" in message
+
+
+def test_typed_merge_automation_continuation_is_allowed_for_owning_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch: True)
+    parent_info = type(
+        "ParentInfo",
+        (),
+        {"workflow_id": "mm:parent-merge-automation"},
+    )
+    workflow_info = type("WorkflowInfo", (), {"parent": parent_info})
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+
+    workflow = MoonMindRunWorkflow()
+    workflow._record_execution_context(
+        node_id="resolve-pr",
+        execution_result={
+            "outputs": {
+                "gatedContinuation": {
+                    "gateType": "merge_automation",
+                    "action": "reenter_gate",
+                    "reason": "Required checks are still running.",
+                }
+            }
+        },
+    )
+
+    assert (
+        workflow._continuation_disposition_failure_message(
+            _gated_resolver_parameters()
+        )
+        is None
+    )
+
+
 @pytest.fixture
 def ungated_continuation_workflow_environment(
     monkeypatch: pytest.MonkeyPatch,

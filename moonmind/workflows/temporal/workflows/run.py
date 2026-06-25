@@ -427,11 +427,15 @@ RUN_WORKFLOW_PUBLISH_OUTCOME_PATCH = "run-workflow-publish-outcome-v1"
 RUN_UNGATED_CONTINUATION_DISPOSITION_PATCH = (
     "run-ungated-continuation-disposition-v1"
 )
+RUN_GATED_STEP_CONTINUATION_PATCH = "run-gated-step-continuation-v1"
 # Merge-automation dispositions that are *continuations*: they only have meaning
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
 # resolved the PR and must not be reported as a success.
 MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS = frozenset({"reenter_gate"})
+GATED_CONTINUATION_GATE_REGISTRY: Mapping[str, frozenset[str]] = {
+    "merge_automation": MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS,
+}
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_FETCH_PROFILE_SNAPSHOTS_PATCH = "fetch-profile-snapshots-v1"
 RUN_SLOT_CONTINUITY_PATCH = "run-slot-continuity-v1"
@@ -854,6 +858,7 @@ class MoonMindRunWorkflow:
         self._failure_diagnostic: Optional[dict[str, Any]] = None
         self._merge_automation_disposition: Optional[str] = None
         self._merge_automation_head_sha: Optional[str] = None
+        self._gated_continuation_request: Optional[dict[str, Any]] = None
         self._report_created: bool = False
         self._report_ref: Optional[str] = None
         # MM-880: compact reference to the versioned ResiliencePolicy envelope
@@ -5526,6 +5531,8 @@ class MoonMindRunWorkflow:
             output["proposals_submitted"] = self._proposals_submitted
         if self._merge_automation_disposition:
             output["mergeAutomationDisposition"] = self._merge_automation_disposition
+        if self._gated_continuation_request:
+            output["gatedContinuation"] = dict(self._gated_continuation_request)
         if self._merge_automation_head_sha:
             output["headSha"] = self._merge_automation_head_sha
         return output
@@ -7060,6 +7067,28 @@ class MoonMindRunWorkflow:
                 node_id=node_id,
                 execution_result=execution_result,
             )
+            if (
+                self._gated_continuation_request
+                and workflow.patched(RUN_GATED_STEP_CONTINUATION_PATCH)
+            ):
+                continuation_blocked_message = (
+                    self._gated_continuation_failure_message(parameters)
+                )
+                if continuation_blocked_message:
+                    self._plan_blocked_message = continuation_blocked_message
+                    self._publish_status = "not_required"
+                    self._publish_reason = continuation_blocked_message
+                    require_pull_request_url = False
+                    pull_request_url = None
+                    self._summary = continuation_blocked_message
+                    self._mark_remaining_plan_steps_skipped(
+                        ordered_nodes=ordered_nodes,
+                        completed_index=index - 1,
+                        summary=continuation_blocked_message,
+                    )
+                    self._refresh_step_readiness(updated_at=workflow.now())
+                    self._update_memo()
+                    break
             blocked_message = (
                 None
                 if blocked_outcome_wait_skipped
@@ -9499,13 +9528,38 @@ class MoonMindRunWorkflow:
             outputs.get("diagnostics_ref") or outputs.get("diagnosticsRef"),
             max_chars=200,
         )
+        gated_continuation = self._normalize_gated_continuation_request(
+            outputs,
+            node_id=node_id,
+        )
+        self._gated_continuation_request = gated_continuation
+        if gated_continuation:
+            self._publish_context["gatedContinuation"] = gated_continuation
+        else:
+            self._publish_context.pop("gatedContinuation", None)
         merge_automation_disposition = self._coerce_text(
             outputs.get("mergeAutomationDisposition")
             or outputs.get("merge_automation_disposition"),
             max_chars=80,
         )
-        if merge_automation_disposition:
-            self._merge_automation_disposition = merge_automation_disposition
+        if (
+            not merge_automation_disposition
+            and gated_continuation
+            and not gated_continuation.get("validationError")
+            and gated_continuation.get("gateType") == "merge_automation"
+        ):
+            typed_action = self._normalize_gate_type(
+                self._coerce_text(gated_continuation.get("action"), max_chars=80)
+            )
+            if typed_action in MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS:
+                merge_automation_disposition = typed_action
+        self._merge_automation_disposition = merge_automation_disposition or None
+        if self._merge_automation_disposition:
+            self._publish_context["mergeAutomationDisposition"] = (
+                self._merge_automation_disposition
+            )
+        else:
+            self._publish_context.pop("mergeAutomationDisposition", None)
         merge_automation_head_sha = self._coerce_text(
             outputs.get("headSha")
             or outputs.get("head_sha")
@@ -10070,6 +10124,175 @@ class MoonMindRunWorkflow:
             return False
         return parent == self._actual_parent_workflow_id()
 
+    @staticmethod
+    def _normalize_gate_type(value: str | None) -> str:
+        return (value or "").strip().lower().replace("-", "_")
+
+    @classmethod
+    def _known_gated_continuation_action(cls, action: str) -> bool:
+        normalized = cls._normalize_gate_type(action)
+        return any(
+            normalized in actions
+            for actions in GATED_CONTINUATION_GATE_REGISTRY.values()
+        )
+
+    def _compact_continuation_mapping(
+        self,
+        value: Any,
+        *,
+        max_key_chars: int = 80,
+        max_value_chars: int = 400,
+    ) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            return {}
+        compact: dict[str, Any] = {}
+        for raw_key, raw_value in value.items():
+            key = self._coerce_text(raw_key, max_chars=max_key_chars)
+            if not key:
+                continue
+            if isinstance(raw_value, bool) or raw_value is None:
+                compact[key] = raw_value
+            elif isinstance(raw_value, (int, float)):
+                compact[key] = raw_value
+            elif isinstance(raw_value, str):
+                text = self._sanitize_operator_summary(
+                    self._coerce_text(raw_value, max_chars=max_value_chars)
+                )
+                if text:
+                    compact[key] = text
+        return compact
+
+    def _normalize_gated_continuation_request(
+        self,
+        outputs: Mapping[str, Any],
+        *,
+        node_id: str,
+    ) -> dict[str, Any] | None:
+        raw_request = outputs.get("gatedContinuation") or outputs.get(
+            "gated_continuation"
+        )
+        request_source = "typed"
+        if isinstance(raw_request, Mapping):
+            raw_gate_type = self._coerce_text(
+                raw_request.get("gateType") or raw_request.get("gate_type"),
+                max_chars=80,
+            )
+            raw_action = self._coerce_text(
+                raw_request.get("action") or raw_request.get("disposition"),
+                max_chars=80,
+            )
+            reason = self._coerce_text(raw_request.get("reason"), max_chars=700)
+            target_step = self._coerce_text(
+                raw_request.get("targetLogicalStepId")
+                or raw_request.get("target_logical_step_id"),
+                max_chars=120,
+            )
+            evidence_refs = self._compact_continuation_mapping(
+                raw_request.get("evidenceRefs") or raw_request.get("evidence_refs")
+            )
+            side_effects = self._compact_continuation_mapping(
+                raw_request.get("sideEffects") or raw_request.get("side_effects"),
+                max_value_chars=200,
+            )
+            budget = self._compact_continuation_mapping(
+                raw_request.get("budget"),
+                max_value_chars=120,
+            )
+        else:
+            legacy_disposition = self._coerce_text(
+                outputs.get("mergeAutomationDisposition")
+                or outputs.get("merge_automation_disposition"),
+                max_chars=80,
+            )
+            if not legacy_disposition or not self._known_gated_continuation_action(
+                legacy_disposition
+            ):
+                return None
+            request_source = "legacy_merge_automation_disposition"
+            raw_gate_type = "merge_automation"
+            raw_action = legacy_disposition
+            reason = (
+                "Legacy pr-resolver merge automation disposition requires the "
+                "workflow-owned merge gate to continue."
+            )
+            target_step = node_id
+            evidence_refs = {}
+            side_effects = {"externalPullRequest": True}
+            budget = {}
+
+        gate_type = self._normalize_gate_type(raw_gate_type)
+        action = self._normalize_gate_type(raw_action)
+        continuation: dict[str, Any] = {
+            "schemaVersion": "gated-continuation/v1",
+            "source": request_source,
+            "logicalStepId": node_id,
+            "gateType": gate_type,
+            "action": action,
+        }
+        if target_step:
+            continuation["targetLogicalStepId"] = target_step
+        if reason:
+            continuation["reason"] = self._sanitize_operator_summary(reason) or reason
+        if evidence_refs:
+            continuation["evidenceRefs"] = evidence_refs
+        if side_effects:
+            continuation["sideEffects"] = side_effects
+        if budget:
+            continuation["budget"] = budget
+
+        allowed_actions = GATED_CONTINUATION_GATE_REGISTRY.get(gate_type)
+        if allowed_actions is None:
+            continuation["validationError"] = "unsupported_gate_type"
+        elif action not in allowed_actions:
+            continuation["validationError"] = "unsupported_gate_action"
+        return continuation
+
+    def _gated_continuation_failure_message(
+        self,
+        parameters: Mapping[str, Any],
+    ) -> str | None:
+        request = self._gated_continuation_request
+        if not isinstance(request, Mapping):
+            return None
+
+        gate_type = self._normalize_gate_type(
+            self._coerce_text(request.get("gateType"), max_chars=80)
+        )
+        action = self._normalize_gate_type(
+            self._coerce_text(request.get("action"), max_chars=80)
+        )
+        validation_error = self._coerce_text(
+            request.get("validationError"),
+            max_chars=80,
+        )
+        if validation_error:
+            return (
+                "Step requested gated continuation with unsupported contract: "
+                f"{validation_error} for gateType='{gate_type or 'unknown'}' "
+                f"action='{action or 'unknown'}'. MoonMind did not continue the "
+                "step because no trusted workflow-owned gate can validate it."
+            )
+
+        if gate_type == "merge_automation" and self._is_merge_automation_gated(
+            parameters
+        ):
+            return None
+
+        reason = self._coerce_text(request.get("reason"), max_chars=700)
+        detail = (
+            f" Reason: {reason.rstrip('.')}. "
+            if reason
+            else " "
+        )
+        return (
+            "Step requested gated continuation "
+            f"gateType='{gate_type or 'unknown'}' action='{action or 'unknown'}'."
+            f"{detail}"
+            "This workflow is not owned by that gate, so MoonMind cannot wait, "
+            "re-execute the logical step, or advance safely. Re-submit the work "
+            "under the owning gate or resolve the external condition manually."
+        )
+
     def _continuation_disposition_failure_message(
         self, parameters: Mapping[str, Any]
     ) -> str | None:
@@ -10084,7 +10307,13 @@ class MoonMindRunWorkflow:
         false-green outcome, so we surface it as an actionable failure instead.
         """
 
-        disposition = (self._merge_automation_disposition or "").strip()
+        message = self._gated_continuation_failure_message(parameters)
+        if message:
+            return message
+        if self._gated_continuation_request:
+            return None
+
+        disposition = self._normalize_gate_type(self._merge_automation_disposition)
         if disposition not in MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS:
             return None
         if self._is_merge_automation_gated(parameters):
