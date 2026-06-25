@@ -1242,7 +1242,9 @@ class TemporalArtifactService:
     @staticmethod
     def _compute_digest_and_size(payload: bytes) -> tuple[str, int]:
         # Artifact digests are content-address/integrity identifiers, not password hashes.
-        return hashlib.sha256(payload, usedforsecurity=False).hexdigest(), len(payload)
+        digest = hashlib.new("sha256", usedforsecurity=False)
+        digest.update(payload)
+        return digest.hexdigest(), len(payload)
 
     def _validate_integrity_declarations(
         self,
