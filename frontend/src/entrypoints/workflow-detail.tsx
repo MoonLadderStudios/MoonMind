@@ -2745,6 +2745,7 @@ function StepObservabilityGroup({
         agentRunId={agentRunId}
         isTerminal={stepTerminal(row.status)}
         autoExpand
+        disclosure={false}
         routes={routes}
         sessionTimelineEnabled={sessionTimelineEnabled}
         structuredHistoryEnabled={structuredHistoryEnabled}
@@ -3171,7 +3172,7 @@ function StepLedgerRowCard({
                 </ul>
               </section>
             ) : null}
-            <section className="step-tl-detail-section">
+            <section className="step-tl-detail-section step-tl-detail-section--logs">
               <h4>Logs & Diagnostics</h4>
               <StepObservabilityGroup
                 apiBase={apiBase}
@@ -3211,6 +3212,7 @@ function LiveLogsPanel({
   agentRunId,
   isTerminal,
   autoExpand = false,
+  disclosure = true,
   routes,
   sessionTimelineEnabled,
   structuredHistoryEnabled,
@@ -3219,13 +3221,21 @@ function LiveLogsPanel({
   agentRunId: string;
   isTerminal: boolean;
   autoExpand?: boolean;
+  // When false, render the log content directly without the collapsible
+  // "Live Logs" disclosure chrome (used when the panel is embedded under an
+  // existing heading, e.g. the step's "Logs & Diagnostics" section).
+  disclosure?: boolean;
   routes: AgentRunRouteTemplates;
   sessionTimelineEnabled: boolean;
   structuredHistoryEnabled: boolean;
 }) {
   const [logContent, setLogContent] = useState<TimelineRow[]>([]);
   const [viewerState, setViewerState] = useState<LogViewerState>('starting');
-  const [expanded, setExpanded] = useState(false);
+  // When rendered without disclosure chrome the panel is always visible, so it
+  // must start expanded; otherwise honor autoExpand. This avoids delaying the
+  // initial log fetch by a render cycle and prevents the embedded toolbar from
+  // being permanently hidden when autoExpand is not set.
+  const [expanded, setExpanded] = useState(!disclosure || autoExpand);
   const isVisible = usePageVisibility();
   const lastSeqRef = useRef<number | null>(null);
   const esRef = useRef<EventSource | null>(null);
@@ -3491,6 +3501,61 @@ function LiveLogsPanel({
       ].filter(([, value]) => value) as Array<[string, string]>
     : [];
 
+  const panelBody = (
+    <div className="stack live-logs-panel">
+      {summaryErrorMessage ? <div className="notice error">{summaryErrorMessage}</div> : null}
+      {expanded ? (
+        <div className="button-group live-logs-toolbar">
+          <label className="live-logs-wrap-toggle">
+            <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
+            <span className="small">Wrap lines</span>
+          </label>
+          <button className="secondary small" onClick={handleCopy}>Copy</button>
+          <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
+        </div>
+      ) : null}
+      <p className="small">
+        Workflow run <code className="text-xs">{agentRunId}</code> — {statusLabel}
+      </p>
+      {sessionTimelineEnabled ? (
+        <p className="small">
+          Timeline shows what happened. Continuity artifacts remain the durable drill-down evidence.
+        </p>
+      ) : null}
+      {sessionBadges.length > 0 ? (
+        <div className="live-logs-session-badges">
+          {sessionBadges.map(([label, value]) => (
+            <span key={`${label}-${value}`} className="card live-logs-session-badge">
+              <strong>{label}:</strong> <code className="text-xs break-all">{value}</code>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
+        {logContent.length === 0 ? (
+          <div className="live-logs-empty">{emptyLabel}</div>
+        ) : sessionTimelineEnabled ? (
+          <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
+            <Virtuoso
+              style={{ height: 400 }}
+              data={logContent}
+              computeItemKey={(_, row) => row.id}
+              itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
+            />
+          </div>
+        ) : (
+          <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
+            {logContent.map((line) => renderTimelineRow(line, wrapLines, false, apiBase))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (!disclosure) {
+    return panelBody;
+  }
+
   return (
     <details
       className="stack"
@@ -3505,54 +3570,7 @@ function LiveLogsPanel({
       >
         <span>Live Logs</span>
       </summary>
-      <div className="stack live-logs-panel">
-        {summaryErrorMessage ? <div className="notice error">{summaryErrorMessage}</div> : null}
-        {expanded ? (
-          <div className="button-group live-logs-toolbar">
-            <label className="live-logs-wrap-toggle">
-              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-              <span className="small">Wrap lines</span>
-            </label>
-            <button className="secondary small" onClick={handleCopy}>Copy</button>
-            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-          </div>
-        ) : null}
-        <p className="small">
-          Workflow run <code className="text-xs">{agentRunId}</code> — {statusLabel}
-        </p>
-        {sessionTimelineEnabled ? (
-          <p className="small">
-            Timeline shows what happened. Continuity artifacts remain the durable drill-down evidence.
-          </p>
-        ) : null}
-        {sessionBadges.length > 0 ? (
-          <div className="live-logs-session-badges">
-            {sessionBadges.map(([label, value]) => (
-              <span key={`${label}-${value}`} className="card live-logs-session-badge">
-                <strong>{label}:</strong> <code className="text-xs break-all">{value}</code>
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <div className={`live-logs-viewer-shell ${wrapLines ? 'is-wrapped' : 'is-unwrapped'}`}>
-          {logContent.length === 0 ? (
-            <div className="live-logs-empty">{emptyLabel}</div>
-          ) : sessionTimelineEnabled ? (
-            <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
-              <Virtuoso
-                style={{ height: 400 }}
-                data={logContent}
-                computeItemKey={(_, row) => row.id}
-                itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
-              />
-            </div>
-          ) : (
-            <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
-              {logContent.map((line) => renderTimelineRow(line, wrapLines, false, apiBase))}
-            </div>
-          )}
-        </div>
-      </div>
+      {panelBody}
     </details>
   );
 }
