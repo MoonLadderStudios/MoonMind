@@ -8,13 +8,17 @@ import json
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Protocol, Sequence
 
+from moonmind.utils.logging import redact_sensitive_payload
+
 from .deployment_execution import (
     DEPLOYMENT_FINAL_STATUSES,
     HostDockerComposeRunner,
     InMemoryEvidenceWriter,
     TemporalDeploymentEvidenceWriter,
     _compact_mapping,
+    _ensure_command_succeeded,
     _execution_ref_from_context,
+    _parse_json_records,
     _redact_sensitive,
     _tail_text,
     _utc_now,
@@ -52,9 +56,14 @@ DEFAULT_MOONMIND_SERVICES = frozenset(
         "postgres",
         "temporal",
         "temporal-ui",
-        "temporal-worker",
+        "temporal-worker-artifacts",
         "temporal-worker-agent-runtime",
         "temporal-worker-deployment-control",
+        "temporal-worker-integrations",
+        "temporal-worker-llm",
+        "temporal-worker-sandbox",
+        "temporal-worker-workflow",
+        "temporal-worker-workflow-merge-automation",
         "qdrant",
         "minio",
         "docker-proxy",
@@ -221,36 +230,46 @@ class HostDockerComposeOpsDiagnosisRunner(HostDockerComposeRunner):
         self, *, services: tuple[str, ...]
     ) -> Mapping[str, Any]:
         ps = await self._run_compose_json(("ps", "--format", "json", *services))
-        summaries = []
-        for item in ps:
+
+        async def inspect_one(item: Mapping[str, Any]) -> Mapping[str, Any] | None:
             container = str(item.get("ID") or item.get("Name") or "").strip()
             service = str(item.get("Service") or item.get("Name") or "").strip()
             if not container:
-                continue
-            result = await self._run_docker_json(
-                ("docker", "inspect", container),
-                failure_class="container_inspect_failure",
-            )
-            inspect = result[0] if result else {}
-            state = inspect.get("State") if isinstance(inspect, Mapping) else {}
-            config = inspect.get("Config") if isinstance(inspect, Mapping) else {}
-            summaries.append(
-                _compact_mapping(
+                return None
+            try:
+                result = await self._run_docker_json(
+                    ("docker", "inspect", container),
+                    failure_class="container_inspect_failure",
+                )
+            except Exception as exc:
+                return _compact_mapping(
                     {
                         "service": service or None,
                         "container": container,
-                        "state": state if isinstance(state, Mapping) else None,
-                        "image": (
-                            config.get("Image")
-                            if isinstance(config, Mapping)
-                            else None
-                        ),
-                        "restartCount": inspect.get("RestartCount")
-                        if isinstance(inspect, Mapping)
-                        else None,
+                        "status": "FAILED",
+                        "reason": _redact_sensitive(_failure_reason(exc)),
                     }
                 )
+            inspect = result[0] if result else {}
+            state = inspect.get("State") if isinstance(inspect, Mapping) else {}
+            config = inspect.get("Config") if isinstance(inspect, Mapping) else {}
+            return _compact_mapping(
+                {
+                    "service": service or None,
+                    "container": container,
+                    "status": "SUCCEEDED",
+                    "state": state if isinstance(state, Mapping) else None,
+                    "image": (
+                        config.get("Image") if isinstance(config, Mapping) else None
+                    ),
+                    "restartCount": inspect.get("RestartCount")
+                    if isinstance(inspect, Mapping)
+                    else None,
+                }
             )
+
+        inspected = await asyncio.gather(*(inspect_one(item) for item in ps))
+        summaries = [item for item in inspected if item is not None]
         return {"containers": summaries}
 
     async def _docker_system_df(self) -> Mapping[str, Any]:
@@ -269,6 +288,7 @@ class HostDockerComposeOpsDiagnosisRunner(HostDockerComposeRunner):
             max_stdout_chars=8000,
             max_stderr_chars=2000,
         )
+        _ensure_command_succeeded(kind, result)
         return {"kind": kind, "result": result}
 
     async def _run_docker_json(
@@ -314,12 +334,19 @@ class HostDockerComposeOpsDiagnosisRunner(HostDockerComposeRunner):
         text = stdout.decode("utf-8", errors="replace").strip()
         if not text:
             return []
-        parsed = json.loads(text)
-        if isinstance(parsed, list):
-            return [item for item in parsed if isinstance(item, Mapping)]
-        if isinstance(parsed, Mapping):
-            return [parsed]
-        return []
+        try:
+            return _parse_json_records(text)
+        except json.JSONDecodeError as exc:
+            raise ToolFailure(
+                error_code="DEPLOYMENT_COMMAND_FAILED",
+                message="Ops diagnosis Docker command returned invalid JSON.",
+                retryable=False,
+                details={
+                    "command": list(command),
+                    "stdout": _tail_text(stdout, max_chars=2000),
+                    "failureClass": failure_class,
+                },
+            ) from exc
 
 
 @dataclass(slots=True)
@@ -355,20 +382,23 @@ class OpsStackDiagnosisExecutor:
                     "reason": _redact_sensitive(_failure_reason(exc)),
                 }
                 continue
-            redacted = _redact_sensitive(payload)
+            redacted = _redact_ops_diagnosis_payload(payload)
             evidence[include] = {"status": "SUCCEEDED", "payload": redacted}
             findings.extend(_findings_for_evidence(include, redacted))
 
-        if not evidence:
+        succeeded_count = sum(
+            1 for item in evidence.values() if item.get("status") == "SUCCEEDED"
+        )
+        if succeeded_count == 0:
             status = "FAILED"
-        elif all(item.get("status") == "SUCCEEDED" for item in evidence.values()):
+        elif succeeded_count == len(evidence):
             status = "SUCCEEDED"
         else:
             status = "PARTIALLY_VERIFIED"
         if status not in DEPLOYMENT_FINAL_STATUSES:
             status = "FAILED"
 
-        diagnosis_payload = _redact_sensitive(
+        diagnosis_payload = _redact_ops_diagnosis_payload(
             {
                 "schemaVersion": "v1",
                 "artifactType": OPS_DIAGNOSIS_ARTIFACT_TYPE,
@@ -637,6 +667,10 @@ def _failure_reason(exc: Exception) -> str:
     if isinstance(exc, ToolFailure):
         return exc.message
     return str(exc) or exc.__class__.__name__
+
+
+def _redact_ops_diagnosis_payload(payload: Any) -> Any:
+    return redact_sensitive_payload(_redact_sensitive(payload))
 
 
 def _finding_for_failure(include: str, exc: Exception) -> dict[str, Any]:

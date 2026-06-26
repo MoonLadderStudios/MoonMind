@@ -5,9 +5,11 @@ from typing import Any, Mapping
 import pytest
 
 from moonmind.workflows.skills.ops_diagnostics_execution import (
+    HostDockerComposeOpsDiagnosisRunner,
     OPS_DIAGNOSIS_ARTIFACT_TYPE,
     OpsStackDiagnosisExecutor,
 )
+from moonmind.workflows.skills.deployment_execution import _parse_json_records
 from moonmind.workflows.skills.tool_plan_contracts import ToolFailure
 
 
@@ -61,9 +63,23 @@ class RecordingDiagnosisRunner:
         if include == "recent_logs":
             return {
                 "tailLines": tail_lines,
-                "logs": "starting\npassword=hunter2\nready",
+                "logs": (
+                    "starting\n"
+                    "password=hunter2\n"
+                    "OPENAI_API_KEY=sk-test-secret\n"
+                    "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                    "github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                    "AIzaSyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+                    "AKIAAAAAAAAAAAAAAAAA\n"
+                    "ready"
+                ),
             }
         return {"ok": True, "authorization": "Bearer raw-secret"}
+
+
+class FailingComposeCommandRunner(HostDockerComposeOpsDiagnosisRunner):
+    async def _run_compose_command(self, *args: Any, **kwargs: Any) -> Mapping[str, Any]:
+        return {"exitCode": 1, "stderr": "compose failed"}
 
 
 def _context(**overrides: object) -> dict[str, object]:
@@ -159,6 +175,11 @@ async def test_ops_diagnosis_publishes_redacted_artifact_and_findings() -> None:
     serialized = str(payload)
     assert "secret-token" not in serialized
     assert "hunter2" not in serialized
+    assert "sk-test-secret" not in serialized
+    assert "ghp_" not in serialized
+    assert "github_pat_" not in serialized
+    assert "AIza" not in serialized
+    assert "AKIA" not in serialized
     assert "[REDACTED]" in serialized
     assert runner.calls[1]["tailLines"] == 75
 
@@ -184,6 +205,24 @@ async def test_ops_diagnosis_returns_partial_for_failed_evidence_class() -> None
 
 
 @pytest.mark.asyncio
+async def test_ops_diagnosis_reports_failed_when_all_evidence_classes_fail() -> None:
+    writer = RecordingEvidenceWriter()
+    executor = OpsStackDiagnosisExecutor(
+        evidence_writer=writer,
+        runner=RecordingDiagnosisRunner(fail_include="recent_logs"),
+    )
+
+    result = await executor.execute(
+        _inputs(include=["recent_logs"]),
+        context=_context(),
+    )
+
+    assert result.status == "FAILED"
+    assert result.outputs["status"] == "FAILED"
+    assert "0 evidence class(es) collected" in result.outputs["summary"]
+
+
+@pytest.mark.asyncio
 async def test_ops_diagnosis_rejects_unknown_service_and_unbounded_tail() -> None:
     executor = OpsStackDiagnosisExecutor(
         evidence_writer=RecordingEvidenceWriter(),
@@ -197,3 +236,55 @@ async def test_ops_diagnosis_rejects_unknown_service_and_unbounded_tail() -> Non
     with pytest.raises(ToolFailure) as tail_exc:
         await executor.execute(_inputs(tailLines=1001), context=_context())
     assert "tailLines" in tail_exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_ops_diagnosis_allows_real_worker_service_names() -> None:
+    runner = RecordingDiagnosisRunner()
+    executor = OpsStackDiagnosisExecutor(
+        evidence_writer=RecordingEvidenceWriter(),
+        runner=runner,
+    )
+
+    await executor.execute(
+        _inputs(
+            include=["container_health"],
+            services=[
+                "temporal-worker-workflow",
+                "temporal-worker-artifacts",
+                "temporal-worker-llm",
+                "temporal-worker-sandbox",
+                "temporal-worker-integrations",
+            ],
+        ),
+        context=_context(),
+    )
+
+    assert runner.calls[0]["services"] == (
+        "temporal-worker-workflow",
+        "temporal-worker-artifacts",
+        "temporal-worker-llm",
+        "temporal-worker-sandbox",
+        "temporal-worker-integrations",
+    )
+
+
+@pytest.mark.asyncio
+async def test_ops_diagnosis_service_command_rejects_nonzero_exit() -> None:
+    runner = FailingComposeCommandRunner(project_dir=".")
+
+    with pytest.raises(ToolFailure) as exc_info:
+        await runner._run_service_command(
+            "api_health",
+            ("docker", "compose", "ps", "--format", "json", "api"),
+        )
+
+    assert exc_info.value.error_code == "DEPLOYMENT_COMMAND_FAILED"
+    assert "exit code 1" in exc_info.value.message
+
+
+def test_ops_diagnosis_uses_shared_json_record_parser_for_ndjson() -> None:
+    assert _parse_json_records('{"Service":"api"}\n{"Service":"temporal"}') == [
+        {"Service": "api"},
+        {"Service": "temporal"},
+    ]

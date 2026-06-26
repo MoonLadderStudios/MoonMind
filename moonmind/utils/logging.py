@@ -15,6 +15,9 @@ _GITHUB_TOKEN_PATTERN = re.compile(
     r"(?:ghp|gho|ghu|ghs|ghr|github_pat)[_-][A-Za-z0-9_-]{20,}",
     re.IGNORECASE,
 )
+_CLOUD_TOKEN_PATTERN = re.compile(
+    r"\b(?:AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b"
+)
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
     r"(?i)\b(token|password|secret|api[_-]?key|credential)\s*[:=]\s*"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
@@ -73,11 +76,12 @@ def _secret_variants(secret: str) -> set[str]:
     return variants
 
 def scrub_github_tokens(text: str) -> str:
-    """Scrub common GitHub token-like values from diagnostic text."""
+    """Scrub common provider token-like values from diagnostic text."""
 
     if not text:
         return ""
-    return _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
+    redacted = _GITHUB_TOKEN_PATTERN.sub("[REDACTED]", text)
+    return _CLOUD_TOKEN_PATTERN.sub("[REDACTED]", redacted)
 
 def _redact_private_key_blocks(text: str) -> str:
     redacted = text
