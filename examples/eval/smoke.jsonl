@@ -1,3 +1,0 @@
-{"query": "Where are the RAG retriever components implemented?", "relevant_ids": ["moonmind/rag/retriever.py"], "retrieved_ids": ["moonmind/rag/retriever.py", "moonmind/rag/service.py", "moonmind/rag/context_pack.py"], "source_issue": "MM-756"}
-{"query": "Which module applies retrieval evidence guardrails?", "relevant_ids": ["moonmind/rag/guardrails.py"], "retrieved_ids": ["moonmind/rag/guardrails.py", "moonmind/rag/context_pack.py", "moonmind/rag/service.py"], "source_issue": "MM-756"}
-{"query": "Where is the manifest retrieval evaluation framework implemented?", "relevant_ids": ["moonmind/manifest/evaluation.py"], "retrieved_ids": ["moonmind/manifest/manifest_cli.py", "moonmind/manifest/evaluation.py", "moonmind/manifest/validator.py"], "source_issue": "MM-756"}

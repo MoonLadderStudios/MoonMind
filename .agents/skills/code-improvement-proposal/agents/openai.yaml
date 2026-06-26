@@ -1,4 +1,0 @@
-interface:
-  display_name: "Code Improvement Proposal"
-  short_description: "Review code and propose an evidence-backed GitHub or Jira issue"
-  default_prompt: "Use $code-improvement-proposal to review a file or directory and produce a prioritized, evidence-backed improvement proposal, then create a GitHub or Jira issue only when confident and warranted."
