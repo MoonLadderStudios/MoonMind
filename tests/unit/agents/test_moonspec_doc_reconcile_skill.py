@@ -72,6 +72,7 @@ def test_moonspec_specify_skill_marks_specs_derived_from_claims() -> None:
         encoding="utf-8"
     )
 
-    assert "`**Derived From Canonical Claims**`" in text
+    assert "`**Stable Claim IDs**`" in text
+    assert "list those claim IDs exactly as supplied" in text
     assert "sourceReference" in text
     assert "claimIds" in text
