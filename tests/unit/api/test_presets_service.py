@@ -2224,11 +2224,67 @@ async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
                 "artifacts/document-health-review.json"
                 in review_step["instructions"]
             )
+            assert "missing metadata" in review_step["instructions"]
+            assert "authority ladder" in review_step["instructions"]
+            assert "docs/tmp/" in review_step["instructions"]
             assert (
                 "artifacts/document-health-review.json"
                 in remediate_step["instructions"]
             )
             assert "remediate ONLY" in remediate_step["instructions"]
+            assert "missing embedded rationale" in remediate_step["instructions"]
+            assert "unverifiable canonical claims" in remediate_step["instructions"]
+            assert "docs/tmp/" in remediate_step["instructions"]
+
+
+async def test_seed_catalog_includes_document_author_preset(tmp_path):
+    """MM-931: docs-native authoring chooses docs architecture fields."""
+
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            template = await service._get_template_for_scope(
+                slug="document-author",
+                scope=PresetScopeType.GLOBAL,
+                scope_ref=None,
+            )
+            assert template.title == "Document Author"
+            assert template.annotations["sourceIssueKey"] == "MM-931"
+            assert template.annotations["sourceReference"] == "MM-927"
+            assert template.steps[0]["skill"]["id"] == "document-author"
+            assert template.steps[0]["annotations"]["documentAuthoringRole"] == "author"
+
+            expanded = await service.expand_template(
+                slug="document-author",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "documentation_intent": "Document a new runtime contract.",
+                    "preferred_area": "docs/Workflows/",
+                    "traceability": "MM-931 from MM-927",
+                    "constraints": "Canonical only.",
+                },
+                context={},
+            )
+
+            assert len(expanded["steps"]) == 1
+            step = expanded["steps"][0]
+            assert step["type"] == "skill"
+            assert step["skill"]["id"] == "document-author"
+            assert "Document a new runtime contract." in step["instructions"]
+            assert "docs/Workflows/" in step["instructions"]
+            assert "MM-931 from MM-927" in step["instructions"]
+            assert "Do not create spec.md" in step["instructions"]
+            assert "docs/tmp/" in step["instructions"]
 
 async def test_jira_breakdown_uses_single_allowed_project_as_runtime_default(
     tmp_path,

@@ -31,6 +31,8 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
 - Keep canonical docs under `docs/` focused on desired state: architecture, contracts, operator-visible behavior, and target semantics.
 - Put migration notes, rollout checklists, implementation backlogs, and temporary investigation details under `docs/tmp/` or in gitignored handoff paths (for example `artifacts/` for tool handoffs, or run-local `specs/<feature-id>/` packets), not as the main framing of canonical docs.
 - Follow the document classes and precedence rules in `docs/Workflows/MoonSpecDocumentModel.md`.
+- When `docs/DocumentationArchitecture.md` exists, fix or report missing metadata, unclear authority, missing embedded rationale, duplicate contract definitions, imperative leakage in canonical docs, and unverifiable canonical claims.
+- Route broad, multi-document, or uncertain improvement work to a bounded `docs/tmp/` improvement plan instead of making speculative canonical edits.
 - When a superseded behavior is no longer implemented, remove or replace the stale description instead of preserving compatibility-era ambiguity.
 
 ## Workflow
@@ -68,6 +70,7 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
    - Assess whether the drift-correcting update would move the document toward or away from those canonical sources.
    - If the update is clearly aligned with the constitution, README, and architecture, proceed to edit the document.
    - If the update appears to contradict the project's declared direction, or if the correct direction is uncertain, do **not** edit the document. Instead, proceed to step 8 (Jira fallback).
+   - If the needed work spans many documents or cannot be made safely in one bounded edit, write a `docs/tmp/` improvement plan that records the findings, authority owners, and proposed follow-up instead of broadening the update.
 
 6. Edit the document.
    - Update only the sections needed to correct the drift.
@@ -75,6 +78,7 @@ For canonical documentation under `docs/`, do not downgrade the documented desir
    - Remove obsolete compatibility language, stale migration framing, and contradicted examples.
    - Preserve the document's existing voice, heading structure, and terminology where they remain accurate.
    - Add or update cross-references only when they help readers find the canonical contract.
+   - For documentation architecture defects, either fix the local defect directly or report why it needs follow-up: missing metadata, authority mismatch, missing rationale, duplicate contracts, imperative leakage, and unverifiable claims must not be silently ignored.
 
 7. Verify the update.
    - Re-read the changed sections and compare them against the drift ledger.

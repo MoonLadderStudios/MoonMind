@@ -70,6 +70,8 @@ Example invocations:
 - Keep canonical docs under `docs/` focused on desired state: architecture, contracts, operator-visible behavior, and target semantics.
 - Put migration notes, rollout checklists, and temporary investigation details under `docs/tmp/` or in gitignored handoff paths, not as the main framing of canonical docs.
 - Follow the document classes and precedence rules in `docs/Workflows/MoonSpecDocumentModel.md`.
+- When applying documentation architecture findings, fix or explicitly report missing metadata, unclear authority, missing embedded rationale, duplicate contract definitions, imperative leakage in canonical docs, and unverifiable canonical claims.
+- Route broad, multi-document, or uncertain cleanup to a bounded `docs/tmp/` improvement plan instead of expanding the remediation beyond the approved report.
 - When a superseded document is no longer needed, prefer removing or replacing it over leaving compatibility-era ambiguity, but only when its unique content has been preserved or intentionally discarded.
 - Never apply a disallowed action, and never apply a destructive action when destructive actions are not permitted.
 - Redact secret-like content if it appears in copied report text, logs, or examples before writing or reporting.

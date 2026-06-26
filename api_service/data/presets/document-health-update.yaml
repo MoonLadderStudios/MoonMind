@@ -37,10 +37,13 @@ steps:
     source code, tests, schemas, and executable configuration as the source of truth.
     Identify documentation health issues such as: drift or factual inaccuracy versus
     the implementation, stale or superseded descriptions, broken or outdated cross-references
-    and links, and coverage or structural gaps. For canonical docs under docs/, judge
+    and links, coverage or structural gaps, missing metadata, unclear authority, missing
+    embedded rationale, duplicate contract definitions, imperative leakage in canonical
+    docs, and unverifiable canonical claims. For canonical docs under docs/, judge
     health against the documented desired state and do not treat a buggy or incomplete
     implementation as the target; record an implementation gap instead of downgrading
-    the doc.
+    the doc. Group documentation architecture findings by the authority ladder in
+    docs/DocumentationArchitecture.md before severity ordering inside each group.
 
 
     This is a review-only step. Do not edit documentation in this step.
@@ -53,9 +56,11 @@ steps:
 
     Write a structured health report to artifacts/document-health-review.json. The
     report must include the reviewed scope and a findings list, where each finding
-    records the document path, the issue type, a severity, the supporting evidence,
-    and a recommended remediation. When no health issues are found, record an empty
-    findings list and say so explicitly.
+    records the document path, the issue type, the authority ladder group when applicable,
+    a severity, the supporting evidence, and a recommended remediation. When a finding
+    implies broad cleanup across multiple documents, recommend a bounded docs/tmp/
+    improvement plan rather than direct canonical edits. When no health issues are found,
+    record an empty findings list and say so explicitly.
 
 
     Scope this review strictly to the documentation scope above. Do not broaden scope
@@ -95,6 +100,13 @@ steps:
     scope beyond the documents in the report. Follow the project''s testing standards:
     if a change touches executable content, add or update the covering tests and confirm
     they pass before finishing.
+
+
+    Fix or explicitly report missing metadata, unclear authority, missing embedded rationale,
+    duplicate contract definitions, imperative leakage in canonical docs, and unverifiable
+    canonical claims when those findings appear in the report. Route broad, multi-document,
+    or uncertain cleanup to a bounded docs/tmp/ improvement plan instead of expanding
+    remediation beyond the approved findings.
 
 
     Report which findings were remediated, which were intentionally left for follow-up,

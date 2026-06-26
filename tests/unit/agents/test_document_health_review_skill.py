@@ -106,3 +106,36 @@ def test_document_health_review_declares_document_update_dependency() -> None:
     assert (_SKILLS_DIR / "document-update" / "SKILL.md").is_file()
     # It still inlines the drift-analysis mechanics it relies on.
     assert "drift" in text.lower()
+
+
+def test_document_health_review_groups_findings_by_authority_ladder() -> None:
+    text = _skill_text()
+
+    assert "group findings by the authority ladder" in text
+    for level in (
+        "Constitution / Document Model",
+        "Documentation Architecture Standard",
+        "System Architecture View",
+        "Cross-Cutting Concept View",
+        "Module Architecture View",
+        "Module Contract Specification",
+        "System / Feature Design View",
+        "Migration / Implementation / Rollout / Status documents",
+    ):
+        assert level in text
+
+
+def test_document_health_review_reports_docs_architecture_defects() -> None:
+    text = _skill_text()
+
+    for defect in (
+        "missing_metadata",
+        "unclear_authority",
+        "missing_rationale",
+        "duplicate_contract",
+        "imperative_leakage",
+        "unverifiable_claim",
+    ):
+        assert defect in text
+    assert "docs/tmp/" in text
+    assert "improvement plan" in text
