@@ -1224,6 +1224,7 @@ def build_remediation_final_summary(
     summary: Mapping[str, Any],
     repair: Mapping[str, Any],
     prevention: Mapping[str, Any],
+    ops_diagnostic_artifact_refs: Mapping[str, Any] | None = None,
     decision_log_ref: str | None = None,
     final_audit_ref: str | None = None,
     lock_release: str,
@@ -1241,6 +1242,8 @@ def build_remediation_final_summary(
     payload = _safe_lifecycle_payload(summary)
     payload["repair"] = _safe_lifecycle_payload(repair)
     payload["prevention"] = _safe_lifecycle_payload(prevention)
+    if refs := _artifact_refs_mapping(ops_diagnostic_artifact_refs):
+        payload["opsDiagnosticArtifactRefs"] = refs
     if ref := _artifact_ref_string(decision_log_ref, "decision_log_ref"):
         payload["decisionLogRef"] = ref
     if ref := _artifact_ref_string(final_audit_ref, "final_audit_ref"):

@@ -119,7 +119,9 @@ from moonmind.services.skill_materialization import AgentSkillMaterializer
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
 from moonmind.workflows.skills.deployment_tools import (
     DEPLOYMENT_UPDATE_TOOL_NAME,
+    OPS_DIAGNOSE_STACK_TOOL_NAME,
     build_deployment_update_tool_definition_payload,
+    build_ops_diagnose_stack_tool_definition_payload,
 )
 
 from moonmind.schemas.agent_runtime_models import (
@@ -1520,6 +1522,9 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
 
     if name == DEPLOYMENT_UPDATE_TOOL_NAME:
         return build_deployment_update_tool_definition_payload()
+
+    if name == OPS_DIAGNOSE_STACK_TOOL_NAME:
+        return build_ops_diagnose_stack_tool_definition_payload()
 
     if name == "security.pentest.run":
         return {
