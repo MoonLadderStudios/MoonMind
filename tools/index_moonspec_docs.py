@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""MM-930 advisory MoonSpec documentation indexer.
+"""MM-938 advisory MoonSpec documentation indexer.
 
 Builds a machine-readable JSON index of canonical MoonSpec documents and stable
 heading claims without mutating checked-in documentation.
 
-Traceability: MM-930 (source issue MM-927, "Moon Spec Doc Architecture
+Traceability: MM-938, MM-930 (source issue MM-927, "Moon Spec Doc Architecture
 Alignment"); covers DESIGN-REQ-001, DESIGN-REQ-008, DESIGN-REQ-010, and
 DESIGN-REQ-011.
 """
@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Iterable
 
 from check_documentation_architecture import (
+    CANONICAL_CLAIM_ID_RE,
+    CANONICAL_CLAIM_PREFIXES,
     NON_CANONICAL_DOC_DIRS,
     REPO_ROOT,
     Finding,
@@ -33,10 +35,26 @@ from check_documentation_architecture import (
 
 
 ISSUE = "MM-930"
+IMPLEMENTATION_ISSUE = "MM-938"
 DEFAULT_OUTPUT = Path("artifacts/moonspec-doc-index/index.json")
 CONSTITUTION_PATH = ".specify/memory/constitution.md"
+CLAIM_PREFIX_CLASS = {
+    "DOC-REQ": "requirement",
+    "CONTRACT": "contract",
+    "INV": "invariant",
+    "NON-GOAL": "non-goal",
+    "QUALITY": "quality",
+    "TEST": "test",
+}
 
 HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$")
+STABLE_CLAIM_PREFIX_RE = "|".join(
+    re.escape(prefix) for prefix in CANONICAL_CLAIM_PREFIXES
+)
+STABLE_CLAIM_HEADING_RE = re.compile(
+    rf"^(?P<id>(?:{STABLE_CLAIM_PREFIX_RE})-\d{{3}})"
+    r"(?P<separator>\s+|:\s*| -\s*|$)(?P<summary>.*)$"
+)
 METADATA_RE = re.compile(r"^\s*\*\*([^*:\n]+):\*\*\s*(.*?)\s*$")
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 IMPLEMENTATION_TOKEN_RE = re.compile(
@@ -69,11 +87,20 @@ class DocumentEntry:
 @dataclass(frozen=True)
 class ClaimEntry:
     id: str
+    identityKind: str
     documentPath: str
+    sourcePath: str
+    section: str
     heading: str
+    summary: str
     type: str
+    claimClass: str
     anchor: str
     digest: str
+    authority: str
+    owningSurface: str
+    relatedDocs: list[str]
+    relatedImplementation: list[str]
 
 
 def _normalize_metadata_key(key: str) -> str:
@@ -188,6 +215,19 @@ def _claim_id(path: str, anchor: str) -> str:
     return f"claim:{digest}"
 
 
+def _parse_stable_claim_heading(heading: str) -> tuple[str, str, str] | None:
+    normalized = _strip_markdown(heading)
+    match = STABLE_CLAIM_HEADING_RE.match(normalized)
+    if not match:
+        return None
+    claim_id = match.group("id")
+    if not CANONICAL_CLAIM_ID_RE.fullmatch(claim_id):
+        return None
+    prefix = claim_id.rsplit("-", 1)[0]
+    summary = match.group("summary").strip(" -:\t") or claim_id
+    return claim_id, CLAIM_PREFIX_CLASS[prefix], summary
+
+
 def _claim_digest(path: str, heading: str, section_text: str) -> str:
     raw = f"{path}\n{heading}\n{section_text}"
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -240,8 +280,47 @@ def _index_paths(paths: Iterable[str], *, root: Path) -> list[str]:
     return sorted(dict.fromkeys(docs))
 
 
-def build_index(paths: Iterable[str] | None = None, *, root: Path | None = None) -> dict:
+def _input_source_warnings(paths: Iterable[str], *, root: Path) -> list[Finding]:
+    resolved_root = root.resolve()
+    warnings: list[Finding] = []
+    for path in paths:
+        path_obj = Path(path)
+        try:
+            candidate = path_obj if path_obj.is_absolute() else root / path_obj
+            resolved_candidate = candidate.resolve()
+            if resolved_candidate.is_relative_to(resolved_root):
+                normalized = resolved_candidate.relative_to(resolved_root).as_posix()
+            else:
+                normalized = path_obj.as_posix()
+        except (OSError, RuntimeError, ValueError):
+            normalized = path_obj.as_posix()
+        if is_canonical_doc(normalized):
+            continue
+        if normalized == CONSTITUTION_PATH:
+            continue
+        warnings.append(
+            _warning(
+                "non-file-source-skipped",
+                normalized,
+                "Input is not a canonical repository markdown file and was not indexed.",
+                "The doc index never fabricates stable canonical claim IDs for Jira text, inline text, or other non-file sources.",
+            )
+        )
+    return warnings
+
+
+def build_index(
+    paths: Iterable[str] | None = None,
+    *,
+    root: Path | None = None,
+    missing_stable_claim_policy: str = "report",
+) -> dict:
     """Build the advisory documentation index payload."""
+
+    if missing_stable_claim_policy not in {"report", "fail", "ignore"}:
+        raise ValueError(
+            "missing_stable_claim_policy must be one of: report, fail, ignore"
+        )
 
     root = root or REPO_ROOT
     input_paths = paths if paths is not None else all_doc_paths(root=root)
@@ -263,9 +342,12 @@ def build_index(paths: Iterable[str] | None = None, *, root: Path | None = None)
         [doc for doc in doc_files if doc.path != CONSTITUTION_PATH],
         focus_paths=None,
     )
+    if paths is not None:
+        warnings.extend(_input_source_warnings(paths, root=root))
 
     document_entries: list[DocumentEntry] = []
     claim_entries: list[ClaimEntry] = []
+    missing_stable_claim_paths: list[str] = []
 
     for path in selected_paths:
         doc = docs_by_path.get(path)
@@ -336,16 +418,49 @@ def build_index(paths: Iterable[str] | None = None, *, root: Path | None = None)
         )
 
         seen_anchors: dict[str, int] = {}
+        stable_claim_count = 0
         for level, heading, section_text in _heading_sections(doc.text):
             anchor = _unique_anchor(_anchor_for_heading(heading), seen_anchors)
+            stable_claim = _parse_stable_claim_heading(heading)
+            claim_id = _claim_id(path, anchor)
+            identity_kind = "generated"
+            claim_class = _claim_type(level)
+            summary = _strip_markdown(heading)
+            if stable_claim is not None:
+                claim_id, claim_class, summary = stable_claim
+                identity_kind = "stable"
+                stable_claim_count += 1
             claim_entries.append(
                 ClaimEntry(
-                    id=_claim_id(path, anchor),
+                    id=claim_id,
+                    identityKind=identity_kind,
                     documentPath=path,
+                    sourcePath=path,
+                    section=f"{path}#{anchor}",
                     heading=heading,
+                    summary=summary,
                     type=_claim_type(level),
+                    claimClass=claim_class,
                     anchor=f"{path}#{anchor}",
                     digest=_claim_digest(path, heading, section_text),
+                    authority=authority,
+                    owningSurface=owning_surface,
+                    relatedDocs=related_docs,
+                    relatedImplementation=related_implementation,
+                )
+            )
+        if (
+            missing_stable_claim_policy != "ignore"
+            and path != CONSTITUTION_PATH
+            and stable_claim_count == 0
+        ):
+            missing_stable_claim_paths.append(path)
+            warnings.append(
+                _warning(
+                    "missing-stable-claim-id",
+                    path,
+                    "Canonical doc has no stable DOC-REQ, CONTRACT, INV, NON-GOAL, QUALITY, or TEST claim headings.",
+                    "Assign stable claim IDs to durable canonical claims, or run with --missing-stable-claim-policy ignore for exploratory indexing.",
                 )
             )
 
@@ -356,9 +471,14 @@ def build_index(paths: Iterable[str] | None = None, *, root: Path | None = None)
     return {
         "tool": "index_moonspec_docs",
         "issue": ISSUE,
+        "implementationIssue": IMPLEMENTATION_ISSUE,
         "sourceIssue": "MM-927",
+        "traceability": [IMPLEMENTATION_ISSUE, ISSUE, "MM-927"],
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "advisoryOnly": True,
+        "missingStableClaimPolicy": missing_stable_claim_policy,
+        "missingStableClaimDocumentCount": len(missing_stable_claim_paths),
+        "missingStableClaimDocuments": missing_stable_claim_paths,
         "canonicalRoots": ["docs", CONSTITUTION_PATH],
         "excludedCanonicalDocDirs": list(NON_CANONICAL_DOC_DIRS),
         "documentCount": len(document_entries),
@@ -401,25 +521,42 @@ def main(argv: list[str] | None = None) -> int:
         help="Exit non-zero when advisory warnings exist. Default is advisory-only.",
     )
     parser.add_argument(
+        "--missing-stable-claim-policy",
+        choices=("report", "fail", "ignore"),
+        default="report",
+        help=(
+            "How to handle canonical docs with no stable claim headings: report "
+            "advisory findings, fail after writing the artifact, or ignore."
+        ),
+    )
+    parser.add_argument(
         "paths",
         nargs="*",
         help="Optional explicit canonical doc paths to index. docs/tmp remains excluded.",
     )
     args = parser.parse_args(argv)
 
-    payload = build_index(args.paths or None)
+    payload = build_index(
+        args.paths or None,
+        missing_stable_claim_policy=args.missing_stable_claim_policy,
+    )
     output_path = write_index(payload, args.output)
 
     if args.format == "json":
         print(json.dumps({"output": str(output_path), **payload}, indent=2, sort_keys=True))
     else:
         print(
-            "MM-930 MoonSpec documentation index "
+            "MM-938 MoonSpec documentation index "
             f"wrote {payload['documentCount']} document(s), "
             f"{payload['claimCount']} claim(s), and "
             f"{payload['warningCount']} advisory warning(s) to {output_path}."
         )
 
+    if (
+        args.missing_stable_claim_policy == "fail"
+        and payload["missingStableClaimDocumentCount"]
+    ):
+        return 1
     if args.strict and payload["warningCount"]:
         return 1
     return 0
