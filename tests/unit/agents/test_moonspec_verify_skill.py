@@ -48,5 +48,3 @@ def test_moonspec_verify_skill_reports_canonical_claim_coverage() -> None:
     assert "Doc drift alone does not block `FULLY_IMPLEMENTED`" in text
     assert "Use durable evidence references" in text
     assert "structured drift in Source Document Drift" in text
-    assert "MM-934" in text
-    assert "MM-927" in text

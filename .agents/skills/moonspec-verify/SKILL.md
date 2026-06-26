@@ -135,8 +135,6 @@ Do not use copied source requirement text in `spec.md` as evidence that behavior
 
 ## Canonical Claim Coverage
 
-MM-934 adds this report contract while preserving source issue MM-927 traceability.
-
 When a canonical source document is present, report first-class Canonical Claim
 Coverage over stable canonical claims from that source while preserving the
 existing Source Document Drift section for reconciliation handoff.
@@ -145,7 +143,7 @@ Build the claim inventory from the canonical source document's stable claim
 headings and durable claim anchors, such as `DOC-REQ-*`, `CONTRACT-*`, `INV-*`,
 `NON-GOAL-*`, `QUALITY-*`, and `TEST-*`. Use temporary `DESIGN-REQ-*` values
 only as source-issue traceability, not as stable canonical claim IDs. Preserve
-source issue traceability such as MM-927 or related coverage IDs when the
+source issue traceability or related coverage IDs when the
 canonical document provides it, but do not treat traceability prose as proof of
 behavior.
 
