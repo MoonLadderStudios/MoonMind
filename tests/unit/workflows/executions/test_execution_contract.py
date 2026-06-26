@@ -10,6 +10,7 @@ from moonmind.workflows.executions.execution_contract import (
     build_runtime_command_preview_config,
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
+    reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
     strip_workflow_capability_identity_versions,
     WorkflowContractError,
@@ -51,18 +52,15 @@ def test_task_skills_accepts_valid_properties() -> None:
     assert spec.skills.exclude == ["legacy"]
     assert spec.skills.materialization_mode == "hybrid"
 
-def test_task_skills_strip_semantic_version_fields() -> None:
-    spec = WorkflowExecutionSpec.model_validate(
-        {
-            "repository": "test/repo",
-            "instructions": "execute",
-            "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
-        }
-    )
-
-    assert spec.skills is not None
-    assert spec.skills.include is not None
-    assert spec.skills.include[0].name == "test-skill"
+def test_task_skills_reject_semantic_version_fields() -> None:
+    with pytest.raises(ValidationError, match="semantic versions"):
+        WorkflowExecutionSpec.model_validate(
+            {
+                "repository": "test/repo",
+                "instructions": "execute",
+                "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
+            }
+        )
 
     with pytest.raises(ValidationError, match="semantic versions"):
         WorkflowExecutionSpec.model_validate(
@@ -72,6 +70,19 @@ def test_task_skills_strip_semantic_version_fields() -> None:
                 "skills": {"include": [{"name": "test-skill:1.0.0"}]},
             }
         )
+
+
+def test_workflow_capability_identity_rejector_blocks_nested_skill_versions() -> None:
+    payload = {
+        "skills": {
+            "include": [
+                {"name": "pr-resolver", "version": "1.0.0", "skillVersion": "1.0.0"},
+            ],
+        },
+    }
+
+    with pytest.raises(WorkflowContractError, match="semantic versions"):
+        reject_workflow_capability_identity_versions(payload)
 
 
 def test_workflow_capability_identity_sanitizer_strips_nested_skill_versions() -> None:

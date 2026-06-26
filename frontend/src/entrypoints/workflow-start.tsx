@@ -2596,12 +2596,6 @@ function mapExpandedStepToState(
     nonEmptyRecordValue(step.source) ||
     compactSourceFromPresetProvenance(nonEmptyRecordValue(step.presetProvenance));
   const normalizedSource = source ? { ...source } : undefined;
-  if (normalizedSource && "version" in normalizedSource) {
-    delete normalizedSource.version;
-  }
-  if (normalizedSource && "presetVersion" in normalizedSource) {
-    delete normalizedSource.presetVersion;
-  }
   const templateAttachments = Array.isArray(step.inputAttachments)
     ? step.inputAttachments
     : Array.isArray(step.attachments)
@@ -7507,7 +7501,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         const normalizedTool = {
           type: "skill",
           name: skillId || "auto",
-          version: "1.0",
           inputs: skillArgs,
           ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
         };
@@ -8203,7 +8196,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const primaryStepTool = {
       type: "skill",
       name: primarySkillId,
-      version: "1.0",
       ...(Object.keys(primarySkillArgs).length > 0
         ? { inputs: primarySkillArgs }
         : {}),
@@ -8645,7 +8637,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         stepPayload.tool = {
           type: "skill",
           name: stepSkillId || primarySkillId,
-          version: "1.0",
           inputs: stepSkillArgs,
           ...(stepSkillCaps.length > 0
             ? { requiredCapabilities: stepSkillCaps }

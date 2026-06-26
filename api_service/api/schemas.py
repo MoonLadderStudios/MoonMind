@@ -688,25 +688,17 @@ class SecretUsageResponse(BaseModel):
     diagnostics: list[SecretUsageDiagnosticResponse] = Field(default_factory=list)
 
 class AgentSkillSummaryResponse(BaseModel):
-    """List item representing an agent skill definition."""
+    """List item representing current agent skill content evidence."""
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     slug: str
     title: str
     description: Optional[str] = None
     author: Optional[str] = None
-    latest_version: Optional[str] = Field(None, alias="latestVersion")
+    format: Optional[str] = None
+    artifact_ref: Optional[str] = Field(None, alias="artifactRef")
+    content_digest: Optional[str] = Field(None, alias="contentDigest")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
-
-class AgentSkillVersionResponse(BaseModel):
-    """Detail response for a specific skill version."""
-    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
-
-    version_string: str = Field(..., alias="versionString")
-    format: str
-    artifact_ref: str = Field(..., alias="artifactRef")
-    content_digest: str = Field(..., alias="contentDigest")
-    created_at: datetime = Field(..., alias="createdAt")
 
 class AgentSkillCreateRequest(BaseModel):
     """Request payload for creating a new agent skill definition."""
@@ -717,19 +709,17 @@ class AgentSkillCreateRequest(BaseModel):
     description: Optional[str] = None
     author: Optional[str] = None
 
-class AgentSkillVersionCreateRequest(BaseModel):
-    """Request payload for pushing a new immutable version to an agent skill."""
+class AgentSkillContentUpdateRequest(BaseModel):
+    """Request payload for updating current content on an agent skill."""
     model_config = ConfigDict(populate_by_name=True)
 
-    version_string: str = Field(..., alias="versionString")
     format: Optional[Literal["markdown", "bundle"]] = Field("markdown")
-    content: str = Field(..., description="The raw skill content to base the version on")
+    content: str = Field(..., description="The raw skill content to store")
 
 class SkillSetEntryResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
 
     skill_slug: str = Field(..., alias="skillSlug")
-    version_constraint: Optional[str] = Field(None, alias="versionConstraint")
 
 class SkillSetSummaryResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True, from_attributes=True)
@@ -778,9 +768,8 @@ __all__ = [
     "SecretUsageDiagnosticResponse",
     "SecretUsageResponse",
     "AgentSkillSummaryResponse",
-    "AgentSkillVersionResponse",
     "AgentSkillCreateRequest",
-    "AgentSkillVersionCreateRequest",
+    "AgentSkillContentUpdateRequest",
     "SkillSetEntryResponse",
     "SkillSetSummaryResponse",
     "SkillSetDetailResponse",

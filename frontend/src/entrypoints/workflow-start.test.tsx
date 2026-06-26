@@ -1361,11 +1361,9 @@ describe.skip("Task Create Entrypoint", () => {
                   tool: {
                     type: "skill",
                     name: "jira-breakdown-orchestrate",
-                    version: "1.0",
                   },
                   skill: {
                     name: "jira-breakdown-orchestrate",
-                    version: "1.0",
                   },
                   steps: [
                     {
@@ -2200,7 +2198,6 @@ describe.skip("Task Create Entrypoint", () => {
                     tool: {
                       type: "skill",
                       name: "jira-breakdown-orchestrate",
-                      version: "1.0",
                       requiredCapabilities: ["git"],
                     },
                     skill: {
@@ -2242,7 +2239,6 @@ describe.skip("Task Create Entrypoint", () => {
                         tool: {
                           type: "skill",
                           name: "moonspec-breakdown",
-                          version: "1.0",
                           requiredCapabilities: ["git"],
                         },
                         skill: {
@@ -2257,7 +2253,6 @@ describe.skip("Task Create Entrypoint", () => {
                         tool: {
                           type: "skill",
                           name: "story.create_jira_issues",
-                          version: "1.0",
                           inputs: {},
                         },
                         skill: {
@@ -2280,7 +2275,6 @@ describe.skip("Task Create Entrypoint", () => {
                         tool: {
                           type: "skill",
                           name: "story.create_jira_orchestrate_tasks",
-                          version: "1.0",
                           inputs: {},
                         },
                         skill: {
@@ -2357,7 +2351,6 @@ describe.skip("Task Create Entrypoint", () => {
                         tool: {
                           type: "skill",
                           name: "moonspec-verify",
-                          version: "1.0",
                         },
                         skill: { id: "moonspec-verify" },
                       },
@@ -5182,7 +5175,6 @@ describe.skip("Task Create Entrypoint", () => {
           tool: {
             type: "skill",
             name: "speckit-orchestrate",
-            version: "1.0",
           },
           runtime: {
             mode: "codex_cli",
@@ -5388,7 +5380,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
-      version: "1.0",
       inputs: {
         issueKey: "MM-564",
         mode: "runtime",
@@ -5676,7 +5667,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(payload.task.tool).toEqual({
       type: "skill",
       name: "auto",
-      version: "1.0",
     });
     expect(payload.requiredCapabilities).toEqual([
       "codex_cli",
@@ -8670,7 +8660,6 @@ describe.skip("Task Create Entrypoint", () => {
       tool: {
         type: "tool",
         id: "jira.get_issue",
-        version: "1.0",
         inputs: { issueKey: "MM-563" },
       },
     });
@@ -9966,7 +9955,6 @@ describe.skip("Task Create Entrypoint", () => {
         tool: {
           type: "skill",
           name: "speckit-clarify",
-          version: "1.0",
           inputs: { feature: "Task Create" },
         },
         skill: {
@@ -10583,7 +10571,6 @@ describe.skip("Task Create Entrypoint", () => {
     expect(savedStep?.tool).toEqual({
       type: "skill",
       name: "auto",
-      version: "1.0",
       inputs: { mode: "advanced" },
       requiredCapabilities: ["docker"],
     });
@@ -16215,7 +16202,6 @@ describe("Task Create governed Tool authoring", () => {
     expect(request.payload.task.tool).toEqual({
       type: "skill",
       name: "moonspec-orchestrate",
-      version: "1.0",
       inputs: {
         issueKey: "MM-577",
         mode: "runtime",

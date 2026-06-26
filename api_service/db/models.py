@@ -385,7 +385,6 @@ __all__ = [
     "AgentSkillSourceKind",
     "AgentSkillFormat",
     "AgentSkillDefinition",
-    "AgentSkillVersion",
     "SkillSet",
     "SkillSetEntry",
 ]
@@ -2279,13 +2278,13 @@ class AgentSkillSourceKind(str, enum.Enum):
     LOCAL = "local"
 
 class AgentSkillFormat(str, enum.Enum):
-    """Supported payload formatting inside a given skill version."""
+    """Supported payload formatting for skill content."""
 
     MARKDOWN = "markdown"
     BUNDLE = "bundle"
 
 class AgentSkillDefinition(Base):
-    """Core definition for a reusable agent skill block/bundle."""
+    """Current definition and content evidence for a reusable agent skill."""
 
     __tablename__ = "agent_skill_definitions"
     __table_args__ = (
@@ -2297,44 +2296,6 @@ class AgentSkillDefinition(Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     author: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    versions: Mapped[list["AgentSkillVersion"]] = relationship(
-        "AgentSkillVersion",
-        back_populates="skill",
-        cascade="all, delete-orphan",
-        order_by="AgentSkillVersion.created_at",
-    )
-
-    @property
-    def latest_version(self) -> str | None:
-        """Return the version string of the most recently created version."""
-        return self.versions[-1].version_string if self.versions else None
-
-class AgentSkillVersion(Base):
-    """Immutable version release pointing to blob contents in artifact storage."""
-
-    __tablename__ = "agent_skill_versions"
-    __table_args__ = (
-        UniqueConstraint(
-            "skill_id", "version_string", name="uq_agent_skill_version_string"
-        ),
-        Index("ix_agent_skill_versions_skill", "skill_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    skill_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("agent_skill_definitions.id", ondelete="CASCADE"), nullable=False
-    )
-    version_string: Mapped[str] = mapped_column(String(64), nullable=False)
     format: Mapped[AgentSkillFormat] = mapped_column(
         Enum(
             AgentSkillFormat,
@@ -2346,14 +2307,16 @@ class AgentSkillVersion(Base):
         nullable=False,
         default=AgentSkillFormat.MARKDOWN,
     )
-    artifact_ref: Mapped[str] = mapped_column(String(1024), nullable=False)
-    content_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    artifact_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    content_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
-
-    skill: Mapped[AgentSkillDefinition] = relationship(
-        "AgentSkillDefinition", back_populates="versions"
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 class SkillSet(Base):
@@ -2400,7 +2363,6 @@ class SkillSetEntry(Base):
     skill_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("agent_skill_definitions.id", ondelete="CASCADE"), nullable=False
     )
-    version_constraint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

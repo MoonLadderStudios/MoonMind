@@ -390,17 +390,12 @@ async def test_deployment_skill_loader_fetches_from_db():
     
     mock_session = AsyncMock()
     
-    class MockVersion:
-        def __init__(self):
-            self.version_string = "1.0.0"
-            self.format = MagicMock(value="markdown")
-            self.artifact_ref = "art_123"
-            self.content_digest = "digest123"
-            
     class MockDef:
         def __init__(self):
             self.slug = "db_skill"
-            self.versions = [MockVersion()]
+            self.format = MagicMock(value="markdown")
+            self.artifact_ref = "art_123"
+            self.content_digest = "digest123"
     
     def _result(definitions=None, artifact_rows=None):
         result = MagicMock()
@@ -607,17 +602,12 @@ async def test_resolver_expands_packaged_pr_resolver_support_skills():
     ]
 
 async def test_resolver_expands_deployment_required_skills_from_artifact_metadata():
-    class MockVersion:
-        def __init__(self, version_string, artifact_ref):
-            self.version_string = version_string
-            self.format = MagicMock(value="markdown")
-            self.artifact_ref = artifact_ref
-            self.content_digest = f"digest-{artifact_ref}"
-
     class MockDef:
         def __init__(self, slug, artifact_ref):
             self.slug = slug
-            self.versions = [MockVersion("1.0.0", artifact_ref)]
+            self.format = MagicMock(value="markdown")
+            self.artifact_ref = artifact_ref
+            self.content_digest = f"digest-{artifact_ref}"
 
     definitions = {
         "primary_skill": MockDef("primary_skill", "art_primary"),
