@@ -1373,6 +1373,90 @@ function jiraProjectKeyFromIssueKey(issueKey: string): string {
   );
 }
 
+const JIRA_ISSUE_KEY_PATTERN = /\b[A-Z][A-Z0-9]+(?:-[A-Z0-9]+)*-\d+\b/;
+
+function extractJiraIssueKeyFromText(text: string): string {
+  return String(text || "").match(JIRA_ISSUE_KEY_PATTERN)?.[0] || "";
+}
+
+function jiraIssueKeyFromValue(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    return String(
+      record.key ||
+        record.issueKey ||
+        record.issue_key ||
+        record.jiraIssueKey ||
+        "",
+    ).trim();
+  }
+  return extractJiraIssueKeyFromText(String(value || ""));
+}
+
+function jiraIssuePickerValueFromKey(
+  issueKey: string,
+  issue?: Pick<JiraIssueDetail, "summary" | "url" | "issueKey"> | null,
+): Record<string, unknown> {
+  const key = String(issueKey || issue?.issueKey || "").trim();
+  return {
+    key,
+    ...(issue?.summary ? { summary: issue.summary } : {}),
+    ...(issue?.url ? { url: issue.url } : {}),
+  };
+}
+
+function normalizeJiraIssuePickerValue(value: unknown): unknown {
+  const issueKey = jiraIssueKeyFromValue(value);
+  if (!issueKey) {
+    return value;
+  }
+  return {
+    ...(value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {}),
+    key: issueKey,
+  };
+}
+
+function presetJiraIssueInputValuesFromIssue(
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "inputs"> | null | undefined,
+  currentValues: Record<string, unknown>,
+  issue: JiraIssueDetail,
+): { values: Record<string, unknown>; changedNames: string[] } {
+  const issueKey = String(issue.issueKey || "").trim();
+  if (!issueKey || !detail) {
+    return { values: currentValues, changedNames: [] };
+  }
+  const values = { ...currentValues };
+  const changedNames: string[] = [];
+  const issueValue = jiraIssuePickerValueFromKey(issueKey, issue);
+
+  for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
+    const fieldSchema = recordValue(rawSchema);
+    const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
+    if (capabilityWidgetName(fieldSchema, uiSchema) !== "jira.issue-picker") {
+      continue;
+    }
+    values[name] = {
+      ...recordValue(values[name]),
+      ...issueValue,
+    };
+    changedNames.push(name);
+  }
+
+  for (const definition of detail.inputs || []) {
+    const name = String(definition.name || "").trim();
+    const normalized = normalizeTemplateInputKey(name);
+    if (!name || (normalized !== "jiraissuekey" && normalized !== "issuekey")) {
+      continue;
+    }
+    values[name] = issueKey;
+    changedNames.push(name);
+  }
+
+  return { values, changedNames };
+}
+
 function JiraProvenanceChip({
   label,
   provenance,
@@ -2844,20 +2928,33 @@ function schemaContractHasFields(detail: Pick<PresetDetail, "inputSchema"> | nul
 }
 
 function resolveSchemaCapabilityValues(
-  detail: Pick<PresetDetail, "inputSchema" | "defaults">,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
   featureRequestOverride?: string,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   const required = schemaRequired(detail.inputSchema);
+  const instructionFeatureRequest = String(featureRequestOverride || "").trim();
+  const instructionJiraIssueKey =
+    extractJiraIssueKeyFromText(instructionFeatureRequest);
   for (const [name, rawSchema] of Object.entries(schemaProperties(detail.inputSchema))) {
     const fieldSchema = recordValue(rawSchema);
-    const instructionFeatureRequest = String(featureRequestOverride || "").trim();
+    const uiSchema = capabilityFieldUiSchema(detail.uiSchema, name);
+    const widget = capabilityWidgetName(fieldSchema, uiSchema);
     const rawExplicit = explicitValues[name];
-    const explicit =
+    let explicit =
       isFeatureRequestInputKey(name) && instructionFeatureRequest
         ? instructionFeatureRequest
         : rawExplicit;
+    if (
+      explicit === undefined &&
+      widget === "jira.issue-picker" &&
+      instructionJiraIssueKey
+    ) {
+      explicit = jiraIssuePickerValueFromKey(instructionJiraIssueKey);
+    } else if (explicit !== undefined && widget === "jira.issue-picker") {
+      explicit = normalizeJiraIssuePickerValue(explicit);
+    }
     const fallback =
       safeCapabilityDefault(detail.defaults, name) ??
       safeCapabilityDefault(fieldSchema, "default");
@@ -2878,7 +2975,7 @@ function resolveSchemaCapabilityValues(
 }
 
 function resolvedPresetInputValues(
-  detail: Pick<PresetDetail, "inputSchema" | "defaults">,
+  detail: Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults">,
   explicitValues: Record<string, unknown>,
   featureRequestOverride?: string,
 ): Record<string, unknown> {
@@ -5909,12 +6006,35 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     if (!targetStep) {
       return;
     }
+    const nextInstructions = writeJiraImportedText(
+      targetStep.instructions,
+      selectedJiraImportText,
+      jiraWriteMode,
+    );
+    const presetInputUpdate =
+      targetStep.stepType === "preset"
+        ? presetJiraIssueInputValuesFromIssue(
+            targetStep.presetDetail,
+            targetStep.presetInputValues,
+            issue,
+          )
+        : { values: targetStep.presetInputValues, changedNames: [] };
+    const nextPresetInputErrors =
+      presetInputUpdate.changedNames.length > 0
+        ? Object.fromEntries(
+            Object.entries(targetStep.presetInputErrors).filter(
+              ([name]) => !presetInputUpdate.changedNames.includes(name),
+            ),
+          ) as Record<string, string>
+        : targetStep.presetInputErrors;
     updateStep(importTarget.localId, {
-      instructions: writeJiraImportedText(
-        targetStep.instructions,
-        selectedJiraImportText,
-        jiraWriteMode,
-      ),
+      instructions: nextInstructions,
+      ...(presetInputUpdate.changedNames.length > 0
+        ? {
+            presetInputValues: presetInputUpdate.values,
+            presetInputErrors: nextPresetInputErrors,
+          }
+        : {}),
     });
     const provenance = createJiraProvenance(
       issue,

@@ -2591,6 +2591,41 @@ async def test_seed_catalog_jira_implement_flattens_jira_issue_input(tmp_path):
             ]
 
 
+@pytest.mark.parametrize(
+    "jira_issue_input",
+    [
+        "MM-742",
+        {"issueKey": "MM-742"},
+    ],
+)
+async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
+    tmp_path, jira_issue_input
+):
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug="jira-implement",
+                scope="global",
+                scope_ref=None,
+                version="1.1.0",
+                inputs={"jira_issue": jira_issue_input},
+                context={},
+            )
+
+            assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-742"}
+            assert expanded["appliedTemplate"]["inputs"]["jira_issue_key"] == "MM-742"
+
+
 async def test_seed_catalog_github_issue_implement_expands_shared_includes(tmp_path):
     seed_dir = (
         Path(__file__).resolve().parents[3]

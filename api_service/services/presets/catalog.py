@@ -810,6 +810,48 @@ def _issue_object_from_ref(
     return None
 
 
+def _issue_ref_from_mapping(
+    issue_value: Mapping[str, Any],
+    *,
+    provider: str,
+    ref_path: Sequence[Any] | None,
+) -> str:
+    if isinstance(ref_path, Sequence) and not isinstance(
+        ref_path, (str, bytes, bytearray)
+    ):
+        cursor: Any = issue_value
+        for path_item in ref_path:
+            if not isinstance(cursor, Mapping):
+                cursor = None
+                break
+            cursor = cursor.get(str(path_item or "").strip())
+        issue_ref = str(cursor or "").strip()
+        if issue_ref:
+            return issue_ref
+
+    candidate_keys = (
+        ("repository", "number")
+        if provider == "github"
+        else ("key", "issueKey", "issue_key", "jiraIssueKey")
+    )
+    if provider == "github":
+        repository = str(issue_value.get("repository") or "").strip()
+        number = str(issue_value.get("number") or "").strip()
+        if repository and number:
+            return f"{repository}#{number}"
+        for key in ("url", "ref"):
+            issue_ref = str(issue_value.get(key) or "").strip()
+            if issue_ref:
+                return issue_ref
+        return ""
+
+    for key in candidate_keys:
+        issue_ref = str(issue_value.get(key) or "").strip()
+        if issue_ref:
+            return issue_ref
+    return ""
+
+
 def _apply_issue_input_overrides(
     *,
     annotations: Mapping[str, Any] | None,
@@ -825,32 +867,50 @@ def _apply_issue_input_overrides(
     adjusted = dict(submitted)
     provider = str(issue_input.get("provider") or "").strip().lower()
     issue_value = adjusted.get(object_input)
+    ref_path_raw = issue_input.get("refPath")
+    ref_path = (
+        ref_path_raw
+        if isinstance(ref_path_raw, Sequence)
+        and not isinstance(ref_path_raw, (str, bytes, bytearray))
+        else None
+    )
     if isinstance(issue_value, Mapping):
         ref_template = str(issue_input.get("refTemplate") or "").strip()
-        ref_path = issue_input.get("refPath")
         issue_ref = ""
         if ref_template:
             issue_ref = _render_issue_ref_template(ref_template, issue_value)
-        elif isinstance(ref_path, Sequence) and not isinstance(ref_path, (str, bytes, bytearray)):
-            cursor: Any = issue_value
-            for path_item in ref_path:
-                if not isinstance(cursor, Mapping):
-                    cursor = None
-                    break
-                cursor = cursor.get(str(path_item or "").strip())
-            issue_ref = str(cursor or "").strip()
+        else:
+            issue_ref = _issue_ref_from_mapping(
+                issue_value,
+                provider=provider,
+                ref_path=ref_path,
+            )
+        if issue_ref:
+            if not str(adjusted.get(ref_input) or "").strip():
+                adjusted[ref_input] = issue_ref
+            issue_object = _issue_object_from_ref(
+                provider=provider,
+                ref_value=issue_ref,
+                ref_path=ref_path,
+            )
+            if issue_object is not None:
+                adjusted[object_input] = {**issue_value, **issue_object}
+        return adjusted
+    if isinstance(issue_value, str):
+        issue_ref = issue_value.strip()
         if issue_ref and not str(adjusted.get(ref_input) or "").strip():
             adjusted[ref_input] = issue_ref
+        if issue_ref:
+            issue_object = _issue_object_from_ref(
+                provider=provider,
+                ref_value=issue_ref,
+                ref_path=ref_path,
+            )
+            if issue_object is not None:
+                adjusted[object_input] = issue_object
         return adjusted
     legacy_ref = str(adjusted.get(ref_input) or "").strip()
     if legacy_ref:
-        ref_path_raw = issue_input.get("refPath")
-        ref_path = (
-            ref_path_raw
-            if isinstance(ref_path_raw, Sequence)
-            and not isinstance(ref_path_raw, (str, bytes, bytearray))
-            else None
-        )
         issue_object = _issue_object_from_ref(
             provider=provider,
             ref_value=legacy_ref,
