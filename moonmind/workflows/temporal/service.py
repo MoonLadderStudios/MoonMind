@@ -230,6 +230,10 @@ NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FINALIZING,
 }
 
+OPERATOR_SIGNAL_ALLOWED_STATES: set[MoonMindWorkflowState] = (
+    NON_TERMINAL_STATES | {MoonMindWorkflowState.AWAITING_SLOT}
+)
+
 _RUNNING_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.PLANNING,
     MoonMindWorkflowState.EXECUTING,
@@ -1674,7 +1678,7 @@ class TemporalExecutionService:
             "SkipDependencyWait",
             "SendMessage",
         }:
-            self._ensure_non_terminal(record)
+            self._ensure_state_allows_operator_signal(record)
             operator_message = self._extract_operator_message(payload)
             update_arg: dict[str, Any] = {}
             if signal_name == "SendMessage":
@@ -4071,6 +4075,14 @@ class TemporalExecutionService:
 
     def _ensure_non_terminal(self, record: TemporalExecutionCanonicalRecord) -> None:
         if record.state not in NON_TERMINAL_STATES:
+            raise TemporalExecutionValidationError(
+                "Workflow is in a terminal state and cannot be progressed."
+            )
+
+    def _ensure_state_allows_operator_signal(
+        self, record: TemporalExecutionCanonicalRecord
+    ) -> None:
+        if record.state not in OPERATOR_SIGNAL_ALLOWED_STATES:
             raise TemporalExecutionValidationError(
                 "Workflow is in a terminal state and cannot be progressed."
             )
