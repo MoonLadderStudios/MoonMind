@@ -172,6 +172,17 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             "jiraOrchestrateRole": "doc-reconciliation"
         }
         assert "FULLY_IMPLEMENTED" in doc_reconcile_step["instructions"]
+        assert "starting authority candidate" in doc_reconcile_step["instructions"]
+        assert "authority ladder and module-owned contract policy" in doc_reconcile_step[
+            "instructions"
+        ]
+        assert "owning canonical doc may be different" in doc_reconcile_step[
+            "instructions"
+        ]
+        assert "ownership is ambiguous" in doc_reconcile_step["instructions"]
+        assert "updated, noUpdateRequired, escalated" in doc_reconcile_step[
+            "instructions"
+        ]
         assert "artifacts/jira-orchestrate-doc-reconcile.json" in doc_reconcile_step[
             "instructions"
         ]
@@ -194,6 +205,11 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         assert "explicit PR-publication step" in pr_step["instructions"]
         assert "controlling instruction for this step only" in pr_step["instructions"]
         assert "merge automation" in pr_step["instructions"]
+        assert "Documentation Conformance section" in pr_step["instructions"]
+        assert "canonical sources" in pr_step["instructions"]
+        assert "temporary artifacts consulted" in pr_step["instructions"]
+        assert "claim coverage" in pr_step["instructions"]
+        assert "reconciliation outcomes" in pr_step["instructions"]
         assert "artifacts/jira-orchestrate-pr.json" in pr_step["instructions"]
         code_review_step = next(
             step

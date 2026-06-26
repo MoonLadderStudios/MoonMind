@@ -101,8 +101,8 @@ Use these gates before advancing:
   - Verdict is not `NO_DETERMINATION`.
   - Completion is claimed only when verdict is `FULLY_IMPLEMENTED`.
 - Doc Reconcile gate:
-  - `moonspec-doc-reconcile` has run after a `FULLY_IMPLEMENTED` verdict when `spec.md` records a canonical source document.
-  - Its result is exactly one of `UPDATED`, `NO_UPDATE_REQUIRED`, or `ESCALATED`, with rationale.
+  - `moonspec-doc-reconcile` has run after a `FULLY_IMPLEMENTED` verdict when at least one canonical source candidate exists: `spec.md` records a canonical source document, the breakdown `sourceReference.path` points under `docs/`, or the orchestration step provides a source design path under `docs/`.
+  - Its result is exactly one of `updated`, `no_update_required`, or `escalated`, with rationale.
 
 If a gate fails, stop or run the appropriate upstream skill. Do not continue on a claimed success without artifacts or evidence.
 
@@ -160,12 +160,12 @@ This replaces the old manual analyze remediation flow. Do not provide scripted "
 
 ### 7. Reconcile Declarative Docs
 
-Run only when the final verdict is `FULLY_IMPLEMENTED` and `spec.md` records a canonical source document under `docs/`:
+Run only when the final verdict is `FULLY_IMPLEMENTED` and at least one canonical source candidate exists: `spec.md` records a canonical source document, the breakdown `sourceReference.path` points under `docs/`, or the orchestration step provides a source design path under `docs/`:
 
 1. Run `moonspec-doc-reconcile` with the canonical document path(s), the latest verification report (including its Source Document Drift section), and `artifacts/doc-discoveries/<feature>.json` when present.
-2. Accept exactly one outcome: `UPDATED` (canonical doc edited), `NO_UPDATE_REQUIRED` (gate not met), or `ESCALATED` (Jira issue created for a misaligned update).
-3. `ESCALATED` does not retroactively fail verification; report the issue key alongside the outcome.
-4. Skip this stage with outcome `NO_UPDATE_REQUIRED` when no canonical source document exists.
+2. Accept exactly one outcome: `updated` (canonical doc edited), `no_update_required` (gate not met), or `escalated` (Jira issue created for a misaligned update).
+3. `escalated` does not retroactively fail verification; report the issue key alongside the outcome.
+4. Skip this stage with outcome `no_update_required` when no canonical source candidate exists.
 
 ## Multi-Spec Designs
 
@@ -194,7 +194,7 @@ Stages:
 - Align: PASS/FAIL/SKIPPED
 - Implement: PASS/FAIL/SKIPPED
 - Verify: FULLY_IMPLEMENTED/ADDITIONAL_WORK_NEEDED/NO_DETERMINATION/SKIPPED
-- Doc Reconcile: UPDATED/NO_UPDATE_REQUIRED/ESCALATED/SKIPPED
+- Doc Reconcile: updated/no_update_required/escalated/SKIPPED
 
 Changed files:
 - [paths]
@@ -220,4 +220,4 @@ Mention source design coverage and `DOC-REQ-*`/`DESIGN-REQ-*` status when presen
 - Enforce one story per spec.
 - Keep TDD, unit tests, integration tests, and `/speckit.verify` in the pipeline.
 - Treat verification as the final authority for completion.
-- Run doc reconciliation after a `FULLY_IMPLEMENTED` verdict when a canonical source document exists; never let derived artifacts silently override canonical docs.
+- Run doc reconciliation after a `FULLY_IMPLEMENTED` verdict when a canonical source candidate exists; never let derived artifacts silently override canonical docs.
