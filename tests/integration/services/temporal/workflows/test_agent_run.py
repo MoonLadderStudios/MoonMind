@@ -26,18 +26,46 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
 # (the standalone stubs were removed in favor of catalog routing).
 from temporalio import activity as _activity
 
+
 @_activity.defn(name="agent_runtime.publish_artifacts")
-async def mock_publish_artifacts(result: AgentRunResult | None = None) -> AgentRunResult | None:
+async def mock_publish_artifacts(
+    result: AgentRunResult | None = None,
+) -> AgentRunResult | None:
     return result
+
+
+_managed_cancel_count = 0
+
+
+def _request_get(request: object, *keys: str, default: Any = None) -> Any:
+    if isinstance(request, dict):
+        for key in keys:
+            if key in request:
+                return request[key]
+        return default
+    for key in keys:
+        value = getattr(request, key, None)
+        if value is not None:
+            return value
+    return default
+
 
 @_activity.defn(name="agent_runtime.cancel")
 async def mock_cancel(request: dict) -> AgentRunStatus:
+    global _managed_cancel_count
+    _managed_cancel_count += 1
     return AgentRunStatus(
-        runId=request.get("run_id", "unknown"),
-        agentKind=request.get("agent_kind", "unknown"),
+        runId=_request_get(request, "run_id", "runId", default="unknown"),
+        agentKind=_request_get(
+            request,
+            "agent_kind",
+            "agentKind",
+            default="unknown",
+        ),
         agentId="managed",
-        status="canceled"
+        status="canceled",
     )
+
 
 @_activity.defn(name="provider_profile.list")
 async def mock_provider_profile_list(request: dict) -> dict:
@@ -162,6 +190,23 @@ async def mock_agent_runtime_status(request: dict) -> dict:
             "status": status,
             "metadata": metadata,
         }
+    if _managed_status_mode == "silent_then_rate_limited_after_cancel":
+        status = "failed" if _managed_cancel_count else "running"
+        metadata = {"runtimeId": "claude_code"}
+        if status == "failed":
+            metadata["finishedAt"] = datetime.now(tz=UTC).isoformat()
+            metadata["exitCode"] = -9
+        return {
+            "runId": request.get("runId")
+            or request.get("run_id")
+            or "test-managed-run",
+            "agentKind": "managed",
+            "agentId": request.get("agentId")
+            or request.get("agent_id")
+            or "claude_code",
+            "status": status,
+            "metadata": metadata,
+        }
     return {
         "status": "running",
         "container_id": request.get("container_id", "test-container-001"),
@@ -178,6 +223,26 @@ async def mock_agent_runtime_fetch_result(request: dict) -> dict:
             "metadata": {
                 "normalizedStatus": "completed",
                 "fetchRunId": request.get("runId") or request.get("run_id"),
+            },
+        }
+    if _managed_status_mode == "silent_then_rate_limited_after_cancel":
+        return {
+            "summary": "Provider rate limit reached; retry after cooldown.",
+            "failureClass": "integration_error",
+            "providerErrorCode": "429",
+            "retryRecommendation": "retry_after_cooldown",
+            "metadata": {
+                "normalizedStatus": "failed",
+                "fetchRunId": request.get("runId") or request.get("run_id"),
+                "providerFailure": {
+                    "providerErrorClass": "rate_limit",
+                    "providerErrorCode": "429",
+                    "retryRecommendation": "retry_after_cooldown",
+                    "sanitizedSummary": (
+                        "Provider rate limit reached; the run will retry "
+                        "after a profile cooldown."
+                    ),
+                },
             },
         }
     return {
@@ -1241,6 +1306,139 @@ async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
         )
     finally:
         _managed_status_mode = "default"
+
+@pytest.mark.asyncio
+async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
+    monkeypatch,
+):
+    global _managed_status_mode, _managed_status_poll_count
+    global _managed_fetch_result_count, _managed_cancel_count
+    _managed_launch_requests.clear()
+    _managed_status_mode = "silent_then_rate_limited_after_cancel"
+    _managed_status_poll_count = 0
+    _managed_fetch_result_count = 0
+    _managed_cancel_count = 0
+
+    def test_policy(request: AgentExecutionRequest) -> dict[str, Any]:
+        return {
+            "runtime": request.agent_id,
+            "noProgressTimeoutSeconds": 1,
+            "noProgressGraceSeconds": 1,
+            "stuckAction": "request_intervention",
+            "retryPolicy": "test_managed_cancel_fetch_rate_limit",
+        }
+
+    monkeypatch.setattr(
+        MoonMindAgentRun,
+        "_resiliency_policy_for_request",
+        staticmethod(test_policy),
+    )
+
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[
+                        MoonMindAgentRun,
+                        MockProviderProfileManager,
+                        TestAgentRunParent,
+                    ],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.artifacts",
+                    activities=[
+                        mock_provider_profile_list,
+                        mock_provider_profile_ensure_manager,
+                        mock_provider_profile_reset_manager,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.agent_runtime",
+                    activities=[
+                        mock_agent_runtime_build_launch_context,
+                        mock_agent_runtime_launch,
+                        mock_agent_runtime_status,
+                        mock_agent_runtime_fetch_result,
+                        mock_publish_artifacts,
+                        mock_cancel,
+                    ],
+                ),
+            ):
+                manager_id = "provider-profile-manager:claude_code"
+                await env.client.start_workflow(
+                    MockProviderProfileManager.run,
+                    {"runtime_id": "claude_code"},
+                    id=manager_id,
+                    task_queue="agent-run-task-queue",
+                )
+                manager_handle = env.client.get_workflow_handle(manager_id)
+
+                parent_handle = await env.client.start_workflow(
+                    TestAgentRunParent.run,
+                    AgentExecutionRequest(
+                        agent_kind="managed",
+                        agent_id="claude_code",
+                        execution_profile_ref="default-managed",
+                        correlation_id="managed-quota-after-cancel:corr",
+                        idempotency_key="managed-quota-after-cancel:idem",
+                    ),
+                    id="test-parent-managed-quota-after-cancel",
+                    task_queue="agent-run-task-queue",
+                )
+
+                await env.sleep(35)
+
+                manager_state = {}
+                parent_state = {}
+                for _ in range(20):
+                    manager_state = await manager_handle.query(
+                        MockProviderProfileManager.get_state
+                    )
+                    parent_state = await parent_handle.query(
+                        TestAgentRunParent.get_state
+                    )
+                    if manager_state.get("cooldown_reports") and any(
+                        "retry scheduled" in change["reason"].lower()
+                        for change in parent_state.get("state_changes", [])
+                    ):
+                        break
+                    await asyncio.sleep(0.1)
+
+                debug_state = {
+                    "cancel_count": _managed_cancel_count,
+                    "fetch_count": _managed_fetch_result_count,
+                    "status_polls": _managed_status_poll_count,
+                    "manager_state": manager_state,
+                    "parent_state": parent_state,
+                }
+                assert _managed_cancel_count >= 1, debug_state
+                assert _managed_fetch_result_count >= 1, debug_state
+                assert manager_state["cooldown_reports"], debug_state
+                assert (
+                    manager_state["cooldown_reports"][-1]["cooldown_seconds"]
+                    == 900
+                )
+                assert not any(
+                    change["state"] == "intervention_requested"
+                    for change in parent_state["state_changes"]
+                )
+                assert any(
+                    "retry scheduled" in change["reason"].lower()
+                    and "900s cooldown" in change["reason"].lower()
+                    for change in parent_state["state_changes"]
+                )
+
+                await parent_handle.cancel()
+                with pytest.raises(WorkflowFailureError):
+                    await parent_handle.result()
+    finally:
+        _managed_status_mode = "default"
+        _managed_cancel_count = 0
 
 @pytest.mark.asyncio
 async def test_agent_run_external_agent_workflow():
