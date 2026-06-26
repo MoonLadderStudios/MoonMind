@@ -557,8 +557,10 @@ a silent stalled agent.
 A continuation disposition (`reenter_gate`) only has meaning when a
 `MoonMind.MergeAutomation` gate owns the next cycle: re-enter `awaiting_external`,
 poll CI on the new head, and finalize the merge. Merge automation marks the
-resolver child it launches by injecting a `mergeGate` block
-(`mergeGate.parentWorkflowId`) into the resolver's `initial_parameters`.
+resolver child it launches by injecting a `mergeGate` block into the resolver's
+`initial_parameters`. `mergeGate.parentWorkflowId` MUST be the
+`MoonMind.MergeAutomation` workflow ID that is the resolver child's actual
+Temporal parent, not the root user workflow that launched merge automation.
 
 When `pr-resolver` is instead submitted as a **standalone top-level
 `MoonMind.UserWorkflow`** (no `mergeGate` owner), there is no gate to re-enter. A

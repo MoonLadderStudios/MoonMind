@@ -10,6 +10,7 @@ from temporalio.workflow import ChildWorkflowCancellationType
 
 from moonmind.workflows.temporal.workflows import merge_automation as merge_automation_module
 from moonmind.workflows.temporal.workflows.merge_automation import (
+    MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH,
     MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
     MoonMindMergeAutomationWorkflow,
 )
@@ -47,6 +48,7 @@ def _payload() -> dict[str, Any]:
         "idempotencyKey": "merge-automation:wf-parent:MoonLadderStudios/MoonMind:350:abc123",
     }
 
+
 def _payload_with_post_merge_jira(**post_merge_overrides: Any) -> dict[str, Any]:
     payload = _payload()
     payload["mergeAutomationConfig"]["postMergeJira"] = {
@@ -57,6 +59,9 @@ def _payload_with_post_merge_jira(**post_merge_overrides: Any) -> dict[str, Any]
     }
     return payload
 
+MERGE_AUTOMATION_WORKFLOW_ID = "merge-automation:wf-parent"
+
+
 @pytest.fixture(autouse=True)
 def _default_temporal_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -64,6 +69,12 @@ def _default_temporal_patch_state(monkeypatch: pytest.MonkeyPatch) -> None:
         "patched",
         lambda _patch_id: True,
     )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "info",
+        lambda: SimpleNamespace(workflow_id=MERGE_AUTOMATION_WORKFLOW_ID),
+    )
+
 
 def test_merge_automation_extracts_artifact_id_from_ref_shapes() -> None:
     assert (
@@ -396,6 +407,10 @@ async def test_merge_automation_tracks_current_head_when_checks_are_still_runnin
     assert result["latestHeadSha"] == "def456"
     assert result["blockers"] == []
     assert child_workflow_ids == [f"{expected_resolver_id}:1"]
+    assert (
+        child_payloads[0]["initial_parameters"]["mergeGate"]["parentWorkflowId"]
+        == MERGE_AUTOMATION_WORKFLOW_ID
+    )
     assert child_payloads[0]["initial_parameters"]["mergeGate"]["headSha"] == "def456"
 
 @pytest.mark.asyncio
@@ -493,6 +508,7 @@ async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marke
 ) -> None:
     workflow = MoonMindMergeAutomationWorkflow()
     child_workflow_ids: list[str] = []
+    child_payloads: list[dict[str, Any]] = []
 
     async def fake_execute_activity(
         activity_type: str,
@@ -513,10 +529,11 @@ async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marke
 
     async def fake_execute_child_workflow(
         workflow_type: str,
-        _payload: dict[str, Any],
+        payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
         assert workflow_type == "MoonMind.UserWorkflow"
+        child_payloads.append(payload)
         child_workflow_ids.append(str(kwargs["id"]))
         return {"status": "success", "mergeAutomationDisposition": "merged"}
 
@@ -561,6 +578,83 @@ async def test_merge_automation_resolver_child_uses_legacy_id_before_patch_marke
         head_sha="abc123",
     )
     assert child_workflow_ids == [f"{legacy_resolver_id}:1"]
+    assert (
+        child_payloads[0]["initial_parameters"]["mergeGate"]["parentWorkflowId"]
+        == "wf-parent"
+    )
+
+
+@pytest.mark.asyncio
+async def test_merge_automation_resolver_child_uses_actual_parent_gate_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindMergeAutomationWorkflow()
+    child_payloads: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert activity_type == "merge_automation.evaluate_readiness"
+        return {
+            "headSha": "abc123",
+            "ready": True,
+            "pullRequestOpen": True,
+            "policyAllowed": True,
+            "checksComplete": True,
+            "checksPassing": True,
+            "automatedReviewComplete": True,
+            "jiraStatusAllowed": True,
+        }
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert workflow_type == "MoonMind.UserWorkflow"
+        child_payloads.append(payload)
+        return {"status": "success", "mergeAutomationDisposition": "merged"}
+
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_memo",
+        lambda _memo: None,
+    )
+    monkeypatch.setattr(
+        merge_automation_module.workflow,
+        "upsert_search_attributes",
+        lambda _attrs: None,
+    )
+
+    result = await workflow.run(_payload())
+
+    assert result["status"] == "merged"
+    assert (
+        child_payloads[0]["initial_parameters"]["mergeGate"]["parentWorkflowId"]
+        == MERGE_AUTOMATION_WORKFLOW_ID
+    )
 
 @pytest.mark.asyncio
 async def test_merge_automation_launches_resolver_when_checks_are_failing_but_complete(

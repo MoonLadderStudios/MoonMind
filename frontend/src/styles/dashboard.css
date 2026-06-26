@@ -4014,17 +4014,143 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.35rem;
 }
 
-.queue-step-attachment-control {
-  display: inline-flex;
+/* MM-936: unified "Add to step" affordance and capability chip row. */
+.queue-step-context {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  width: fit-content;
 }
 
-.queue-step-attachment-label {
-  color: rgb(var(--mm-muted));
+.queue-step-context-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.queue-step-attachment-add-button.queue-step-context-menu-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: auto;
+  min-width: 0;
+  height: 2rem;
+  padding: 0 0.6rem;
   font-size: 0.86rem;
+}
+
+.queue-step-context-menu-button-text {
   font-weight: 650;
+}
+
+.queue-step-context-menu-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 20;
+  min-width: 15rem;
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.35rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 10px;
+  background: rgb(var(--mm-panel));
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.18);
+}
+
+.queue-step-context-menu-group-label {
+  margin: 0.25rem 0.4rem 0.1rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.queue-step-context-menu-separator {
+  height: 1px;
+  margin: 0.25rem 0;
+  background: rgb(var(--mm-border));
+}
+
+.queue-step-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgb(var(--mm-text));
+  font-size: 0.88rem;
+  text-align: left;
+}
+
+.queue-step-context-menu-item:hover:not(:disabled),
+.queue-step-context-menu-item:focus-visible:not(:disabled) {
+  background: rgb(var(--mm-accent) / 0.12);
+}
+
+.queue-step-context-menu-item:disabled {
+  opacity: 0.5;
+}
+
+.queue-step-context-menu-capability-label {
+  flex: 1 1 auto;
+}
+
+.queue-step-context-menu-capability-token {
+  color: rgb(var(--mm-muted));
+  font-family: var(--mm-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+}
+
+.queue-step-capability-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-step-capability-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid rgb(var(--mm-accent) / 0.45);
+  border-radius: 999px;
+  background: rgb(var(--mm-accent) / 0.1);
+  font-size: 0.82rem;
+}
+
+.queue-step-capability-chip.is-derived {
+  border-color: rgb(var(--mm-border));
+  background: rgb(var(--mm-muted) / 0.12);
+  color: rgb(var(--mm-muted));
+}
+
+.queue-step-capability-chip-detail {
+  color: rgb(var(--mm-muted));
+  font-size: 0.76rem;
+}
+
+.queue-step-capability-chip-lock {
+  font-size: 0.72rem;
+  cursor: help;
+}
+
+.queue-step-capability-chip-remove {
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+}
+
+.queue-step-capability-chip-remove svg {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 .queue-step-attachment-add-button {

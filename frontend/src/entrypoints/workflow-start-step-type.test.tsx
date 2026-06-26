@@ -345,6 +345,45 @@ describe("Task Create Step Type authoring", () => {
     expect(fetchSpy).toHaveBeenCalled();
   });
 
+  it("preserves explicit step capabilities when changing Step Type away from Skill", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const primaryStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+
+    // Add a capability via the always-visible "Add to step" menu while the
+    // step is still the default Skill type.
+    fireEvent.click(
+      within(primaryStep).getByRole("button", { name: "Add to Step 1" }),
+    );
+    fireEvent.click(
+      within(primaryStep).getByRole("menuitem", { name: /Git repository/ }),
+    );
+
+    const removeLabel = "Remove Git repository capability from Step 1";
+    expect(
+      within(primaryStep).getByRole("button", { name: removeLabel }),
+    ).toBeTruthy();
+
+    // Changing the step type away from Skill must not clear the step-level
+    // explicit capability — only skill id/args are skill-specific.
+    selectStepType(primaryStep, "Tool");
+
+    expect(within(primaryStep).queryByLabelText(/Skill \(optional\)/)).toBeNull();
+    expect(
+      within(primaryStep).getByRole("button", { name: removeLabel }),
+    ).toBeTruthy();
+
+    // The chip remains removable through the explicit authoring field.
+    fireEvent.click(
+      within(primaryStep).getByRole("button", { name: removeLabel }),
+    );
+    expect(
+      within(primaryStep).queryByRole("button", { name: removeLabel }),
+    ).toBeNull();
+  });
+
   it("clears Preset configuration after changing Step Type without showing the discard warning", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
