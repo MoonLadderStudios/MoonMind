@@ -2752,7 +2752,6 @@ async def test_seed_catalog_jira_implement_accepts_common_jira_issue_shapes(
                 slug="jira-implement",
                 scope="global",
                 scope_ref=None,
-                version="1.1.0",
                 inputs={"jira_issue": jira_issue_input},
                 context={},
             )
