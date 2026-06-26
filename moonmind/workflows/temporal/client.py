@@ -185,7 +185,13 @@ def _latest_schedule_trigger_result(
     def _sort_key(action_result: object) -> datetime:
         return (
             _schedule_datetime(
+                _schedule_object_value(action_result, "actual_time", "actualTime")
+            )
+            or _schedule_datetime(
                 _schedule_object_value(action_result, "started_at", "startedAt")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "schedule_time", "scheduleTime")
             )
             or _schedule_datetime(
                 _schedule_object_value(action_result, "scheduled_at", "scheduledAt")
@@ -195,11 +201,21 @@ def _latest_schedule_trigger_result(
 
     threshold = _schedule_datetime(not_before) if not_before is not None else None
     for action_result in sorted(action_results, key=_sort_key, reverse=True):
-        scheduled_at = _schedule_datetime(
-            _schedule_object_value(action_result, "scheduled_at", "scheduledAt")
+        scheduled_at = (
+            _schedule_datetime(
+                _schedule_object_value(action_result, "schedule_time", "scheduleTime")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "scheduled_at", "scheduledAt")
+            )
         )
-        started_at = _schedule_datetime(
-            _schedule_object_value(action_result, "started_at", "startedAt")
+        started_at = (
+            _schedule_datetime(
+                _schedule_object_value(action_result, "actual_time", "actualTime")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "started_at", "startedAt")
+            )
         )
         action_time = started_at or scheduled_at
         if (
@@ -208,14 +224,19 @@ def _latest_schedule_trigger_result(
             and action_time < threshold
         ):
             continue
-        action = _schedule_object_value(action_result, "action")
+        action = _schedule_object_value(
+            action_result,
+            "start_workflow_result",
+            "startWorkflowResult",
+            "action",
+        )
         workflow_id = _schedule_object_value(action, "workflow_id", "workflowId")
         run_id = _schedule_object_value(
             action,
-            "first_execution_run_id",
-            "firstExecutionRunId",
             "run_id",
             "runId",
+            "first_execution_run_id",
+            "firstExecutionRunId",
         )
         if workflow_id or run_id:
             return ScheduleTriggerResult(
@@ -925,7 +946,7 @@ class TemporalClientAdapter:
 
         handle, _desc = await self._get_schedule_handle(definition_id)
         try:
-            triggered_after = datetime.now(timezone.utc) - timedelta(seconds=30)
+            triggered_after = datetime.now(timezone.utc)
             await handle.trigger()
         except Exception as exc:
             raise ScheduleOperationError(

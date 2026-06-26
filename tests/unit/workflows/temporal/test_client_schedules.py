@@ -528,18 +528,18 @@ class TestTriggerSchedule:
     @pytest.mark.asyncio
     async def test_returns_triggered_workflow_metadata_from_recent_action(self) -> None:
         handle = _mock_schedule_handle()
-        scheduled_at = datetime.now(timezone.utc)
+        scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=1)
         handle.describe.side_effect = [
             MagicMock(),
             SimpleNamespace(
                 info=SimpleNamespace(
                     recent_actions=[
                         SimpleNamespace(
-                            scheduled_at=scheduled_at,
-                            started_at=scheduled_at,
-                            action=SimpleNamespace(
+                            schedule_time=scheduled_at,
+                            actual_time=scheduled_at,
+                            start_workflow_result=SimpleNamespace(
                                 workflow_id="workflow-from-trigger",
-                                first_execution_run_id="run-from-trigger",
+                                run_id="run-from-trigger",
                             ),
                         )
                     ]
@@ -558,6 +558,35 @@ class TestTriggerSchedule:
             workflow_id="workflow-from-trigger",
             run_id="run-from-trigger",
         )
+
+    @pytest.mark.asyncio
+    async def test_ignores_recent_action_before_manual_trigger(self) -> None:
+        handle = _mock_schedule_handle()
+        stale_action_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+        handle.describe.side_effect = [
+            MagicMock(),
+            SimpleNamespace(
+                info=SimpleNamespace(
+                    recent_actions=[
+                        SimpleNamespace(
+                            schedule_time=stale_action_time,
+                            actual_time=stale_action_time,
+                            start_workflow_result=SimpleNamespace(
+                                workflow_id="previous-workflow",
+                                run_id="previous-run",
+                            ),
+                        )
+                    ]
+                )
+            ),
+        ]
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.trigger_schedule(definition_id=_TEST_UUID)
+
+        assert result == ScheduleTriggerResult()
 
 class TestDeleteSchedule:
     """DOC-REQ-002: delete schedule."""
