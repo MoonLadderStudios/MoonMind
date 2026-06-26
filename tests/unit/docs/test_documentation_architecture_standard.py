@@ -90,6 +90,29 @@ def test_incremental_adoption_policy_present() -> None:
     assert "no retroactive metadata-only churn PR is mandated" in text
 
 
+def test_stable_canonical_claim_id_families_present() -> None:
+    text = _read()
+    assert "Stable Canonical Claim IDs" in text
+    for prefix in ("DOC-REQ", "CONTRACT", "INV", "NON-GOAL", "QUALITY", "TEST"):
+        assert prefix in text
+    assert "PREFIX-NNN" in text
+
+
+def test_claim_ids_are_distinguished_from_design_req_traceability() -> None:
+    text = _read()
+    assert "DESIGN-REQ-*" in text
+    assert "not stable canonical anchors" in text
+    assert "MM-927" in text
+    assert "MM-929" in text
+
+
+def test_claim_id_validation_is_advisory_and_incremental() -> None:
+    text = _read()
+    assert "malformed IDs" in text
+    assert "reused for multiple canonical claims" in text
+    assert "Adoption is incremental" in text
+
+
 def test_downstream_minor_local_adjustment_path_documented() -> None:
     text = _read()
     assert "minor local adjustments" in text.lower()

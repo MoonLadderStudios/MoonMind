@@ -29,3 +29,7 @@ The important paths through the module (request handling, background work, error
 ## 5. Constraints & decisions
 
 Invariants the module must uphold and the design decisions behind its structure.
+
+### INV-001 <concise stable invariant heading>
+
+The durable module invariant this document owns.

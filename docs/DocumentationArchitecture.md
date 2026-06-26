@@ -271,7 +271,7 @@ In both forms: the five viewpoints classify every canonical declarative document
 6. **Resolve same-class conflicts by authority scope.** When two canonical documents disagree, use the precedence ladder (§7.1) and the conflict-handling procedure (§7.2) to determine which document owns the claim; reconcile the non-owning document, and escalate foundational conflicts rather than resolving them unilaterally.
 7. **Keep rationale with its rule.** Embed significant design rationale in the owning canonical document (§8); do not create separate design-rationale journals.
 
-This standard's taxonomy is the foundation. The **authoring conventions** that build directly on it — the metadata headers (§11), naming conventions (§12), and the incremental adoption policy (§13) — are defined below. Integration with tooling, document templates, migration guidance, and validation are defined in further dependent stories that build on this taxonomy.
+This standard's taxonomy is the foundation. The **authoring conventions** that build directly on it — the metadata headers (§11), naming conventions (§12), the incremental adoption policy (§13), and stable canonical claim IDs (§14) — are defined below. Integration with tooling, document templates, migration guidance, and validation are defined in further dependent stories that build on this taxonomy.
 
 ---
 
@@ -373,7 +373,39 @@ Downstream MoonSpec projects may apply **minor local adjustments** to these conv
 
 ---
 
-## 14. Viewpoint Templates
+## 14. Stable Canonical Claim IDs
+
+Stable canonical claim IDs make durable documentation addressable for indexing, slicing, verification, and reconciliation without depending on run-local coverage IDs. This convention is added under **MM-929**, preserving traceability to source issue **MM-927** ("Moon Spec Doc Architecture Alignment") and coverage IDs **DESIGN-REQ-008**, **DESIGN-REQ-009**, and **DESIGN-REQ-011**.
+
+A stable canonical claim ID identifies one durable claim in a canonical declarative document. Place the ID at the start of the smallest heading that owns the claim. Keep the heading concise, then let the following body text explain the rule, contract, invariant, quality bar, non-goal, or test expectation. The ID is durable under normal text edits: editing prose, splitting paragraphs, or clarifying examples must not require a new ID while the same claim remains in force.
+
+Use these ID families:
+
+| Prefix | Use for |
+|---|---|
+| `DOC-REQ` | Documentation or product behavior requirements that a canonical doc owns. |
+| `CONTRACT` | API, payload, interface, workflow/activity, signal/update, or provider-boundary contract clauses. |
+| `INV` | Invariants that must always hold across implementation and operations. |
+| `NON-GOAL` | Explicit exclusions that prevent scope expansion or accidental interpretation as supported behavior. |
+| `QUALITY` | Quality attributes such as reliability, performance, observability, security, maintainability, or operator ergonomics. |
+| `TEST` | Required verification obligations tied to the canonical claim, especially boundary or regression coverage. |
+
+IDs use `PREFIX-NNN`, where `NNN` is a zero-padded three-digit number. Examples:
+
+- `### DOC-REQ-001 One active skill set is resolved per run`
+- `### CONTRACT-001 Activity payloads carry artifact refs for large content`
+- `### INV-001 Workflow code stays deterministic`
+- `### NON-GOAL-001 Plans do not become canonical desired state`
+- `### QUALITY-001 Live-log failure degrades to artifact replay`
+- `### TEST-001 Workflow-boundary tests cover real invocation shape`
+
+Canonical claim IDs are different from temporary `DESIGN-REQ-*` IDs. `DESIGN-REQ-*` IDs are run-local or source-design coverage markers used for traceability while a design is decomposed and implemented; they are not stable canonical anchors and must not be used as claim IDs in durable docs. When a temporary design requirement becomes durable desired state, assign the appropriate canonical claim ID family above and preserve the source `DESIGN-REQ-*` value only as traceability prose.
+
+Adoption is incremental. New canonical docs and substantially edited sections should add stable claim IDs for the claims they introduce or materially revise. Existing docs are not forced through a metadata-only backfill. The advisory documentation-architecture checker warns by default when canonical claim headings use malformed IDs or when one stable ID is reused for multiple canonical claims; those warnings remain advisory unless a caller opts into strict mode.
+
+---
+
+## 15. Viewpoint Templates
 
 Copy the matching template to start a new document. Each template embeds the correct metadata header (§11) and a concise section skeleton drawn from this standard. Templates are starting points, not a heavyweight process: delete sections that do not apply.
 

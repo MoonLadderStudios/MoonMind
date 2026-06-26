@@ -22,6 +22,10 @@ The operations, inputs, and outputs the module guarantees (signatures, payload s
 
 What callers can rely on: ordering, idempotency, error semantics, compatibility commitments.
 
+### CONTRACT-001 <concise stable contract heading>
+
+The durable interface guarantee this contract owns.
+
 ## 4. Failure modes
 
 How the contract behaves on invalid input, downstream failure, and degraded conditions.
@@ -29,3 +33,7 @@ How the contract behaves on invalid input, downstream failure, and degraded cond
 ## 5. Versioning & compatibility
 
 How changes to this contract are versioned and what compatibility callers can expect. For Temporal-facing contracts (workflows, activities, signals, updates), explicitly address replay safety, in-flight compatibility, and workflow boundary test coverage.
+
+### TEST-001 <concise stable verification heading>
+
+The required boundary or regression coverage for this contract.

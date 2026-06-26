@@ -27,6 +27,10 @@ Enumerated advisory checks:
                                      statement.
   5. ``discouraged-decision-record`` separate ``decisions/`` or ADR-style docs
                                      introduced instead of embedded rationale.
+  6. ``malformed-claim-id``          canonical claim headings with malformed
+                                     stable IDs.
+  7. ``duplicate-claim-id``          stable canonical claim IDs reused across
+                                     canonical docs.
 """
 
 from __future__ import annotations
@@ -100,6 +104,26 @@ ADR_FILE_RE = re.compile(r"(?:^|/)(?:adr[-_].+|\d{3,4}[-_].+-decision|.*\bADR\b.
 # (the standard, this validation doc) are not miscounted as views.
 SYSTEM_ARCH_DECLARATION_RE = re.compile(
     r"document\s+class\s*[:|]\s*\**\s*system architecture view", re.IGNORECASE
+)
+
+CANONICAL_CLAIM_PREFIXES = (
+    "DOC-REQ",
+    "CONTRACT",
+    "INV",
+    "NON-GOAL",
+    "QUALITY",
+    "TEST",
+)
+CANONICAL_CLAIM_PREFIX_RE = "|".join(
+    re.escape(prefix) for prefix in CANONICAL_CLAIM_PREFIXES
+)
+CANONICAL_CLAIM_ID_RE = re.compile(
+    rf"^(?:{CANONICAL_CLAIM_PREFIX_RE})-\d{{3}}$"
+)
+CLAIM_HEADING_RE = re.compile(
+    rf"^\s{{0,3}}#{{1,6}}\s+(?:`|\*\*)?"
+    rf"(?P<id>(?:{CANONICAL_CLAIM_PREFIX_RE})(?:-[A-Za-z0-9_]+)?)"
+    rf"(?:`|\*\*)?(?=\s|:|-|$)"
 )
 
 SEVERITY_ADVISORY = "advisory"
@@ -312,12 +336,89 @@ def check_discouraged_decision_record(docs: Sequence[DocFile]) -> list[Finding]:
     return findings
 
 
+def _claim_heading_ids(doc: DocFile) -> list[str]:
+    ids: list[str] = []
+    in_fence = False
+    for line in doc.text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = CLAIM_HEADING_RE.match(line)
+        if match:
+            ids.append(match.group("id"))
+    return ids
+
+
+def check_malformed_claim_ids(docs: Sequence[DocFile]) -> list[Finding]:
+    findings: list[Finding] = []
+    for doc in docs:
+        if not is_canonical_doc(doc.path):
+            continue
+        for claim_id in _claim_heading_ids(doc):
+            if CANONICAL_CLAIM_ID_RE.fullmatch(claim_id):
+                continue
+            findings.append(
+                Finding(
+                    rule="malformed-claim-id",
+                    severity=SEVERITY_ADVISORY,
+                    path=doc.path,
+                    message=(
+                        f"Canonical claim heading uses malformed ID `{claim_id}`. "
+                        "Use PREFIX-NNN with one of DOC-REQ, CONTRACT, INV, "
+                        "NON-GOAL, QUALITY, or TEST "
+                        "(see docs/DocumentationArchitecture.md §14)."
+                    ),
+                )
+            )
+    return findings
+
+
+def check_duplicate_claim_ids(docs: Sequence[DocFile]) -> list[Finding]:
+    findings: list[Finding] = []
+    by_id: dict[str, list[str]] = {}
+    for doc in docs:
+        if not is_canonical_doc(doc.path):
+            continue
+        for claim_id in _claim_heading_ids(doc):
+            if CANONICAL_CLAIM_ID_RE.fullmatch(claim_id):
+                by_id.setdefault(claim_id, []).append(doc.path)
+
+    for claim_id, paths in sorted(by_id.items()):
+        unique_paths = sorted(set(paths))
+        if len(paths) < 2:
+            continue
+        for path in unique_paths:
+            others = [other for other in unique_paths if other != path]
+            detail = "duplicate occurrences in this document"
+            if others:
+                detail = "also used by: " + ", ".join(others)
+            findings.append(
+                Finding(
+                    rule="duplicate-claim-id",
+                    severity=SEVERITY_ADVISORY,
+                    path=path,
+                    message=(
+                        f"Stable canonical claim ID `{claim_id}` is reused. "
+                        "Assign one durable ID to one canonical claim "
+                        "(see docs/DocumentationArchitecture.md §14)."
+                    ),
+                    detail=detail,
+                )
+            )
+    return findings
+
+
 ALL_CHECKS = (
     check_missing_document_class,
     check_imperative_plan_in_canonical_area,
     check_duplicate_canonical_authority,
     check_contract_missing_authority_statement,
     check_discouraged_decision_record,
+    check_malformed_claim_ids,
+    check_duplicate_claim_ids,
 )
 
 
