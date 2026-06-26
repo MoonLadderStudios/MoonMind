@@ -7475,14 +7475,14 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     skill_runtime = dumped["skillRuntime"]
     assert skill_runtime["resolvedSkillsetRef"] == "artifact:resolved-skills-1"
     assert skill_runtime["selectedSkills"] == ["pr-resolver"]
-    assert skill_runtime["selectedVersions"][0] == {
+    assert skill_runtime["selectedEvidence"][0] == {
         "name": "pr-resolver",
-        "version": "1.2.0",
         "sourceKind": "deployment",
         "sourcePath": None,
         "contentRef": "artifact:skill-body-1",
         "contentDigest": "sha256:abc",
     }
+    assert "selectedVersions" not in skill_runtime
     assert skill_runtime["sourceProvenance"][0] == {
         "name": "pr-resolver",
         "sourceKind": "deployment",
@@ -7543,6 +7543,26 @@ def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
             "sourcePath": ".agents/skills/fix-ci",
         },
     ]
+
+
+def test_serialize_execution_handles_missing_skill_materialization_metadata() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "workflow": {
+            "instructions": "Inspect skill runtime evidence.",
+            "skills": {"sets": ["operator-default"]},
+        },
+        "skillRuntime": None,
+        "skillsMaterialized": None,
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["taskSkills"] == ["operator-default"]
+    assert payload["skillRuntime"]["selectedSkills"] == ["operator-default"]
+    assert payload["skillRuntime"]["selectedEvidence"] == []
+    assert payload["skillRuntime"]["sourceProvenance"] == []
+
 
 def test_serialize_execution_accepts_snake_case_skill_materialization_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)

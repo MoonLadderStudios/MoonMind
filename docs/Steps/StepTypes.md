@@ -154,7 +154,7 @@ Examples:
 
 A Tool is not an arbitrary script. Tool definitions must declare their contract:
 
-1. name and version,
+1. name,
 2. input schema,
 3. output schema,
 4. required authorization,
@@ -181,8 +181,7 @@ Desired payload shape:
   "title": "Move Jira issue to In Progress",
   "type": "tool",
   "tool": {
-    "id": "jira.transition_issue",
-    "version": "1.0.0",
+    "name": "jira.transition_issue",
     "inputs": {
       "issueKey": "MM-123",
       "targetStatus": "In Progress"
@@ -236,8 +235,7 @@ Desired payload shape:
   "title": "Implement Jira issue",
   "type": "skill",
   "skill": {
-    "id": "code.implementation",
-    "version": "1.0.0",
+    "name": "code.implementation",
     "inputs": {
       "repository": "MoonLadderStudios/MoonMind",
       "issueKey": "MM-123",
@@ -290,8 +288,7 @@ Temporary draft payload before expansion:
   "title": "Jira Orchestrate",
   "type": "preset",
   "preset": {
-    "id": "jira-orchestrate",
-    "version": "1",
+    "slug": "jira-orchestrate",
     "inputs": {
       "jira_issue": {
         "key": "MM-123",
@@ -311,8 +308,7 @@ After apply or submit-time expansion, generated steps should include provenance:
   "title": "Implement MM-123",
   "type": "skill",
   "skill": {
-    "id": "code.implementation",
-    "version": "1.0.0",
+    "name": "code.implementation",
     "inputs": {
       "repository": "MoonLadderStudios/MoonMind",
       "jira_issue_key": "MM-123"
@@ -320,8 +316,7 @@ After apply or submit-time expansion, generated steps should include provenance:
   },
   "provenance": {
     "sourceType": "preset",
-    "presetId": "jira-orchestrate",
-    "presetVersion": "1",
+    "presetSlug": "jira-orchestrate",
     "inputSnapshot": {
       "jira_issue": {
         "key": "MM-123"
@@ -440,7 +435,7 @@ Apply calls the backend expansion service and inserts generated child steps into
 
 ### 8.2 Reapply
 
-Reapply regenerates steps from the saved preset ID, preset version, and current inputs. If generated child steps were edited, the UI must explain whether reapply replaces, merges, or appends regenerated steps.
+Reapply regenerates steps from the saved preset slug and current inputs. If generated child steps were edited, the UI must explain whether reapply replaces, merges, or appends regenerated steps.
 
 ### 8.3 Submit-time auto-expansion
 
@@ -512,12 +507,11 @@ Every step must have:
 A Tool step is valid only when:
 
 1. the selected tool exists,
-2. the tool version can be resolved or pinned,
-3. inputs validate against the tool schema,
-4. the user has required authorization,
-5. required worker capabilities are available,
-6. forbidden fields are absent,
-7. retry and side-effect policy is known.
+2. inputs validate against the tool schema,
+3. the user has required authorization,
+4. required worker capabilities are available,
+5. forbidden fields are absent,
+6. retry and side-effect policy is known.
 
 Tool validation must reject arbitrary shell snippets unless the selected tool is an explicitly approved typed command tool with bounded inputs and policy.
 
@@ -537,12 +531,11 @@ A Skill step is valid only when:
 A Preset step is valid for apply or submit-time expansion only when:
 
 1. the preset exists,
-2. the preset version is active for authoring,
-3. inputs validate against the preset input schema,
-4. expansion succeeds deterministically,
-5. generated steps validate under their own Tool or Skill rules,
-6. step count and policy limits are enforced,
-7. expansion warnings are visible to the user.
+2. inputs validate against the preset input schema,
+3. expansion succeeds deterministically,
+4. generated steps validate under their own Tool or Skill rules,
+5. step count and policy limits are enforced,
+6. expansion warnings are visible to the user.
 
 Validation errors must be field-addressable:
 
@@ -659,8 +652,7 @@ type StepType = "tool" | "skill" | "preset";
 
 type StepProvenance = {
   sourceType: "preset" | "proposal" | "manual";
-  presetId?: string;
-  presetVersion?: string;
+  presetSlug?: string;
   inputSnapshot?: Record<string, unknown>;
   parentPresetPath?: string[];
 };
@@ -675,8 +667,7 @@ type BaseStep = {
 type ToolStep = BaseStep & {
   type: "tool";
   tool: {
-    id: string;
-    version?: string;
+    name: string;
     inputs: Record<string, unknown>;
   };
 };
@@ -684,8 +675,7 @@ type ToolStep = BaseStep & {
 type SkillStep = BaseStep & {
   type: "skill";
   skill: {
-    id: string;
-    version?: string;
+    name: string;
     inputs: Record<string, unknown>;
   };
 };
@@ -693,8 +683,7 @@ type SkillStep = BaseStep & {
 type PresetStep = BaseStep & {
   type: "preset";
   preset: {
-    id: string;
-    version?: string;
+    slug: string;
     inputs: Record<string, unknown>;
   };
   expansionState?: "not_expanded" | "applied" | "error";
@@ -708,8 +697,7 @@ Preset expansion APIs accept `PresetStep` and return concrete executable steps p
 
 ```ts
 type ExpandPresetRequest = {
-  presetId: string;
-  presetVersion?: string;
+  presetSlug: string;
   inputs: Record<string, unknown>;
   context: Record<string, unknown>;
 };
@@ -729,7 +717,7 @@ Preset management and preset use are separate experiences.
 Preset management lives in the Presets section:
 
 1. catalog browsing,
-2. create/edit/version,
+2. create/edit,
 3. governance and lifecycle,
 4. save-from-workflow,
 5. audit and usage inspection,
@@ -753,7 +741,7 @@ Workflow proposals must preserve executable intent.
 
 When a proposal is created from preset-derived work, it may carry preset provenance, but the stored promotable workflow execution payload should be executable and flattened by default unless the proposal is explicitly still in draft-authoring form.
 
-Promotion must not silently re-expand a live preset catalog entry. If the user wants to refresh a proposal or draft to the latest preset version, that must be an explicit action with validation.
+Promotion must not silently re-expand a live preset catalog entry. If the user wants to refresh a proposal or draft from the current preset definition, that must be an explicit action with validation.
 
 Rules:
 
@@ -827,7 +815,7 @@ The implementation may migrate in phases.
 
 Desired default: no. Presets expand into concrete steps before runtime execution.
 
-A future linked-preset mode may exist, but it must be explicit and visibly different from ordinary preset application. It would need separate rules for version pinning, drift detection, refresh behavior, validation, audit, and runtime lookup.
+A future linked-preset mode may exist, but it must be explicit and visibly different from ordinary preset application. It would need separate rules for snapshot evidence, drift detection, refresh behavior, validation, audit, and runtime lookup.
 
 ### Q2: Should the API use `step.type` or `step.action.kind`?
 

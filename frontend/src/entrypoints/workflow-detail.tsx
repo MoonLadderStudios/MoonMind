@@ -285,12 +285,11 @@ const SkillRuntimeSchema = z
   .object({
     resolvedSkillsetRef: z.string().nullable().optional(),
     selectedSkills: z.array(z.string()).optional().default([]),
-    selectedVersions: z
+    selectedEvidence: z
       .array(
         z
           .object({
             name: z.string(),
-            version: z.string().nullable().optional(),
             sourceKind: z.string().nullable().optional(),
             sourcePath: z.string().nullable().optional(),
             contentRef: z.string().nullable().optional(),

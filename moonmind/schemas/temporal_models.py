@@ -2487,13 +2487,12 @@ class ExecutionDependencySummaryModel(BaseModel):
     close_status: Optional[str] = Field(None, alias="closeStatus")
     workflow_type: Optional[str] = Field(None, alias="workflowType")
 
-class ExecutionSkillVersionSummaryModel(BaseModel):
-    """Compact operator-safe summary of one selected skill version."""
+class ExecutionSkillEvidenceSummaryModel(BaseModel):
+    """Compact operator-safe evidence for one selected skill."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(..., alias="name")
-    version: Optional[str] = Field(None, alias="version")
     source_kind: Optional[str] = Field(None, alias="sourceKind")
     source_path: Optional[str] = Field(None, alias="sourcePath")
     content_ref: Optional[str] = Field(None, alias="contentRef")
@@ -2537,8 +2536,8 @@ class ExecutionSkillRuntimeModel(BaseModel):
 
     resolved_skillset_ref: Optional[str] = Field(None, alias="resolvedSkillsetRef")
     selected_skills: list[str] = Field(default_factory=list, alias="selectedSkills")
-    selected_versions: list[ExecutionSkillVersionSummaryModel] = Field(
-        default_factory=list, alias="selectedVersions"
+    selected_evidence: list[ExecutionSkillEvidenceSummaryModel] = Field(
+        default_factory=list, alias="selectedEvidence"
     )
     source_provenance: list[ExecutionSkillProvenanceModel] = Field(
         default_factory=list, alias="sourceProvenance"

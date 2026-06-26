@@ -280,8 +280,7 @@ Example provenance:
 ```json
 {
   "sourceType": "preset",
-  "presetId": "jira-orchestrate",
-  "presetVersion": "1",
+  "presetSlug": "jira-orchestrate",
   "inputSnapshot": {
     "jira_issue": {
       "key": "MOON-123"
@@ -299,9 +298,8 @@ A Skill may request Jira context directly in its own input schema.
 Example Skill manifest fragment:
 
 ```yaml
-id: code.implementation
+name: code.implementation
 kind: skill
-version: 1
 title: Code Implementation
 entrypoint: SKILL.md
 
@@ -372,8 +370,7 @@ A Tool step may be authored directly:
 {
   "type": "tool",
   "tool": {
-    "id": "jira.transition_issue",
-    "version": "1.0.0",
+    "name": "jira.transition_issue",
     "inputs": {
       "issueKey": "MOON-123",
       "transitionId": "31"

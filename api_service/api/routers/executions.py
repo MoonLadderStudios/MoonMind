@@ -74,10 +74,10 @@ from moonmind.schemas.temporal_models import (
     ExecutionRefreshEnvelope,
     ExecutionRelatedRunModel,
     ExecutionResumeSummaryModel,
+    ExecutionSkillEvidenceSummaryModel,
     ExecutionSkillLifecycleIntentModel,
     ExecutionSkillProvenanceModel,
     ExecutionSkillRuntimeModel,
-    ExecutionSkillVersionSummaryModel,
     RecoverFromFailedStepRequest,
     RecoverFromFailedStepResponse,
     RecoverFromSelectedStepRequest,
@@ -1188,10 +1188,10 @@ def _mapping_value(raw: Mapping[str, Any], *keys: str) -> object | None:
             return raw[key]
     return None
 
-def _selected_skill_versions(raw: object | None) -> list[ExecutionSkillVersionSummaryModel]:
+def _selected_skill_evidence(raw: object | None) -> list[ExecutionSkillEvidenceSummaryModel]:
     if not isinstance(raw, list):
         return []
-    versions: list[ExecutionSkillVersionSummaryModel] = []
+    evidence: list[ExecutionSkillEvidenceSummaryModel] = []
     for item in raw:
         if not isinstance(item, Mapping):
             continue
@@ -1202,10 +1202,9 @@ def _selected_skill_versions(raw: object | None) -> list[ExecutionSkillVersionSu
         )
         if not name:
             continue
-        versions.append(
-            ExecutionSkillVersionSummaryModel(
+        evidence.append(
+            ExecutionSkillEvidenceSummaryModel(
                 name=name,
-                version=_coerce_temporal_scalar(item.get("version")) or None,
                 sourceKind=(
                     _coerce_temporal_scalar(
                         item.get("sourceKind") or item.get("source_kind")
@@ -1232,13 +1231,13 @@ def _selected_skill_versions(raw: object | None) -> list[ExecutionSkillVersionSu
                 ),
             )
         )
-    return versions
+    return evidence
 
-def _skill_provenance_from_versions(
-    versions: list[ExecutionSkillVersionSummaryModel],
+def _skill_provenance_from_evidence(
+    evidence: list[ExecutionSkillEvidenceSummaryModel],
 ) -> list[ExecutionSkillProvenanceModel]:
     provenance: list[ExecutionSkillProvenanceModel] = []
-    for entry in versions:
+    for entry in evidence:
         if not entry.source_kind and not entry.source_path:
             continue
         provenance.append(
@@ -1252,7 +1251,7 @@ def _skill_provenance_from_versions(
 
 def _skill_source_provenance(
     raw: object | None,
-    versions: list[ExecutionSkillVersionSummaryModel],
+    evidence: list[ExecutionSkillEvidenceSummaryModel],
 ) -> list[ExecutionSkillProvenanceModel]:
     provenance: list[ExecutionSkillProvenanceModel] = []
     seen: set[tuple[str, str | None, str | None]] = set()
@@ -1292,7 +1291,7 @@ def _skill_source_provenance(
                 )
             )
 
-    for entry in _skill_provenance_from_versions(versions):
+    for entry in _skill_provenance_from_evidence(evidence):
         key = (entry.name, entry.source_kind, entry.source_path)
         if key in seen:
             continue
@@ -1388,19 +1387,33 @@ def _skill_runtime_evidence(
         params.get("skillsMaterialized"),
         task_payload.get("skillRuntime"),
     )
-    selected_skills = _skill_selector_names(materialized.get("selectedSkills"))
+    selected_skills = _skill_selector_names(
+        materialized.get("selectedSkills") if materialized else None
+    )
     if selected_skills is None:
-        selected_skills = _skill_selector_names(materialized.get("activeSkills"))
+        selected_skills = _skill_selector_names(
+            materialized.get("activeSkills") if materialized else None
+        )
     if selected_skills is None:
         selected_skills = task_skills or []
 
-    versions = _selected_skill_versions(
-        materialized.get("selectedVersions") or materialized.get("skills")
+    evidence = _selected_skill_evidence(
+        (
+            materialized.get("selectedEvidence")
+            or materialized.get("selectedVersions")
+            or materialized.get("skills")
+        )
+        if materialized
+        else None
     )
     provenance = _skill_source_provenance(
-        materialized.get("sourceProvenance")
-        or materialized.get("source_provenance"),
-        versions,
+        (
+            materialized.get("sourceProvenance")
+            or materialized.get("source_provenance")
+        )
+        if materialized
+        else None,
+        evidence,
     )
     task_skills_payload = _first_mapping(task_payload.get("skills"))
     materialization_mode = (
@@ -1429,13 +1442,13 @@ def _skill_runtime_evidence(
         or resolved_skillset_ref
     )
 
-    if not any([runtime_ref, selected_skills, versions, materialized, lifecycle_intent]):
+    if not any([runtime_ref, selected_skills, evidence, materialized, lifecycle_intent]):
         return None
 
     return ExecutionSkillRuntimeModel(
         resolvedSkillsetRef=runtime_ref,
         selectedSkills=selected_skills,
-        selectedVersions=versions,
+        selectedEvidence=evidence,
         sourceProvenance=provenance,
         materializationMode=materialization_mode,
         visiblePath=(
