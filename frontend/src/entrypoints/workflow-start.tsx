@@ -6871,7 +6871,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               ...step,
               explicitRequiredCapabilities:
                 step.explicitRequiredCapabilities.filter(
-                  (existing) => existing !== normalized,
+                  (existing) =>
+                    normalizeCapabilityToken(existing) !== normalized,
                 ),
             }
           : step,
@@ -7236,15 +7237,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           stepType: nextType,
         };
 
+        // MM-936: explicitRequiredCapabilities is a step-level field that is
+        // merged for every step type, so it must be preserved across type
+        // changes. Only the skill-specific id/args are cleared here.
         if (
           step.stepType === "skill" &&
-          (step.skillId.trim() ||
-            step.skillArgs.trim() ||
-            step.explicitRequiredCapabilities.length > 0)
+          (step.skillId.trim() || step.skillArgs.trim())
         ) {
           nextStep.skillId = "";
           nextStep.skillArgs = "";
-          nextStep.explicitRequiredCapabilities = [];
         }
 
         if (
