@@ -1,6 +1,6 @@
 ---
 name: moonspec-doc-reconcile
-description: Reconcile a canonical declarative document under docs/ with verified implementation discoveries after a FULLY_IMPLEMENTED moonspec-verify verdict. Use when an orchestration run must decide whether implementation discoveries definitely require updating the source design document for function, consistency, or best practices, apply the smallest correct doc update, or escalate a misaligned update as a Jira issue instead of editing.
+description: Reconcile canonical declarative documents under docs/ with verified implementation discoveries after a FULLY_IMPLEMENTED moonspec-verify verdict. Use when an orchestration run must decide whether implementation discoveries definitely require updating the owning canonical document for function, consistency, or best practices, apply the smallest correct doc update, or escalate ambiguous authority conflicts as Jira issues instead of editing.
 metadata:
   required-capabilities:
     - git
@@ -8,24 +8,44 @@ metadata:
 
 # MoonSpec Doc Reconcile
 
-Use this skill as the final doc-reconciliation pass of a MoonSpec orchestration run. It decides whether verified implementation discoveries definitely require updating the canonical source document, applies the smallest correct update when they do, and reports a structured outcome either way.
+Use this skill as the final doc-reconciliation pass of a MoonSpec orchestration run. It decides whether verified implementation discoveries definitely require updating the canonical document that owns the affected claim, applies the smallest correct update when they do, and reports a structured outcome either way.
 
-This skill operationalizes the reconciliation expectation in `docs/Workflows/MoonSpecDocumentModel.md` and Constitution XI ("update the owning `docs/` files first").
+This skill operationalizes the reconciliation expectation in `docs/Workflows/MoonSpecDocumentModel.md`, the authority ladder and module-owned contract policy in `docs/DocumentationArchitecture.md`, and Constitution XI ("update the owning `docs/` files first").
 
 ## Preconditions
 
 - The latest `moonspec-verify` verdict for the active feature is `FULLY_IMPLEMENTED`. If it is not, stop with `NO_UPDATE_REQUIRED` and report that reconciliation only runs after successful verification.
-- A canonical source document exists: `spec.md` records a `**Source Document**` path under `docs/` (or the breakdown `sourceReference.path` points there). If no canonical document exists, stop immediately with `NO_UPDATE_REQUIRED` and the rationale `no canonical source document`.
+- At least one canonical source candidate exists: `spec.md` records a `**Source Document**` path under `docs/`, the breakdown `sourceReference.path` points there, or the orchestration step provides a source design path under `docs/`. If no canonical document candidate exists, stop immediately with `NO_UPDATE_REQUIRED` and the rationale `no canonical source document`.
 
 ## Inputs
 
-- Required: canonical source document path(s) from `spec.md` `**Source Document**` or breakdown `sourceReference.path`.
+- Required: canonical source document path(s) from `spec.md` `**Source Document**`, breakdown `sourceReference.path`, or the orchestration source design path. Treat these as starting candidates, not as the only documents that may be edited.
 - Required: the latest `moonspec-verify` report, including its Source Document Drift section.
 - Optional: the discovery ledger at `artifacts/doc-discoveries/<feature>.json` written by `moonspec-implement`.
 - Optional: doc-drift notes from a `story-reconcile-implementation` report.
 - Optional: explicit scope limits from the orchestration step.
 
 Discoveries are the only valid basis for edits. Do not re-derive drift by auditing the whole document; this skill is intentionally limited to reconciling verified discoveries from the MoonSpec run.
+
+## Authority-Scope Resolution
+
+For each discovery that passes the update gate, identify the canonical document that owns the affected claim before editing. Use `docs/Workflows/MoonSpecDocumentModel.md` for document-class precedence and `docs/DocumentationArchitecture.md` for same-class authority, including the module-owned contract policy.
+
+Apply this bounded procedure:
+
+1. Classify the affected claim: system structure, cross-cutting semantic, module internals, module contract/API/payload shape, feature behavior, rationale, or migration/status text.
+2. Map the claim to the owning authority scope in `docs/DocumentationArchitecture.md`:
+   - system-wide structure and dependency direction: System Architecture View,
+   - cross-module concern semantics: Cross-Cutting Concept View,
+   - module internals: Module Architecture View,
+   - interface, API, activity/signal/update, DTO, schema, or payload shape: Module Contract Specification owned by the providing module,
+   - feature-level behavior: System/Feature Design View,
+   - migration/status text: temporary artifact, never canonical desired state.
+3. Use the source document path, discovery evidence, cited docs, and nearby module ownership to locate the owning canonical document. The owning document may be different from the original source document.
+4. Edit the owning canonical document when the evidence shows that document is incomplete or wrong. Edit a non-owning canonical document only when it conflicts with the owner and must be reconciled to the owner's desired state.
+5. Escalate instead of guessing when ownership is ambiguous, when two plausible owners claim the same contract, when the relevant module-owned contract cannot be identified, or when the required update would alter constitution/document-model/documentation-architecture policy or a published contract without clear authority.
+
+Never downgrade a canonical document to match incomplete or buggy code. Verification must establish that the implementation is correct for the agreed story before this skill updates desired-state documentation.
 
 ## Update Gate
 
@@ -54,7 +74,7 @@ When no discovery passes the gate, report `NO_UPDATE_REQUIRED` with a one-line r
 
 ## Escalation
 
-If a required update would conflict with the constitution, `README.md`, or the declared architecture direction — or the correct desired state is genuinely uncertain — do not edit. Instead:
+If a required update would conflict with the constitution, `README.md`, the Document Model, `docs/DocumentationArchitecture.md`, a module-owned contract, or the declared architecture direction — or the owning document/correct desired state is genuinely uncertain — do not edit. Instead:
 
 1. Read `.agents/skills/jira-issue-creator/SKILL.md` and follow its workflow.
 2. Create a Jira issue containing the document path, the contradicted claim, the implementation evidence, and why the update may conflict with project direction.
@@ -77,15 +97,18 @@ Write the structured result to the path provided by the orchestration step when 
 {
   "action": "updated | no_update_required | escalated",
   "docPaths": ["docs/Workflows/Example.md"],
+  "updated": [{"docPath": "docs/Workflows/Example.md", "reason": "definite function drift in owning module contract"}],
+  "noUpdateRequired": [{"docPath": "docs/ExampleDesign.md", "reason": "possible drift only"}],
+  "escalated": [{"docPath": "docs/Workflows/Example.md", "reason": "ambiguous module-owned contract authority"}],
   "gateRationale": "which gate criterion each applied discovery met, or why each discovery was rejected",
   "evidence": ["file, test, or report references backing the decision"],
   "jiraIssue": {"key": "MM-000", "url": "https://..."}
 }
 ```
 
-`docPaths` lists edited documents for `updated`, the considered documents otherwise. Include `jiraIssue` only for `escalated`.
+`docPaths` lists edited documents for `updated`, the considered documents otherwise. The `updated`, `noUpdateRequired`, and `escalated` lists are always present; use empty lists for categories that do not apply. Every updated/noUpdateRequired/escalated item must include a reason. Include `jiraIssue` only for `escalated`.
 
-Also return a short markdown summary suitable for inclusion in a pull request body: outcome, edited paths or rejection rationale, and escalation issue key when present.
+Also return a short markdown summary suitable for inclusion in a pull request body: outcome, canonical sources considered, owning canonical docs edited or rejected, temporary artifacts consulted, claim coverage, and escalation issue key when present.
 
 ## Key Rules
 
@@ -95,3 +118,4 @@ Also return a short markdown summary suitable for inclusion in a pull request bo
 - Smallest correct edit; desired-state framing preserved; no imperative content in canonical docs.
 - Misaligned updates become Jira issues, never silent edits or silent drops.
 - The structured outcome is mandatory in every run, including no-ops.
+- Use authority-scope ownership, not original-source-document convenience, to choose what canonical doc to update.

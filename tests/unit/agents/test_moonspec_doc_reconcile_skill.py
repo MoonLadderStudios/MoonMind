@@ -15,7 +15,16 @@ def test_moonspec_doc_reconcile_skill_defines_gate_and_output_contract() -> None
     assert "**Function**" in text
     assert "**Consistency**" in text
     assert "**Best practices**" in text
+    assert "## Authority-Scope Resolution" in text
+    assert "docs/DocumentationArchitecture.md" in text
+    assert "module-owned contract policy" in text
+    assert "The owning document may be different from the original source document" in text
+    assert "Escalate instead of guessing when ownership is ambiguous" in text
     assert "no_update_required" in text
+    assert "noUpdateRequired" in text
+    assert '"updated": [' in text
+    assert '"escalated": [' in text
+    assert "Every updated/noUpdateRequired/escalated item must include a reason" in text
     assert "escalated" in text
     assert "docs/Workflows/MoonSpecDocumentModel.md" in text
     assert "Never commit, push, or create pull requests" in text
