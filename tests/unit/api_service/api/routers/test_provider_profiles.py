@@ -958,7 +958,7 @@ async def test_create_enabled_profile_rejects_missing_database_secret_ref(
         response = await client.post("/api/v1/provider-profiles", json=payload)
 
     assert response.status_code == 422
-    assert "OPENAI_API_KEY binding references managed secret" in response.text
+    assert "OPENAI_API_KEY=[REDACTED] binding references managed secret" in response.text
     assert "secret db://missing-provider-secret was not found" in response.text
 
 
