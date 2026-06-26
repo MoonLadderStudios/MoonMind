@@ -62,11 +62,11 @@ description: "Task list template for single-story Moon Spec implementation"
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create project structure in src/ and tests/ per implementation plan
-- [ ] T002 Initialize [language] project with [framework] dependencies in [config file]
-- [ ] T003 [P] Configure linting and formatting tools in [config file]
-- [ ] T004 [P] Configure unit test tooling for `[UNIT TEST COMMAND]` in [test config file]
-- [ ] T005 [P] Configure integration test tooling for `[INTEGRATION TEST COMMAND]` in [test config file]
+- [ ] T001 Create project structure in src/ and tests/ per implementation plan (No source claim applies: setup task)
+- [ ] T002 Initialize [language] project with [framework] dependencies in [config file] (No source claim applies: setup task)
+- [ ] T003 [P] Configure linting and formatting tools in [config file] (No source claim applies: setup task)
+- [ ] T004 [P] Configure unit test tooling for `[UNIT TEST COMMAND]` in [test config file] (No source claim applies: setup task)
+- [ ] T005 [P] Configure integration test tooling for `[INTEGRATION TEST COMMAND]` in [test config file] (No source claim applies: setup task)
 
 ---
 
@@ -78,13 +78,13 @@ description: "Task list template for single-story Moon Spec implementation"
 
 Examples of foundational tasks (include only what the story truly depends on):
 
-- [ ] T006 Setup database schema and migrations framework in [schema/migrations path]
-- [ ] T007 [P] Implement authentication/authorization framework in src/[auth path]
-- [ ] T008 [P] Setup API routing and middleware structure in src/[routing path]
-- [ ] T009 Create base models/entities that the story depends on in src/models/
-- [ ] T010 Configure error handling and logging infrastructure in src/[infrastructure path]
-- [ ] T011 Setup environment configuration management in [config path]
-- [ ] T012 Configure integration test fixtures, service containers, or emulators needed by SCN-* in tests/integration/
+- [ ] T006 Setup database schema and migrations framework in [schema/migrations path] (No source claim applies: foundational infrastructure task)
+- [ ] T007 [P] Implement authentication/authorization framework in src/[auth path] (No source claim applies: foundational infrastructure task)
+- [ ] T008 [P] Setup API routing and middleware structure in src/[routing path] (No source claim applies: foundational infrastructure task)
+- [ ] T009 Create base models/entities that the story depends on in src/models/ (No source claim applies: foundational infrastructure task)
+- [ ] T010 Configure error handling and logging infrastructure in src/[infrastructure path] (No source claim applies: foundational infrastructure task)
+- [ ] T011 Setup environment configuration management in [config path] (No source claim applies: foundational infrastructure task)
+- [ ] T012 Configure integration test fixtures, service containers, or emulators needed by SCN-* in tests/integration/ (No source claim applies: foundational infrastructure task)
 
 **Checkpoint**: Foundation ready - story test and implementation work can now begin
 
@@ -150,8 +150,8 @@ Examples of foundational tasks (include only what the story truly depends on):
 - [ ] TXXX [P] Expand integration coverage for operational scenarios covering DESIGN-REQ-001 in tests/integration/
 - [ ] TXXX Security hardening for CLAIM-003 in src/[location]/[file].py
 - [ ] TXXX Run quickstart.md validation (No source claim applies: validation task)
-- [ ] TXXX Run `/speckit.verify` to validate the final implementation against the original feature request and Source Packet claims
-- [ ] TXXX Run `moonspec-doc-reconcile` for the canonical source document when `spec.md` names a canonical source under docs/
+- [ ] TXXX Run `/speckit.verify` to validate the final implementation against the original feature request and Source Packet claims (No source claim applies: validation task)
+- [ ] TXXX Run `moonspec-doc-reconcile` for the canonical source document when `spec.md` names a canonical source under docs/ (No source claim applies: documentation reconciliation task)
 
 ---
 

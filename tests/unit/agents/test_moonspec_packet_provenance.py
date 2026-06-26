@@ -72,6 +72,12 @@ def test_mm933_tasks_require_claim_mapping_or_explicit_explanation() -> None:
 def test_mm933_task_template_examples_map_implementation_tasks_to_claims() -> None:
     template = (TEMPLATES_DIR / "tasks-template.md").read_text(encoding="utf-8")
 
+    assert (
+        "### Implementation" in template
+    ), "tasks-template.md is missing '### Implementation' section"
+    assert (
+        "**Checkpoint**" in template
+    ), "tasks-template.md is missing '**Checkpoint**' marker"
     implementation_section = template.split("### Implementation", 1)[1].split(
         "**Checkpoint**", 1
     )[0]
