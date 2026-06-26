@@ -15766,6 +15766,39 @@ describe("Task Create schema-driven capability inputs", () => {
     });
   });
 
+  it("derives jira.issue-picker expansion inputs from imported-style step instructions", async () => {
+    renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
+    const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText("Preset Template") as HTMLSelectElement;
+    await waitFor(() => {
+      expect(presetSelect.options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::jira-schema-preset" },
+    });
+    await within(step).findByLabelText("Jira issue");
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Complete Jira issue ENG-202: Build browser shell" },
+    });
+
+    fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(([url, request]) => {
+          if (!String(url).startsWith("/api/presets/jira-schema-preset:expand")) {
+            return false;
+          }
+          const payload = JSON.parse(String(request?.body || "{}")) as {
+            inputs?: { jira_issue?: { key?: string } };
+          };
+          return payload.inputs?.jira_issue?.key === "ENG-202";
+        }),
+      ).toBe(true);
+    });
+  });
+
 
 
   it("renders github.issue-picker from schema metadata and normalizes manual issue URL", async () => {

@@ -24,6 +24,24 @@ logger = logging.getLogger(__name__)
 
 _cached_current_user_dependency = None
 
+
+def _disabled_auth_fallback_user():
+    from types import SimpleNamespace
+
+    user_id_str = settings.oidc.DEFAULT_USER_ID or _DEFAULT_USER_ID
+    return SimpleNamespace(
+        id=uuid.UUID(user_id_str),
+        email=settings.oidc.DEFAULT_USER_EMAIL or "stub@example.com",
+        is_superuser=True,
+    )
+
+
+def _disabled_auth_test_user():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
+
+
 async def get_default_user_from_db(
     session: AsyncSession = Depends(get_async_session),
 ) -> User:
@@ -64,16 +82,10 @@ def get_current_user():
     if _cached_current_user_dependency is None:
 
         async def _current_user_fallback():  # pragma: no cover – simple helper
-            if (
-                settings.workflow.test_mode
-                or os.getenv("PYTEST_CURRENT_TEST")
-                or os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1"
-            ):
-                from types import SimpleNamespace as _SimpleNamespace
-
-                return _SimpleNamespace(
-                    id=None, email="stub@example.com", is_superuser=True
-                )
+            if settings.workflow.test_mode or os.getenv("PYTEST_CURRENT_TEST"):
+                return _disabled_auth_test_user()
+            if os.getenv("MOONMIND_DISABLE_DEFAULT_USER_DB_LOOKUP") == "1":
+                return _disabled_auth_fallback_user()
 
             async def _load_default_user() -> User | None:
                 from api_service.db.base import get_async_session_context
@@ -98,10 +110,8 @@ def get_current_user():
                     exc_info=True,
                 )
 
-            # Fallback: lightweight stub with the minimal attributes used in code
-            from types import SimpleNamespace
-
-            return SimpleNamespace(id=None, email="stub@example.com", is_superuser=True)
+            # Fallback: lightweight stub with the minimal attributes used in code.
+            return _disabled_auth_fallback_user()
 
         _cached_current_user_dependency = _current_user_fallback
 
