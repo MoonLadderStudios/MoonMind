@@ -1490,11 +1490,11 @@ def _secret_refs_check(
         status = managed_secret_statuses.get(result.parsed.locator)
         if status is None:
             problems.append(
-                f"{role} binding references managed secret db://{result.parsed.locator} was not found"
+                f"{role}=[REDACTED] binding references managed secret db://{result.parsed.locator} was not found"
             )
         elif status != SecretStatus.ACTIVE.value:
             problems.append(
-                f"{role} binding references managed secret db://{result.parsed.locator} is {status}"
+                f"{role}=[REDACTED] binding references managed secret db://{result.parsed.locator} is {status}"
             )
 
     return _readiness_check(
