@@ -1,0 +1,756 @@
+{
+  "source": {
+    "title": "MM-927: Moon Spec Doc Architecture Alignment",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "declarative-text",
+    "jiraIssueKey": "MM-927",
+    "jiraIssueSummary": "Moon Spec Doc Architecture Alignment",
+    "originalDesignText": "MM-927: Moon Spec Doc Architecture Alignment\n\nCurrent state\nMoonMind is in a good position for this pivot. The implemented work establishes the core doctrine: MoonSpec now has a Documentation Architecture Standard that is explicitly a MoonSpec-level strategy, not a repo-specific migration plan, and it extends rather than replaces the MoonSpec Document Model. The standard defines the vocabulary, five canonical declarative viewpoints, module-owned contracts, same-class precedence, and embedded rationale policy.\n\nThe base model is also wired correctly: canonical docs under docs/ describe desired state, temporary execution artifacts under specs//artifacts/ are disposable derived views, and imperative working docs live under docs/tmp/ or gitignored handoff paths. The read order now explicitly places the Document Model first, then the Documentation Architecture Standard, then project-local architecture/design/contract docs, then optional implementation scratch.\n\nThe current MoonSpec workflow has already moved beyond vanilla Spec Kit in an important way. moonspec-breakdown classifies input as canonical declarative, declarative text, or imperative override; fails fast on imperative checklists without explicit override; and treats breakdown output as a temporary derived view whose source document remains authoritative. It extracts DESIGN-REQ-* coverage points, maps them to independently testable stories, and writes the result under gitignored artifacts/story-breakdowns/ rather than creating durable specs.\n\nThe rest of the skill chain has also been adjusted around docs as higher authority: moonspec-specify records the canonical source document and treats spec.md as a temporary execution artifact, moonspec-implement writes a discovery ledger for doc drift, moonspec-verify reports Source Document Drift, and moonspec-doc-reconcile runs after FULLY_IMPLEMENTED to update canonical docs only when verified evidence definitely requires it.\n\nThe orchestration layer is aligned with that model. moonspec-orchestrate now includes moonspec-doc-reconcile as the final stage, and the Jira orchestrate preset runs doc reconciliation before PR creation, writes a structured reconciliation artifact, and requires doc edits from reconciliation to be committed in the same PR as the implementation.\n\nMoonSpec already treats canonical docs as the higher authority, but the execution path is still Spec-Kit-shaped: docs feed breakdown/spec/plan/tasks, and those temporary artifacts drive implementation. The next evolution is to make canonical docs the first-class object MoonSpec generates, indexes, slices, verifies, and reconciles.\n\nImmediate cleanup before the next evolution: fix the Module Architecture naming inconsistency so Section 3.2 and downstream examples prefer <ModuleName>ModuleArchitecture.md; clarify durable <SystemName>System.md versus transitional <FeatureName>Design.md; align templates with the metadata standard fields Authority, Owning Surface, Related Docs, and Related Implementation; and reconcile stale temporary authority-conflict plans.\n\nRecommended MoonSpec evolution model: Canonical docs -> doc index / authority graph -> doc slice / story candidate -> temporary implementation packet -> implementation and verification -> canonical doc reconciliation -> PR closes with docs and code aligned. spec.md should stop being the conceptual center. MoonSpec's native domain should become Architecture Description, Viewpoint, View, Module Doc Set, Module Contract Specification, Doc claim / invariant / requirement, Doc slice, Implementation packet, and Reconciliation result.\n\nPhase 1 - Make canonical docs addressable. Add stable claim ID conventions such as DOC-REQ, CONTRACT, INV, NON-GOAL, QUALITY, and TEST. Add a moonspec-doc-index tool or skill that emits a machine-readable index containing document path, documentClass, viewpoint, authority, owningSurface, and claims with id, heading, type, anchor, and textDigest. Start advisory-only and warn for duplicate authority, duplicate claim IDs, missing Authority/Owning Surface, and ambiguous Module Architecture View ownership.\n\nPhase 2 - Add docs-native authoring and improvement skills. moonspec-doc-author creates canonical docs from viewpoint templates and metadata. moonspec-doc-improve improves existing canonical docs without turning them into plans. moonspec-doc-review reviews docs like code and groups findings by the standard's authority ladder.\n\nPhase 3 - Replace spec generation with doc slicing. moonspec-doc-slice takes a canonical doc path, optional section or stable claim IDs, desired slice size, and constraints, then outputs temporary story breakdown artifacts with stable source references. moonspec-specify becomes an adapter and spec.md states it is derived from canonical doc claims.\n\nPhase 4 - Generate temporary implementation packets directly from doc slices. Evolve moonspec-plan and moonspec-tasks so temporary packets are explicitly derived from stable doc claims and include source document path, viewpoint, owning surface, stable claim IDs, expected code/test surfaces, temporary implementation plan, TDD checklist, verification commands, and doc reconciliation expectations. Task generation must validate both final /speckit.verify and final moonspec-doc-reconcile tasks when a canonical source exists.\n\nPhase 5 - Expand verification from story complete to docs embodied. moonspec-verify should add Canonical Claim Coverage with claim ID, source, evidence, status, and notes. It should distinguish implementation gaps, verification gaps, and doc drift while preserving the rule that doc drift alone should not block FULLY_IMPLEMENTED when implementation is correct.\n\nPhase 6 - Evolve reconciliation from single-source-doc updates to authority-scope reconciliation. moonspec-doc-reconcile should use the Documentation Architecture precedence ladder to update the owning source doc, contract doc, module architecture doc, or cross-cutting concept doc, or escalate when ownership is unclear. Output should include updated, noUpdateRequired, and escalated entries.\n\nPhase 7 - Add a PR-level documentation conformance report with canonical sources, temporary artifacts, claim coverage, and doc reconciliation outcomes.\n\nConcrete next Jira issues: stabilize the Documentation Architecture Standard; implement MoonSpec Doc Index; add stable claim ID conventions; implement moonspec-doc-slice; implement docs-native implementation packet generation; expand moonspec-verify to canonical claim coverage; expand moonspec-doc-reconcile to authority-scope reconciliation.\n\nRecommended order: Wave 1 stabilize and index; Wave 2 slice and execute from docs; Wave 3 maintain and improve docs continuously. The strategic goal is that MoonSpec does not generate the source of truth. MoonSpec operates on the source of truth: it creates canonical docs, indexes them, slices them into executable work, generates temporary implementation artifacts, verifies code against stable doc claims, and reconciles canonical docs before the PR closes.\n"
+  },
+  "extractedAt": "2026-06-26T01:46:08Z",
+  "outputMode": "jira",
+  "designSummary": "The design pivots MoonSpec from a Spec-Kit-shaped execution path toward a docs-native architecture where canonical docs are indexed, sliced into independently testable work, used to generate temporary implementation packets, verified through stable claim coverage, reconciled by authority scope, and summarized in PR documentation conformance. It also identifies a near-term stabilization pass for the Documentation Architecture Standard so future automation is built on consistent naming, metadata, and working-document rules.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Canonical docs remain source of truth",
+      "type": "constraint",
+      "source_section": "Current state / strategic goal",
+      "explanation": "MoonSpec operates on durable desired-state docs rather than generated specs as authority."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Temporary artifacts stay disposable",
+      "type": "artifact",
+      "source_section": "Current state",
+      "explanation": "Breakdown, spec, plan, task, and discovery outputs are derived working material, not durable guidance."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Breakdown rejects imperative inputs by default",
+      "type": "constraint",
+      "source_section": "Current state",
+      "explanation": "MoonSpec classifies inputs and fails fast on plans, checklists, or migration trackers unless explicitly overridden."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Documentation standard naming is consistent",
+      "type": "requirement",
+      "source_section": "Immediate cleanup",
+      "explanation": "Module Architecture View guidance consistently prefers <ModuleName>ModuleArchitecture.md."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "System documents and feature designs are distinct",
+      "type": "requirement",
+      "source_section": "Immediate cleanup",
+      "explanation": "Durable <SystemName>System.md docs and transitional <FeatureName>Design.md docs are clearly distinguished."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Viewpoint templates match metadata standard",
+      "type": "requirement",
+      "source_section": "Immediate cleanup",
+      "explanation": "Templates include Authority, Owning Surface, Related Docs, and Related Implementation."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Stale imperative authority notes are reconciled",
+      "type": "migration",
+      "source_section": "Immediate cleanup",
+      "explanation": "Conflicting docs/tmp status or migration notes are updated, deleted, or archived."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "MoonSpec uses docs architecture vocabulary",
+      "type": "state-model",
+      "source_section": "Recommended evolution model",
+      "explanation": "Architecture Description, Viewpoint, View, Module Doc Set, contracts, claims, slices, packets, and reconciliation become native concepts."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Canonical docs have stable claim IDs",
+      "type": "requirement",
+      "source_section": "Phase 1",
+      "explanation": "Docs support stable IDs such as DOC-REQ, CONTRACT, INV, NON-GOAL, QUALITY, and TEST."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "MoonSpec doc index maps documents and claims",
+      "type": "artifact",
+      "source_section": "Phase 1",
+      "explanation": "A machine-readable index captures path, documentClass, viewpoint, authority, owningSurface, and claim metadata."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Doc index validation starts advisory-only",
+      "type": "constraint",
+      "source_section": "Phase 1",
+      "explanation": "Duplicate authority, duplicate claim IDs, missing metadata, and ambiguous module ownership warn and exit zero by default."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Docs-native authoring creates canonical docs",
+      "type": "requirement",
+      "source_section": "Phase 2",
+      "explanation": "moonspec-doc-author chooses viewpoint template, location, filename, metadata, stable claims, rationale, and validation."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Docs-native improvement keeps docs declarative",
+      "type": "requirement",
+      "source_section": "Phase 2",
+      "explanation": "moonspec-doc-improve repairs metadata, authority, rationale, duplicate contracts, imperative leakage, and verification gaps."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Docs-native review reports by authority ladder",
+      "type": "requirement",
+      "source_section": "Phase 2",
+      "explanation": "moonspec-doc-review groups findings by system, cross-cutting, module, contract, design, imperative leakage, and verification-hook categories."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Doc slicing replaces prompt-centered spec generation",
+      "type": "requirement",
+      "source_section": "Phase 3",
+      "explanation": "moonspec-doc-slice emits temporary story artifacts with stable canonical source references."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "spec.md becomes a compatibility adapter",
+      "type": "constraint",
+      "source_section": "Phase 3 / Phase 4",
+      "explanation": "Doc-backed spec.md declares itself derived from canonical claims rather than serving as authority."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Implementation packets derive from doc slices",
+      "type": "artifact",
+      "source_section": "Phase 4",
+      "explanation": "Temporary packets include source path, viewpoint, owning surface, claim IDs, code/test surfaces, TDD checklist, verification commands, and reconciliation expectations."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Task generation requires verification and reconciliation finals",
+      "type": "requirement",
+      "source_section": "Phase 4",
+      "explanation": "moonspec-tasks validates final /speckit.verify and moonspec-doc-reconcile tasks when a canonical source exists."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Verification becomes canonical claim-aware",
+      "type": "observability",
+      "source_section": "Phase 5",
+      "explanation": "moonspec-verify reports Canonical Claim Coverage with source, evidence, status, and notes."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Verification separates gaps and drift",
+      "type": "requirement",
+      "source_section": "Phase 5",
+      "explanation": "Implementation gaps, verification gaps, and doc drift are distinguished; doc drift feeds reconciliation."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Doc reconciliation is authority-scope aware",
+      "type": "requirement",
+      "source_section": "Phase 6",
+      "explanation": "moonspec-doc-reconcile uses the precedence ladder to update the owning canonical doc or escalate."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Reconciliation output supports multi-doc decisions",
+      "type": "artifact",
+      "source_section": "Phase 6",
+      "explanation": "Structured results include updated, noUpdateRequired, and escalated entries with path, viewpoint, claim IDs, and reason."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "PRs report documentation conformance",
+      "type": "observability",
+      "source_section": "Phase 7",
+      "explanation": "PR bodies include canonical sources, temporary artifacts, claim coverage, and reconciliation outcomes."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "TDD and final verification remain downstream defaults",
+      "type": "constraint",
+      "source_section": "Phase 4 / strategic goal",
+      "explanation": "Docs-native packet generation preserves test-first execution and final verification against the original design."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Stabilize Documentation Architecture Standard",
+      "shortName": "standard-stabilization",
+      "description": "As a MoonSpec documentation author, I need the standard and templates to give one unambiguous golden path so later automation does not encode conflicting naming, metadata, or working-document rules.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Immediate cleanup before the next evolution",
+          "Concrete next Jira issues #1"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "scope": [
+        "Fix naming guidance and examples.",
+        "Clarify system versus design document roles.",
+        "Align templates with metadata header.",
+        "Reconcile stale temporary authority notes."
+      ],
+      "outOfScope": [
+        "Doc index, slicing, verification, reconciliation, and PR reporting implementation."
+      ],
+      "independentTest": "Run targeted documentation validator and template tests showing corrected naming, metadata headers, and stale working-doc status.",
+      "acceptanceCriteria": [
+        "Section 3.2 and examples consistently prefer <ModuleName>ModuleArchitecture.md.",
+        "The standard distinguishes durable <SystemName>System.md from transitional <FeatureName>Design.md.",
+        "Canonical viewpoint templates include the required metadata fields.",
+        "Stale docs/tmp authority-conflict notes are no longer contradictory or active without purpose.",
+        "Tests cover naming and template metadata."
+      ],
+      "requirements": [
+        "Preserve canonical docs as desired-state authority.",
+        "Keep imperative working material separate from canonical guidance."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-001 for Stabilize Documentation Architecture Standard."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-004 for Stabilize Documentation Architecture Standard."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-005 for Stabilize Documentation Architecture Standard."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-006 for Stabilize Documentation Architecture Standard."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "STORY-001 explicitly owns DESIGN-REQ-007 for Stabilize Documentation Architecture Standard."
+        }
+      ],
+      "dependencies": [],
+      "risks": [
+        "Avoid requiring repo-wide metadata churn for existing docs."
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Add stable canonical claim ID conventions",
+      "shortName": "claim-id-conventions",
+      "description": "As a MoonSpec maintainer, I need canonical docs and templates to define stable claim ID conventions so docs can be indexed, sliced, verified, and reconciled without relying on run-local coverage IDs.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Phase 1 - Make canonical docs addressable",
+          "Concrete next Jira issues #3"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [],
+      "outOfScope": [],
+      "independentTest": "Run documentation validation tests with sample docs containing valid, malformed, and duplicate claim IDs.",
+      "acceptanceCriteria": [
+        "Guidance defines DOC-REQ, CONTRACT, INV, NON-GOAL, QUALITY, and TEST IDs.",
+        "Templates show concise stable claim heading examples.",
+        "Malformed and duplicate IDs produce advisory warnings by default.",
+        "Guidance distinguishes canonical claim IDs from temporary DESIGN-REQ IDs."
+      ],
+      "requirements": [
+        "Stable IDs are durable under normal text edits.",
+        "Adoption remains incremental."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "STORY-002 explicitly owns DESIGN-REQ-008 for Add stable canonical claim ID conventions."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "STORY-002 explicitly owns DESIGN-REQ-009 for Add stable canonical claim ID conventions."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "STORY-002 explicitly owns DESIGN-REQ-011 for Add stable canonical claim ID conventions."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "risks": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Implement advisory MoonSpec doc index",
+      "shortName": "doc-index",
+      "description": "As a MoonSpec operator, I need a machine-readable index of canonical documents and stable claims so automation can find authorities, detect overlaps, and prepare doc-backed slices.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Phase 1 - Make canonical docs addressable",
+          "Concrete next Jira issues #2"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011"
+        ]
+      },
+      "scope": [],
+      "outOfScope": [],
+      "independentTest": "Run unit tests against fixture docs and verify emitted index plus advisory warnings match expected JSON.",
+      "acceptanceCriteria": [
+        "Index output is valid JSON under an artifact path.",
+        "Document entries include path, documentClass, viewpoint, authority, owningSurface, related docs, and related implementation.",
+        "Claim entries include id, heading, type, anchor, and digest.",
+        "Warnings are structured and advisory-only by default.",
+        "docs/tmp imperative documents are not treated as canonical docs."
+      ],
+      "requirements": [
+        "Do not mutate checked-in docs while indexing.",
+        "Keep large generated data as artifacts or refs."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-001 for Implement advisory MoonSpec doc index."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-008 for Implement advisory MoonSpec doc index."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-010 for Implement advisory MoonSpec doc index."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "STORY-003 explicitly owns DESIGN-REQ-011 for Implement advisory MoonSpec doc index."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "risks": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Add docs-native author, improve, and review skills",
+      "shortName": "doc-skills",
+      "description": "As a MoonSpec documentation maintainer, I need docs-native authoring, improvement, and review workflows so canonical docs can be created and maintained directly instead of using spec.md as the center.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Phase 2 - Add docs-native authoring and improvement skills"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "scope": [],
+      "outOfScope": [],
+      "independentTest": "Use fixture or temporary-workspace tests to verify each workflow creates, improves, or reviews canonical docs without creating spec.md.",
+      "acceptanceCriteria": [
+        "Doc authoring chooses location, filename, viewpoint template, metadata, stable claims, and rationale.",
+        "Doc improvement fixes or reports missing metadata, authority, rationale, duplicate contracts, imperative leakage, and unverifiable claims.",
+        "Broad work is routed to docs/tmp improvement plans.",
+        "Doc review groups findings by the authority ladder.",
+        "No docs-native authoring workflow creates spec.md."
+      ],
+      "requirements": [
+        "Canonical docs stay declarative.",
+        "Imperative plans live under docs/tmp or gitignored handoff paths."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-004 explicitly owns DESIGN-REQ-001 for Add docs-native author, improve, and review skills."
+        },
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "STORY-004 explicitly owns DESIGN-REQ-012 for Add docs-native author, improve, and review skills."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "STORY-004 explicitly owns DESIGN-REQ-013 for Add docs-native author, improve, and review skills."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "STORY-004 explicitly owns DESIGN-REQ-014 for Add docs-native author, improve, and review skills."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003"
+      ],
+      "risks": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Implement docs-native MoonSpec doc slicing",
+      "shortName": "doc-slice",
+      "description": "As a MoonSpec workflow runner, I need to slice canonical docs and stable claim IDs into independently testable story candidates so implementation work starts from desired-state docs.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Phase 3 - Replace spec generation with doc slicing",
+          "Concrete next Jira issues #4"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016"
+        ]
+      },
+      "scope": [],
+      "outOfScope": [],
+      "independentTest": "Run doc-slice against canonical and imperative fixture docs; verify source references and imperative fail-fast behavior.",
+      "acceptanceCriteria": [
+        "Each story carries sourceReference.path, sections, and stable claim IDs for file-backed docs.",
+        "Outputs remain temporary artifacts and do not create spec.md or specs/ directories.",
+        "Coverage matrix maps every selected claim or extracted point to a story.",
+        "Imperative docs are rejected without explicit override.",
+        "Specify handoff can mark spec.md as derived from canonical claims."
+      ],
+      "requirements": [
+        "Preserve canonical document path in file-backed story references.",
+        "Prefer vertical operational outcomes over implementation-layer slices."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-002 for Implement docs-native MoonSpec doc slicing."
+        },
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-003 for Implement docs-native MoonSpec doc slicing."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-015 for Implement docs-native MoonSpec doc slicing."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "STORY-005 explicitly owns DESIGN-REQ-016 for Implement docs-native MoonSpec doc slicing."
+        }
+      ],
+      "dependencies": [
+        "STORY-002",
+        "STORY-003"
+      ],
+      "risks": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Generate docs-native implementation packets",
+      "shortName": "doc-packets",
+      "description": "As a MoonSpec implementer, I need temporary implementation packets generated from doc slices so plan and task artifacts carry canonical claim provenance, TDD expectations, verification commands, and required doc reconciliation work.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Phase 4 - Generate temporary implementation packets directly from doc slices",
+          "Concrete next Jira issues #5"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "scope": [],
+      "outOfScope": [],
+      "independentTest": "Generate a packet from a fixture doc slice and assert provenance, claim mappings, TDD tasks, verify task, and reconciliation task are present.",
+      "acceptanceCriteria": [
+        "Packet records source document path, viewpoint, owning surface, and stable claim IDs.",
+        "Every implementation task maps to stable claim IDs or explains why none apply.",
+        "Test tasks precede production code tasks.",
+        "Task list includes final /speckit.verify and moonspec-doc-reconcile tasks when source is canonical.",
+        "spec.md is marked as a temporary adapter if generated downstream."
+      ],
+      "requirements": [
+        "Keep generated artifacts temporary.",
+        "Preserve existing specs pipeline compatibility while changing authority semantics."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "STORY-006 explicitly owns DESIGN-REQ-002 for Generate docs-native implementation packets."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "STORY-006 explicitly owns DESIGN-REQ-016 for Generate docs-native implementation packets."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "STORY-006 explicitly owns DESIGN-REQ-017 for Generate docs-native implementation packets."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "STORY-006 explicitly owns DESIGN-REQ-018 for Generate docs-native implementation packets."
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "ownership": "STORY-006 explicitly owns DESIGN-REQ-024 for Generate docs-native implementation packets."
+        }
+      ],
+      "dependencies": [
+        "STORY-005"
+      ],
+      "risks": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-007",
+      "summary": "Expand MoonSpec verify to canonical claim coverage",
+      "shortName": "claim-verify",
+      "description": "As a MoonSpec reviewer, I need verification reports to evaluate canonical claim coverage so a PR is judged against desired-state document claims, code evidence, and test evidence.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Phase 5 - Expand verification from story complete to docs embodied",
+          "Concrete next Jira issues #6"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "scope": [],
+      "outOfScope": [],
+      "independentTest": "Run verification fixtures for verified, partially verified, missing evidence, and doc-drifted claims; assert statuses and drift output.",
+      "acceptanceCriteria": [
+        "Reports include Canonical Claim Coverage.",
+        "Each claim status includes code, test, artifact evidence, or a clear gap reason.",
+        "Implementation gaps, verification gaps, and doc drift are classified separately.",
+        "Doc drift alone does not block FULLY_IMPLEMENTED when behavior is correct.",
+        "Structured claim-level drift is available for reconciliation."
+      ],
+      "requirements": [
+        "Compare final behavior against original canonical source.",
+        "Use durable evidence references, not large pasted content."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-007 explicitly owns DESIGN-REQ-001 for Expand MoonSpec verify to canonical claim coverage."
+        },
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "STORY-007 explicitly owns DESIGN-REQ-019 for Expand MoonSpec verify to canonical claim coverage."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "STORY-007 explicitly owns DESIGN-REQ-020 for Expand MoonSpec verify to canonical claim coverage."
+        },
+        {
+          "id": "DESIGN-REQ-024",
+          "ownership": "STORY-007 explicitly owns DESIGN-REQ-024 for Expand MoonSpec verify to canonical claim coverage."
+        }
+      ],
+      "dependencies": [
+        "STORY-006"
+      ],
+      "risks": [],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-008",
+      "summary": "Expand reconciliation and PR documentation conformance",
+      "shortName": "reconcile-report",
+      "description": "As a MoonSpec PR closer, I need reconciliation to update the correct owning canonical documents and report documentation conformance in the PR so implementation and desired-state docs close aligned.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-927: Moon Spec Doc Architecture Alignment",
+        "sections": [
+          "Phase 6 - Evolve reconciliation from single-source-doc updates to authority-scope reconciliation",
+          "Phase 7 - Add a PR-level documentation conformance report",
+          "Concrete next Jira issues #7"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023"
+        ]
+      },
+      "scope": [],
+      "outOfScope": [],
+      "independentTest": "Run reconciliation and PR-body generation fixtures with single-doc updates, multi-doc updates, no-update cases, and unclear ownership escalations.",
+      "acceptanceCriteria": [
+        "Reconciliation can update the owning canonical doc even when it is not the original source doc.",
+        "Ambiguous ownership conflicts are escalated rather than guessed.",
+        "Structured artifact lists updated, noUpdateRequired, and escalated decisions with reasons.",
+        "PR conformance section lists canonical sources, temporary artifacts, claim coverage, and reconciliation outcomes.",
+        "Required canonical doc edits are included in the implementation PR."
+      ],
+      "requirements": [
+        "Respect authority ladder and module-owned contract policy.",
+        "Never downgrade canonical docs to match incomplete or buggy code."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "STORY-008 explicitly owns DESIGN-REQ-001 for Expand reconciliation and PR documentation conformance."
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "ownership": "STORY-008 explicitly owns DESIGN-REQ-021 for Expand reconciliation and PR documentation conformance."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "ownership": "STORY-008 explicitly owns DESIGN-REQ-022 for Expand reconciliation and PR documentation conformance."
+        },
+        {
+          "id": "DESIGN-REQ-023",
+          "ownership": "STORY-008 explicitly owns DESIGN-REQ-023 for Expand reconciliation and PR documentation conformance."
+        }
+      ],
+      "dependencies": [
+        "STORY-007"
+      ],
+      "risks": [],
+      "assumptions": [],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-003",
+      "STORY-004",
+      "STORY-007",
+      "STORY-008"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-007"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-008"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-006",
+      "STORY-007"
+    ]
+  },
+  "recommendedFirstStory": "STORY-001",
+  "outOfScope": [
+    "Creating or modifying spec.md during breakdown.",
+    "Creating directories under specs/ during breakdown.",
+    "Implementing the stories during breakdown.",
+    "Publishing Jira issues, PRs, or external comments from this step."
+  ]
+}
