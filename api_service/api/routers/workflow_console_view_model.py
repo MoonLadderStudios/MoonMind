@@ -699,6 +699,7 @@ def build_runtime_config(
                 "update": "/api/recurring-workflows/{definitionId}",
                 "runNow": "/api/recurring-workflows/{definitionId}/run",
                 "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200",
+                "delete": "/api/recurring-workflows/{definitionId}",
             },
             "temporal": {
                 "list": temporal_dashboard.list_endpoint,

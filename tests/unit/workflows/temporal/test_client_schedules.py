@@ -6,7 +6,7 @@ and T017 (SDK error wrapping).
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -19,6 +19,7 @@ from temporalio.common import SearchAttributeKey
 from moonmind.workflows.temporal.client import (
     MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
     MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE,
+    ScheduleTriggerResult,
     TemporalClientAdapter,
 )
 from moonmind.workflows.temporal.schedule_errors import (
@@ -51,6 +52,12 @@ def _mock_schedule_handle(*, describe_side_effect: Exception | None = None) -> M
     handle.update = AsyncMock()
     return handle
 
+async def _run_schedule_update_callback(handle: MagicMock, update_input: Any) -> Any:
+    update_callback = handle.update.call_args[0][0]
+    update = await update_callback(update_input)
+    assert isinstance(update, ScheduleUpdate)
+    return update.schedule
+
 # ---------------------------------------------------------------------------
 # T010: create_schedule
 # ---------------------------------------------------------------------------
@@ -79,6 +86,7 @@ class TestCreateSchedule:
         
         schedule_arg = call_args[0][1]
         assert schedule_arg.action.id == f"mm:{_TEST_UUID}:{{{{.ScheduleTime}}}}"
+        assert schedule_arg.action.task_queue == "mm.workflow.user.v2"
 
     @pytest.mark.asyncio
     async def test_does_not_template_scheduled_for_search_attribute(self) -> None:
@@ -335,11 +343,10 @@ class TestUpdateSchedule:
         )
         handle.update.assert_awaited_once()
 
-        # Get the callback passed to update()
-        update_callback = handle.update.call_args[0][0]
-
-        # Call it with our mock input
-        updated_schedule = await update_callback(mock_update_input)
+        updated_schedule = await _run_schedule_update_callback(
+            handle,
+            mock_update_input,
+        )
 
         assert updated_schedule.spec.cron_expressions == ["0 12 * * *"]
         assert updated_schedule.spec.time_zone_name == "America/New_York"
@@ -372,8 +379,10 @@ class TestUpdateSchedule:
         await adapter.update_schedule(definition_id=_TEST_UUID)
 
         handle.update.assert_awaited_once()
-        update_callback = handle.update.call_args[0][0]
-        updated_schedule = await update_callback(mock_update_input)
+        updated_schedule = await _run_schedule_update_callback(
+            handle,
+            mock_update_input,
+        )
 
         # Verify fields are preserved
         assert updated_schedule.spec.cron_expressions == ["0 0 * * *"]
@@ -417,8 +426,10 @@ class TestUpdateSchedule:
             },
         )
 
-        update_callback = handle.update.call_args[0][0]
-        updated_schedule = await update_callback(mock_update_input)
+        updated_schedule = await _run_schedule_update_callback(
+            handle,
+            mock_update_input,
+        )
 
         assert updated_schedule.action.workflow == "MoonMind.UserWorkflow"
         assert updated_schedule.action.args == [workflow_input]
@@ -513,6 +524,69 @@ class TestTriggerSchedule:
         adapter = _make_adapter(mock_client)
         await adapter.trigger_schedule(definition_id=_TEST_UUID)
         handle.trigger.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_triggered_workflow_metadata_from_recent_action(self) -> None:
+        handle = _mock_schedule_handle()
+        scheduled_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+        handle.describe.side_effect = [
+            MagicMock(),
+            SimpleNamespace(
+                info=SimpleNamespace(
+                    recent_actions=[
+                        SimpleNamespace(
+                            schedule_time=scheduled_at,
+                            actual_time=scheduled_at,
+                            start_workflow_result=SimpleNamespace(
+                                workflow_id="workflow-from-trigger",
+                                run_id="run-from-trigger",
+                            ),
+                        )
+                    ]
+                )
+            ),
+        ]
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.trigger_schedule(definition_id=_TEST_UUID)
+
+        assert result == ScheduleTriggerResult(
+            scheduled_at=scheduled_at,
+            started_at=scheduled_at,
+            workflow_id="workflow-from-trigger",
+            run_id="run-from-trigger",
+        )
+
+    @pytest.mark.asyncio
+    async def test_ignores_recent_action_before_manual_trigger(self) -> None:
+        handle = _mock_schedule_handle()
+        stale_action_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+        handle.describe.side_effect = [
+            MagicMock(),
+            SimpleNamespace(
+                info=SimpleNamespace(
+                    recent_actions=[
+                        SimpleNamespace(
+                            schedule_time=stale_action_time,
+                            actual_time=stale_action_time,
+                            start_workflow_result=SimpleNamespace(
+                                workflow_id="previous-workflow",
+                                run_id="previous-run",
+                            ),
+                        )
+                    ]
+                )
+            ),
+        ]
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle = MagicMock(return_value=handle)
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.trigger_schedule(definition_id=_TEST_UUID)
+
+        assert result == ScheduleTriggerResult()
 
 class TestDeleteSchedule:
     """DOC-REQ-002: delete schedule."""

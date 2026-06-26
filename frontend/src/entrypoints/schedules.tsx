@@ -688,7 +688,9 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         credentials: 'include',
       });
       if (!response.ok) {
-        throw new Error(`Failed to delete schedule: ${response.statusText}`);
+        throw new Error(
+          await responseErrorMessage(response, 'Failed to delete schedule'),
+        );
       }
     },
     onSuccess: () => {

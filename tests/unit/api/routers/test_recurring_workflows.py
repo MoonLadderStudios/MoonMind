@@ -132,7 +132,7 @@ async def test_list_recurring_workflows_uses_runtime_schedule_summary() -> None:
     assert response.items[0].last_dispatch_status == "enqueued"
     assert response.items[0].permissions.can_edit is True
     assert response.items[0].permissions.can_run_now is True
-    assert response.items[0].permissions.can_delete is False
+    assert response.items[0].permissions.can_delete is True
     assert response.items[0].actions == response.items[0].permissions
     service.runtime_summaries_for_definitions.assert_awaited_once_with([definition])
 
@@ -173,10 +173,8 @@ async def test_create_recurring_workflow_returns_serialized_definition() -> None
     assert response.temporal_schedule_id == "mm-schedule:test-definition"
     assert response.permissions.can_edit is True
     assert response.permissions.can_run_now is True
-    assert response.permissions.can_delete is False
-    assert response.permissions.disabled_reasons["canDelete"] == (
-        "Schedule deletion is not available yet."
-    )
+    assert response.permissions.can_delete is True
+    assert response.permissions.disabled_reasons == {}
     service.create_definition.assert_awaited_once()
 
 @pytest.mark.asyncio
@@ -195,7 +193,7 @@ async def test_get_recurring_workflow_serializes_action_permissions() -> None:
 
     assert response.permissions.can_edit is True
     assert response.permissions.can_run_now is True
-    assert response.permissions.can_delete is False
+    assert response.permissions.can_delete is True
     assert response.actions == response.permissions
 
 @pytest.mark.asyncio
@@ -220,7 +218,11 @@ async def test_global_recurring_workflow_action_permissions_require_operator() -
     assert operator_permissions.can_run_now is True
     assert viewer_permissions.can_edit is False
     assert viewer_permissions.can_run_now is False
+    assert viewer_permissions.can_delete is False
     assert viewer_permissions.disabled_reasons["canEdit"] == (
+        "Operator privileges are required to manage global schedules."
+    )
+    assert viewer_permissions.disabled_reasons["canDelete"] == (
         "Operator privileges are required to manage global schedules."
     )
 
@@ -246,6 +248,27 @@ async def test_run_recurring_workflow_now_returns_run_row() -> None:
     assert response.outcome == "pending_dispatch"
     assert response.started_at is None
     service.create_manual_run.assert_awaited_once_with(definition)
+
+@pytest.mark.asyncio
+async def test_delete_recurring_workflow_deletes_authorized_definition() -> None:
+    service = AsyncMock()
+    definition = _definition()
+    service.require_authorized_definition.return_value = definition
+    user = SimpleNamespace(id=definition.owner_user_id, is_superuser=False)
+
+    response = await recurring_router.delete_recurring_workflow(
+        definition_id=definition.id,
+        service=service,
+        user=user,
+    )
+
+    assert response.status_code == 204
+    service.require_authorized_definition.assert_awaited_once_with(
+        definition_id=definition.id,
+        user_id=user.id,
+        can_manage_global=False,
+    )
+    service.delete_definition.assert_awaited_once_with(definition)
 
 @pytest.mark.asyncio
 async def test_list_recurring_workflow_runs_hydrates_actual_start_time() -> None:

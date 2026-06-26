@@ -121,6 +121,7 @@ Temporal Schedules are the authoritative recurring scheduling system for Tempora
 | `PATCH` | `/api/recurring-workflows/{id}` | Update schedule |
 | `POST` | `/api/recurring-workflows/{id}/run` | Trigger immediate manual run |
 | `GET` | `/api/recurring-workflows/{id}/runs` | List run history |
+| `DELETE` | `/api/recurring-workflows/{id}` | Delete schedule and stop future dispatch |
 
 #### Create payload
 
