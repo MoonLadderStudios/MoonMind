@@ -1538,19 +1538,16 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
             "inputs": {
                 "schema": {
                     "type": "object",
-                    "required": [
-                        "target",
-                        "scope_artifact_ref",
-                        "operation_mode",
-                        "runner_profile_id",
-                    ],
+                    "required": ["target"],
                     "properties": {
                         "target": {"type": "string"},
                         "scope_artifact_ref": {
                             "type": "string",
                             "description": (
-                                "ArtifactRef for the approved pentest scope "
-                                "document."
+                                "Advanced: ArtifactRef for the approved pentest "
+                                "scope document. Execution still fails closed "
+                                "until MoonMind has an approved scope for the "
+                                "target."
                             ),
                         },
                         "objective": {"type": "string"},
@@ -1561,8 +1558,12 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
                                 "validate_hypothesis",
                                 "full_authorized",
                             ],
+                            "default": "recon_only",
                         },
-                        "runner_profile_id": {"type": "string"},
+                        "runner_profile_id": {
+                            "type": "string",
+                            "default": "pentestgpt-claude-oauth",
+                        },
                         "execution_profile_ref": {
                             "type": "string",
                             "description": (
