@@ -42,12 +42,14 @@ def upgrade() -> None:
            set format = v.format,
                artifact_ref = v.artifact_ref,
                content_digest = v.content_digest
-          from agent_skill_versions v
+         from agent_skill_versions v
          where v.skill_id = d.id
-           and v.created_at = (
-               select max(v2.created_at)
+           and v.id = (
+               select v2.id
                  from agent_skill_versions v2
                 where v2.skill_id = d.id
+                order by v2.created_at desc, v2.id desc
+                limit 1
            )
         """
     )

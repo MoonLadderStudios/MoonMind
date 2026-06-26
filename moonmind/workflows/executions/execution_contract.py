@@ -180,7 +180,13 @@ def _strip_preset_identity_versions(value: Mapping[str, Any]) -> dict[str, Any]:
     composition = payload.get("composition")
     if isinstance(composition, Mapping):
         payload["composition"] = _strip_preset_identity_versions(composition)
-    for list_key in ("includes", "authoredPresets", "appliedStepTemplates"):
+    for list_key in (
+        "includes",
+        "authoredPresets",
+        "authored_presets",
+        "appliedStepTemplates",
+        "applied_step_templates",
+    ):
         items = payload.get(list_key)
         if isinstance(items, list):
             payload[list_key] = [
@@ -208,7 +214,13 @@ def _reject_preset_identity_versions(
             composition,
             field_path=f"{field_path}.composition",
         )
-    for list_key in ("includes", "authoredPresets", "appliedStepTemplates"):
+    for list_key in (
+        "includes",
+        "authoredPresets",
+        "authored_presets",
+        "appliedStepTemplates",
+        "applied_step_templates",
+    ):
         items = value.get(list_key)
         if isinstance(items, list):
             for index, item in enumerate(items):
@@ -311,6 +323,7 @@ def reject_workflow_capability_identity_versions(
         "task_template",
         "presetSchedule",
         "preset_schedule",
+        "source",
     ):
         node = payload.get(key)
         if isinstance(node, Mapping):

@@ -85,6 +85,60 @@ def test_workflow_capability_identity_rejector_blocks_nested_skill_versions() ->
         reject_workflow_capability_identity_versions(payload)
 
 
+def test_workflow_capability_identity_rejector_blocks_step_source_versions() -> None:
+    payload = {
+        "steps": [
+            {
+                "instructions": "Run preset-derived step.",
+                "source": {"slug": "jira-implement", "presetVersion": "1.0.0"},
+            },
+        ],
+    }
+
+    with pytest.raises(
+        WorkflowContractError,
+        match=r"workflow\.steps\[0\]\.source",
+    ):
+        reject_workflow_capability_identity_versions(payload)
+
+
+def test_workflow_capability_identity_rejector_blocks_snake_case_nested_presets() -> None:
+    payload = {
+        "task_template": {
+            "slug": "jira-orchestrate",
+            "authored_presets": [
+                {"presetSlug": "jira-implement", "presetVersion": "1.0.0"},
+            ],
+            "applied_step_templates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    with pytest.raises(
+        WorkflowContractError,
+        match=r"workflow\.task_template\.authored_presets\[0\]",
+    ):
+        reject_workflow_capability_identity_versions(payload)
+
+
+def test_workflow_capability_identity_rejector_blocks_snake_case_applied_templates() -> None:
+    payload = {
+        "task_template": {
+            "slug": "jira-orchestrate",
+            "applied_step_templates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    with pytest.raises(
+        WorkflowContractError,
+        match=r"workflow\.task_template\.applied_step_templates\[0\]",
+    ):
+        reject_workflow_capability_identity_versions(payload)
+
+
 def test_workflow_capability_identity_sanitizer_strips_nested_skill_versions() -> None:
     payload = {
         "skills": {

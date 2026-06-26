@@ -695,7 +695,7 @@ class AgentSkillSummaryResponse(BaseModel):
     title: str
     description: Optional[str] = None
     author: Optional[str] = None
-    format: Optional[str] = None
+    format: Optional[Literal["markdown", "bundle"]] = None
     artifact_ref: Optional[str] = Field(None, alias="artifactRef")
     content_digest: Optional[str] = Field(None, alias="contentDigest")
     updated_at: Optional[datetime] = Field(None, alias="updatedAt")
