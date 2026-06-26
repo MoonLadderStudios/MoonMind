@@ -233,7 +233,6 @@ class ManagedRunSupervisor:
                 latest = last_output_seen_at
                 if (
                     strategy is None
-                    or progress_timeout_seconds is None
                     or record is None
                     or not record.workspace_path
                 ):

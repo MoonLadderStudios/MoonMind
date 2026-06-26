@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -15,6 +17,16 @@ from moonmind.workflows.temporal.runtime.strategies.base import (
     ManagedRuntimeStrategy,
 )
 from moonmind.workflows.provider_failures import classify_provider_failure
+
+_CLAUDE_PROGRESS_MTIME_PADDING_SECONDS = 5.0
+_CLAUDE_PR_RESOLVER_PROGRESS_FILES: tuple[Path, ...] = (
+    Path("var/pr_resolver/result.json"),
+    Path("var/pr_resolver/snapshot.json"),
+    Path("artifacts/pr_resolver_result.json"),
+    Path("artifacts/pr_resolver_snapshot.json"),
+    Path("artifacts/pr_resolver_addressed_comments.json"),
+)
+
 
 class ClaudeCodeStrategy(ManagedRuntimeStrategy):
     """Strategy for launching ``claude`` CLI runs."""
@@ -127,6 +139,50 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
 
     def terminate_on_live_rate_limit(self) -> bool:
         return True
+
+    def probe_progress_at(
+        self,
+        *,
+        workspace_path: str | None,
+        run_id: str,
+        started_at: datetime,
+    ) -> datetime | None:
+        """Use MoonMind pr-resolver artifacts as a silent-run progress signal."""
+
+        if not workspace_path:
+            return None
+        workspace_root = Path(workspace_path)
+        if not workspace_root.is_dir():
+            return None
+
+        threshold_ts = started_at.timestamp() - _CLAUDE_PROGRESS_MTIME_PADDING_SECONDS
+        latest_ts: float | None = None
+        for candidate in self._iter_pr_resolver_progress_candidates(workspace_root):
+            try:
+                stat = candidate.stat()
+            except OSError:
+                continue
+            if stat.st_mtime < threshold_ts:
+                continue
+            if latest_ts is None or stat.st_mtime > latest_ts:
+                latest_ts = stat.st_mtime
+
+        if latest_ts is None:
+            return None
+        return datetime.fromtimestamp(latest_ts, tz=UTC)
+
+    @staticmethod
+    def _iter_pr_resolver_progress_candidates(workspace_root: Path) -> Iterator[Path]:
+        for rel_path in _CLAUDE_PR_RESOLVER_PROGRESS_FILES:
+            yield workspace_root / rel_path
+
+        attempts_dir = workspace_root / "var" / "pr_resolver" / "attempts"
+        if attempts_dir.is_dir():
+            yield from attempts_dir.glob("*.json")
+
+        artifacts_dir = workspace_root / "artifacts"
+        if artifacts_dir.is_dir():
+            yield from artifacts_dir.glob("pr_resolver*.json")
 
     async def prepare_workspace(
         self,
