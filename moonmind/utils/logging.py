@@ -19,7 +19,8 @@ _CLOUD_TOKEN_PATTERN = re.compile(
     r"\b(?:AIza[A-Za-z0-9_-]{16,}|AKIA[A-Z0-9]{16})\b"
 )
 _SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b(token|password|secret|api[_-]?key|credential)\s*[:=]\s*"
+    r"(?i)\b([A-Z0-9_.-]*(?:token|password|secret|api[_-]?key|credential)"
+    r"[A-Z0-9_.-]*)\s*[:=]\s*"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;\"']+)"
 )
 _AUTHORIZATION_PATTERN = re.compile(
