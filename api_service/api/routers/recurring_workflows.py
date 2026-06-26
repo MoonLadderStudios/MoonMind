@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -152,10 +152,7 @@ def _serialize_definition(
     permissions = action_permissions or RecurringWorkflowActionPermissionsModel(
         can_edit=True,
         can_run_now=True,
-        can_delete=False,
-        disabled_reasons={
-            "canDelete": "Schedule deletion is not available yet.",
-        },
+        can_delete=True,
     )
     return RecurringWorkflowDefinitionModel(
         id=definition.id,
@@ -215,17 +212,16 @@ def _action_permissions_for_definition(
         can_manage = is_operator
         manage_reason = "Operator privileges are required to manage this schedule."
 
-    disabled_reasons: dict[str, str] = {
-        "canDelete": "Schedule deletion is not available yet.",
-    }
+    disabled_reasons: dict[str, str] = {}
     if not can_manage:
         disabled_reasons["canEdit"] = manage_reason
         disabled_reasons["canRunNow"] = manage_reason
+        disabled_reasons["canDelete"] = manage_reason
 
     return RecurringWorkflowActionPermissionsModel(
         can_edit=can_manage,
         can_run_now=can_manage,
-        can_delete=False,
+        can_delete=can_manage,
         disabled_reasons=disabled_reasons,
     )
 
@@ -547,6 +543,43 @@ async def run_recurring_workflow_now(
         scope=definition.scope_type.value,
     )
     return _serialize_run(run)
+
+@router.delete("/{definition_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_recurring_workflow(
+    definition_id: UUID,
+    service: RecurringWorkflowsService = Depends(_get_service),
+    user: User = Depends(get_current_user()),
+) -> Response:
+    user_id = getattr(user, "id", None)
+    try:
+        definition = await service.require_authorized_definition(
+            definition_id=definition_id,
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            can_manage_global=bool(getattr(user, "is_superuser", False)),
+        )
+        await service.delete_definition(definition)
+    except Exception as exc:  # pragma: no cover - thin mapping layer
+        _log_route_exception(
+            action="delete_recurring_workflow",
+            definition_id=definition_id,
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            exc=exc,
+        )
+        _audit_schedule_action(
+            action="recurring_schedule.delete",
+            outcome="failure",
+            user_id=user_id if isinstance(user_id, UUID) else None,
+            definition_id=definition_id,
+        )
+        raise _map_error(exc) from exc
+    _audit_schedule_action(
+        action="recurring_schedule.delete",
+        outcome="success",
+        user_id=user_id if isinstance(user_id, UUID) else None,
+        definition_id=definition.id,
+        scope=definition.scope_type.value,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 @router.get("/{definition_id}/runs", response_model=RecurringWorkflowRunListResponse)
 async def list_recurring_workflow_runs(

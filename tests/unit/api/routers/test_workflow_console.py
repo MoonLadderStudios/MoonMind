@@ -257,7 +257,7 @@ def test_task_create_route_uses_canonical_boot_payload(client: TestClient) -> No
         "/api/"
     )
 
-def test_schedules_runtime_config_exposes_documented_templates_without_delete(
+def test_schedules_runtime_config_exposes_documented_templates(
     client: TestClient,
 ) -> None:
     response = client.get("/schedules")
@@ -273,8 +273,8 @@ def test_schedules_runtime_config_exposes_documented_templates_without_delete(
         "update": "/api/recurring-workflows/{definitionId}",
         "runNow": "/api/recurring-workflows/{definitionId}/run",
         "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200",
+        "delete": "/api/recurring-workflows/{definitionId}",
     }
-    assert "delete" not in schedules
 
 def test_oauth_terminal_route_uses_terminal_boot_payload(client: TestClient) -> None:
     response = client.get("/oauth-terminal?session_id=oas_route_shell")

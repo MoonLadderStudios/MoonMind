@@ -26,7 +26,10 @@ from moonmind.workflows.recurring.cron import (
     parse_cron_expression,
     validate_timezone_name,
 )
-from moonmind.workflows.temporal.client import TemporalClientAdapter
+from moonmind.workflows.temporal.client import (
+    ScheduleTriggerResult,
+    TemporalClientAdapter,
+)
 from moonmind.workflows.temporal.schedule_errors import (
     ScheduleAdapterError,
     ScheduleAlreadyExistsError,
@@ -497,6 +500,88 @@ class RecurringWorkflowsService:
             "mm_owner_id": str(owner_user_id),
         }
 
+    def _expected_task_queue(self, workflow_type: str) -> str | None:
+        resolver = getattr(self._adapter, "resolve_workflow_task_queue", None)
+        if not callable(resolver):
+            return None
+        try:
+            resolved = resolver(workflow_type)
+        except Exception:
+            logger.warning(
+                "Could not resolve expected task queue for recurring workflow %s",
+                workflow_type,
+                exc_info=True,
+            )
+            return None
+        task_queue = str(resolved or "").strip()
+        return task_queue or None
+
+    def _schedule_action_mismatch(
+        self,
+        *,
+        action: object | None,
+        workflow_type: str,
+        workflow_input: Mapping[str, Any],
+    ) -> bool:
+        temporal_workflow_type = _object_value(action, "workflow")
+        temporal_args = _object_value(action, "args") or []
+        try:
+            temporal_args_list = list(temporal_args)
+        except TypeError:
+            temporal_args_list = []
+        temporal_input = temporal_args_list[0] if temporal_args_list else None
+        temporal_task_queue = _object_value(action, "task_queue", "taskQueue")
+        expected_task_queue = self._expected_task_queue(workflow_type)
+        return (
+            temporal_workflow_type != workflow_type
+            or temporal_input != workflow_input
+            or (
+                expected_task_queue is not None
+                and temporal_task_queue != expected_task_queue
+            )
+        )
+
+    async def _ensure_schedule_action_current(
+        self,
+        definition: RecurringWorkflowDefinition,
+    ) -> None:
+        policy_src = (
+            definition.policy if isinstance(definition.policy, Mapping) else None
+        )
+        policy_obj = _normalize_policy(
+            policy_src,
+            global_max_backfill=_DEFAULT_SCHEDULER_MAX_BACKFILL,
+        )
+        workflow_type, workflow_input = self._workflow_bundle_for_definition(
+            definition
+        )
+        try:
+            description = await self._adapter.describe_schedule(
+                definition_id=definition.id
+            )
+        except ScheduleNotFoundError:
+            await self._recreate_temporal_schedule(definition, policy_obj)
+            return
+
+        schedule = _object_value(description, "schedule")
+        action = _object_value(schedule, "action")
+        if not self._schedule_action_mismatch(
+            action=action,
+            workflow_type=workflow_type,
+            workflow_input=workflow_input,
+        ):
+            return
+
+        await self._adapter.update_schedule(
+            definition_id=definition.id,
+            workflow_type=workflow_type,
+            workflow_input=workflow_input,
+            memo={"definitionId": str(definition.id)},
+            search_attributes=self._owner_search_attributes(
+                definition.owner_user_id
+            ),
+        )
+
     async def create_definition(
         self,
         *,
@@ -696,29 +781,72 @@ class RecurringWorkflowsService:
         now = datetime.now(UTC)
 
         try:
-            await self._adapter.trigger_schedule(definition_id=definition.id)
+            await self._ensure_schedule_action_current(definition)
+            trigger_result = await self._adapter.trigger_schedule(
+                definition_id=definition.id
+            )
         except Exception as exc:
-            logger.error(f"Failed to trigger temporal schedule for {definition.id}: {exc}")
+            logger.error(
+                "Failed to trigger temporal schedule for %s: %s",
+                definition.id,
+                exc,
+            )
             raise RecurringWorkflowValidationError(f"Failed to trigger schedule: {exc}")
 
-        # In phase 2, we can just insert a stub run for the manual invocation API
+        if not isinstance(trigger_result, ScheduleTriggerResult):
+            trigger_result = ScheduleTriggerResult()
+        scheduled_for = trigger_result.scheduled_at or now
+        message = "Triggered via Temporal Schedule"
+        if trigger_result.workflow_id:
+            message = f"Triggered Temporal workflow {trigger_result.workflow_id}"
+
         run = RecurringWorkflowRun(
             id=uuid4(),
             definition_id=definition.id,
-            scheduled_for=now,
+            scheduled_for=scheduled_for,
             trigger=RecurringWorkflowRunTrigger.MANUAL,
             outcome=RecurringWorkflowRunOutcome.ENQUEUED,
             dispatch_attempts=1,
             dispatch_after=now,
+            temporal_workflow_id=trigger_result.workflow_id,
+            temporal_run_id=trigger_result.run_id,
             created_at=now,
             updated_at=now,
-            message="Triggered via Temporal Schedule",
+            message=message,
         )
+        definition.last_scheduled_for = scheduled_for
+        definition.last_dispatch_status = RecurringWorkflowRunOutcome.ENQUEUED.value
+        definition.last_dispatch_error = None
+        definition.updated_at = now
         self._session.add(run)
         await self._session.flush()
         await self._session.refresh(run)
         await self._session.commit()
         return run
+
+    async def delete_definition(
+        self,
+        definition: RecurringWorkflowDefinition,
+    ) -> None:
+        try:
+            await self._adapter.delete_schedule(definition_id=definition.id)
+        except ScheduleNotFoundError:
+            logger.info(
+                "Temporal schedule already absent while deleting recurring definition %s",
+                definition.id,
+            )
+        except ScheduleAdapterError as exc:
+            logger.error(
+                "Failed to delete temporal schedule for %s: %s",
+                definition.id,
+                exc,
+            )
+            raise RecurringWorkflowValidationError(
+                f"Failed to delete schedule: {exc}"
+            ) from exc
+
+        await self._session.delete(definition)
+        await self._session.commit()
 
     def _workflow_bundle_for_definition(
         self, dfn: RecurringWorkflowDefinition
@@ -854,12 +982,10 @@ class RecurringWorkflowsService:
                     dfn
                 )
                 action = getattr(sched, "action", None)
-                temporal_workflow_type = _object_value(action, "workflow")
-                temporal_args = _object_value(action, "args") or []
-                temporal_input = temporal_args[0] if temporal_args else None
-                action_mismatch = (
-                    temporal_workflow_type != workflow_type
-                    or temporal_input != workflow_input
+                action_mismatch = self._schedule_action_mismatch(
+                    action=action,
+                    workflow_type=workflow_type,
+                    workflow_input=workflow_input,
                 )
 
                 if mismatch or action_mismatch:
