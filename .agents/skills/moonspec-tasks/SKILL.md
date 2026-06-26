@@ -21,6 +21,7 @@ The generated task list must:
 - Include unit tests and integration tests before production implementation.
 - Include red-first confirmation tasks.
 - Preserve traceability to the original request or source design preserved in `spec.md`.
+- Carry forward docs-native packet provenance from `spec.md`: source document path, document class, viewpoint, owning surface, stable claim IDs, temporary-adapter role, and source issue traceability such as `MM-933` / `MM-927`.
 - Include final `/speckit.verify` work after implementation and tests pass.
 - Include a final doc-reconciliation task (`moonspec-doc-reconcile`) after `/speckit.verify` when `spec.md` records a canonical source document under `docs/`.
 
@@ -101,7 +102,7 @@ If shell arguments contain single quotes, use shell-safe escaping such as `'I'\'
 Read:
 
 - `plan.md`: tech stack, libraries, project structure, unit test tooling, integration test tooling, constraints, validation commands, and any `## Requirement Status` table.
-- `spec.md`: preserved `**Input**`, single user story, goal, independent test, acceptance scenarios, edge cases, functional requirements, success criteria, assumptions, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`.
+- `spec.md`: preserved `**Input**`, `## Source Packet`, single user story, goal, independent test, acceptance scenarios, edge cases, functional requirements, success criteria, assumptions, and source design mappings such as `CLAIM-*`, `DESIGN-REQ-*` or `DOC-REQ-*`.
 - `.specify/memory/constitution.md`: project constraints and test discipline.
 - `data-model.md` when present: entities, relationships, validation rules, and state transitions.
 - `contracts/` when present: public interfaces and contract or integration test obligations.
@@ -115,7 +116,7 @@ Build a traceability inventory before writing tasks:
 - One row per acceptance scenario or `SCN-*`.
 - One row per meaningful edge case.
 - One row per measurable success criterion or `SC-*`.
-- One row per in-scope `DESIGN-REQ-*` or `DOC-REQ-*`.
+- One row per in-scope stable source claim ID from `## Source Packet`, such as `CLAIM-*`, `DESIGN-REQ-*` or `DOC-REQ-*`.
 - One row per constitution requirement that affects implementation or testing.
 
 For each row, carry forward the matching `## Requirement Status` entry from `plan.md` when present. Allowed statuses are `missing`, `partial`, `implemented_unverified`, and `implemented_verified`; if a row has no status, treat it as `missing`.
@@ -141,6 +142,7 @@ Fill:
 - Unit test command.
 - Integration test command.
 - Source traceability summary.
+- Source packet summary: source document path, viewpoint, owning surface, stable claim IDs, temporary-adapter role, and source issue traceability when present.
 - Story summary.
 - Independent test.
 - Story traceability IDs.
@@ -169,7 +171,8 @@ Rules:
 - Use sequential task IDs: `T001`, `T002`, `T003`, and so on.
 - Use `[P]` only for tasks that can run in parallel because they touch different files and do not depend on incomplete tasks.
 - Include exact file paths.
-- Include requirement, scenario, or source IDs when the task implements or validates behavior.
+- Include requirement, scenario, or stable source claim IDs when the task implements or validates behavior.
+- Every task must map to stable claim IDs from `## Source Packet`, `DESIGN-REQ-*`, or `DOC-REQ-*`, or state `No source claim applies: <reason>` in the task description.
 - Do not include story labels such as `[US1]`; this task list covers one story.
 
 Good examples:
@@ -268,6 +271,7 @@ Include only work that strengthens the completed story without adding hidden sco
 - Each explicit non-goal or constraint must map to a guardrail test, validation task, or documented scope check when it affects implementation.
 - Each contract must map to a contract or integration test before implementation.
 - Each task that validates behavior must name the file path and requirement/scenario/source IDs.
+- Each implementation task must name stable claim IDs from `## Source Packet`, `DESIGN-REQ-*`, or `DOC-REQ-*`, or state `No source claim applies: <reason>`.
 
 Do not generate tasks for future stories, broad refactors, speculative infrastructure, or implementation layers that are not needed by the single story.
 
@@ -302,9 +306,11 @@ Before reporting, verify:
 - Integration test tasks precede implementation tasks.
 - Red-first confirmation tasks exist before production code tasks.
 - Every traceability inventory row has task coverage.
+- Every task maps to stable claim IDs or explicitly explains why none apply.
 - `## Requirement Status` rows from `plan.md`, when present, are reflected without forcing unnecessary implementation tasks for `implemented_verified` rows.
 - `implemented_unverified` rows include fallback implementation tasks that are conditional on verification failure.
 - Final `/speckit.verify` task exists.
+- Final `moonspec-doc-reconcile` task exists after `/speckit.verify` when `spec.md` records a canonical source document under `docs/`.
 
 If validation fails, update `tasks.md` and validate again before reporting.
 
@@ -318,6 +324,7 @@ Report:
 - Parallel opportunities.
 - Independent test criteria.
 - Source design or original request coverage summary.
+- Source packet provenance summary: source document path, viewpoint, owning surface, stable claim IDs, temporary-adapter role, and source issue traceability.
 - Requirement status coverage summary, including code-and-test, verification-only, conditional fallback, and already-verified counts when `plan.md` provides statuses.
 - Required unit and integration test coverage.
 - Unit and integration test tooling.
@@ -361,7 +368,8 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Unit tests and integration tests are required.
 - Red-first confirmation tasks are required before production code.
 - Preserve traceability to `spec.md` `**Input**` and source design mappings.
+- Preserve docs-native packet provenance from `spec.md` without treating generated artifacts as authoritative.
 - Consume `plan.md` `## Requirement Status` when present so tasks match planned code, verification-only, conditional fallback, or already-verified work.
-- Use concrete file paths and requirement/scenario/source IDs.
+- Use concrete file paths and requirement/scenario/stable claim IDs, or explain why no source claim applies.
 - Include final `/speckit.verify`.
 - Do not implement code from this skill.

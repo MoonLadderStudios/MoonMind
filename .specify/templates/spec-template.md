@@ -5,6 +5,16 @@
 **Status**: Draft
 **Input**: User description: "$ARGUMENTS"
 
+## Source Packet
+
+**Artifact Role**: Temporary adapter derived from the canonical request or source document; not authoritative desired state.
+**Source Document**: [docs/path.md or original request only]
+**Document Class**: [canonical declarative document | temporary execution artifact | imperative working document | original request]
+**Viewpoint**: [System Architecture View | Module Architecture View | System / Feature Design View | Module Contract Specification | Cross-Cutting Concept View | none]
+**Owning Surface**: [document authority scope, module, feature, contract surface, or none]
+**Stable Claim IDs**: [CLAIM-001, DESIGN-REQ-001, DOC-REQ-001, or none with reason]
+**Source Issue Traceability**: [e.g., MM-933 from MM-927, or none]
+
 <!-- Moon Spec specs contain exactly one independently testable user story. Use /speckit.breakdown for technical designs that contain multiple stories. -->
 
 ## User Story - [Brief Title]

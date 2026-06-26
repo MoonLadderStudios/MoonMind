@@ -11,7 +11,9 @@ description: "Task list template for single-story Moon Spec implementation"
 
 **Organization**: Tasks are grouped by phase around a single user story so the work stays focused, traceable, and independently testable.
 
-**Source Traceability**: Each task should reference the relevant `FR-*`, acceptance scenario, success criterion, or `DESIGN-REQ-*`/`DOC-REQ-*` source mapping from `spec.md` when applicable.
+**Source Traceability**: Each task MUST reference the relevant stable claim IDs from `spec.md` (`CLAIM-*`, `DESIGN-REQ-*`, `DOC-REQ-*`), plus `FR-*`, acceptance scenario, or success criterion IDs when applicable. If no stable claim applies, the task MUST state `No source claim applies: <reason>`.
+
+**Source Packet**: Carry forward `spec.md` source document path, viewpoint, owning surface, stable claim IDs, and temporary-adapter role. Preserve source issue traceability such as `MM-933` and `MM-927` when present.
 
 **Test Commands**:
 
@@ -23,7 +25,8 @@ description: "Task list template for single-story Moon Spec implementation"
 
 - **[P]**: Can run in parallel (different files, no dependencies)
 - Include exact file paths in descriptions
-- Include requirement, scenario, or source IDs when the task implements or validates behavior
+- Include requirement, scenario, or stable source claim IDs when the task implements or validates behavior
+- Include `No source claim applies: <reason>` when a setup, validation, or polish task has no applicable source claim
 
 ## Path Conventions
 
@@ -39,7 +42,7 @@ description: "Task list template for single-story Moon Spec implementation"
   The /speckit.tasks command MUST replace these with actual tasks based on:
   - The single user story from spec.md
   - The original request/design preserved in spec.md Input
-  - Source design mappings such as DESIGN-REQ-* or DOC-REQ-*
+  - Stable source claim mappings such as CLAIM-*, DESIGN-REQ-* or DOC-REQ-*
   - Feature requirements from plan.md
   - Entities from data-model.md
   - Endpoints from contracts/
@@ -93,7 +96,14 @@ Examples of foundational tasks (include only what the story truly depends on):
 
 **Independent Test**: [How to verify this story works on its own]
 
-**Traceability**: [FR-001, FR-002, SCN-001, SC-001, DESIGN-REQ-001]
+**Traceability**: [FR-001, FR-002, SCN-001, SC-001, CLAIM-001, DESIGN-REQ-001]
+
+**Source Packet**:
+
+- Source document: [docs/path.md or original request only]
+- Viewpoint: [viewpoint or none]
+- Owning surface: [surface or none]
+- Stable claim IDs: [CLAIM-001, DESIGN-REQ-001, DOC-REQ-001, or none with reason]
 
 **Test Plan**:
 
@@ -140,7 +150,8 @@ Examples of foundational tasks (include only what the story truly depends on):
 - [ ] TXXX [P] Expand integration coverage for operational scenarios in tests/integration/
 - [ ] TXXX Security hardening
 - [ ] TXXX Run quickstart.md validation
-- [ ] TXXX Run `/speckit.verify` to validate the final implementation against the original feature request
+- [ ] TXXX Run `/speckit.verify` to validate the final implementation against the original feature request and Source Packet claims
+- [ ] TXXX Run `moonspec-doc-reconcile` for the canonical source document when `spec.md` names a canonical source under docs/
 
 ---
 
@@ -209,7 +220,8 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 - [P] tasks = different files, no dependencies
 - The task list should cover one story only
 - The story should be independently completable and testable
-- Each in-scope requirement, scenario, success criterion, and source design mapping should have task coverage
+- Each in-scope requirement, scenario, success criterion, and stable source claim mapping must have task coverage
+- Each task must map to stable claim IDs or state `No source claim applies: <reason>`
 - Verify unit and integration tests fail before implementing
 - Run `/speckit.verify` after implementation to check the final result against the original request
 - Commit after each task or logical group

@@ -109,6 +109,7 @@ Validate before planning:
 - `FEATURE_SPEC` has exactly one `## User Story - ...` section.
 - The story has a Summary, Goal, Independent Test, Acceptance Scenarios, Requirements, and Success Criteria.
 - Source design mappings such as `DESIGN-REQ-*` are preserved when present.
+- Source packet provenance is preserved when present: source document path, document class, viewpoint, owning surface, stable claim IDs, temporary-adapter role, and issue traceability such as `MM-933` / `MM-927`.
 - Constitution gates and `MUST` constraints are available for the plan.
 - In-scope requirement IDs and scenario IDs can be identified for planning and traceability.
 
@@ -138,6 +139,7 @@ Fill:
 
 Add a `## Requirement Status` section after `## Summary` with one row per in-scope item that materially affects delivery:
 
+- stable source claim IDs from `## Source Packet`, such as `CLAIM-*`, `DESIGN-REQ-*`, or `DOC-REQ-*`
 - `FR-*`
 - acceptance scenarios or `SCN-*`
 - measurable success criteria or `SC-*` when they drive implementation or testing
@@ -150,6 +152,8 @@ Use this table shape:
 | FR-001         | missing                | none found                  | add code and tests           | unit + integration       |
 | SCN-001        | implemented_unverified | `src/...`, no scenario test | add verification tests first, with implementation contingency if they fail | integration |
 | DESIGN-REQ-004 | implemented_verified   | `src/...`, `tests/...`      | no new implementation        | none beyond final verify |
+
+When a row originates from a stable source claim, include the claim ID in the `ID` cell or in the evidence text so `/speckit.tasks` can map every implementation task back to stable claim provenance. If no stable source claim applies, write `No stable source claim applies: <reason>` in the evidence text.
 
 Allowed `Status` values:
 
