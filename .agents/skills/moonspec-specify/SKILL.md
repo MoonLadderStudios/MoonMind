@@ -51,7 +51,13 @@ For source-backed requests:
 5. If the source artifact contains multiple independent stories, do not collapse them into one spec. Ask the user to choose one story, or direct them to `/speckit.breakdown` when the goal is to extract stories from a broader technical or declarative design.
 6. If a source requirement is intentionally out of scope for the selected story, keep it in the source mapping as out of scope with a short rationale. Do not silently drop it.
 7. Record the canonical source document path and its document class (per `docs/Workflows/MoonSpecDocumentModel.md`) in a `**Source Document**` line directly below `**Input**` in `spec.md`.
-8. If drafting reveals a conflict between the feature request and the canonical source document, surface it as a `[NEEDS CLARIFICATION]` marker or an explicitly flagged conflict in the spec. Do not silently resolve the conflict toward either side; the canonical document wins by default, and evidence that the document itself is wrong must flow to doc reconciliation, not be buried in the spec.
+8. When the request comes from a `moonspec-breakdown` story whose
+   `sourceReference` contains stable canonical `claimIds`, record a
+   `**Derived From Canonical Claims**` line directly below `**Source Document**`
+   in `spec.md`. List the claim IDs exactly as supplied by the breakdown
+   handoff, and keep the generated `DESIGN-REQ-*` mapping in the Source Design
+   Requirements section.
+9. If drafting reveals a conflict between the feature request and the canonical source document, surface it as a `[NEEDS CLARIFICATION]` marker or an explicitly flagged conflict in the spec. Do not silently resolve the conflict toward either side; the canonical document wins by default, and evidence that the document itself is wrong must flow to doc reconciliation, not be buried in the spec.
 
 Complete source reading, requirement extraction, and single-story selection before creating the feature directory.
 
