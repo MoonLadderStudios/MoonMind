@@ -297,7 +297,7 @@ Apply calls the backend expansion service and inserts the generated child steps 
 
 ### Reapply
 
-Reapply regenerates steps from the saved preset ID, preset version, and current inputs. If the user edited generated child steps, the UI should make clear that reapplying may replace or update those generated steps.
+Reapply regenerates steps from the saved preset slug and current inputs. If the user edited generated child steps, the UI should make clear that reapplying may replace or update those generated steps.
 
 ## Submit-Time Preset Auto-Expansion
 
@@ -455,8 +455,7 @@ Example:
 ```json
 {
   "sourceType": "preset",
-  "presetId": "jira-orchestrate",
-  "presetVersion": "1",
+  "presetSlug": "jira-orchestrate",
   "inputSnapshot": {
     "jira_issue": {
       "key": "MOON-123"

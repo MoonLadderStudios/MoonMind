@@ -5077,6 +5077,22 @@ export interface components {
             disabledReason?: string | null;
         };
         /**
+         * ExecutionSkillEvidenceSummaryModel
+         * @description Compact operator-safe evidence for one selected skill.
+         */
+        ExecutionSkillEvidenceSummaryModel: {
+            /** Name */
+            name: string;
+            /** Sourcekind */
+            sourceKind?: string | null;
+            /** Sourcepath */
+            sourcePath?: string | null;
+            /** Contentref */
+            contentRef?: string | null;
+            /** Contentdigest */
+            contentDigest?: string | null;
+        };
+        /**
          * ExecutionSkillLifecycleIntentModel
          * @description How skill intent or snapshot reuse is preserved across lifecycle paths.
          */
@@ -5113,8 +5129,8 @@ export interface components {
             resolvedSkillsetRef?: string | null;
             /** Selectedskills */
             selectedSkills?: string[];
-            /** Selectedversions */
-            selectedVersions?: components["schemas"]["ExecutionSkillVersionSummaryModel"][];
+            /** Selectedevidence */
+            selectedEvidence?: components["schemas"]["ExecutionSkillEvidenceSummaryModel"][];
             /** Sourceprovenance */
             sourceProvenance?: components["schemas"]["ExecutionSkillProvenanceModel"][];
             /** Materializationmode */
@@ -5133,24 +5149,6 @@ export interface components {
             activationSummaryRef?: string | null;
             diagnostics?: components["schemas"]["ExecutionProjectionDiagnosticModel"] | null;
             lifecycleIntent?: components["schemas"]["ExecutionSkillLifecycleIntentModel"] | null;
-        };
-        /**
-         * ExecutionSkillVersionSummaryModel
-         * @description Compact operator-safe summary of one selected skill version.
-         */
-        ExecutionSkillVersionSummaryModel: {
-            /** Name */
-            name: string;
-            /** Version */
-            version?: string | null;
-            /** Sourcekind */
-            sourceKind?: string | null;
-            /** Sourcepath */
-            sourcePath?: string | null;
-            /** Contentref */
-            contentRef?: string | null;
-            /** Contentdigest */
-            contentDigest?: string | null;
         };
         /**
          * ExecutionTargetDiagnosticAttachmentModel

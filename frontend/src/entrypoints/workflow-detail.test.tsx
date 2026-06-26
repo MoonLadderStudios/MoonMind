@@ -3453,10 +3453,9 @@ describe('Workflow Detail Entrypoint', () => {
       skillRuntime: {
         resolvedSkillsetRef: 'artifact:resolved-skills-1',
         selectedSkills: ['jira-pr-verify'],
-        selectedVersions: [
+        selectedEvidence: [
           {
             name: 'jira-pr-verify',
-            version: '1.2.0',
             sourceKind: 'deployment',
             contentRef: 'artifact:skill-body-1',
             contentDigest: 'sha256:abc',
@@ -3531,8 +3530,11 @@ describe('Workflow Detail Entrypoint', () => {
         'jira-pr-verify, fix-comments',
       );
       expect(screen.getByText('Delegated Skill').closest('div')?.textContent).toContain('jira-pr-verify');
-      expect(screen.getByText('Selected Versions').closest('div')?.textContent).toContain(
-        'jira-pr-verify@1.2.0',
+      expect(screen.getByText('Selected Skill Evidence').closest('div')?.textContent).toContain(
+        'jira-pr-verify',
+      );
+      expect(screen.getByText('Selected Skill Evidence').closest('div')?.textContent).toContain(
+        'artifact:skill-body-1',
       );
       expect(screen.getByText('Source Provenance').closest('div')?.textContent).toContain(
         'deployment',

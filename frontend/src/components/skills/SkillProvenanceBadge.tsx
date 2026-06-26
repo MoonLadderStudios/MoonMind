@@ -1,9 +1,8 @@
 type SkillRuntime = {
   resolvedSkillsetRef?: string | null | undefined;
   selectedSkills?: string[] | undefined;
-  selectedVersions?: Array<{
+  selectedEvidence?: Array<{
     name: string;
-    version?: string | null | undefined;
     sourceKind?: string | null | undefined;
     sourcePath?: string | null | undefined;
     contentRef?: string | null | undefined;
@@ -52,12 +51,16 @@ export function SkillProvenanceBadge({
 }: SkillProvenanceBadgeProps) {
   const hasExplicitSkills = Array.isArray(taskSkills) && taskSkills.length > 0;
   const runtimeRef = skillRuntime?.resolvedSkillsetRef || resolvedSkillsetRef;
-  const selectedVersions = skillRuntime?.selectedVersions ?? [];
+  const selectedEvidence = skillRuntime?.selectedEvidence ?? [];
   const provenance = skillRuntime?.sourceProvenance ?? [];
   const diagnostics = skillRuntime?.diagnostics;
   const lifecycleIntent = skillRuntime?.lifecycleIntent;
-  const selectedVersionText = selectedVersions
-    .map((entry) => `${entry.name}${entry.version ? `@${entry.version}` : ''}`)
+  const selectedEvidenceText = selectedEvidence
+    .map((entry) =>
+      [entry.name, entry.contentRef, entry.contentDigest, entry.sourceKind, entry.sourcePath]
+        .filter(Boolean)
+        .join(' · '),
+    )
     .join(', ');
   const provenanceText = provenance
     .map((entry) => [entry.name, entry.sourceKind, entry.sourcePath].filter(Boolean).join(' · '))
@@ -96,10 +99,10 @@ export function SkillProvenanceBadge({
             )}
           </dd>
         </div>
-        {selectedVersionText ? (
+        {selectedEvidenceText ? (
           <div>
-            <dt>Selected Versions</dt>
-            <dd>{selectedVersionText}</dd>
+            <dt>Selected Skill Evidence</dt>
+            <dd>{selectedEvidenceText}</dd>
           </div>
         ) : null}
         {provenanceText ? (

@@ -7475,14 +7475,14 @@ def test_serialize_execution_surfaces_compact_skill_runtime_metadata() -> None:
     skill_runtime = dumped["skillRuntime"]
     assert skill_runtime["resolvedSkillsetRef"] == "artifact:resolved-skills-1"
     assert skill_runtime["selectedSkills"] == ["pr-resolver"]
-    assert skill_runtime["selectedVersions"][0] == {
+    assert skill_runtime["selectedEvidence"][0] == {
         "name": "pr-resolver",
-        "version": "1.2.0",
         "sourceKind": "deployment",
         "sourcePath": None,
         "contentRef": "artifact:skill-body-1",
         "contentDigest": "sha256:abc",
     }
+    assert "selectedVersions" not in skill_runtime
     assert skill_runtime["sourceProvenance"][0] == {
         "name": "pr-resolver",
         "sourceKind": "deployment",
