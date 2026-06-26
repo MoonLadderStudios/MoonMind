@@ -271,6 +271,37 @@ _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
         "not-applicable",
     }
 )
+_DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
+    {
+        "diagnostics_artifact_ref",
+        "diagnosticsArtifactRef",
+        "evidence_refs",
+        "evidenceRefs",
+        "primary_report_ref",
+        "primaryReportRef",
+        "publish_outcome",
+        "publishOutcome",
+        "push_status",
+        "pushStatus",
+        "report_bundle",
+        "reportBundle",
+        "report_bundle_v",
+        "reportBundleV",
+        "report_scope",
+        "reportScope",
+        "report_type",
+        "reportType",
+        "stderr_artifact_ref",
+        "stderrArtifactRef",
+        "stdout_artifact_ref",
+        "stdoutArtifactRef",
+        "structured_ref",
+        "structuredRef",
+        "summary_ref",
+        "summaryRef",
+    }
+)
+_REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
     {"jira-implement", *JIRA_BACKED_AGENT_SKILLS}
@@ -416,6 +447,7 @@ NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
 RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
     "run-stop-on-publish-handoff-failure-v1"
 )
+RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 # Assert the producing Step Execution reached the `accepted` terminal
 # disposition before an external handoff runs, in addition to the existing
 # MoonSpec gate verdict block. Guarded for replay safety so in-flight runs keep
@@ -7509,6 +7541,18 @@ class MoonMindRunWorkflow:
             return result.get(key)
         return getattr(result, key, None)
 
+    def _effective_result_outputs(self, result: Any) -> Mapping[str, Any] | None:
+        outputs = self._get_from_result(result, "outputs")
+        if isinstance(outputs, Mapping):
+            return outputs
+        if not workflow.patched(RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH):
+            return None
+        if isinstance(result, Mapping) and any(
+            key in result for key in _DIRECT_EXECUTABLE_OUTPUT_KEYS
+        ):
+            return result
+        return None
+
     def _activity_result_status(self, result: Any) -> str | None:
         raw_status = self._get_from_result(result, "status")
         if raw_status is None:
@@ -9298,7 +9342,7 @@ class MoonMindRunWorkflow:
         if publish_mode not in {"pr", "branch"}:
             return
 
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
         self._record_no_change_publish_evidence(outputs)
@@ -9313,6 +9357,14 @@ class MoonMindRunWorkflow:
 
         push_status = self._coerce_text(outputs.get("push_status"))
         if push_status is None:
+            report_not_required_reason = (
+                self._report_only_publish_not_required_reason(outputs)
+            )
+            if report_not_required_reason is not None:
+                self._publish_status = "not_required"
+                self._publish_reason = report_not_required_reason
+                if self._merge_automation_requested(parameters):
+                    self._publish_context["mergeAutomationStatus"] = "not_applicable"
             return
         self._record_publish_metadata_context(outputs)
 
@@ -9384,6 +9436,46 @@ class MoonMindRunWorkflow:
         if push_status == "pushed" and publish_mode == "branch":
             self._publish_status = "published"
             self._publish_reason = "published branch"
+
+    def _report_only_publish_not_required_reason(
+        self,
+        outputs: Mapping[str, Any],
+    ) -> str | None:
+        report_type = self._coerce_text(
+            outputs.get("report_type") or outputs.get("reportType"),
+            max_chars=120,
+        )
+        report_bundle = outputs.get("report_bundle") or outputs.get("reportBundle")
+        if not report_type and isinstance(report_bundle, Mapping):
+            report_type = self._coerce_text(
+                report_bundle.get("report_type") or report_bundle.get("reportType"),
+                max_chars=120,
+            )
+        if report_type not in _REPORT_ONLY_PUBLISH_TYPES:
+            return None
+
+        primary_ref = self._coerce_text(
+            outputs.get("primary_report_ref") or outputs.get("primaryReportRef"),
+            max_chars=200,
+        )
+        if not primary_ref and isinstance(report_bundle, Mapping):
+            primary_bundle_ref = report_bundle.get(
+                "primary_report_ref"
+            ) or report_bundle.get("primaryReportRef")
+            if isinstance(primary_bundle_ref, Mapping):
+                primary_ref = self._coerce_text(
+                    primary_bundle_ref.get("artifact_id")
+                    or primary_bundle_ref.get("artifactId"),
+                    max_chars=200,
+                )
+            else:
+                primary_ref = self._coerce_text(primary_bundle_ref, max_chars=200)
+        if not primary_ref:
+            return None
+        return (
+            "security.pentest.run produced a final report artifact; "
+            "PR/branch publication is not applicable"
+        )
 
     def _publish_not_required_reason(self, outputs: Mapping[str, Any]) -> str | None:
         for source in self._publish_outcome_sources(outputs):
@@ -9496,7 +9588,7 @@ class MoonMindRunWorkflow:
         return None
 
     def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
 
@@ -9715,7 +9807,7 @@ class MoonMindRunWorkflow:
 
     def _record_report_result(self, execution_result: Any) -> None:
         metadata = self._get_from_result(execution_result, "metadata")
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         report_sources = [
             source
             for source in (metadata, outputs)
