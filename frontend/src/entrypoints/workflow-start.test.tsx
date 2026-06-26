@@ -21,6 +21,9 @@ import {
 import { renderWithClient } from "../utils/test-utils";
 import {
   ARTIFACT_COMPLETE_RETRY_DELAYS_MS,
+  buildCapabilityChips,
+  CAPABILITY_CATALOG,
+  capabilityChipProvenanceLabel,
   LIQUID_GL_OPTIONS,
   preferredTemplate,
   resolveDefaultProviderProfileId,
@@ -16167,14 +16170,17 @@ describe("Task Create governed Tool authoring", () => {
         target: { value: '{"issueKey":"MM-577","mode":"runtime"}' },
       },
     );
-    fireEvent.change(
-      within(step).getByLabelText(
-        /Step 1 Skill Required Capabilities \(optional CSV\)/,
-      ),
-      {
-        target: { value: "git, jira" },
-      },
+    // MM-936: capabilities are authored through the always-visible "Add to step"
+    // chip menu rather than a freeform CSV field.
+    const addToStep = within(step).getByRole("button", {
+      name: "Add to Step 1",
+    });
+    fireEvent.click(addToStep);
+    fireEvent.click(
+      within(step).getByRole("menuitem", { name: /Git repository/ }),
     );
+    fireEvent.click(addToStep);
+    fireEvent.click(within(step).getByRole("menuitem", { name: /^Jira/ }));
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -16216,6 +16222,124 @@ describe("Task Create governed Tool authoring", () => {
       },
       requiredCapabilities: ["git", "jira"],
     });
+  });
+
+  it("renders an always-visible Add to step menu and submits explicit capabilities without Advanced mode", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Author capabilities through the chip menu." },
+    });
+
+    // The "+" affordance is visible without toggling Advanced mode and the old
+    // CSV authoring field is gone.
+    expect(
+      within(step).queryByLabelText(/Skill Required Capabilities/),
+    ).toBeNull();
+    const addToStep = within(step).getByRole("button", {
+      name: "Add to Step 1",
+    });
+
+    fireEvent.click(addToStep);
+    fireEvent.click(within(step).getByRole("menuitem", { name: /^Docker/ }));
+
+    const chip = await within(step).findByText("Docker");
+    expect(chip).toBeTruthy();
+    expect(
+      within(step).getByText("· docker", { exact: false }),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const payload = latestCreateRequest().payload as {
+      requiredCapabilities?: string[];
+    };
+    expect(payload.requiredCapabilities).toContain("docker");
+  });
+
+  it("removes explicit capability chips but keeps derived chips locked", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+
+    // Publishing as a PR contributes a derived, non-removable gh chip.
+    const derivedChip = (
+      await within(step).findByText("GitHub CLI / PRs")
+    ).closest("li") as HTMLElement;
+    expect(within(derivedChip).getByText("· from publish mode")).toBeTruthy();
+    expect(
+      within(derivedChip).queryByRole("button", {
+        name: /Remove GitHub CLI \/ PRs capability/,
+      }),
+    ).toBeNull();
+
+    // The publish-derived gh option is disabled in the menu so the UI never
+    // silently drops a backend-required capability.
+    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    expect(
+      (
+        within(step).getByRole("menuitem", {
+          name: /GitHub CLI \/ PRs/,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+
+    // An explicitly added capability is removable.
+    fireEvent.click(within(step).getByRole("menuitem", { name: /^Jira/ }));
+    const removeJira = await within(step).findByRole("button", {
+      name: "Remove Jira capability from Step 1",
+    });
+    fireEvent.click(removeJira);
+    await waitFor(() => {
+      expect(within(step).queryByText("Jira")).toBeNull();
+    });
+  });
+
+  it("adds a custom capability token through the prompt", async () => {
+    const promptSpy = vi
+      .spyOn(window, "prompt")
+      .mockImplementationOnce(() => "unity, qdrant");
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Author a custom capability." },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    fireEvent.click(
+      within(step).getByRole("menuitem", { name: "Custom capability…" }),
+    );
+    expect(promptSpy).toHaveBeenCalledTimes(1);
+
+    expect(await within(step).findByText("unity")).toBeTruthy();
+    expect(within(step).getByText("qdrant")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const payload = latestCreateRequest().payload as {
+      requiredCapabilities?: string[];
+    };
+    expect(payload.requiredCapabilities).toEqual(
+      expect.arrayContaining(["unity", "qdrant"]),
+    );
+    promptSpy.mockRestore();
   });
 
   it("submits auto skill step attachments without explicit skill type", async () => {
@@ -16823,5 +16947,111 @@ describe("Task Create runtime switch layout stability", () => {
       profileId: "profile:codex-default",
     });
     expect(request.payload.task.runtime).not.toHaveProperty("effort");
+  });
+});
+
+describe("MM-936 capability registry and chip computation", () => {
+  function requireChip(
+    chips: ReturnType<typeof buildCapabilityChips>,
+    token: string,
+  ) {
+    const chip = chips.find((entry) => entry.token === token);
+    if (!chip) {
+      throw new Error(`expected a capability chip for ${token}`);
+    }
+    return chip;
+  }
+
+  it("describes known capability tokens in the frontend catalog", () => {
+    for (const token of ["git", "gh", "jira", "docker", "codex_cli"]) {
+      const entry = CAPABILITY_CATALOG[token];
+      if (!entry) {
+        throw new Error(`expected a catalog entry for ${token}`);
+      }
+      expect(entry.token).toBe(token);
+      expect(entry.label.length).toBeGreaterThan(0);
+      expect(entry.shortLabel.length).toBeGreaterThan(0);
+      expect(entry.description.length).toBeGreaterThan(0);
+      expect(entry.icon.length).toBeGreaterThan(0);
+      expect(["Code", "Integrations", "Runtime"]).toContain(entry.group);
+    }
+  });
+
+  it("marks explicit-only capabilities removable and labels them from the catalog", () => {
+    const chips = buildCapabilityChips({ explicit: ["gh"] });
+    expect(chips).toHaveLength(1);
+    const chip = requireChip(chips, "gh");
+    expect(chip.label).toBe("GitHub CLI / PRs");
+    expect(chip.removable).toBe(true);
+    expect(chip.sources).toEqual([
+      {
+        token: "gh",
+        sourceKind: "explicit",
+        sourceLabel: "added to this step",
+        removable: true,
+      },
+    ]);
+    expect(capabilityChipProvenanceLabel(chip)).toBeNull();
+  });
+
+  it("keeps derived capabilities non-removable with provenance", () => {
+    const chips = buildCapabilityChips({
+      skill: ["git"],
+      generatedTool: ["docker"],
+      preset: ["jira"],
+      runtime: ["codex_cli"],
+      publish: ["gh"],
+      template: ["unity"],
+    });
+    expect(requireChip(chips, "git").removable).toBe(false);
+    expect(capabilityChipProvenanceLabel(requireChip(chips, "git"))).toBe(
+      "from skill",
+    );
+    expect(capabilityChipProvenanceLabel(requireChip(chips, "docker"))).toBe(
+      "from tool",
+    );
+    expect(capabilityChipProvenanceLabel(requireChip(chips, "jira"))).toBe(
+      "from preset",
+    );
+    expect(capabilityChipProvenanceLabel(requireChip(chips, "codex_cli"))).toBe(
+      "from runtime",
+    );
+    expect(capabilityChipProvenanceLabel(requireChip(chips, "gh"))).toBe(
+      "from publish mode",
+    );
+    expect(capabilityChipProvenanceLabel(requireChip(chips, "unity"))).toBe(
+      "from template",
+    );
+  });
+
+  it("treats a capability with both explicit and derived sources as non-removable", () => {
+    const chips = buildCapabilityChips({ explicit: ["git"], skill: ["git"] });
+    expect(chips).toHaveLength(1);
+    const chip = requireChip(chips, "git");
+    expect(chip.removable).toBe(false);
+    expect(chip.sources.map((source) => source.sourceKind)).toEqual([
+      "explicit",
+      "skill",
+    ]);
+    // The UI must not silently drop a backend-required capability even when the
+    // user also added it explicitly.
+    expect(capabilityChipProvenanceLabel(chip)).toBe("from skill");
+  });
+
+  it("normalizes and de-duplicates tokens while preserving first-seen order", () => {
+    const chips = buildCapabilityChips({
+      explicit: [" GIT ", "jira", "git"],
+      skill: ["JIRA"],
+    });
+    expect(chips.map((chip) => chip.token)).toEqual(["git", "jira"]);
+    // jira is contributed explicitly first, then by the skill -> non-removable.
+    expect(requireChip(chips, "jira").removable).toBe(false);
+  });
+
+  it("synthesizes catalog entries for unknown custom tokens", () => {
+    const chips = buildCapabilityChips({ explicit: ["qdrant"] });
+    const chip = requireChip(chips, "qdrant");
+    expect(chip.label).toBe("qdrant");
+    expect(chip.removable).toBe(true);
   });
 });
