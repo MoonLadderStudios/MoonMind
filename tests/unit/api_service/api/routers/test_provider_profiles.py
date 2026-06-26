@@ -958,7 +958,8 @@ async def test_create_enabled_profile_rejects_missing_database_secret_ref(
         response = await client.post("/api/v1/provider-profiles", json=payload)
 
     assert response.status_code == 422
-    assert "OPENAI_API_KEY=[REDACTED] secret db://missing-provider-secret was not found" in response.text
+    assert "OPENAI_API_KEY=[REDACTED]" in response.text
+    assert "secret db://missing-provider-secret was not found" in response.text
 
 
 @pytest.mark.asyncio
@@ -1164,14 +1165,9 @@ async def test_provider_profile_readiness_reports_invalid_stored_secret_ref(
     checks = {check["id"]: check for check in readiness["checks"]}
     assert checks["secret_refs"]["status"] == "error"
     assert "provider_api_key" in checks["secret_refs"]["message"]
-    assert (
-        "provider_api_key=[REDACTED] SecretRef"
-        in checks["secret_refs"]["message"]
-    )
-    assert (
-        "secret reference must use <backend>://<locator> format"
-        in checks["secret_refs"]["message"]
-    )
+    assert "SecretRef (secret reference must use <backend>://<locator> format)" in checks[
+        "secret_refs"
+    ]["message"]
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,66 @@
+slug: document-author
+title: Document Author
+description: Author a new docs-native document by selecting its document class, location, filename, viewpoint template, metadata, stable claims, and rationale without creating spec.md.
+scope: global
+tags:
+  - documentation
+  - document-authoring
+  - docs-native
+requiredCapabilities:
+  - git
+annotations:
+  sourceSkill: document-author
+  sourceIssueKey: MM-931
+  sourceReference: MM-927
+  output: authored-document
+inputs:
+  - name: documentation_intent
+    label: Documentation Intent
+    type: textarea
+    required: true
+    default: ""
+  - name: preferred_area
+    label: Preferred Docs Area
+    type: text
+    required: false
+    default: "docs/"
+  - name: traceability
+    label: Traceability
+    type: text
+    required: false
+    default: ""
+  - name: constraints
+    label: Constraints
+    type: textarea
+    required: false
+    default: ""
+steps:
+  - title: Author docs-native document
+    type: skill
+    annotations:
+      documentAuthoringRole: author
+      sourceIssueKey: MM-931
+      sourceReference: MM-927
+    instructions: |-
+      Author one docs-native document for this intent:
+      {{ inputs.documentation_intent }}
+
+      Preferred docs area:
+      {{ inputs.preferred_area }}
+
+      Traceability:
+      {{ inputs.traceability }}
+
+      Additional constraints:
+      {{ inputs.constraints }}
+
+      Follow the document-author skill. Choose the document class, location, filename, viewpoint template, metadata header, stable claims, and embedded rationale before writing. If the request is broad or cleanup-oriented, write a bounded improvement plan under docs/tmp/ instead of editing canonical docs.
+
+      Keep canonical docs declarative. Put imperative plans under docs/tmp/ or a gitignored handoff path. Do not create spec.md and do not write under specs/.
+
+      Report the chosen path, ownership reason, metadata fields, stable claims, rationale placement, duplicate/authority checks, verification, and confirmation that no docs-native spec.md was created.
+    skill:
+      id: document-author
+      args: {}
+      requiredCapabilities:
+        - git

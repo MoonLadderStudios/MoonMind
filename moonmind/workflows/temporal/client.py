@@ -125,6 +125,128 @@ class WorkflowStartResult:
     workflow_id: str
     run_id: str
 
+@dataclass(frozen=True, slots=True)
+class ScheduleTriggerResult:
+    """Best-effort metadata for a workflow started by a Temporal Schedule."""
+
+    scheduled_at: datetime | None = None
+    started_at: datetime | None = None
+    workflow_id: str | None = None
+    run_id: str | None = None
+
+def _schedule_object_value(source: object, *keys: str) -> Any:
+    if source is None:
+        return None
+    if isinstance(source, Mapping):
+        for key in keys:
+            if key in source:
+                return source[key]
+        return None
+    for key in keys:
+        value = getattr(source, key, None)
+        if value is not None:
+            return value
+    return None
+
+def _schedule_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return _schedule_datetime(parsed)
+    return None
+
+def _latest_schedule_trigger_result(
+    description: object,
+    *,
+    not_before: datetime | None = None,
+) -> ScheduleTriggerResult:
+    """Extract the latest start-workflow action from a schedule description."""
+
+    info = _schedule_object_value(description, "info")
+    recent_actions = (
+        _schedule_object_value(info, "recent_actions", "recentActions") or []
+    )
+    try:
+        action_results = list(recent_actions)
+    except TypeError:
+        return ScheduleTriggerResult()
+
+    def _sort_key(action_result: object) -> datetime:
+        return (
+            _schedule_datetime(
+                _schedule_object_value(action_result, "actual_time", "actualTime")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "started_at", "startedAt")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "schedule_time", "scheduleTime")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "scheduled_at", "scheduledAt")
+            )
+            or datetime.min.replace(tzinfo=timezone.utc)
+        )
+
+    threshold = _schedule_datetime(not_before) if not_before is not None else None
+    for action_result in sorted(action_results, key=_sort_key, reverse=True):
+        scheduled_at = (
+            _schedule_datetime(
+                _schedule_object_value(action_result, "schedule_time", "scheduleTime")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "scheduled_at", "scheduledAt")
+            )
+        )
+        started_at = (
+            _schedule_datetime(
+                _schedule_object_value(action_result, "actual_time", "actualTime")
+            )
+            or _schedule_datetime(
+                _schedule_object_value(action_result, "started_at", "startedAt")
+            )
+        )
+        action_time = started_at or scheduled_at
+        if (
+            threshold is not None
+            and action_time is not None
+            and action_time < threshold
+        ):
+            continue
+        action = _schedule_object_value(
+            action_result,
+            "start_workflow_result",
+            "startWorkflowResult",
+            "action",
+        )
+        workflow_id = _schedule_object_value(action, "workflow_id", "workflowId")
+        run_id = _schedule_object_value(
+            action,
+            "run_id",
+            "runId",
+            "first_execution_run_id",
+            "firstExecutionRunId",
+        )
+        if workflow_id or run_id:
+            return ScheduleTriggerResult(
+                scheduled_at=scheduled_at,
+                started_at=started_at,
+                workflow_id=str(workflow_id) if workflow_id else None,
+                run_id=str(run_id) if run_id else None,
+            )
+    return ScheduleTriggerResult()
+
 async def get_temporal_client(address: str, namespace: str) -> Client:
     """Connect to and return a Temporal client."""
 
@@ -205,6 +327,11 @@ class TemporalClientAdapter:
                 )
             )
         return self._workflow_topology.task_queues[0]
+
+    def resolve_workflow_task_queue(self, workflow_type: str | None) -> str:
+        """Resolve the task queue a schedule/start action should use."""
+
+        return self._get_task_queue(workflow_type)
 
     async def start_workflow(
         self,
@@ -558,7 +685,7 @@ class TemporalClientAdapter:
         client = await self.get_client()
         definition_uuid = _UUID(str(definition_id))
         schedule_id = make_schedule_id(definition_uuid)
-        task_queue = self._get_task_queue()
+        task_queue = self._get_task_queue(workflow_type)
 
         args = [workflow_input] if workflow_input is not None else []
 
@@ -679,7 +806,7 @@ class TemporalClientAdapter:
         """
         from uuid import UUID as _UUID
 
-        from temporalio.client import ScheduleActionStartWorkflow
+        from temporalio.client import ScheduleActionStartWorkflow, ScheduleUpdate
 
         from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
         from moonmind.workflows.temporal.schedule_mapping import (
@@ -765,7 +892,7 @@ class TemporalClientAdapter:
                     ),
                 )
 
-            return schedule
+            return ScheduleUpdate(schedule=schedule)
 
         try:
             await handle.update(_do_update)
@@ -808,7 +935,7 @@ class TemporalClientAdapter:
                 f"Failed to unpause schedule: {exc}"
             ) from exc
 
-    async def trigger_schedule(self, *, definition_id: Any) -> None:
+    async def trigger_schedule(self, *, definition_id: Any) -> ScheduleTriggerResult:
         """Trigger an immediate run of the schedule.
 
         Raises:
@@ -819,11 +946,24 @@ class TemporalClientAdapter:
 
         handle, _desc = await self._get_schedule_handle(definition_id)
         try:
+            triggered_after = datetime.now(timezone.utc)
             await handle.trigger()
         except Exception as exc:
             raise ScheduleOperationError(
                 f"Failed to trigger schedule: {exc}"
             ) from exc
+        try:
+            description = await handle.describe()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to describe schedule after trigger",
+                exc_info=True,
+            )
+            return ScheduleTriggerResult()
+        return _latest_schedule_trigger_result(
+            description,
+            not_before=triggered_after,
+        )
 
     async def delete_schedule(self, *, definition_id: Any) -> None:
         """Delete a Temporal Schedule.

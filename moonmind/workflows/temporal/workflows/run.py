@@ -271,6 +271,37 @@ _PUBLISH_NOT_REQUIRED_STATUSES = frozenset(
         "not-applicable",
     }
 )
+_DIRECT_EXECUTABLE_OUTPUT_KEYS = frozenset(
+    {
+        "diagnostics_artifact_ref",
+        "diagnosticsArtifactRef",
+        "evidence_refs",
+        "evidenceRefs",
+        "primary_report_ref",
+        "primaryReportRef",
+        "publish_outcome",
+        "publishOutcome",
+        "push_status",
+        "pushStatus",
+        "report_bundle",
+        "reportBundle",
+        "report_bundle_v",
+        "reportBundleV",
+        "report_scope",
+        "reportScope",
+        "report_type",
+        "reportType",
+        "stderr_artifact_ref",
+        "stderrArtifactRef",
+        "stdout_artifact_ref",
+        "stdoutArtifactRef",
+        "structured_ref",
+        "structuredRef",
+        "summary_ref",
+        "summaryRef",
+    }
+)
+_REPORT_ONLY_PUBLISH_TYPES = frozenset({"security_pentest_report"})
 _JIRA_ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
 _JIRA_BACKED_AGENT_SKILLS = frozenset(
     {"jira-implement", *JIRA_BACKED_AGENT_SKILLS}
@@ -416,6 +447,7 @@ NATIVE_PR_LEASE_CONFLICT_GATE_PATCH = "native-pr-lease-conflict-gate-v1"
 RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH = (
     "run-stop-on-publish-handoff-failure-v1"
 )
+RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH = "run-direct-tool-report-outputs-v1"
 # Assert the producing Step Execution reached the `accepted` terminal
 # disposition before an external handoff runs, in addition to the existing
 # MoonSpec gate verdict block. Guarded for replay safety so in-flight runs keep
@@ -3517,7 +3549,7 @@ class MoonMindRunWorkflow:
         execution_result: Any,
         updated_at: datetime,
     ) -> None:
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
 
@@ -3608,11 +3640,20 @@ class MoonMindRunWorkflow:
             ),
         }
         artifacts = {
-            "outputSummary": _output_ref("outputSummaryRef", "output_summary_ref")
+            "outputSummary": _output_ref(
+                "outputSummaryRef",
+                "output_summary_ref",
+                "summaryRef",
+                "summary_ref",
+            )
             or _artifact_class_ref("output.summary"),
             "outputPrimary": _output_ref(
                 "outputPrimaryRef",
                 "output_primary_ref",
+                "primaryRef",
+                "primary_ref",
+                "primaryReportRef",
+                "primary_report_ref",
             )
             or _artifact_class_ref("output.primary"),
             "runtimeStdout": _output_ref(
@@ -3635,7 +3676,12 @@ class MoonMindRunWorkflow:
                 "logArtifactRef",
                 "log_artifact_ref",
             ),
-            "runtimeDiagnostics": _output_ref("diagnosticsRef", "diagnostics_ref")
+            "runtimeDiagnostics": _output_ref(
+                "diagnosticsRef",
+                "diagnostics_ref",
+                "diagnosticsArtifactRef",
+                "diagnostics_artifact_ref",
+            )
             or _artifact_class_ref("runtime.diagnostics"),
             "providerSnapshot": _output_ref(
                 "providerSnapshotRef",
@@ -4259,13 +4305,29 @@ class MoonMindRunWorkflow:
         logical_step_id: str,
         execution_result: Any,
     ) -> bool:
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         row_outputs = self._step_execution_compact_output_refs(logical_step_id)
         merged_outputs: dict[str, Any] = {}
         if isinstance(outputs, Mapping):
             merged_outputs.update(dict(outputs))
+            self._merge_direct_output_evidence(merged_outputs, outputs)
         merged_outputs.update(row_outputs)
         return logical_step_success_allowed(outputs=merged_outputs)
+
+    @staticmethod
+    def _merge_direct_output_evidence(
+        merged_outputs: dict[str, Any],
+        outputs: Mapping[str, Any],
+    ) -> None:
+        for source_key, target_key in (
+            ("primary_report_ref", "primaryRef"),
+            ("primaryReportRef", "primaryRef"),
+            ("summary_ref", "summaryRef"),
+            ("summaryRef", "summaryRef"),
+        ):
+            value = outputs.get(source_key)
+            if isinstance(value, str) and value.strip():
+                merged_outputs.setdefault(target_key, value.strip())
 
     def _review_gate_active(
         self,
@@ -7543,6 +7605,18 @@ class MoonMindRunWorkflow:
             return result.get(key)
         return getattr(result, key, None)
 
+    def _effective_result_outputs(self, result: Any) -> Mapping[str, Any] | None:
+        outputs = self._get_from_result(result, "outputs")
+        if isinstance(outputs, Mapping):
+            return outputs
+        if not workflow.patched(RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH):
+            return None
+        if isinstance(result, Mapping) and not _DIRECT_EXECUTABLE_OUTPUT_KEYS.isdisjoint(
+            result
+        ):
+            return result
+        return None
+
     def _activity_result_status(self, result: Any) -> str | None:
         raw_status = self._get_from_result(result, "status")
         if raw_status is None:
@@ -9332,7 +9406,7 @@ class MoonMindRunWorkflow:
         if publish_mode not in {"pr", "branch"}:
             return
 
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
         self._record_no_change_publish_evidence(outputs)
@@ -9341,6 +9415,16 @@ class MoonMindRunWorkflow:
         if not_required_reason is not None:
             self._publish_status = "not_required"
             self._publish_reason = not_required_reason
+            if self._merge_automation_requested(parameters):
+                self._publish_context["mergeAutomationStatus"] = "not_applicable"
+            return
+
+        report_not_required_reason = self._report_only_publish_not_required_reason(
+            outputs
+        )
+        if report_not_required_reason is not None:
+            self._publish_status = "not_required"
+            self._publish_reason = report_not_required_reason
             if self._merge_automation_requested(parameters):
                 self._publish_context["mergeAutomationStatus"] = "not_applicable"
             return
@@ -9418,6 +9502,46 @@ class MoonMindRunWorkflow:
         if push_status == "pushed" and publish_mode == "branch":
             self._publish_status = "published"
             self._publish_reason = "published branch"
+
+    def _report_only_publish_not_required_reason(
+        self,
+        outputs: Mapping[str, Any],
+    ) -> str | None:
+        report_type = self._coerce_text(
+            outputs.get("report_type") or outputs.get("reportType"),
+            max_chars=120,
+        )
+        report_bundle = outputs.get("report_bundle") or outputs.get("reportBundle")
+        if not report_type and isinstance(report_bundle, Mapping):
+            report_type = self._coerce_text(
+                report_bundle.get("report_type") or report_bundle.get("reportType"),
+                max_chars=120,
+            )
+        if report_type not in _REPORT_ONLY_PUBLISH_TYPES:
+            return None
+
+        primary_ref = self._coerce_text(
+            outputs.get("primary_report_ref") or outputs.get("primaryReportRef"),
+            max_chars=200,
+        )
+        if not primary_ref and isinstance(report_bundle, Mapping):
+            primary_bundle_ref = report_bundle.get(
+                "primary_report_ref"
+            ) or report_bundle.get("primaryReportRef")
+            if isinstance(primary_bundle_ref, Mapping):
+                primary_ref = self._coerce_text(
+                    primary_bundle_ref.get("artifact_id")
+                    or primary_bundle_ref.get("artifactId"),
+                    max_chars=200,
+                )
+            else:
+                primary_ref = self._coerce_text(primary_bundle_ref, max_chars=200)
+        if not primary_ref:
+            return None
+        return (
+            "security.pentest.run produced a final report artifact; "
+            "PR/branch publication is not applicable"
+        )
 
     def _publish_not_required_reason(self, outputs: Mapping[str, Any]) -> str | None:
         for source in self._publish_outcome_sources(outputs):
@@ -9530,7 +9654,7 @@ class MoonMindRunWorkflow:
         return None
 
     def _record_execution_context(self, *, node_id: str, execution_result: Any) -> None:
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
 
@@ -9749,7 +9873,7 @@ class MoonMindRunWorkflow:
 
     def _record_report_result(self, execution_result: Any) -> None:
         metadata = self._get_from_result(execution_result, "metadata")
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         report_sources = [
             source
             for source in (metadata, outputs)

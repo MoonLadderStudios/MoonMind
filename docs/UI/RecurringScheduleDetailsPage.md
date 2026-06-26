@@ -2,7 +2,7 @@
 
 **Status:** Active
 **Owner:** MoonMind Engineering
-**Last Updated:** 2026-06-24
+**Last Updated:** 2026-06-26
 **Audience:** UI developers, backend developers, operators
 
 ## 1. Purpose
@@ -129,7 +129,7 @@ The page needs the following schedule data:
 | `temporalScheduleId` | Advanced/debug fact when available |
 | `updatedAt` | Metadata and freshness display |
 
-The page uses the existing schedule endpoints. Delete is a planned contract and should not be surfaced in the UI until the backend route and runtime-config source are available.
+The page uses the existing schedule endpoints. Delete is surfaced only when the runtime config exposes the backend delete route.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -137,7 +137,7 @@ The page uses the existing schedule endpoints. Delete is a planned contract and 
 | `PATCH` | `/api/recurring-workflows/{definitionId}` | Save schedule edits |
 | `POST` | `/api/recurring-workflows/{definitionId}/run` | Trigger immediate manual run |
 | `GET` | `/api/recurring-workflows/{definitionId}/runs` | Load run history |
-| `DELETE` | `/api/recurring-workflows/{definitionId}` | Planned: delete schedule and stop future dispatch |
+| `DELETE` | `/api/recurring-workflows/{definitionId}` | Delete schedule and stop future dispatch |
 
 Runtime config should expose matching endpoint templates under `sources.schedules`:
 
@@ -150,13 +150,14 @@ Runtime config should expose matching endpoint templates under `sources.schedule
       "detail": "/api/recurring-workflows/{definitionId}",
       "update": "/api/recurring-workflows/{definitionId}",
       "runNow": "/api/recurring-workflows/{definitionId}/run",
-      "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200"
+      "runs": "/api/recurring-workflows/{definitionId}/runs?limit=200",
+      "delete": "/api/recurring-workflows/{definitionId}"
     }
   }
 }
 ```
 
-`sources.schedules.delete` should be added only when `DELETE /api/recurring-workflows/{definitionId}` is implemented by the backend.
+`sources.schedules.delete` is required for rendering the destructive delete action.
 
 ---
 
@@ -194,9 +195,9 @@ The edit surface should not require users to return to `/workflows/new` to adjus
 
 ---
 
-## 9. Planned Delete Behavior
+## 9. Delete Behavior
 
-The delete action is destructive and should live in the detail page action area, visually separated from routine actions, once the backend delete route and `sources.schedules.delete` runtime-config template exist.
+The delete action is destructive and should live in the detail page action area, visually separated from routine actions.
 
 Required behavior:
 
@@ -232,7 +233,7 @@ This keeps the recurring schedule page focused on controlling the cadence and re
 - If the schedule no longer exists, show a not-found state with a link back to `/schedules`.
 - If the detail request succeeds but run history fails, keep the schedule controls available and show a localized runs-panel error.
 - If update fails because reconciliation with Temporal failed, present the MoonMind API error and leave the page state unchanged.
-- If delete is unavailable because the backend contract has not been implemented, do not render the delete action.
+- If delete is unavailable because runtime config omits `sources.schedules.delete`, do not render the delete action.
 - If the schedule is disabled, the page should show it as paused/disabled rather than failed.
 - If `lastDispatchStatus` or `lastDispatchError` indicates failure, the page should show an attention state but still allow edit, run now, and available destructive actions when authorized.
 
