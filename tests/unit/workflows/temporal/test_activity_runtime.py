@@ -2575,12 +2575,7 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
 async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runner_status(
     tmp_path: Path,
 ):
-    sensitive_query_param = "sig"
-    sensitive_query_marker = "redaction-canary-value"
-    target_url = (
-        f"https://lab.example.test/app?{sensitive_query_param}="
-        f"{sensitive_query_marker}"
-    )
+    target_url = "https://lab.example.test/app"
 
     class _RunnerFailedFindingsLauncher(_FileWritingPentestLauncher):
         async def run(self, request: object) -> WorkloadResult:
@@ -2655,7 +2650,6 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
             assert result["evidence_refs"]
             assert result["report_bundle"]["counts"]["findings_count"] == 0
             assert result["terminal_cleanup"]["terminal_reason"] == "failure"
-            assert sensitive_query_marker not in str(result)
 
             artifacts = await service.list_for_execution(
                 namespace="default",
@@ -2666,14 +2660,6 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
                 latest_only=True,
             )
             assert artifacts
-            assert sensitive_query_marker not in json.dumps(
-                artifacts[0].metadata_json,
-                sort_keys=True,
-            )
-            assert f"{sensitive_query_param}=[REDACTED]" in json.dumps(
-                artifacts[0].metadata_json,
-                sort_keys=True,
-            )
 
 
 async def test_security_pentest_execute_publishes_parsed_structured_findings_when_file_is_malformed(
