@@ -3020,6 +3020,8 @@ label.checkbox {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
+  width: fit-content;
+  max-width: 100%;
 }
 
 input,

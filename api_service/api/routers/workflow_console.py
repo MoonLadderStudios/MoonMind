@@ -815,7 +815,6 @@ async def workflow_console_route(
         "workflow-detail",
         detail_path,
         initial_data={"dashboardConfig": dashboard_config},
-        data_wide_panel=True,
         session=session,
         user=_user,
     )
