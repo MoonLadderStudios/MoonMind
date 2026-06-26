@@ -82,6 +82,22 @@ def test_supported_action_types_and_safety_rules_documented() -> None:
     assert "most conservative action" in text
 
 
+def test_remediation_handles_docs_architecture_defects_and_broad_work() -> None:
+    text = _read_skill()
+
+    for expected in (
+        "missing metadata",
+        "unclear authority",
+        "missing embedded rationale",
+        "duplicate contract",
+        "imperative leakage",
+        "unverifiable canonical claims",
+    ):
+        assert expected in text
+    assert "docs/tmp/" in text
+    assert "improvement plan" in text
+
+
 def test_high_level_workflow_has_thirteen_safe_ordered_steps() -> None:
     text = _read_skill()
 
