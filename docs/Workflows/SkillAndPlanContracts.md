@@ -467,6 +467,25 @@ Workers declare capability sets (e.g., `llm`, `sandbox`, `integration:jules`, `i
 
 Broad Moon Spec breakdown is an agent-runtime operation that writes story candidates as durable handoff files under `artifacts/story-breakdowns/`. It does not create `spec.md` files and does not write under `specs/`.
 
+MoonSpec doc slicing is the deterministic doc-native path between canonical
+documentation indexing and story breakdown. `tools/index_moonspec_docs.py`
+writes `artifacts/moonspec-doc-index/index.json` with durable canonical claim
+IDs. `tools/slice_moonspec_docs.py` consumes that index and emits temporary
+derived workflow artifacts under `artifacts/moonspec-doc-slices/`:
+
+* `doc-slices.json` maps one or more stable canonical claim IDs and run-local
+  coverage IDs to one independently testable story candidate with explicit
+  dependencies.
+* `implementation-packets.json` carries compact Source Packet references for
+  downstream `moonspec-specify`, `moonspec-plan`, `moonspec-tasks`,
+  `moonspec-implement`, and `moonspec-verify` stages.
+
+These artifacts are not source-of-truth documents. They contain compact paths,
+claim IDs, coverage IDs, digests, and metadata; they do not embed canonical
+document bodies in workflow payloads. If a downstream `spec.md` is produced for
+compatibility, it remains a temporary derived adapter from the doc slice Source
+Packet, not the authoritative design object.
+
 When a workflow execution requests Jira issue creation from ambiguous user intent, the planner should dispatch an `agent_runtime` step with the `jira-issue-creator` agent skill selected. The agent uses the Jira connector/API to resolve projects, issue types, create fields, and issue descriptions.
 
 ```json
