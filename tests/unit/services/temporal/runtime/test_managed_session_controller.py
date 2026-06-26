@@ -4781,6 +4781,86 @@ async def test_controller_reconcile_marks_terminal_owner_session_terminated(
     session_supervisor.start.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_controller_terminal_owner_lookup_handles_bad_status_value(
+    tmp_path: Path,
+) -> None:
+    record = CodexManagedSessionRecord(
+        sessionId="sess-bad-status",
+        sessionEpoch=1,
+        agentRunId="task-bad-status",
+        containerId="ctr-bad-status",
+        threadId="thread-bad-status",
+        runtimeId="codex_cli",
+        imageRef="img",
+        controlUrl="docker-exec://bad-status",
+        status="ready",
+        workspacePath="/work/repo",
+        sessionWorkspacePath="/work/session",
+        artifactSpoolPath="/work/artifacts",
+        startedAt="2026-04-06T12:00:00Z",
+    )
+
+    class _BadStatus:
+        @property
+        def name(self) -> str:
+            raise RuntimeError("unexpected status shape")
+
+    async def _owner_workflow_status(_workflow_id: str) -> object:
+        return _BadStatus()
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=ManagedSessionStore(tmp_path / "session-store"),
+        owner_workflow_status_resolver=_owner_workflow_status,
+    )
+
+    assert await controller._terminal_owner_workflow_status(record) is None
+
+
+@pytest.mark.asyncio
+async def test_controller_reconcile_termination_allows_nullable_record_metadata(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    record = CodexManagedSessionRecord(
+        sessionId="sess-null-metadata",
+        sessionEpoch=1,
+        agentRunId="task-null-metadata",
+        containerId="ctr-null-metadata",
+        threadId="thread-null-metadata",
+        runtimeId="codex_cli",
+        imageRef="img",
+        controlUrl="docker-exec://null-metadata",
+        status="ready",
+        workspacePath="/work/repo",
+        sessionWorkspacePath="/work/session",
+        artifactSpoolPath="/work/artifacts",
+        startedAt="2026-04-06T12:00:00Z",
+    )
+    store.save(record)
+    record.metadata = None
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+    )
+
+    updated = await controller._mark_session_terminated_by_reconcile(
+        record,
+        reason="owner workflow completed",
+        metadata={"ownerWorkflowStatus": "COMPLETED"},
+    )
+
+    assert updated.status == "terminated"
+    assert updated.metadata["ownerWorkflowStatus"] == "COMPLETED"
+    assert updated.metadata["terminationSource"] == "managed_session_reconcile"
+
+
 def _reap_active_record(session_id: str) -> CodexManagedSessionRecord:
     return CodexManagedSessionRecord(
         sessionId=session_id,
@@ -4996,6 +5076,101 @@ async def test_controller_reaps_stale_ready_session_after_max_age(
     assert stale_record.metadata["reapReason"] == "stale_active_session_max_age"
     assert store.load("sess-recent").status == "ready"
     assert store.load("sess-busy").status == "busy"
+
+
+def test_controller_stale_ready_ids_skip_missing_age_and_accept_naive_age(
+    tmp_path: Path,
+) -> None:
+    missing_age = _reap_active_record("sess-missing-age")
+    missing_age.started_at = None
+    missing_age.updated_at = None
+    naive_age = _reap_active_record("sess-naive-age")
+    naive_age.started_at = datetime(2020, 1, 1, 0, 0, 0)
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root=str(tmp_path / "agent_jobs"),
+    )
+
+    stale = controller._stale_active_session_ids(
+        active_records={
+            missing_age.session_id: missing_age,
+            naive_age.session_id: naive_age,
+        },
+        by_session={},
+        max_age_seconds=3600,
+        now=datetime.now(tz=UTC),
+    )
+
+    assert stale == {"sess-naive-age"}
+
+
+@pytest.mark.asyncio
+async def test_controller_reap_continues_when_stale_session_termination_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", "3600")
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(_reap_active_record("sess-fail"))
+    store.save(_reap_active_record("sess-ok"))
+    original_update = store.update
+
+    async def _update(session_id: str, **kwargs: object) -> CodexManagedSessionRecord:
+        if session_id == "sess-fail":
+            raise RuntimeError("database unavailable")
+        return await original_update(session_id, **kwargs)
+
+    store.update = _update
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:2] == ("docker", "ps"):
+            return 0, "c-fail\nc-ok\n", ""
+        if command[:3] == ("docker", "inspect", "--format"):
+            return (
+                0,
+                "c-fail|sess-fail|managed-session|2020-01-01T00:00:00Z\n"
+                "c-ok|sess-ok|managed-session|2020-01-01T00:00:00Z\n",
+                "",
+            )
+        if command[:3] == ("docker", "rm", "-f"):
+            if command[-1].startswith("moonmind-session-"):
+                return 1, "", "No such container"
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.forced_stale == 1
+    assert result.reaped_session_ids == ("sess-ok",)
+    assert result.reaped_containers == 1
+    removed = {cmd[-1] for cmd in commands if cmd[:3] == ("docker", "rm", "-f")}
+    assert "c-ok" in removed
+    assert "c-fail" not in removed
+    assert store.load("sess-fail").status == "ready"
+    assert store.load("sess-ok").status == "terminated"
 
 
 @pytest.mark.asyncio

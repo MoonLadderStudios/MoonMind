@@ -180,6 +180,22 @@ def _parse_docker_timestamp(value: str) -> datetime | None:
     return parsed
 
 
+def _coerce_aware_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = _parse_docker_timestamp(value)
+    else:
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def _normalize_owner_workflow_status(value: Any) -> str:
     """Normalize Temporal workflow status values for terminal-state checks."""
 
@@ -3519,6 +3535,9 @@ class DockerCodexManagedSessionController:
             return None
         try:
             status = await resolver(record.agent_run_id)
+            if not _owner_workflow_status_is_terminal(status):
+                return None
+            return _normalize_owner_workflow_status(status)
         except Exception:
             logger.warning(
                 "Managed session owner workflow status lookup failed for %s",
@@ -3526,9 +3545,6 @@ class DockerCodexManagedSessionController:
                 exc_info=True,
             )
             return None
-        if not _owner_workflow_status_is_terminal(status):
-            return None
-        return _normalize_owner_workflow_status(status)
 
     async def _mark_session_terminated_by_reconcile(
         self,
@@ -3540,7 +3556,7 @@ class DockerCodexManagedSessionController:
         if self._session_store is None:
             return record
         updated_metadata = {
-            **dict(record.metadata),
+            **dict(record.metadata or {}),
             **dict(metadata),
             "terminationSource": "managed_session_reconcile",
             "terminatedAt": datetime.now(tz=UTC).isoformat(),
@@ -3683,6 +3699,9 @@ class DockerCodexManagedSessionController:
             age_anchor = (
                 newest_container_created_at or record.updated_at or record.started_at
             )
+            age_anchor = _coerce_aware_datetime(age_anchor)
+            if age_anchor is None:
+                continue
             if (now - age_anchor).total_seconds() < max_age_seconds:
                 continue
             stale.add(session_id)
@@ -4008,20 +4027,27 @@ class DockerCodexManagedSessionController:
                 skipped_recent += len(session_containers)
                 continue
             if force_stale:
-                forced_stale += 1
                 record = active_records.get(session_id)
                 if record is not None:
-                    await self._mark_session_terminated_by_reconcile(
-                        record,
-                        reason=(
-                            "managed session exceeded reap max age without an "
-                            "active turn"
-                        ),
-                        metadata={
-                            "maxAgeSeconds": max_age_seconds,
-                            "reapReason": "stale_active_session_max_age",
-                        },
-                    )
+                    try:
+                        await self._mark_session_terminated_by_reconcile(
+                            record,
+                            reason=(
+                                "managed session exceeded reap max age without an "
+                                "active turn"
+                            ),
+                            metadata={
+                                "maxAgeSeconds": max_age_seconds,
+                                "reapReason": "stale_active_session_max_age",
+                            },
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to terminate stale active session %s during reap",
+                            session_id,
+                        )
+                        continue
+                forced_stale += 1
                 logger.warning(
                     "Reaping stale active managed session %s after max age %s seconds",
                     session_id,
@@ -4047,19 +4073,28 @@ class DockerCodexManagedSessionController:
                     session_id,
                 )
         for session_id in sorted(stale_active_session_ids - set(by_session)):
-            forced_stale += 1
             record = active_records.get(session_id)
             if record is not None:
-                await self._mark_session_terminated_by_reconcile(
-                    record,
-                    reason=(
-                        "managed session exceeded reap max age without an active turn"
-                    ),
-                    metadata={
-                        "maxAgeSeconds": max_age_seconds,
-                        "reapReason": "stale_active_session_max_age",
-                    },
-                )
+                try:
+                    await self._mark_session_terminated_by_reconcile(
+                        record,
+                        reason=(
+                            "managed session exceeded reap max age without an "
+                            "active turn"
+                        ),
+                        metadata={
+                            "maxAgeSeconds": max_age_seconds,
+                            "reapReason": "stale_active_session_max_age",
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to terminate stale active session %s "
+                        "(no containers) during reap",
+                        session_id,
+                    )
+                    continue
+            forced_stale += 1
             logger.warning(
                 "Marked stale active managed session %s terminated after max age "
                 "%s seconds; no labeled containers were present",
