@@ -221,14 +221,9 @@ def _get_managed_session_store_root() -> str:
         "managed_sessions",
     )
 
-NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
-    MoonMindWorkflowState.SCHEDULED,
-    MoonMindWorkflowState.INITIALIZING,
-    MoonMindWorkflowState.PLANNING,
-    MoonMindWorkflowState.EXECUTING,
-    MoonMindWorkflowState.AWAITING_EXTERNAL,
-    MoonMindWorkflowState.FINALIZING,
-}
+NON_TERMINAL_STATES: set[MoonMindWorkflowState] = (
+    set(MoonMindWorkflowState) - TERMINAL_STATES
+)
 
 _RUNNING_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.PLANNING,

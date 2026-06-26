@@ -3905,6 +3905,44 @@ async def test_signal_pause_recovery_and_external_event_transitions(
         assert "artifact://events/1" in (signaled.artifact_refs or [])
         assert signaled.state is MoonMindWorkflowState.EXECUTING
 
+
+@pytest.mark.asyncio
+async def test_signal_pause_allows_awaiting_slot(tmp_path, mock_client_adapter):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        created.state = MoonMindWorkflowState.AWAITING_SLOT
+        await session.commit()
+
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="Pause",
+            payload={},
+            payload_artifact_ref=None,
+        )
+
+        mock_client_adapter.update_workflow.assert_awaited_once_with(
+            created.workflow_id,
+            "Pause",
+        )
+        paused = await service.describe_execution(created.workflow_id)
+        assert paused.state is MoonMindWorkflowState.AWAITING_SLOT
+        assert paused.paused is True
+        assert paused.memo["waiting_reason"] == "operator_paused"
+
+
 @pytest.mark.asyncio
 async def test_signal_resume_forwards_payload_via_workflow_update(
     tmp_path, mock_client_adapter
