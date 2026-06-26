@@ -1,0 +1,198 @@
+# Backend Test Selection Strategy
+
+## Purpose
+
+MoonMind uses impact-aware backend test selection to keep pull request feedback fast without weakening coverage for risky changes. The strategy is:
+
+```text
+Run the cheap, broad safety net on backend pull requests.
+Run expensive specialized suites only when changed files can affect them.
+Run full backend verification for risky or uncertain cases.
+Fail open when classification is incomplete or ambiguous.
+```
+
+This document describes the intended steady-state behavior. It is not a rollout checklist.
+
+## Test Categories
+
+Backend tests are classified by the runtime resources they start, not by the implementation code they exercise.
+
+| Category | Marker | Resource boundary | PR behavior |
+| --- | --- | --- | --- |
+| Fast unit | `unit_fast` | Pure Python logic, schemas, validation, and services with mocks. No Docker, network, external process, or Temporal test server. | Required for backend-impacting pull requests. |
+| Component | `component` | FastAPI `TestClient`, dependency overrides, and in-process router/service wiring. | Required for API, auth, database, service, and generated OpenAPI type changes. |
+| Temporal boundary | `temporal_boundary` | Temporal `WorkflowEnvironment`, `Worker`, `Replayer`, workflow signal/update/query/replay, activity-boundary, and serialized payload behavior. | Required for Temporal workflow, runtime, worker, or Temporal schema-sensitive changes. |
+| Slow | `slow` | Valuable tests that are too expensive or too environment-sensitive for the default PR fast path. | Excluded from the default PR fast path; run manually, nightly, or by explicit target. |
+| Hermetic integration CI | `integration` plus `integration_ci` | Docker Compose-backed tests using local dependencies only. No external credentials. | Required for Docker, compose, database, migration, integration-test, and runtime infrastructure changes. |
+| Provider verification | `provider_verification` plus provider-specific markers | Live external-provider tests requiring real credentials. | Outside required PR CI; run manually or in credentialed scheduled environments. |
+
+The pytest marker registry lives in `pyproject.toml`. Runtime classification for existing tests is centralized in `tests/conftest.py`; explicit markers are still preferred when a test has a clear resource boundary.
+
+## Selector Contract
+
+`tools/select_test_suites.py` reads changed file paths from stdin and emits GitHub Actions-compatible outputs:
+
+```text
+unit_fast=true|false
+api_component=true|false
+temporal_boundary=true|false
+integration_ci=true|false
+full_backend=true|false
+```
+
+The selector is conservative. If it cannot classify the change confidently, it selects full backend verification.
+
+### Backend Detection
+
+A pull request is backend-impacting when it touches backend source, backend tests, backend tooling, migrations, or workflow-sensitive generated contracts. Backend-impacting pull requests select `unit_fast=true` unless the selector forces the full backend path, which also includes fast unit coverage.
+
+Docs-only and frontend-only changes do not select backend suites unless they touch a backend-sensitive generated contract or another fail-open path.
+
+### Component Selection
+
+The selector enables `api_component=true` for changes under or matching:
+
+- `api_service/api/`
+- `api_service/auth*`
+- `api_service/auth_providers.py`
+- `api_service/db/`
+- `api_service/services/`
+- `tests/unit/api/`
+- `tests/unit/api_service/`
+- `tests/component/api/`
+- `tools/export_openapi.py`
+- `tools/generate_openapi_types.py`
+- `frontend/src/generated/openapi.ts`
+
+Component tests are intended to catch in-process API, router, auth, database, and service wiring regressions without starting Docker or a live Temporal server.
+
+### Temporal Boundary Selection
+
+The selector enables `temporal_boundary=true` for changes under or matching:
+
+- `moonmind/workflows/temporal/`
+- `moonmind/schemas/managed_session_models.py`
+- `moonmind/schemas/*workflow*`
+- `moonmind/schemas/*temporal*`
+- `api_service/worker*`
+- `tests/unit/workflows/temporal/`
+- `tests/integration/workflows/temporal/`
+
+Temporal boundary tests are mandatory for changes to workflow code, activity invocation shapes, signal/update/query names, replay-visible behavior, status normalization, serialized payloads, managed-session schemas, or adapter-to-workflow contracts.
+
+### Hermetic Integration CI Selection
+
+The selector enables `integration_ci=true` for changes under or matching:
+
+- `docker-compose.test.yaml`
+- `api_service/Dockerfile`
+- `.env-template`
+- `tests/integration/`
+- `tools/test_integration.sh`
+- `api_service/db/`
+- `api_service/migrations/`
+- `migrations/`
+- `alembic/`
+- `pyproject.toml`
+- `uv.lock`
+
+This suite validates compose-backed local infrastructure seams and must remain free of external-provider credentials.
+
+## Full Backend Path
+
+The selector enables `full_backend=true` and selects all backend suites when any of the following is true:
+
+- Changed files cannot be determined.
+- Changed-file input is empty.
+- A changed path is unknown to the selector.
+- The event is a push to `main`.
+- The event is `workflow_dispatch`.
+- The event is `schedule`.
+- CI workflow files changed under `.github/workflows/`.
+- Dependency files changed, including `pyproject.toml`, `uv.lock`, or `poetry.lock`.
+- Test runner or selector files changed, including `tools/test_unit.sh`, `tools/test_unit_docker.sh`, `tools/test_integration.sh`, or `tools/select_test_suites.py`.
+- Global pytest configuration changed, including `tests/conftest.py` or `tests/unit/conftest.py`.
+
+The full backend path uses the canonical unit runner:
+
+```bash
+./tools/test_unit.sh --python-only
+```
+
+`./tools/test_unit.sh` reports slow tests with `--durations=${MOONMIND_PYTEST_DURATIONS:-25}` and emits JUnit XML in CI.
+
+## Required Check Model
+
+Conditional GitHub Actions jobs are not suitable as individual branch-protection requirements because skipped jobs can leave required checks unresolved. MoonMind uses one always-running required summary job instead:
+
+- `select-test-suites` computes backend suite outputs.
+- `unit-fast`, `api-component`, `temporal-boundary`, and `integration-ci` run only when selected.
+- `ci-required` always runs and fails if any selected backend suite did not complete successfully.
+
+Branch protection should require `ci-required` for backend selection, plus any separately required frontend, generated-contract, CodeQL, or repository policy checks.
+
+## Main, Manual, And Scheduled Runs
+
+Pull request CI is impact-aware. Safety paths are intentionally broader:
+
+- Pushes to `main` run full backend verification.
+- Manual dispatches run full backend verification.
+- Scheduled runs run full backend verification.
+- The standalone `Run Pytest Integration CI` workflow remains available for scheduled and manual hermetic integration runs.
+- Provider verification remains separate and should run only where required provider credentials are intentionally available.
+
+## Local Commands
+
+Run selector tests after changing path rules:
+
+```bash
+pytest tests/unit/tools/test_select_test_suites.py -q
+```
+
+Run the fast unit PR safety net:
+
+```bash
+pytest tests/unit \
+  -m "not temporal_boundary and not component and not slow" \
+  -q -n auto --dist loadfile --durations=25
+```
+
+Run component coverage:
+
+```bash
+pytest tests/unit/api tests/unit/api_service tests/component/api \
+  -m "component and not temporal_boundary and not slow" \
+  -q -n auto --dist loadfile --durations=25
+```
+
+Run Temporal boundary coverage:
+
+```bash
+pytest tests/unit/workflows/temporal \
+  -m "temporal_boundary and not slow" \
+  -q --durations=25
+```
+
+Run hermetic integration CI:
+
+```bash
+./tools/test_integration.sh
+```
+
+Run full backend unit verification:
+
+```bash
+./tools/test_unit.sh --python-only
+```
+
+## Maintaining The Selector
+
+When adding a new backend subsystem, test category, or high-risk path:
+
+1. Add the path rule to `tools/select_test_suites.py`.
+2. Add selector unit coverage in `tests/unit/tools/test_select_test_suites.py`.
+3. Update this document when the intended strategy changes.
+4. Keep test classification resource-based.
+5. Prefer over-selection to under-selection.
+
+Selector changes must force full backend verification, because a broken selector can silently skip the wrong suites.

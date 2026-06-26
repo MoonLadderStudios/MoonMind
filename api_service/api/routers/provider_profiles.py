@@ -1,0 +1,1684 @@
+"""CRUD API for managed agent provider profiles."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, Optional
+
+import httpx
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api_service.auth_providers import get_current_user
+from api_service.db.models import (
+    ManagedAgentProviderProfile,
+    ManagedAgentRateLimitPolicy,
+    ManagedSecret,
+    ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
+    RuntimeMaterializationMode,
+    SecretStatus,
+    User,
+)
+from api_service.services.settings_catalog import has_settings_permission
+from moonmind.auth.secret_refs import (
+    ParsedSecretRef,
+    SecretBackend,
+    SecretReferenceError,
+    parse_secret_ref,
+)
+from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
+from moonmind.utils.logging import (
+    redact_profile_file_templates,
+    redact_sensitive_payload,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/provider-profiles", tags=["provider-profiles"])
+_claude_manual_validation_client: httpx.AsyncClient | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SecretRefParseResult:
+    parsed: ParsedSecretRef | None = None
+    error: str | None = None
+
+def validate_secret_refs_helper(value: dict[str, str] | None) -> dict[str, str] | None:
+    if not value:
+        return value
+    for k, v in value.items():
+        if not v:
+            continue
+        try:
+            parse_secret_ref(v)
+        except SecretReferenceError as e:
+            raise ValueError(f"Invalid secret reference {v!r} for key {k!r}: {e}")
+    return value
+
+# ---------------------------------------------------------------------------
+# Request / Response schemas
+# ---------------------------------------------------------------------------
+
+class ProviderProfileCreate(BaseModel):
+    profile_id: str = Field(..., max_length=128)
+    runtime_id: str = Field(..., max_length=64)
+    provider_id: str = Field(default="unknown", max_length=64)
+    provider_label: Optional[str] = None
+    default_model: Optional[str] = None
+    default_effort: Optional[str] = Field(default=None, max_length=64)
+    model_overrides: Optional[dict[str, str]] = None
+    
+    credential_source: str = Field(..., pattern="^(oauth_volume|secret_ref|none)$")
+    runtime_materialization_mode: str = Field(..., pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
+    
+    volume_ref: Optional[str] = None
+    volume_mount_path: Optional[str] = None
+    account_label: Optional[str] = None
+    
+    tags: Optional[list[str]] = None
+    priority: int = Field(default=100)
+    
+    secret_refs: Optional[dict[str, str]] = None
+    clear_env_keys: Optional[list[str]] = None
+    env_template: Optional[dict[str, Any]] = None
+    file_templates: Optional[list[dict[str, Any]]] = None
+    home_path_overrides: Optional[dict[str, str]] = None
+    command_behavior: Optional[dict[str, Any]] = None
+
+    max_parallel_runs: int = Field(default=1, ge=1)
+    cooldown_after_429_seconds: int = Field(default=900, ge=0)
+    rate_limit_policy: str = Field(default="backoff", pattern="^(backoff|queue|fail_fast)$")
+    enabled: bool = False
+    is_default: bool = False
+    max_lease_duration_seconds: int = Field(default=7200, ge=60)
+    auth_state: str = Field(
+        default="not_configured",
+        pattern="^(not_configured|oauth_pending|api_key_pending|connected|validation_failed|disconnected)$",
+    )
+    disabled_reason: Optional[str] = Field(
+        default="missing_credentials",
+        pattern="^(missing_credentials|auth_invalid|user_disabled|policy_disabled|disconnected)$",
+    )
+    first_authenticated_at: Optional[datetime] = None
+    last_validated_at: Optional[datetime] = None
+    last_auth_method: Optional[str] = Field(
+        default=None,
+        pattern="^(oauth_volume|secret_ref|manual)$",
+    )
+
+    @field_validator("env_template", mode="before")
+    @classmethod
+    def _stringify_runtime_env(
+        cls, value: object
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("env_template must be a JSON object")
+        return value
+
+    @field_validator("secret_refs", mode="after")
+    @classmethod
+    def _validate_secret_refs(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        return validate_secret_refs_helper(value)
+
+    @model_validator(mode="after")
+    def _validate_runtime_env(self) -> "ProviderProfileCreate":
+        if self.enabled and self.auth_state != ProviderProfileAuthState.CONNECTED.value:
+            raise ValueError("enabled profiles require auth_state=connected")
+        if self.enabled:
+            self.disabled_reason = None
+        validate_codex_oauth_profile_refs(
+            runtime_id=self.runtime_id,
+            credential_source=self.credential_source,
+            runtime_materialization_mode=self.runtime_materialization_mode,
+            volume_ref=self.volume_ref,
+            volume_mount_path=self.volume_mount_path,
+            volume_ref_field_name="volume_ref",
+            volume_mount_path_field_name="volume_mount_path",
+        )
+        return self
+
+class ProviderProfileUpdate(BaseModel):
+    provider_id: Optional[str] = Field(default=None, max_length=64)
+    provider_label: Optional[str] = None
+    default_model: Optional[str] = None
+    default_effort: Optional[str] = Field(default=None, max_length=64)
+    model_overrides: Optional[dict[str, str]] = None
+    credential_source: Optional[str] = Field(default=None, pattern="^(oauth_volume|secret_ref|none)$")
+    runtime_materialization_mode: Optional[str] = Field(default=None, pattern="^(oauth_home|api_key_env|env_bundle|config_bundle|composite)$")
+    volume_ref: Optional[str] = None
+    volume_mount_path: Optional[str] = None
+    account_label: Optional[str] = None
+    tags: Optional[list[str]] = None
+    priority: Optional[int] = None
+    secret_refs: Optional[dict[str, str]] = None
+    clear_env_keys: Optional[list[str]] = None
+    env_template: Optional[dict[str, Any]] = None
+    file_templates: Optional[list[dict[str, Any]]] = None
+    home_path_overrides: Optional[dict[str, str]] = None
+    command_behavior: Optional[dict[str, Any]] = None
+
+    max_parallel_runs: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("env_template", mode="before")
+    @classmethod
+    def _stringify_runtime_env_update(
+        cls, value: object
+    ) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("env_template must be a JSON object")
+        return value
+        
+    cooldown_after_429_seconds: Optional[int] = Field(default=None, ge=0)
+    rate_limit_policy: Optional[str] = Field(
+        default=None, pattern="^(backoff|queue|fail_fast)$"
+    )
+    enabled: Optional[bool] = None
+    is_default: Optional[bool] = None
+    max_lease_duration_seconds: Optional[int] = Field(default=None, ge=60)
+    auth_state: Optional[str] = Field(
+        default=None,
+        pattern="^(not_configured|oauth_pending|api_key_pending|connected|validation_failed|disconnected)$",
+    )
+    disabled_reason: Optional[str] = Field(
+        default=None,
+        pattern="^(missing_credentials|auth_invalid|user_disabled|policy_disabled|disconnected)$",
+    )
+    first_authenticated_at: Optional[datetime] = None
+    last_validated_at: Optional[datetime] = None
+    last_auth_method: Optional[str] = Field(
+        default=None,
+        pattern="^(oauth_volume|secret_ref|manual)$",
+    )
+
+    @field_validator("secret_refs", mode="after")
+    @classmethod
+    def _validate_secret_refs_update(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        return validate_secret_refs_helper(value)
+
+    @model_validator(mode="after")
+    def _validate_runtime_env_update(self) -> "ProviderProfileUpdate":
+        return self
+
+class ProviderProfileResponse(BaseModel):
+    profile_id: str
+    runtime_id: str
+    provider_id: str
+    provider_label: Optional[str]
+    default_model: Optional[str] = None
+    default_effort: Optional[str] = None
+    model_overrides: dict[str, str] = Field(default_factory=dict)
+    credential_source: str
+    runtime_materialization_mode: str
+    volume_ref: Optional[str]
+    volume_mount_path: Optional[str]
+    account_label: Optional[str]
+    tags: Optional[list[str]] = None
+    priority: int = 100
+    secret_refs: Optional[dict[str, str]] = None
+    clear_env_keys: Optional[list[str]] = None
+    env_template: Optional[dict[str, Any]] = None
+    file_templates: Optional[list[dict[str, Any]]] = None
+    home_path_overrides: Optional[dict[str, str]] = None
+    command_behavior: Optional[dict[str, Any]] = None
+    max_parallel_runs: int
+    cooldown_after_429_seconds: int
+    rate_limit_policy: str
+    enabled: bool
+    is_default: bool
+    max_lease_duration_seconds: int
+    auth_state: str
+    disabled_reason: Optional[str]
+    first_authenticated_at: Optional[str]
+    last_validated_at: Optional[str]
+    last_auth_method: Optional[str]
+    launch_ready: bool
+    readiness: "ProviderProfileReadiness"
+    created_at: Optional[str]
+    updated_at: Optional[str]
+
+    model_config = {"from_attributes": True}
+
+class ProviderReadinessCheck(BaseModel):
+    id: str
+    label: str
+    status: str = Field(..., pattern="^(pass|warning|error)$")
+    message: str
+
+class ProviderProfileReadiness(BaseModel):
+    status: str = Field(..., pattern="^(ready|warning|blocked)$")
+    launch_ready: bool
+    summary: str
+    checks: list[ProviderReadinessCheck]
+
+class ClaudeManualAuthCommitRequest(BaseModel):
+    token: str = Field(..., min_length=1, max_length=8192)
+    account_label: Optional[str] = None
+
+class ProviderApiKeySetupRequest(BaseModel):
+    api_key: str = Field(..., min_length=1, max_length=8192)
+    account_label: Optional[str] = None
+    make_default: bool = False
+    enable_after_validation: bool = True
+
+class ClaudeManualAuthReadiness(BaseModel):
+    connected: bool
+    last_validated_at: str
+    backing_secret_exists: bool
+    launch_ready: bool
+    failure_reason: Optional[str] = None
+
+class ClaudeManualAuthCommitResponse(BaseModel):
+    status: str
+    status_label: str
+    readiness: ClaudeManualAuthReadiness
+    profile_id: str
+    secret_ref: str
+
+class ProviderApiKeySetupResponse(BaseModel):
+    status: str
+    status_label: str
+    readiness: ClaudeManualAuthReadiness
+    profile_id: str
+    secret_ref: str
+
+# ---------------------------------------------------------------------------
+# Dependency: DB session
+# ---------------------------------------------------------------------------
+
+def _get_session() -> Any:
+    """Return the session dependency. Resolved at import-time from the app."""
+    from api_service.db.base import get_async_session
+
+    return get_async_session
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("", response_model=list[ProviderProfileResponse])
+async def list_profiles(
+    runtime_id: Optional[str] = None,
+    enabled_only: bool = False,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> list[dict[str, Any]]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    stmt = select(ManagedAgentProviderProfile)
+    if runtime_id:
+        stmt = stmt.where(ManagedAgentProviderProfile.runtime_id == runtime_id)
+    if enabled_only:
+        stmt = stmt.where(ManagedAgentProviderProfile.enabled.is_(True))
+    stmt = stmt.order_by(
+        ManagedAgentProviderProfile.is_default.desc(),
+        ManagedAgentProviderProfile.priority.desc(),
+        ManagedAgentProviderProfile.profile_id.asc(),
+    )
+
+    result = await session.execute(stmt)
+    rows = result.scalars().all()
+    visible_rows = [r for r in rows if _can_view_profile(r, current_user)]
+    secret_ref_results = _secret_ref_results_for_rows(visible_rows)
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        visible_rows,
+        secret_ref_results=secret_ref_results,
+    )
+    return [
+        _row_to_dict(
+            r,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(r.profile_id),
+        )
+        for r in visible_rows
+    ]
+
+@router.get("/{profile_id}", response_model=ProviderProfileResponse)
+async def get_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.read")
+    row = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    if not _can_view_profile(row, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this provider profile.",
+        )
+    secret_ref_results = _secret_ref_results_for_rows([row])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [row],
+        secret_ref_results=secret_ref_results,
+    )
+    return _row_to_dict(
+        row,
+        managed_secret_statuses=secret_statuses,
+        secret_ref_results=secret_ref_results.get(row.profile_id),
+    )
+
+@router.post("", response_model=ProviderProfileResponse, status_code=201)
+async def create_profile(
+    body: ProviderProfileCreate,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    existing = await session.get(ManagedAgentProviderProfile, body.profile_id)
+    if existing:
+        raise HTTPException(status_code=409, detail="Profile already exists")
+
+    profile = ManagedAgentProviderProfile(
+        profile_id=body.profile_id,
+        runtime_id=body.runtime_id,
+        provider_id=body.provider_id,
+        provider_label=body.provider_label,
+        default_model=body.default_model,
+        default_effort=body.default_effort,
+        model_overrides=body.model_overrides,
+        credential_source=ProviderCredentialSource(body.credential_source),
+        runtime_materialization_mode=RuntimeMaterializationMode(body.runtime_materialization_mode),
+        volume_ref=body.volume_ref,
+        volume_mount_path=body.volume_mount_path,
+        account_label=body.account_label,
+        tags=body.tags,
+        priority=body.priority,
+        secret_refs=body.secret_refs,
+        clear_env_keys=body.clear_env_keys,
+        env_template=body.env_template,
+        file_templates=body.file_templates,
+        home_path_overrides=body.home_path_overrides,
+        command_behavior=body.command_behavior,
+        owner_user_id=getattr(current_user, "id", None),
+        max_parallel_runs=body.max_parallel_runs,
+        cooldown_after_429_seconds=body.cooldown_after_429_seconds,
+        rate_limit_policy=ManagedAgentRateLimitPolicy(body.rate_limit_policy),
+        enabled=body.enabled,
+        is_default=False,
+        max_lease_duration_seconds=body.max_lease_duration_seconds,
+        auth_state=ProviderProfileAuthState(body.auth_state),
+        disabled_reason=(
+            ProviderProfileDisabledReason(body.disabled_reason)
+            if body.disabled_reason is not None
+            else None
+        ),
+        first_authenticated_at=body.first_authenticated_at,
+        last_validated_at=body.last_validated_at,
+        last_auth_method=(
+            ProviderProfileAuthMethod(body.last_auth_method)
+            if body.last_auth_method is not None
+            else None
+        ),
+    )
+    _validate_codex_oauth_profile_row(profile)
+    session.add(profile)
+    await session.flush()
+    if profile.enabled:
+        secret_ref_results = _secret_ref_results_for_rows([profile])
+        secret_statuses = await _managed_secret_statuses_for_rows(
+            session,
+            [profile],
+            secret_ref_results=secret_ref_results,
+        )
+        _require_enabled_profile_launchable(
+            profile,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(profile.profile_id, {}),
+        )
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=body.runtime_id,
+        preferred_profile_id=profile.profile_id if body.is_default else None,
+    )
+    await session.commit()
+    await session.refresh(profile)
+
+    await sync_provider_profile_manager(session=session, runtime_id=body.runtime_id)
+
+    secret_ref_results = _secret_ref_results_for_rows([profile])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [profile],
+        secret_ref_results=secret_ref_results,
+    )
+    return _row_to_dict(
+        profile,
+        managed_secret_statuses=secret_statuses,
+        secret_ref_results=secret_ref_results.get(profile.profile_id),
+    )
+
+@router.patch("/{profile_id}", response_model=ProviderProfileResponse)
+async def update_profile(
+    profile_id: str,
+    body: ProviderProfileUpdate,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    _require_profile_management(profile, current_user)
+
+    update_data = body.model_dump(exclude_unset=True)
+    requested_is_default = update_data.pop("is_default", None)
+    for key, value in update_data.items():
+        if key == "rate_limit_policy" and value is not None:
+            value = ManagedAgentRateLimitPolicy(value)
+        elif key == "credential_source" and value is not None:
+            value = ProviderCredentialSource(value)
+        elif key == "runtime_materialization_mode" and value is not None:
+            value = RuntimeMaterializationMode(value)
+        elif key == "auth_state" and value is not None:
+            value = ProviderProfileAuthState(value)
+        elif key == "disabled_reason" and value is not None:
+            value = ProviderProfileDisabledReason(value)
+        elif key == "last_auth_method" and value is not None:
+            value = ProviderProfileAuthMethod(value)
+        setattr(profile, key, value)
+
+    if profile.enabled:
+        if profile.auth_state != ProviderProfileAuthState.CONNECTED:
+            raise HTTPException(
+                status_code=422,
+                detail="Enabled profiles require auth_state=connected",
+            )
+        profile.disabled_reason = None
+        secret_ref_results = _secret_ref_results_for_rows([profile])
+        secret_statuses = await _managed_secret_statuses_for_rows(
+            session,
+            [profile],
+            secret_ref_results=secret_ref_results,
+        )
+        _require_enabled_profile_launchable(
+            profile,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(profile.profile_id, {}),
+        )
+
+    if requested_is_default is False:
+        profile.is_default = False
+
+    _validate_codex_oauth_profile_row(profile)
+    await session.flush()
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=profile.runtime_id,
+        preferred_profile_id=profile.profile_id if requested_is_default else None,
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+    secret_ref_results = _secret_ref_results_for_rows([profile])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [profile],
+        secret_ref_results=secret_ref_results,
+    )
+    return _row_to_dict(
+        profile,
+        managed_secret_statuses=secret_statuses,
+        secret_ref_results=secret_ref_results.get(profile.profile_id),
+    )
+
+@router.post(
+    "/{profile_id}/credentials/api-key",
+    response_model=ProviderApiKeySetupResponse,
+)
+async def setup_provider_api_key(
+    profile_id: str,
+    body: ProviderApiKeySetupRequest,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_profile_management(profile, current_user)
+    mapping = _api_key_mapping_for_profile(profile)
+
+    api_key = body.api_key.strip()
+    if not _looks_like_provider_api_key(mapping, api_key):
+        await _mark_api_key_validation_failed(
+            session=session,
+            profile=profile,
+            reason="API key validation failed.",
+        )
+        raise HTTPException(status_code=422, detail="API key validation failed.")
+
+    try:
+        await validate_provider_api_key(profile.provider_id, api_key)
+    except HTTPException as exc:
+        if exc.status_code in {401, 403, 422}:
+            await _mark_api_key_validation_failed(
+                session=session,
+                profile=profile,
+                reason="API key validation failed.",
+            )
+        raise exc
+
+    validated_at = datetime.now(UTC)
+    secret_slug = _provider_api_key_secret_slug(
+        profile.profile_id,
+        mapping.secret_role,
+    )
+    secret_ref = f"db://{secret_slug}"
+    await _upsert_managed_secret(
+        session=session,
+        slug=secret_slug,
+        plaintext=api_key,
+        details={
+            "provider_profile_id": profile.profile_id,
+            "runtime_id": profile.runtime_id,
+            "provider_id": profile.provider_id,
+            "auth_strategy": mapping.auth_strategy,
+            "secret_role": mapping.secret_role,
+            "last_validated_at": validated_at.isoformat(),
+        },
+    )
+
+    _apply_api_key_setup_to_profile(
+        profile,
+        mapping=mapping,
+        secret_ref=secret_ref,
+        account_label=body.account_label,
+        validated_at=validated_at,
+        enabled=body.enable_after_validation,
+    )
+
+    await session.flush()
+    secret_ref_results = _secret_ref_results_for_rows([profile])
+    secret_statuses = await _managed_secret_statuses_for_rows(
+        session,
+        [profile],
+        secret_ref_results=secret_ref_results,
+    )
+    if profile.enabled:
+        _require_enabled_profile_launchable(
+            profile,
+            managed_secret_statuses=secret_statuses,
+            secret_ref_results=secret_ref_results.get(profile.profile_id, {}),
+        )
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=profile.runtime_id,
+        preferred_profile_id=profile.profile_id if body.make_default else None,
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+
+    return {
+        "status": "ready",
+        "status_label": mapping.ready_label,
+        "profile_id": profile.profile_id,
+        "secret_ref": secret_ref,
+        "readiness": {
+            "connected": True,
+            "last_validated_at": validated_at.isoformat(),
+            "backing_secret_exists": True,
+            "launch_ready": True,
+            "failure_reason": None,
+        },
+    }
+
+@router.post(
+    "/{profile_id}/manual-auth/commit",
+    response_model=ClaudeManualAuthCommitResponse,
+)
+async def commit_claude_manual_auth(
+    profile_id: str,
+    body: ClaudeManualAuthCommitRequest,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    _require_profile_management(profile, current_user)
+    _require_claude_anthropic_profile(profile)
+
+    token = body.token.strip()
+    if not _looks_like_claude_manual_token(token):
+        raise HTTPException(
+            status_code=422,
+            detail="Claude token validation failed.",
+        )
+    await validate_claude_manual_token(token)
+
+    validated_at = datetime.now(UTC)
+    secret_slug = _claude_manual_secret_slug(profile.profile_id)
+    secret_ref = f"db://{secret_slug}"
+    await _upsert_managed_secret(
+        session=session,
+        slug=secret_slug,
+        plaintext=token,
+        details={
+            "provider_profile_id": profile.profile_id,
+            "runtime_id": profile.runtime_id,
+            "provider_id": profile.provider_id,
+            "auth_strategy": "claude_credential_methods",
+            "last_validated_at": validated_at.isoformat(),
+        },
+    )
+
+    profile.credential_source = ProviderCredentialSource.SECRET_REF
+    profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
+    profile.secret_refs = {
+        **(profile.secret_refs or {}),
+        "anthropic_api_key": secret_ref,
+    }
+    clear_env_keys = list(profile.clear_env_keys or [])
+    for env_key in [
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+    ]:
+        if env_key not in clear_env_keys:
+            clear_env_keys.append(env_key)
+    profile.clear_env_keys = clear_env_keys
+    profile.env_template = {
+        **(profile.env_template or {}),
+        "ANTHROPIC_API_KEY": {"from_secret_ref": "anthropic_api_key"},
+    }
+    profile.account_label = (
+        body.account_label or profile.account_label or "Claude Anthropic"
+    )
+    profile.enabled = True
+    profile.auth_state = ProviderProfileAuthState.CONNECTED
+    profile.disabled_reason = None
+    if profile.first_authenticated_at is None:
+        profile.first_authenticated_at = validated_at
+    profile.last_validated_at = validated_at
+    profile.last_auth_method = ProviderProfileAuthMethod.SECRET_REF
+    behavior = dict(profile.command_behavior or {})
+    behavior.update(
+        {
+            "auth_strategy": "claude_credential_methods",
+            "auth_state": "connected",
+            "auth_actions": oauth_auth_actions_for_profile(profile),
+            "auth_status_label": "Anthropic API key ready",
+            "auth_readiness": {
+                "connected": True,
+                "last_validated_at": validated_at.isoformat(),
+                "backing_secret_exists": True,
+                "launch_ready": True,
+            },
+        }
+    )
+    profile.command_behavior = behavior
+
+    await session.flush()
+    await normalize_runtime_default_profile(
+        session=session,
+        runtime_id=profile.runtime_id,
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+
+    return {
+        "status": "ready",
+        "status_label": "Anthropic API key ready",
+        "profile_id": profile.profile_id,
+        "secret_ref": secret_ref,
+        "readiness": {
+            "connected": True,
+            "last_validated_at": validated_at.isoformat(),
+            "backing_secret_exists": True,
+            "launch_ready": True,
+            "failure_reason": None,
+        },
+    }
+
+@router.post("/{profile_id}/oauth/validate")
+async def validate_claude_oauth_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Validate an OAuth-backed provider profile against its auth volume.
+
+    Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+    handler name is retained for OpenAPI operation-id stability.
+    """
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    _require_profile_management(profile, current_user)
+    mapping = _require_first_party_oauth_profile(profile)
+    if not profile.volume_ref or not profile.volume_mount_path:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{mapping.label_prefix} OAuth validation requires OAuth volume metadata.",
+        )
+
+    try:
+        from moonmind.workflows.temporal.runtime.providers.volume_verifiers import (
+            verify_volume_credentials,
+        )
+
+        verification = await verify_volume_credentials(
+            runtime_id=profile.runtime_id,
+            volume_ref=profile.volume_ref,
+            volume_mount_path=profile.volume_mount_path,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{mapping.label_prefix} OAuth validation unavailable.",
+        ) from exc
+
+    if not verification.get("verified", False):
+        failed_at = datetime.now(UTC)
+        apply_oauth_validation_failure(
+            profile,
+            mapping=mapping,
+            reason=verification.get("reason"),
+            failed_at=failed_at,
+        )
+        await session.commit()
+        await session.refresh(profile)
+        reason = (
+            profile.command_behavior.get("auth_readiness", {}).get("failure_reason")
+            if isinstance(profile.command_behavior, dict)
+            else None
+        ) or "unknown"
+        raise HTTPException(
+            status_code=400,
+            detail=f"{mapping.label_prefix} OAuth validation failed: {reason}",
+        )
+
+    validated_at = datetime.now(UTC)
+    profile.enabled = True
+    profile.auth_state = ProviderProfileAuthState.CONNECTED
+    profile.disabled_reason = None
+    if profile.first_authenticated_at is None:
+        profile.first_authenticated_at = validated_at
+    profile.last_validated_at = validated_at
+    profile.last_auth_method = ProviderProfileAuthMethod.OAUTH_VOLUME
+    apply_oauth_connected_state(
+        profile,
+        mapping=mapping,
+        validated_at=validated_at,
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+    return {
+        "status": "ready",
+        "status_label": f"{mapping.label_prefix} OAuth ready",
+        "profile_id": profile.profile_id,
+        "readiness": profile.command_behavior.get("auth_readiness")
+        if isinstance(profile.command_behavior, dict)
+        else None,
+    }
+
+@router.post("/{profile_id}/oauth/disconnect")
+async def disconnect_claude_oauth_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> dict[str, Any]:
+    """Disconnect an OAuth-backed provider profile and clear its volume fields.
+
+    Generalized across the first-party Claude, Codex, and Gemini runtimes; the
+    handler name is retained for OpenAPI operation-id stability.
+    """
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    _require_profile_management(profile, current_user)
+    mapping = _require_first_party_oauth_profile(profile)
+
+    if profile.credential_source == ProviderCredentialSource.OAUTH_VOLUME:
+        profile.credential_source = ProviderCredentialSource.NONE
+        profile.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
+    profile.volume_ref = None
+    profile.volume_mount_path = None
+    clear_oauth_home_path_overrides(profile, mapping=mapping)
+    disconnected_at = datetime.now(UTC)
+    profile.enabled = False
+    profile.auth_state = ProviderProfileAuthState.DISCONNECTED
+    profile.disabled_reason = ProviderProfileDisabledReason.DISCONNECTED
+    profile.last_validated_at = disconnected_at
+    update_oauth_command_behavior(
+        profile,
+        mapping=mapping,
+        auth_state="disconnected",
+        status_label=f"{mapping.label_prefix} OAuth disconnected",
+        readiness={
+            "connected": False,
+            "last_validated_at": disconnected_at.isoformat(),
+            "backing_secret_exists": False,
+            "launch_ready": False,
+        },
+    )
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+    return {
+        "status": "disconnected",
+        "status_label": f"{mapping.label_prefix} OAuth disconnected",
+        "profile_id": profile.profile_id,
+    }
+
+@router.delete("/{profile_id}", status_code=204)
+async def delete_profile(
+    profile_id: str,
+    session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
+    current_user: User = Depends(get_current_user()),
+) -> None:
+    profile = await session.get(ManagedAgentProviderProfile, profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    _require_provider_profile_permission(current_user, "provider_profiles.write")
+    _require_profile_management(profile, current_user)
+    runtime_id = profile.runtime_id
+    await session.delete(profile)
+    await session.flush()
+    await normalize_runtime_default_profile(session=session, runtime_id=runtime_id)
+    await session.commit()
+    await sync_provider_profile_manager(session=session, runtime_id=runtime_id)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _user_id(user: Any) -> str | None:
+    raw = getattr(user, "id", None)
+    if raw is None:
+        return None
+    return str(raw)
+
+def _require_provider_profile_permission(user: Any, permission: str) -> None:
+    if has_settings_permission(user, permission):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=f"Missing required provider profile permission: {permission}.",
+    )
+
+def _can_view_profile(row: ManagedAgentProviderProfile, user: Any) -> bool:
+    user_id = _user_id(user)
+    if user_id is None or bool(getattr(user, "is_superuser", False)):
+        return True
+    owner_id = row.owner_user_id
+    return owner_id is None or str(owner_id) == user_id
+
+def _require_profile_management(row: ManagedAgentProviderProfile, user: Any) -> None:
+    user_id = _user_id(user)
+    if user_id is None or bool(getattr(user, "is_superuser", False)):
+        return
+    owner_id = row.owner_user_id
+    if owner_id is None or str(owner_id) == user_id:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="Not authorized to manage this provider profile.",
+    )
+
+def _validate_codex_oauth_profile_row(row: ManagedAgentProviderProfile) -> None:
+    try:
+        validate_codex_oauth_profile_refs(
+            runtime_id=row.runtime_id,
+            credential_source=(
+                row.credential_source.value if row.credential_source else None
+            ),
+            runtime_materialization_mode=(
+                row.runtime_materialization_mode.value
+                if row.runtime_materialization_mode
+                else None
+            ),
+            volume_ref=row.volume_ref,
+            volume_mount_path=row.volume_mount_path,
+            volume_ref_field_name="volume_ref",
+            volume_mount_path_field_name="volume_mount_path",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+def _require_claude_anthropic_profile(row: ManagedAgentProviderProfile) -> None:
+    if row.runtime_id != "claude_code" or row.provider_id != "anthropic":
+        raise HTTPException(
+            status_code=422,
+            detail="Manual Claude auth is only supported for claude_code Anthropic profiles.",
+        )
+
+
+def _require_first_party_oauth_profile(
+    row: ManagedAgentProviderProfile,
+) -> FirstPartyOAuthProfile:
+    mapping = get_first_party_oauth_profile(row.runtime_id, row.provider_id)
+    if mapping is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "OAuth lifecycle actions are only supported for first-party "
+                "Claude, Codex, and Gemini provider profiles."
+            ),
+        )
+    return mapping
+
+@dataclass(frozen=True, slots=True)
+class _ApiKeyMapping:
+    runtime_id: str
+    provider_id: str
+    secret_role: str
+    env_key: str
+    clear_env_keys: tuple[str, ...]
+    auth_strategy: str
+    ready_label: str
+
+_API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
+    ("claude_code", "anthropic"): _ApiKeyMapping(
+        runtime_id="claude_code",
+        provider_id="anthropic",
+        secret_role="anthropic_api_key",
+        env_key="ANTHROPIC_API_KEY",
+        clear_env_keys=("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"),
+        auth_strategy="api_key_env",
+        ready_label="Anthropic API key ready",
+    ),
+    ("codex_cli", "openai"): _ApiKeyMapping(
+        runtime_id="codex_cli",
+        provider_id="openai",
+        secret_role="openai_api_key",
+        env_key="OPENAI_API_KEY",
+        clear_env_keys=("MINIMAX_API_KEY",),
+        auth_strategy="api_key_env",
+        ready_label="OpenAI API key ready",
+    ),
+    ("gemini_cli", "google"): _ApiKeyMapping(
+        runtime_id="gemini_cli",
+        provider_id="google",
+        secret_role="google_api_key",
+        env_key="GEMINI_API_KEY",
+        clear_env_keys=("GOOGLE_APPLICATION_CREDENTIALS",),
+        auth_strategy="api_key_env",
+        ready_label="Google API key ready",
+    ),
+}
+
+def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMapping:
+    mapping = _API_KEY_MAPPINGS.get((row.runtime_id, row.provider_id))
+    if mapping is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "API-key setup is only supported for first-party Anthropic, "
+                "OpenAI, and Google profiles."
+            ),
+        )
+    return mapping
+
+def _looks_like_claude_manual_token(token: str) -> bool:
+    return token.startswith("sk-ant-") and len(token) >= 12
+
+def _claude_manual_secret_slug(profile_id: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", profile_id.lower()).strip("-")
+    if not normalized:
+        normalized = "claude-anthropic"
+    digest = hashlib.sha256(profile_id.encode("utf-8")).hexdigest()[:16]
+    return f"{normalized}-{digest}-token"
+
+def _provider_api_key_secret_slug(profile_id: str, secret_role: str) -> str:
+    normalized_profile = re.sub(r"[^a-z0-9]+", "-", profile_id.lower()).strip("-")
+    normalized_role = re.sub(r"[^a-z0-9]+", "-", secret_role.lower()).strip("-")
+    if not normalized_profile:
+        normalized_profile = "provider-profile"
+    digest = hashlib.sha256(
+        f"{profile_id}:{secret_role}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{normalized_profile}-{normalized_role}-{digest}"
+
+def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
+    if not api_key:
+        return False
+    if mapping.provider_id == "anthropic":
+        return api_key.startswith("sk-ant-") and len(api_key) >= 12
+    if mapping.provider_id == "openai":
+        return api_key.startswith("sk-") and len(api_key) >= 12
+    if mapping.provider_id == "google":
+        return len(api_key) >= 12
+    return False
+
+def _apply_api_key_setup_to_profile(
+    row: ManagedAgentProviderProfile,
+    *,
+    mapping: _ApiKeyMapping,
+    secret_ref: str,
+    account_label: str | None,
+    validated_at: datetime,
+    enabled: bool,
+) -> None:
+    row.credential_source = ProviderCredentialSource.SECRET_REF
+    row.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
+    clear_oauth_home_path_overrides(
+        row,
+        mapping=get_first_party_oauth_profile(row.runtime_id, row.provider_id),
+    )
+    row.secret_refs = {
+        **(row.secret_refs or {}),
+        mapping.secret_role: secret_ref,
+    }
+    clear_env_keys = list(row.clear_env_keys or [])
+    for env_key in mapping.clear_env_keys:
+        if env_key not in clear_env_keys:
+            clear_env_keys.append(env_key)
+    row.clear_env_keys = clear_env_keys
+    row.env_template = {
+        **(row.env_template or {}),
+        mapping.env_key: {"from_secret_ref": mapping.secret_role},
+    }
+    row.account_label = account_label or row.account_label or row.provider_label
+    row.enabled = enabled
+    row.auth_state = ProviderProfileAuthState.CONNECTED
+    row.disabled_reason = (
+        None if enabled else ProviderProfileDisabledReason.USER_DISABLED
+    )
+    if row.first_authenticated_at is None:
+        row.first_authenticated_at = validated_at
+    row.last_validated_at = validated_at
+    row.last_auth_method = ProviderProfileAuthMethod.SECRET_REF
+    behavior = dict(row.command_behavior or {})
+    behavior.update(
+        {
+            "auth_strategy": mapping.auth_strategy,
+            "auth_state": "connected",
+            "auth_actions": ["use_api_key"],
+            "auth_status_label": mapping.ready_label,
+            "auth_readiness": {
+                "connected": True,
+                "last_validated_at": validated_at.isoformat(),
+                "backing_secret_exists": True,
+                "launch_ready": True,
+            },
+        }
+    )
+    row.command_behavior = behavior
+
+async def _mark_api_key_validation_failed(
+    *,
+    session: AsyncSession,
+    profile: ManagedAgentProviderProfile,
+    reason: str,
+) -> None:
+    failed_at = datetime.now(UTC)
+    profile.enabled = False
+    profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+    profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+    profile.last_validated_at = failed_at
+    behavior = dict(profile.command_behavior or {})
+    behavior.update(
+        {
+            "auth_state": "validation_failed",
+            "auth_status_label": "API key validation failed",
+            "auth_readiness": {
+                "connected": False,
+                "last_validated_at": failed_at.isoformat(),
+                "backing_secret_exists": False,
+                "launch_ready": False,
+                "failure_reason": redact_sensitive_payload(reason),
+            },
+        }
+    )
+    profile.command_behavior = behavior
+    await normalize_runtime_default_profile(session=session, runtime_id=profile.runtime_id)
+    await session.commit()
+    await session.refresh(profile)
+    await sync_provider_profile_manager(session=session, runtime_id=profile.runtime_id)
+
+async def _upsert_managed_secret(
+    *,
+    session: AsyncSession,
+    slug: str,
+    plaintext: str,
+    details: dict[str, Any],
+) -> ManagedSecret:
+    result = await session.execute(select(ManagedSecret).where(ManagedSecret.slug == slug))
+    secret = result.scalar_one_or_none()
+    if secret is None:
+        secret = ManagedSecret(
+            slug=slug,
+            ciphertext=plaintext,
+            status=SecretStatus.ACTIVE,
+            details=details,
+        )
+        session.add(secret)
+        return secret
+
+    secret.ciphertext = plaintext
+    secret.status = SecretStatus.ACTIVE
+    secret.details = {**(secret.details or {}), **details}
+    secret.updated_at = datetime.now(UTC)
+    return secret
+
+async def validate_claude_manual_token(token: str) -> None:
+    headers = {
+        "x-api-key": token,
+        "anthropic-version": "2023-06-01",
+    }
+    try:
+        response = await _get_claude_manual_validation_client().get(
+            "https://api.anthropic.com/v1/models",
+            headers=headers,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("claude_manual_auth_validation_failed", exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Claude token validation failed.",
+        ) from exc
+
+    if response.status_code in {401, 403}:
+        raise HTTPException(
+            status_code=401,
+            detail="Claude token validation failed.",
+        )
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail="Claude token validation failed.",
+        )
+
+async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
+    provider_id = provider_id.strip().lower()
+    if provider_id == "anthropic":
+        await validate_claude_manual_token(api_key)
+        return
+    if provider_id == "openai":
+        await _validate_openai_api_key(api_key)
+        return
+    if provider_id == "google":
+        await _validate_google_api_key(api_key)
+        return
+    raise HTTPException(
+        status_code=422,
+        detail="Unsupported provider API-key setup.",
+    )
+
+async def _validate_openai_api_key(api_key: str) -> None:
+    try:
+        response = await _get_claude_manual_validation_client().get(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("openai_api_key_validation_failed")
+        raise HTTPException(status_code=502, detail="API key validation failed.") from exc
+    if response.status_code in {401, 403}:
+        raise HTTPException(status_code=401, detail="API key validation failed.")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="API key validation failed.")
+
+async def _validate_google_api_key(api_key: str) -> None:
+    try:
+        response = await _get_claude_manual_validation_client().get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": api_key},
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("google_api_key_validation_failed")
+        raise HTTPException(status_code=502, detail="API key validation failed.") from exc
+    if response.status_code in {400, 401, 403}:
+        raise HTTPException(status_code=401, detail="API key validation failed.")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="API key validation failed.")
+
+def _get_claude_manual_validation_client() -> httpx.AsyncClient:
+    global _claude_manual_validation_client
+    if (
+        _claude_manual_validation_client is None
+        or _claude_manual_validation_client.is_closed
+    ):
+        _claude_manual_validation_client = httpx.AsyncClient(timeout=10.0)
+    return _claude_manual_validation_client
+
+async def _managed_secret_statuses_for_rows(
+    session: AsyncSession,
+    rows: list[ManagedAgentProviderProfile],
+    *,
+    secret_ref_results: dict[str, dict[str, _SecretRefParseResult]] | None = None,
+) -> dict[str, str]:
+    secret_ref_results = secret_ref_results or _secret_ref_results_for_rows(rows)
+    slugs: set[str] = set()
+    for row in rows:
+        for result in secret_ref_results.get(row.profile_id, {}).values():
+            if result.parsed and result.parsed.backend == SecretBackend.DB_ENCRYPTED:
+                slugs.add(result.parsed.locator)
+    if not slugs:
+        return {}
+
+    result = await session.execute(
+        select(ManagedSecret).where(ManagedSecret.slug.in_(slugs))
+    )
+    return {secret.slug: secret.status.value for secret in result.scalars().all()}
+
+
+def _secret_ref_results_for_rows(
+    rows: list[ManagedAgentProviderProfile],
+) -> dict[str, dict[str, _SecretRefParseResult]]:
+    results: dict[str, dict[str, _SecretRefParseResult]] = {}
+    for row in rows:
+        row_results: dict[str, _SecretRefParseResult] = {}
+        if not isinstance(row.secret_refs, dict):
+            results[row.profile_id] = row_results
+            continue
+        for role, ref in row.secret_refs.items():
+            if not isinstance(ref, str) or not ref:
+                row_results[str(role)] = _SecretRefParseResult(
+                    error="SecretRef must be a non-empty string"
+                )
+                continue
+            try:
+                row_results[str(role)] = _SecretRefParseResult(
+                    parsed=parse_secret_ref(ref)
+                )
+            except SecretReferenceError as exc:
+                row_results[str(role)] = _SecretRefParseResult(error=str(exc))
+        results[row.profile_id] = row_results
+    return results
+
+
+def _readiness_check(
+    check_id: str,
+    label: str,
+    status: str,
+    message: str,
+) -> dict[str, str]:
+    return {
+        "id": check_id,
+        "label": label,
+        "status": status,
+        "message": redact_sensitive_payload(message),
+    }
+
+
+def _provider_profile_readiness(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str] | None = None,
+    secret_ref_results: dict[str, _SecretRefParseResult] | None = None,
+) -> dict[str, Any]:
+    managed_secret_statuses = managed_secret_statuses or {}
+    secret_ref_results = secret_ref_results or _secret_ref_results_for_rows([row]).get(
+        row.profile_id,
+        {},
+    )
+
+    credential_source = row.credential_source.value if row.credential_source else None
+    materialization_mode = (
+        row.runtime_materialization_mode.value
+        if row.runtime_materialization_mode
+        else None
+    )
+
+    checks = [
+        _required_fields_check(row),
+        _enabled_check(row),
+        _auth_state_check(row),
+        _secret_refs_check(
+            row,
+            credential_source=credential_source,
+            managed_secret_statuses=managed_secret_statuses,
+            secret_ref_results=secret_ref_results,
+        ),
+        _oauth_volume_check(
+            row,
+            credential_source=credential_source,
+            materialization_mode=materialization_mode,
+        ),
+        _concurrency_check(row),
+        _cooldown_check(row),
+        _provider_validation_check(row),
+    ]
+
+    if any(check["status"] == "error" for check in checks):
+        status = "blocked"
+        launch_ready = False
+        summary = "Provider profile has launch blockers."
+    elif any(check["status"] == "warning" for check in checks):
+        status = "warning"
+        launch_ready = True
+        summary = "Provider profile is usable with readiness warnings."
+    else:
+        status = "ready"
+        launch_ready = True
+        summary = "Provider profile is ready for launch."
+
+    return {
+        "status": status,
+        "launch_ready": launch_ready,
+        "summary": summary,
+        "checks": checks,
+    }
+
+
+def _require_enabled_profile_launchable(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str],
+    secret_ref_results: dict[str, _SecretRefParseResult],
+) -> None:
+    readiness = _provider_profile_readiness(
+        row,
+        managed_secret_statuses=managed_secret_statuses,
+        secret_ref_results=secret_ref_results,
+    )
+    blockers = [
+        check["message"]
+        for check in readiness["checks"]
+        if check["status"] == "error"
+    ]
+    if blockers:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Enabled profiles require connected credentials and launch-ready "
+                "credential bindings: " + "; ".join(blockers)
+            ),
+        )
+
+
+def _required_fields_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    missing_required = [
+        field_name
+        for field_name, value in {
+            "profile_id": row.profile_id,
+            "runtime_id": row.runtime_id,
+            "provider_id": row.provider_id,
+            "credential_source": row.credential_source,
+            "runtime_materialization_mode": row.runtime_materialization_mode,
+        }.items()
+        if value in {None, ""}
+    ]
+    return _readiness_check(
+        "required_fields",
+        "Required fields",
+        "error" if missing_required else "pass",
+        (
+            "Missing required fields: " + ", ".join(missing_required)
+            if missing_required
+            else "Required provider profile fields are present."
+        ),
+    )
+
+
+def _enabled_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    return _readiness_check(
+        "enabled",
+        "Enabled state",
+        "pass" if row.enabled else "error",
+        "Profile is enabled." if row.enabled else "Profile is disabled.",
+    )
+
+
+def _auth_state_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    auth_state = row.auth_state.value if row.auth_state else None
+    disabled_reason = row.disabled_reason.value if row.disabled_reason else None
+    connected = auth_state == ProviderProfileAuthState.CONNECTED.value
+    consistent = not row.enabled or disabled_reason is None
+    if connected and consistent:
+        message = "Profile credentials are connected."
+    elif connected:
+        message = f"Profile is enabled but still has disabled reason {disabled_reason}."
+    elif disabled_reason:
+        message = (
+            f"Profile credentials are {auth_state or 'unknown'} "
+            f"({disabled_reason})."
+        )
+    else:
+        message = f"Profile credentials are {auth_state or 'unknown'}."
+    return _readiness_check(
+        "auth_state",
+        "Activation state",
+        "pass" if connected and consistent else "error",
+        message,
+    )
+
+
+def _secret_refs_check(
+    row: ManagedAgentProviderProfile,
+    *,
+    credential_source: str | None,
+    managed_secret_statuses: dict[str, str],
+    secret_ref_results: dict[str, _SecretRefParseResult],
+) -> dict[str, str]:
+    if credential_source != "secret_ref":
+        return _readiness_check(
+            "secret_refs",
+            "SecretRef bindings",
+            "pass",
+            "SecretRef bindings are not required for this credential source.",
+        )
+    if not row.secret_refs:
+        return _readiness_check(
+            "secret_refs",
+            "SecretRef bindings",
+            "error",
+            "credential_source secret_ref requires at least one SecretRef binding.",
+        )
+
+    problems: list[str] = []
+    for role, result in secret_ref_results.items():
+        if result.error:
+            problems.append(f"{role}: invalid SecretRef ({result.error})")
+            continue
+        if not result.parsed or result.parsed.backend != SecretBackend.DB_ENCRYPTED:
+            continue
+        status = managed_secret_statuses.get(result.parsed.locator)
+        if status is None:
+            problems.append(
+                f"{role}: managed secret db://{result.parsed.locator} was not found"
+            )
+        elif status != SecretStatus.ACTIVE.value:
+            problems.append(
+                f"{role}: managed secret db://{result.parsed.locator} is {status}"
+            )
+
+    return _readiness_check(
+        "secret_refs",
+        "SecretRef bindings",
+        "error" if problems else "pass",
+        (
+            "; ".join(problems)
+            if problems
+            else "SecretRef bindings are syntactically valid."
+        ),
+    )
+
+
+def _oauth_volume_check(
+    row: ManagedAgentProviderProfile,
+    *,
+    credential_source: str | None,
+    materialization_mode: str | None,
+) -> dict[str, str]:
+    oauth_required = (
+        credential_source == "oauth_volume" or materialization_mode == "oauth_home"
+    )
+    if not oauth_required:
+        return _readiness_check(
+            "oauth_volume",
+            "OAuth volume",
+            "pass",
+            "OAuth volume metadata is not required for this credential source.",
+        )
+
+    missing_oauth = [
+        field_name
+        for field_name, value in {
+            "volume_ref": row.volume_ref,
+            "volume_mount_path": row.volume_mount_path,
+        }.items()
+        if not value
+    ]
+    return _readiness_check(
+        "oauth_volume",
+        "OAuth volume",
+        "error" if missing_oauth else "pass",
+        (
+            "Missing OAuth volume metadata: " + ", ".join(missing_oauth)
+            if missing_oauth
+            else "OAuth volume metadata is present."
+        ),
+    )
+
+
+def _concurrency_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    has_capacity = bool(row.max_parallel_runs and row.max_parallel_runs > 0)
+    return _readiness_check(
+        "concurrency",
+        "Concurrency",
+        "pass" if has_capacity else "error",
+        (
+            f"Profile allows {row.max_parallel_runs} parallel run(s)."
+            if has_capacity
+            else "Profile has no available configured concurrency."
+        ),
+    )
+
+
+def _cooldown_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    cooldown = row.cooldown_after_429_seconds
+    valid_cooldown = cooldown is not None and cooldown >= 0
+    return _readiness_check(
+        "cooldown",
+        "Cooldown",
+        "pass" if valid_cooldown else "error",
+        f"Cooldown after provider rate limit is {cooldown}s.",
+    )
+
+
+def _provider_validation_check(row: ManagedAgentProviderProfile) -> dict[str, str]:
+    provider_readiness = (
+        row.command_behavior.get("auth_readiness")
+        if isinstance(row.command_behavior, dict)
+        else None
+    )
+    if not isinstance(provider_readiness, dict):
+        return _readiness_check(
+            "provider_validation",
+            "Provider validation",
+            "warning",
+            "No provider-specific validation metadata is available.",
+        )
+
+    launch_ready = provider_readiness.get("launch_ready")
+    if launch_ready is None:
+        launch_ready = provider_readiness.get("launchReady")
+    failure_reason = provider_readiness.get("failure_reason") or provider_readiness.get(
+        "failureReason"
+    )
+    return _readiness_check(
+        "provider_validation",
+        "Provider validation",
+        "pass" if launch_ready is not False else "error",
+        (
+            "Provider validation reports launch ready."
+            if launch_ready is not False
+            else (
+                "Provider validation blocks launch: "
+                f"{failure_reason or 'unknown reason'}"
+            )
+        ),
+    )
+
+
+def _row_to_dict(
+    row: ManagedAgentProviderProfile,
+    *,
+    managed_secret_statuses: dict[str, str] | None = None,
+    secret_ref_results: dict[str, _SecretRefParseResult] | None = None,
+) -> dict[str, Any]:
+    readiness = _provider_profile_readiness(
+        row,
+        managed_secret_statuses=managed_secret_statuses,
+        secret_ref_results=secret_ref_results,
+    )
+    payload = {
+        "profile_id": row.profile_id,
+        "runtime_id": row.runtime_id,
+        "provider_id": row.provider_id,
+        "provider_label": row.provider_label,
+        "default_model": row.default_model,
+        "default_effort": row.default_effort,
+        "model_overrides": row.model_overrides or {},
+        "credential_source": row.credential_source.value if row.credential_source else None,
+        "runtime_materialization_mode": row.runtime_materialization_mode.value if row.runtime_materialization_mode else None,
+        "volume_ref": row.volume_ref,
+        "volume_mount_path": row.volume_mount_path,
+        "account_label": row.account_label,
+        "tags": row.tags or [],
+        "priority": row.priority,
+        "secret_refs": row.secret_refs or {},
+        "clear_env_keys": row.clear_env_keys or [],
+        "env_template": row.env_template or {},
+        "file_templates": row.file_templates or [],
+        "home_path_overrides": row.home_path_overrides or {},
+        "command_behavior": row.command_behavior or {},
+        "max_parallel_runs": row.max_parallel_runs,
+        "cooldown_after_429_seconds": row.cooldown_after_429_seconds,
+        "rate_limit_policy": (
+            row.rate_limit_policy.value if row.rate_limit_policy else None
+        ),
+        "enabled": row.enabled,
+        "is_default": row.is_default,
+        "max_lease_duration_seconds": row.max_lease_duration_seconds,
+        "auth_state": row.auth_state.value if row.auth_state else None,
+        "disabled_reason": (
+            row.disabled_reason.value if row.disabled_reason else None
+        ),
+        "first_authenticated_at": (
+            row.first_authenticated_at.isoformat()
+            if row.first_authenticated_at
+            else None
+        ),
+        "last_validated_at": (
+            row.last_validated_at.isoformat() if row.last_validated_at else None
+        ),
+        "last_auth_method": (
+            row.last_auth_method.value if row.last_auth_method else None
+        ),
+        "launch_ready": readiness["launch_ready"],
+        "readiness": readiness,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+    for key in ("env_template", "command_behavior"):
+        payload[key] = redact_sensitive_payload(payload[key])
+    payload["file_templates"] = redact_profile_file_templates(payload["file_templates"])
+    return payload
+
+from api_service.services.provider_profile_service import (
+    FirstPartyOAuthProfile,
+    apply_oauth_connected_state,
+    apply_oauth_validation_failure,
+    clear_oauth_home_path_overrides,
+    get_first_party_oauth_profile,
+    normalize_runtime_default_profile,
+    oauth_auth_actions_for_profile,
+    sync_provider_profile_manager,
+    update_oauth_command_behavior,
+)

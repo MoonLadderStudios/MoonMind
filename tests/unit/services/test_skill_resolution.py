@@ -1,0 +1,829 @@
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from moonmind.schemas.agent_skill_models import (
+    SkillSelector,
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
+    AgentSkillProvenance,
+)
+from moonmind.services.skill_resolution import (
+    AgentSkillResolver,
+    SkillResolutionContext,
+    BuiltInSkillLoader,
+    LocalSkillLoader,
+    RepoSkillLoader,
+    DeploymentSkillLoader,
+)
+
+pytestmark = [pytest.mark.asyncio]
+
+async def test_resolver_can_resolve_empty_selector():
+    resolver = AgentSkillResolver()
+    context = SkillResolutionContext(snapshot_id="snap-123", allow_local_skills=True)
+    selector = SkillSelector(include=[])
+    
+    result = await resolver.resolve(selector, context)
+    
+    assert result.snapshot_id == "snap-123"
+    assert result.skills == []
+
+async def test_resolver_resolves_built_in_skills():
+    loader = BuiltInSkillLoader()
+    async def mock_load(sel, ctx):
+        if any(s.name == "read_file" for s in sel.include):
+            return [
+                ResolvedSkillEntry(
+                    skill_name="read_file",
+                    provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN)
+                )
+            ]
+        return []
+    loader.load_skills = mock_load
+
+    resolver = AgentSkillResolver(loaders=[loader])
+    context = SkillResolutionContext(snapshot_id="snap-123", allow_local_skills=True)
+    selector = SkillSelector(
+        include=[
+            {
+                "name": "read_file",
+            }
+        ]
+    )
+    
+    result = await resolver.resolve(selector, context)
+    
+    assert len(result.skills) == 1
+    skill = result.skills[0]
+    assert skill.skill_name == "read_file"
+    assert skill.provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+
+async def test_built_in_loader_discovers_packaged_agent_skills():
+    loader = BuiltInSkillLoader()
+    context = SkillResolutionContext(snapshot_id="snap-123")
+    selector = SkillSelector(include=[{"name": "moonspec-breakdown"}])
+
+    results = await loader.load_skills(selector, context)
+
+    discovered = {entry.skill_name: entry for entry in results}
+    assert "moonspec-breakdown" in discovered
+    assert discovered["moonspec-breakdown"].content_ref is None
+    assert discovered["moonspec-breakdown"].provenance.source_kind == AgentSkillSourceKind.BUILT_IN
+    assert discovered["moonspec-breakdown"].provenance.source_path
+
+async def test_built_in_loader_resolves_batch_dependabot_resolver_by_name(tmp_path):
+    """FR-012: batch-dependabot-resolver MUST be resolvable by name through the
+    built-in fallback list so a recurring queue_task schedule can target it.
+
+    Point skills_root at an empty directory so the packaged-folder scan finds
+    nothing; only the built-in fallback name list can supply the skill. This
+    exercises the fallback wiring directly (parity with batch-pr-resolver),
+    rather than incidentally rediscovering the checked-in skill folder.
+    """
+    loader = BuiltInSkillLoader(skills_root=tmp_path)
+    context = SkillResolutionContext(snapshot_id="snap-dependabot")
+
+    results = await loader.load_skills(SkillSelector(include=[]), context)
+
+    resolved_names = {entry.skill_name for entry in results}
+    assert "batch-dependabot-resolver" in resolved_names
+    # Parity: the general-purpose batch resolver is guaranteed by the same path.
+    assert "batch-pr-resolver" in resolved_names
+
+async def test_builtin_loader_ignores_cwd_agents_skills_projection(
+    monkeypatch,
+    tmp_path,
+):
+    cwd_projection_root = tmp_path / "runtime" / "skills_active" / "snap"
+    projected_skill = cwd_projection_root / "cwd-only"
+    projected_skill.mkdir(parents=True)
+    (projected_skill / "SKILL.md").write_text("# CWD only\n", encoding="utf-8")
+    (cwd_projection_root / "_manifest.json").write_text("{}\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(cwd_projection_root)
+    monkeypatch.chdir(tmp_path)
+
+    loader = BuiltInSkillLoader()
+    results = await loader.load_skills(
+        SkillSelector(include=[]),
+        SkillResolutionContext(snapshot_id="snap"),
+    )
+
+    assert "cwd-only" not in {entry.skill_name for entry in results}
+    
+async def test_resolver_resolves_local_skills_when_allowed():
+    loader = LocalSkillLoader()
+    async def mock_load(sel, ctx):
+        if not ctx.allow_local_skills:
+            return []
+        if any(s.name == "my_local_skill" for s in sel.include):
+            return [
+                ResolvedSkillEntry(
+                    skill_name="my_local_skill",
+                    provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.LOCAL)
+                )
+            ]
+        return []
+    loader.load_skills = mock_load
+
+    resolver = AgentSkillResolver(loaders=[loader])
+    context = SkillResolutionContext(snapshot_id="snap-123", allow_local_skills=True)
+    selector = SkillSelector(
+        include=[
+            {
+                "name": "my_local_skill",
+            }
+        ]
+    )
+    
+    result = await resolver.resolve(selector, context)
+    assert len(result.skills) == 1
+    skill = result.skills[0]
+    assert skill.skill_name == "my_local_skill"
+    assert skill.provenance.source_kind == AgentSkillSourceKind.LOCAL
+    
+async def test_resolver_filters_local_skills_when_not_allowed():
+    resolver = AgentSkillResolver()
+    context = SkillResolutionContext(snapshot_id="snap-123", allow_local_skills=False)
+    selector = SkillSelector(
+        include=[
+            {
+                "name": "my_local_skill",
+            }
+        ]
+    )
+    
+    with pytest.raises(ValueError, match="Could not resolve selected skill 'my_local_skill'"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_resolves_repo_skills_when_workspace_provided():
+    loader = RepoSkillLoader()
+    async def mock_load(sel, ctx):
+        if not ctx.workspace_root:
+            return []
+        if any(s.name == "my_repo_skill" for s in sel.include):
+            return [
+                ResolvedSkillEntry(
+                    skill_name="my_repo_skill",
+                    provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.REPO)
+                )
+            ]
+        return []
+    loader.load_skills = mock_load
+
+    resolver = AgentSkillResolver(loaders=[loader])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root="/tmp/workspace",
+        allow_repo_skills=True,
+        allow_local_skills=False
+    )
+    selector = SkillSelector(
+        include=[
+            {
+                "name": "my_repo_skill",
+            }
+        ]
+    )
+    
+    result = await resolver.resolve(selector, context)
+    assert len(result.skills) == 1
+    skill = result.skills[0]
+    assert skill.skill_name == "my_repo_skill"
+    assert skill.provenance.source_kind == AgentSkillSourceKind.REPO
+
+async def test_resolver_ignores_repo_skills_when_no_workspace():
+    loader = RepoSkillLoader()
+    async def mock_load(sel, ctx):
+        if not ctx.workspace_root:
+            return []
+        if any(s.name == "my_repo_skill" for s in sel.include):
+            return [
+                ResolvedSkillEntry(
+                    skill_name="my_repo_skill",
+                    provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.REPO)
+                )
+            ]
+        return []
+    loader.load_skills = mock_load
+
+    resolver = AgentSkillResolver(loaders=[loader])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123", 
+        allow_local_skills=False
+    )
+    selector = SkillSelector(
+        include=[
+            {
+                "name": "my_repo_skill",
+            }
+        ]
+    )
+    
+    with pytest.raises(ValueError, match="Could not resolve selected skill 'my_repo_skill'"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_filters_repo_skills_when_not_allowed(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "repo_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Repo Skill\n", encoding="utf-8")
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=False,
+    )
+    selector = SkillSelector(include=[{"name": "repo_skill"}])
+
+    with pytest.raises(ValueError, match="Could not resolve selected skill 'repo_skill'"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_resolves_repo_skills_when_allowed(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "repo_skill"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Repo Skill\n", encoding="utf-8")
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "repo_skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert len(result.skills) == 1
+    assert result.skills[0].skill_name == "repo_skill"
+    assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.REPO
+    assert result.policy_summary["repo_skills_allowed"] is True
+
+async def test_resolver_policy_summary_reports_repo_and_local_policy():
+    resolver = AgentSkillResolver(loaders=[])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        allow_repo_skills=False,
+        allow_local_skills=True,
+    )
+    selector = SkillSelector(include=[])
+
+    result = await resolver.resolve(selector, context)
+
+    assert result.policy_summary["repo_skills_allowed"] is False
+    assert result.policy_summary["local_skills_allowed"] is True
+
+async def test_repo_skill_loader_scans_fs(tmp_path):
+    loader = RepoSkillLoader()
+    skills_dir = tmp_path / ".agents" / "skills"
+    
+    # Create two skills
+    skill1 = skills_dir / "skill1"
+    skill1.mkdir(parents=True)
+    (skill1 / "SKILL.md").touch()
+    
+    skill2 = skills_dir / "skill2"
+    skill2.mkdir(parents=True)
+    (skill2 / "SKILL.md").touch()
+    
+    # Non-skill directory
+    skill3 = skills_dir / "not_a_skill"
+    skill3.mkdir(parents=True)
+    
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "skill1"}])
+    
+    results = await loader.load_skills(selector, context)
+    assert len(results) == 2
+    names = {r.skill_name for r in results}
+    assert "skill1" in names
+    assert "skill2" in names
+    assert "not_a_skill" not in names
+
+async def test_repo_loader_rejects_active_projection_as_repo_source(tmp_path):
+    active_root = tmp_path / "runtime" / "skills_active" / "snap"
+    active_skill = active_root / "active"
+    active_skill.mkdir(parents=True)
+    (active_skill / "SKILL.md").write_text("# Active\n", encoding="utf-8")
+    (active_root / "_manifest.json").write_text("{}\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(active_root)
+
+    loader = RepoSkillLoader()
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+
+    with pytest.raises(RuntimeError, match="workspace-contamination error"):
+        await loader.load_skills(SkillSelector(include=[]), context)
+
+async def test_repo_loader_rejects_workspace_runtime_projection_without_manifest(tmp_path):
+    active_root = tmp_path / "runtime" / "skills_active" / "snap"
+    active_skill = active_root / "active"
+    active_skill.mkdir(parents=True)
+    (active_skill / "SKILL.md").write_text("# Active\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(active_root)
+
+    loader = RepoSkillLoader()
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+
+    with pytest.raises(RuntimeError, match="workspace-contamination error"):
+        await loader.load_skills(SkillSelector(include=[]), context)
+
+async def test_local_loader_rejects_hidden_local_overlay(tmp_path):
+    active_root = tmp_path / "runtime" / "skills_active" / "snap"
+    active_root.mkdir(parents=True)
+    (active_root / "_manifest.json").write_text("{}\n", encoding="utf-8")
+    agents_dir = tmp_path / ".agents"
+    agents_dir.mkdir()
+    (agents_dir / "skills").symlink_to(active_root)
+
+    loader = LocalSkillLoader()
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_local_skills=True,
+    )
+
+    with pytest.raises(RuntimeError, match=".agents/skills/local is hidden"):
+        await loader.load_skills(SkillSelector(include=[]), context)
+
+async def test_local_skill_loader_scans_fs(tmp_path):
+    loader = LocalSkillLoader()
+    skills_dir = tmp_path / ".agents" / "skills" / "local"
+    
+    skill1 = skills_dir / "local1"
+    skill1.mkdir(parents=True)
+    (skill1 / "SKILL.md").touch()
+    
+    context = SkillResolutionContext(
+        snapshot_id="snap",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+        allow_local_skills=True,
+    )
+    selector = SkillSelector(include=[])
+    
+    results = await loader.load_skills(selector, context)
+    assert len(results) == 1
+    assert results[0].skill_name == "local1"
+
+async def test_deployment_skill_loader_fetches_from_db():
+    loader = DeploymentSkillLoader()
+    
+    mock_session = AsyncMock()
+    
+    class MockVersion:
+        def __init__(self):
+            self.version_string = "1.0.0"
+            self.format = MagicMock(value="markdown")
+            self.artifact_ref = "art_123"
+            self.content_digest = "digest123"
+            
+    class MockDef:
+        def __init__(self):
+            self.slug = "db_skill"
+            self.versions = [MockVersion()]
+    
+    def _result(definitions=None, artifact_rows=None):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = list(definitions or [])
+        result.all.return_value = list(artifact_rows or [])
+        return result
+
+    mock_session.execute.side_effect = [
+        _result(definitions=[MockDef()]),
+        _result(artifact_rows=[("art_123", {"required_skills": []})]),
+    ]
+    
+    @asynccontextmanager
+    async def mock_maker():
+        yield mock_session
+        
+    context = SkillResolutionContext(snapshot_id="snap", async_session_maker=mock_maker)
+    selector = SkillSelector(include=[{"name": "db_skill"}])
+    
+    results = await loader.load_skills(selector, context)
+    assert len(results) == 1
+    assert results[0].skill_name == "db_skill"
+    assert results[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
+    assert mock_session.execute.call_count == 2
+    definition_stmt = str(mock_session.execute.call_args_list[0].args[0])
+    assert "WHERE agent_skill_definitions.slug IN" in definition_stmt
+
+async def test_resolver_respects_precedence():
+    from unittest.mock import AsyncMock
+
+    built_in = BuiltInSkillLoader()
+    built_in.load_skills = AsyncMock(return_value=[
+        ResolvedSkillEntry(skill_name="shared_skill", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+    ])
+
+    deployment = DeploymentSkillLoader()
+    deployment.load_skills = AsyncMock(return_value=[
+        ResolvedSkillEntry(skill_name="shared_skill", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.DEPLOYMENT))
+    ])
+
+    resolver = AgentSkillResolver(loaders=[built_in, deployment])
+    context = SkillResolutionContext(snapshot_id="snap")
+    selector = SkillSelector(include=[{"name": "shared_skill"}])
+    
+    result = await resolver.resolve(selector, context)
+    assert len(result.skills) == 1
+    # Deployment overrides built-in
+    assert result.skills[0].provenance.source_kind == AgentSkillSourceKind.DEPLOYMENT
+
+async def test_resolver_rejects_collisions_within_source():
+    class CollisionLoader(BuiltInSkillLoader):
+        async def load_skills(self, sel, ctx):
+            return [
+                ResolvedSkillEntry(skill_name="dup_skill", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN)),
+                ResolvedSkillEntry(skill_name="dup_skill", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+            ]
+
+    resolver = AgentSkillResolver(loaders=[CollisionLoader()])
+    context = SkillResolutionContext(snapshot_id="snap")
+    selector = SkillSelector(include=[])
+    
+    with pytest.raises(ValueError, match="Duplicate skill definition"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_rejects_versioned_selector_input():
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        SkillSelector(include=[{"name": "test_skill", "version": "2.0"}])
+
+    with pytest.raises(ValueError, match="semantic versions"):
+        SkillSelector(include=[{"name": "test_skill:2.0"}])
+
+async def test_resolver_produces_deterministic_snapshot_sorting():
+    class DisorderLoader(BuiltInSkillLoader):
+        async def load_skills(self, sel, ctx):
+            # Out of alphabetical order
+            return [
+                ResolvedSkillEntry(skill_name="zebra", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN)),
+                ResolvedSkillEntry(skill_name="alpha", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN)),
+                ResolvedSkillEntry(skill_name="charlie", provenance=AgentSkillProvenance(source_kind=AgentSkillSourceKind.BUILT_IN))
+            ]
+
+    resolver = AgentSkillResolver(loaders=[DisorderLoader()])
+    context = SkillResolutionContext(snapshot_id="snap")
+    selector = SkillSelector(include=[{"name": "zebra"}, {"name": "alpha"}, {"name": "charlie"}])
+    
+    result = await resolver.resolve(selector, context)
+    assert len(result.skills) == 3
+    assert result.skills[0].skill_name == "alpha"
+    assert result.skills[1].skill_name == "charlie"
+    assert result.skills[2].skill_name == "zebra"
+
+async def test_resolver_expands_required_skills_from_strict_metadata(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper-skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper-skill\"\n"
+        "  required-capabilities:\n"
+        "    - GH\n"
+        "    - jira\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper-skill\n"
+        "description: Supports orchestration.\n"
+        "metadata:\n"
+        "  required-capabilities:\n"
+        "    - git\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert [skill.skill_name for skill in result.skills] == [
+        "helper-skill",
+        "orchestrator",
+    ]
+    by_name = {skill.skill_name: skill for skill in result.skills}
+    assert by_name["orchestrator"].selection_reason == "selected"
+    assert by_name["helper-skill"].selection_reason == "required"
+    assert by_name["helper-skill"].required_by == ["orchestrator"]
+    assert by_name["orchestrator"].required_capabilities == ["gh", "jira"]
+    assert by_name["helper-skill"].required_capabilities == ["git"]
+    assert result.source_trace["requiredSkillEdges"] == [
+        {"requiredBy": "orchestrator", "skill": "helper-skill"}
+    ]
+    assert result.source_trace["requiredCapabilitySources"] == [
+        {"skill": "helper-skill", "capabilities": ["git"]},
+        {"skill": "orchestrator", "capabilities": ["gh", "jira"]},
+    ]
+
+async def test_resolver_allows_underscores_in_required_skill_names(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper_skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper_skill\"\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper_skill\n"
+        "description: Supports orchestration.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert [skill.skill_name for skill in result.skills] == [
+        "helper_skill",
+        "orchestrator",
+    ]
+
+async def test_resolver_expands_packaged_pr_resolver_support_skills():
+    resolver = AgentSkillResolver(loaders=[BuiltInSkillLoader()])
+    context = SkillResolutionContext(snapshot_id="snap-123")
+    selector = SkillSelector(include=[{"name": "pr-resolver"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert {skill.skill_name for skill in result.skills} >= {
+        "fix-ci",
+        "fix-comments",
+        "fix-merge-conflicts",
+        "pr-resolver",
+    }
+    assert result.source_trace["requiredSkillEdges"] == [
+        {"requiredBy": "pr-resolver", "skill": "fix-ci"},
+        {"requiredBy": "pr-resolver", "skill": "fix-comments"},
+        {"requiredBy": "pr-resolver", "skill": "fix-merge-conflicts"},
+    ]
+
+async def test_resolver_expands_deployment_required_skills_from_artifact_metadata():
+    class MockVersion:
+        def __init__(self, version_string, artifact_ref):
+            self.version_string = version_string
+            self.format = MagicMock(value="markdown")
+            self.artifact_ref = artifact_ref
+            self.content_digest = f"digest-{artifact_ref}"
+
+    class MockDef:
+        def __init__(self, slug, artifact_ref):
+            self.slug = slug
+            self.versions = [MockVersion("1.0.0", artifact_ref)]
+
+    definitions = {
+        "primary_skill": MockDef("primary_skill", "art_primary"),
+        "helper_skill": MockDef("helper_skill", "art_helper"),
+    }
+    artifact_metadata = {
+        "art_primary": {
+            "required_skills": ["helper_skill"],
+            "required_capabilities": ["jira"],
+        },
+        "art_helper": {"required_skills": [], "required_capabilities": ["git"]},
+    }
+    requested_slug_batches: list[set[str]] = []
+
+    def _result(definitions=None, artifact_rows=None):
+        result = MagicMock()
+        result.scalars.return_value.all.return_value = list(definitions or [])
+        result.all.return_value = list(artifact_rows or [])
+        return result
+
+    mock_session = AsyncMock()
+
+    async def execute(stmt):
+        compiled = stmt.compile()
+        params = compiled.params
+        if "agent_skill_definitions" in str(stmt):
+            names = set()
+            for value in params.values():
+                if isinstance(value, list):
+                    names.update(value)
+                elif isinstance(value, str):
+                    names.add(value)
+            requested_slug_batches.append(names)
+            return _result(
+                definitions=[
+                    definition
+                    for name, definition in definitions.items()
+                    if name in names
+                ]
+            )
+        refs = set()
+        for value in params.values():
+            if isinstance(value, list):
+                refs.update(value)
+            elif isinstance(value, str):
+                refs.add(value)
+        return _result(
+            artifact_rows=[
+                (artifact_ref, metadata)
+                for artifact_ref, metadata in artifact_metadata.items()
+                if artifact_ref in refs
+            ]
+        )
+
+    mock_session.execute.side_effect = execute
+
+    @asynccontextmanager
+    async def mock_maker():
+        yield mock_session
+
+    resolver = AgentSkillResolver(loaders=[DeploymentSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        async_session_maker=mock_maker,
+    )
+    selector = SkillSelector(include=[{"name": "primary_skill"}])
+
+    result = await resolver.resolve(selector, context)
+
+    assert [skill.skill_name for skill in result.skills] == [
+        "helper_skill",
+        "primary_skill",
+    ]
+    by_name = {skill.skill_name: skill for skill in result.skills}
+    assert by_name["primary_skill"].selection_reason == "selected"
+    assert by_name["helper_skill"].selection_reason == "required"
+    assert by_name["helper_skill"].required_by == ["primary_skill"]
+    assert by_name["primary_skill"].required_capabilities == ["jira"]
+    assert by_name["helper_skill"].required_capabilities == ["git"]
+    assert requested_slug_batches == [{"primary_skill"}, {"helper_skill"}]
+    assert result.source_trace["requiredSkillEdges"] == [
+        {"requiredBy": "primary_skill", "skill": "helper_skill"}
+    ]
+
+async def test_resolver_rejects_excluded_required_skill(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper-skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper-skill\"\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper-skill\n"
+        "description: Supports orchestration.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(
+        include=[{"name": "orchestrator"}],
+        exclude=["helper-skill"],
+    )
+
+    with pytest.raises(ValueError, match="requires skill 'helper-skill'.*excluded"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_rejects_missing_required_skill(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    orchestrator.mkdir(parents=True)
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills: \"helper-skill\"\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    with pytest.raises(ValueError, match="requires missing skill 'helper-skill'"):
+        await resolver.resolve(selector, context)
+
+async def test_resolver_rejects_non_string_required_skills_metadata(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    orchestrator = skills_dir / "orchestrator"
+    helper = skills_dir / "helper-skill"
+    orchestrator.mkdir(parents=True)
+    helper.mkdir()
+    (orchestrator / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-skills:\n"
+        "    - helper-skill\n"
+        "---\n",
+        encoding="utf-8",
+    )
+    (helper / "SKILL.md").write_text(
+        "---\n"
+        "name: helper-skill\n"
+        "description: Supports orchestration.\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    with pytest.raises(ValueError, match="metadata.required-skills must be a string"):
+        await resolver.resolve(selector, context)
+
+
+async def test_resolver_rejects_invalid_required_capabilities_metadata(tmp_path):
+    skills_dir = tmp_path / ".agents" / "skills"
+    skill_dir = skills_dir / "orchestrator"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\n"
+        "name: orchestrator\n"
+        "description: Runs orchestration.\n"
+        "metadata:\n"
+        "  required-capabilities: jira\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    resolver = AgentSkillResolver(loaders=[RepoSkillLoader()])
+    context = SkillResolutionContext(
+        snapshot_id="snap-123",
+        workspace_root=str(tmp_path),
+        allow_repo_skills=True,
+    )
+    selector = SkillSelector(include=[{"name": "orchestrator"}])
+
+    with pytest.raises(
+        ValueError,
+        match="metadata.required-capabilities must be a list of strings",
+    ):
+        await resolver.resolve(selector, context)

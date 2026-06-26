@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/integration/test_interventions.py (score: 1.000, trust: canonical)\n    line 76: assert response.status_code == 202, response.text\n2. docs/Workflows/PrMergeAutomation.md (score: 1.000, trust: canonical)\n    line 18: 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,\n3. docs/Workflows/WorkflowPresetsSystem.md (score: 1.000, trust: canonical)\n    line 11: Workflow presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a proposal/remediation flow, or another composed Workflow pattern.\n4. docs/Workflows/WorkflowCancellation.md (score: 1.000, trust: canonical)\n    line 85: Managed agent runs (`MoonMind.AgentRun`) acquire provider profile slots from the `ProviderProfileManager` singleton workflow before launching. These slots are a limited resource (typically `max_parallel_runs: 1` per profile). The system must guarantee slot recovery regardless of how a workflow terminates.\n5. docs/Workflows/SkillAndPlanContracts.md (score: 1.000, trust: canonical)\n    line 104: * New code should import canonical `Tool*` names.\n6. docs/Workflows/WorkflowArchitecture.md (score: 1.000, trust: canonical)\n    line 19: - presets, Jira imports, and dependency declarations\n7. docs/Workflows/StepReviewGateSystem.md (score: 1.000, trust: canonical)\n    line 75: DEFAULT_SKIP_TOOL_TYPES = (\"repo.publish\", \"codex.execute\")\n8. docs/Workflows/WorkflowEditingSystem.md (score: 1.000, trust: canonical)\n    line 18: - Terminal executions, including failed and canceled executions, gain a **Rerun** action that reuses the same prefilled submit experience and allows the operator to edit the draft before submitting it again.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/integration/test_interventions.py",
+      "text": "line 76: assert response.status_code == 202, response.text",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 76,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/PrMergeAutomation.md",
+      "text": "line 18: 3. waits for external merge-readiness signals such as GitHub review/check completion and optional Jira state,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 18,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowPresetsSystem.md",
+      "text": "line 11: Workflow presets let a user start from a known workflow shape without manually authoring every step. A preset may represent a simple one-step action, a multi-step coding workflow, a Jira-driven orchestration flow, a proposal/remediation flow, or another composed Workflow pattern.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 11,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowCancellation.md",
+      "text": "line 85: Managed agent runs (`MoonMind.AgentRun`) acquire provider profile slots from the `ProviderProfileManager` singleton workflow before launching. These slots are a limited resource (typically `max_parallel_runs: 1` per profile). The system must guarantee slot recovery regardless of how a workflow terminates.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 85,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/SkillAndPlanContracts.md",
+      "text": "line 104: * New code should import canonical `Tool*` names.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 104,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowArchitecture.md",
+      "text": "line 19: - presets, Jira imports, and dependency declarations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 19,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/StepReviewGateSystem.md",
+      "text": "line 75: DEFAULT_SKIP_TOOL_TYPES = (\"repo.publish\", \"codex.execute\")",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 75,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowEditingSystem.md",
+      "text": "line 18: - Terminal executions, including failed and canceled executions, gain a **Rerun** action that reuses the same prefilled submit experience and allows the operator to edit the draft before submitting it again.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 18,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-25T07:10:02Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

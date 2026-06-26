@@ -1,0 +1,119 @@
+{
+  "handoffType": "jira-orchestrate-submission",
+  "createdAt": "2026-06-12T00:00:00Z",
+  "jiraIssueKey": "MM-820",
+  "classification": {
+    "inputType": "single-story feature request",
+    "reason": "The trusted Jira preset brief identifies Source story STORY-001 and a single Jira issue summary: Complete remaining behavior for Establish Step Execution conformance harness."
+  },
+  "sourceStory": {
+    "id": "STORY-001",
+    "summary": "Complete remaining behavior for Establish Step Execution conformance harness",
+    "sourceJiraIssue": "unknown",
+    "sourceDesignPath": "docs/Steps/StepExecutionsAndCheckpointing.md",
+    "coverageIds": [
+      "DESIGN-REQ-002",
+      "DESIGN-REQ-003",
+      "DESIGN-REQ-006",
+      "DESIGN-REQ-010",
+      "DESIGN-REQ-012",
+      "DESIGN-REQ-021",
+      "DESIGN-REQ-024"
+    ]
+  },
+  "preset": {
+    "slug": "jira-orchestrate",
+    "version": "1.0.0",
+    "scope": "global"
+  },
+  "repository": "MoonLadderStudios/MoonMind",
+  "targetRuntime": "codex_cli",
+  "idempotencyKey": "jira-orchestrate:MM-820:STORY-001",
+  "artifactResumeInspection": {
+    "status": "no_existing_feature_artifacts_found",
+    "checkedPatterns": [
+      "MM-820",
+      "820",
+      "step-execution",
+      "step_execution",
+      "conformance"
+    ],
+    "resumeFrom": "jira-orchestrate runtime workflow submission",
+    "notes": [
+      "No existing MM-820 Moon Spec feature directory or handoff artifact was found in the workspace.",
+      "The downstream Jira Orchestrate preset must inspect and resume Moon Spec stages during runtime execution instead of this breakdown handoff running implementation inline."
+    ]
+  },
+  "submissionStatus": "not_submitted_from_this_workspace",
+  "localBlockers": [
+    {
+      "command": "curl -fsS http://localhost:8000/api/health",
+      "reason": "The local MoonMind API service is not available in this managed workspace, so the Jira Orchestrate runtime workflow cannot be submitted here.",
+      "evidence": "curl: (7) Failed to connect to localhost port 8000"
+    },
+    {
+      "command": "docker ps --format '{{.Names}} {{.Status}}' | head -50",
+      "reason": "No running MoonMind containers were visible from this workspace.",
+      "evidence": "Command returned no container rows."
+    }
+  ],
+  "createExecutionPayload": {
+    "type": "task",
+    "payload": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "targetRuntime": "codex_cli",
+      "publishMode": "pr",
+      "idempotencyKey": "jira-orchestrate:MM-820:STORY-001",
+      "integration": "jira",
+      "task": {
+        "title": "Run Jira Orchestrate for MM-820",
+        "instructions": "Run Jira Orchestrate for MM-820.\n\nUse the Jira preset brief for MM-820 as the canonical Moon Spec orchestration input.\n\nSource story: STORY-001. Source summary: Complete remaining behavior for Establish Step Execution conformance harness. Source Jira issue: unknown. Original brief reference: not provided. Source design document: docs/Steps/StepExecutionsAndCheckpointing.md.\n\nClassify this input as a single-story feature request. Inspect existing Moon Spec artifacts and resume from the first incomplete stage instead of regenerating valid later-stage artifacts. Use the existing Jira Orchestrate workflow. Do not run implementation inline inside the breakdown task.",
+        "runtime": {
+          "mode": "codex_cli"
+        },
+        "publish": {
+          "mode": "pr"
+        },
+        "inputs": {
+          "jira_issue_key": "MM-820",
+          "source_design_path": "docs/Steps/StepExecutionsAndCheckpointing.md",
+          "constraints": "Source story: STORY-001. Source summary: Complete remaining behavior for Establish Step Execution conformance harness. Source Jira issue: unknown. Original brief reference: not provided. Use the trusted Jira preset brief as canonical input. Treat docs/Steps/StepExecutionsAndCheckpointing.md as runtime source requirements. Inspect existing Moon Spec artifacts and resume from the first incomplete stage. Do not run implementation inline inside the breakdown task."
+        },
+        "taskTemplate": {
+          "slug": "jira-orchestrate",
+          "version": "1.0.0",
+          "scope": "global"
+        },
+        "presetSchedule": {
+          "source": "jira-breakdown-orchestrate",
+          "reason": "source_story_handoff",
+          "presetSlug": "jira-orchestrate",
+          "presetVersion": "1.0.0",
+          "jiraIssueKey": "MM-820",
+          "sourceStoryId": "STORY-001",
+          "sourceDesignPath": "docs/Steps/StepExecutionsAndCheckpointing.md"
+        }
+      }
+    }
+  },
+  "canonicalJiraBriefSummary": {
+    "summary": "Complete remaining behavior for Establish Step Execution conformance harness",
+    "issueType": "Story",
+    "status": "In Progress",
+    "acceptanceCriteria": [
+      "A single conformance command covers manifest, checkpoint, gate, terminology, and API contract fixtures.",
+      "Tests fail when manifests or checkpoints include raw stdout, stderr, diffs, logs, provider payloads, credentials, or oversized inline evidence.",
+      "At least one replay or degraded-input fixture exists for old manifest rows, old checkpoint rows, old gate verdict strings, and old ledger rows with only legacy checkpoint refs.",
+      "Canonical terms step-executions, executionOrdinal, and recover_from_failed_step are enforced.",
+      "Golden fixtures cover successful execution, failed reattempt, gate failure, recovery with preserved steps, degraded checkpoint payload, degraded gate verdict, and legacy ledger rows with only old checkpoint refs.",
+      "Canonical content types and terminology are asserted for all new evidence writers.",
+      "Compatibility helpers return typed invalid/degraded decisions rather than uncaught exceptions."
+    ],
+    "alreadyImplementedEvidence": [
+      "DESIGN-REQ-003 terminology checks in tests/integration/temporal/test_step_execution_contracts.py.",
+      "DESIGN-REQ-006 manifest inline evidence rejection in moonmind/schemas/temporal_models.py and tests/unit/workflows/temporal/test_step_execution_manifest.py.",
+      "DESIGN-REQ-010 checkpoint content type, identity, validation, and degraded payload handling in tests/unit/workflows/temporal/test_step_checkpoints.py.",
+      "DESIGN-REQ-024 degraded manifest/checkpoint payload coverage in manifest and checkpoint unit tests."
+    ]
+  }
+}

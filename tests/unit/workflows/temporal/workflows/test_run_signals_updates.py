@@ -1,0 +1,1318 @@
+import asyncio
+import inspect
+from unittest.mock import AsyncMock, call
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker, UnsandboxedWorkflowRunner
+
+from temporalio import workflow
+from temporalio.exceptions import ActivityError
+from temporalio.workflow import ActivityCancellationType
+from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_TASK_QUEUE
+from moonmind.workflows.temporal.workflows import run as run_workflow_module
+from moonmind.workflows.temporal.workflows.run import (
+    DEPENDENCY_RECONCILE_INTERVAL,
+    DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE,
+    STATE_AWAITING_SLOT,
+    STATE_WAITING_ON_DEPENDENCIES,
+    MoonMindUserWorkflow,
+)
+
+class _NestedFailure(Exception):
+    def __init__(self, message: str, cause: BaseException | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
+
+
+async def fake_execute_activity(activity_name, *args, **kwargs):
+    if activity_name == "artifact.read":
+        import json
+
+        return json.dumps(
+            {
+                "plan_version": "1.0",
+                "metadata": {
+                    "title": "Test",
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "registry_snapshot": {
+                        "digest": "reg:sha256:123",
+                        "artifact_ref": "art:sha256:456",
+                    },
+                },
+                "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+                "tools": [
+                    {
+                        "name": "dummy_tool",
+                        "version": "1.0.0",
+                        "spec_ref": "art:sha256:789",
+                        "inputs": {"schema": {"type": "object", "properties": {}}},
+                        "outputs": {"schema": {"type": "object", "properties": {}}},
+                        "executor": {"name": "dummy"},
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "node-1",
+                        "type": "generic",
+                        "title": "dummy",
+                        "tool": {"name": "dummy_tool"},
+                        "input": {},
+                        "dependencies": [],
+                    }
+                ],
+                "edges": [],
+            }
+        ).encode("utf-8")
+    elif activity_name == "plan.summarize":
+        return {"summary": "Done"}
+    elif activity_name == "artifact.write_stream":
+        return {"artifact_id": "art-123"}
+    elif activity_name == "artifact.create":
+        return {"artifact_id": "art-123"}, {"url": "test"}
+    return {}
+
+
+def test_operator_failure_summary_uses_deep_actionable_cause() -> None:
+    failure = _NestedFailure(
+        "Child Workflow execution failed",
+        _NestedFailure(
+            "Activity task failed",
+            RuntimeError("sessionEpoch does not match the active managed session"),
+        ),
+    )
+
+    assert (
+        MoonMindUserWorkflow._operator_failure_summary(failure)
+        == "sessionEpoch does not match the active managed session"
+    )
+
+
+def test_operator_failure_summary_skips_temporal_activity_wrapper() -> None:
+    cause = RuntimeError("sessionEpoch does not match the active managed session")
+    try:
+        raise cause
+    except RuntimeError as exc:
+        failure = ActivityError(
+            "Activity error",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="test-worker",
+            activity_type="agent_runtime.session_status",
+            activity_id="activity-1",
+            retry_state=None,
+        )
+        failure.__cause__ = exc
+
+    assert (
+        MoonMindUserWorkflow._operator_failure_summary(failure)
+        == "sessionEpoch does not match the active managed session"
+    )
+
+
+def _make_workflow_for_diagnostic() -> MoonMindUserWorkflow:
+    wf = MoonMindUserWorkflow()
+    wf._state = "executing"
+    return wf
+
+
+def test_failure_diagnostic_from_exception_captures_deep_root_cause() -> None:
+    wf = _make_workflow_for_diagnostic()
+    failure = _NestedFailure(
+        "Child Workflow execution failed",
+        _NestedFailure(
+            "Activity task failed",
+            RuntimeError(
+                "Provider authentication failed with HTTP 401 for profile codex-prod."
+            ),
+        ),
+    )
+
+    diag = wf._failure_diagnostic_from_exception(
+        failure,
+        stage="executing",
+        step_id="apply-patch",
+        step_title="Apply patch",
+        source="child_workflow",
+        child_workflow_id="task-123:agent:apply-patch",
+    )
+
+    assert diag["stage"] == "executing"
+    assert diag["stepId"] == "apply-patch"
+    assert diag["stepTitle"] == "Apply patch"
+    assert diag["source"] == "child_workflow"
+    assert diag["childWorkflowId"] == "task-123:agent:apply-patch"
+    assert (
+        diag["message"]
+        == "Provider authentication failed with HTTP 401 for profile codex-prod."
+    )
+    assert diag["rootCauseType"] == "RuntimeError"
+    assert diag["category"] == "execution_error"
+
+
+def test_failure_diagnostic_redacts_github_tokens() -> None:
+    wf = _make_workflow_for_diagnostic()
+    secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    failure = RuntimeError(
+        f"Push failed because token {secret} was rejected by the server"
+    )
+
+    diag = wf._failure_diagnostic_from_exception(failure, stage="executing")
+
+    assert secret not in diag["message"]
+    # Sanity check: redacted message still mentions the failure context.
+    assert "Push failed" in diag["message"]
+
+
+def test_failure_diagnostic_classifies_invalid_input_as_user_error() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    wf = _make_workflow_for_diagnostic()
+    failure = ApplicationError(
+        "Plan tool 'apply-patch' was not found in registry snapshot",
+        type="INVALID_INPUT",
+        non_retryable=True,
+    )
+
+    diag = wf._failure_diagnostic_from_exception(failure, stage="planning")
+
+    assert diag["category"] == "user_error"
+    assert "Plan tool" in diag["message"]
+
+
+def test_failure_diagnostic_classifies_profile_resolution_as_integration() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    wf = _make_workflow_for_diagnostic()
+    failure = ApplicationError(
+        "No enabled provider profiles for runtime codex_cli",
+        type="ProfileResolutionError",
+        non_retryable=True,
+    )
+
+    diag = wf._failure_diagnostic_from_exception(failure, stage="executing")
+
+    assert diag["category"] == "integration_error"
+
+
+def test_record_failure_diagnostic_keeps_first_root_cause() -> None:
+    wf = _make_workflow_for_diagnostic()
+    first = RuntimeError(
+        "Provider authentication failed with HTTP 401 for profile codex-prod."
+    )
+    wf._record_failure_diagnostic(
+        first,
+        stage="executing",
+        step_id="apply-patch",
+        step_title="Apply patch",
+        source="child_workflow",
+        child_workflow_id="wf:1",
+    )
+
+    second = RuntimeError("generic wrapper from higher-level handler")
+    wf._record_failure_diagnostic(second, stage="finalizing", source="workflow")
+
+    assert wf._failure_diagnostic is not None
+    assert wf._failure_diagnostic["stepId"] == "apply-patch"
+    assert (
+        wf._failure_diagnostic["message"]
+        == "Provider authentication failed with HTTP 401 for profile codex-prod."
+    )
+
+
+@pytest.fixture
+def mock_run_environment(monkeypatch):
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_trusted_owner_metadata", lambda self: ("user", "user-1")
+    )
+    monkeypatch.setattr(workflow, "execute_activity", fake_execute_activity)
+
+    # Mock upsert_search_attributes since test env rejects unknown ones
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
+
+    # Mock complex stages to avoid payload validation errors during signal testing
+    async def fake_planning_stage(*args, **kwargs):
+        return "ref-123"
+
+    async def fake_execution_stage(self, *args, **kwargs):
+        try:
+            await workflow.wait_condition(
+                lambda: self._paused or self._cancel_requested,
+                timeout=timedelta(seconds=1),
+            )
+        except asyncio.TimeoutError:
+            return
+        while self._paused and not self._cancel_requested:
+            await workflow.wait_condition(
+                lambda: not self._paused or self._cancel_requested
+            )
+
+    monkeypatch.setattr(MoonMindUserWorkflow, "_run_planning_stage", fake_planning_stage)
+    monkeypatch.setattr(
+        MoonMindUserWorkflow, "_run_execution_stage", fake_execution_stage
+    )
+
+@pytest.mark.asyncio
+async def test_run_workflow_pause_resume(mock_run_environment):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-signals",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-pause",
+                task_queue="test-task-queue-signals",
+            )
+            await handle.execute_update("Pause")
+
+            # Workflow should be paused and waiting.
+            await asyncio.sleep(0.1)
+            status = await handle.query("get_status")
+            assert status.get("paused") is True
+
+            await handle.execute_update("Resume")
+            result = await handle.result()
+            assert result["status"] == "success"
+
+@pytest.mark.asyncio
+async def test_run_workflow_update_parameters(mock_run_environment):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-signals",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-update",
+                task_queue="test-task-queue-signals",
+            )
+            await handle.execute_update("Pause")
+
+            await handle.execute_update(
+                "update_parameters",
+                {"new_parameters": {"param1": "new_value", "param2": "value2"}},
+            )
+
+            await handle.execute_update("Resume")
+            result = await handle.result()
+            assert result["status"] == "success"
+
+@pytest.mark.asyncio
+async def test_run_workflow_cancel_signal(mock_run_environment):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-signals",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-cancel",
+                task_queue="test-task-queue-signals",
+            )
+            await handle.execute_update("Pause")
+
+            await handle.execute_update("Cancel")
+            result = await handle.result()
+            assert result["status"] == "canceled"
+
+@pytest.mark.asyncio
+async def test_recovery_forwards_operator_message_to_active_jules_child(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    mock_handle = type(
+        "MockHandle",
+        (),
+        {"execute_update": AsyncMock(), "signal": AsyncMock()},
+    )()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    await workflow_instance.resume(
+        {"message": "Please rename it to Provider Profiles."}
+    )
+
+    mock_handle.execute_update.assert_awaited_once_with("Resume")
+    mock_handle.signal.assert_awaited_once_with(
+        "operator_message",
+        {"message": "Please rename it to Provider Profiles."},
+    )
+    assert workflow_instance._recovery_requested is True
+
+@pytest.mark.asyncio
+async def test_pause_resume_forwards_lifecycle_updates_to_active_child(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:agent:implement"
+    workflow_instance._active_agent_id = "codex"
+
+    mock_handle = type("MockHandle", (), {"execute_update": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+
+    await workflow_instance.pause()
+    await workflow_instance.resume()
+
+    assert workflow_instance._paused is False
+    assert mock_handle.execute_update.await_args_list == [
+        call("Pause"),
+        call("Resume"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pause_reverts_and_fails_when_active_child_update_fails(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:agent:implement"
+    workflow_instance._active_agent_id = "codex"
+
+    mock_handle = type(
+        "MockHandle",
+        (),
+        {"execute_update": AsyncMock(side_effect=RuntimeError("child gone"))},
+    )()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+
+    with pytest.raises(RuntimeError, match="Failed to forward Pause"):
+        await workflow_instance.pause()
+
+    assert workflow_instance._paused is False
+    assert workflow_instance._waiting_reason is None
+    assert workflow_instance._pause_resume_transition_in_progress is False
+
+
+def test_pause_resume_validators_block_concurrent_transition() -> None:
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._pause_resume_transition_in_progress = True
+
+    with pytest.raises(ValueError, match="transition already in progress"):
+        workflow_instance.validate_pause()
+    with pytest.raises(ValueError, match="transition already in progress"):
+        workflow_instance.validate_resume()
+
+
+def test_dependency_wait_loop_exits_after_unpaused_dependency_failure() -> None:
+    source = inspect.getsource(MoonMindUserWorkflow._wait_for_dependencies)
+
+    assert (
+        "(self._dependency_failure is None and self._unresolved_dependency_ids)"
+        in source
+    )
+    assert (
+        "or (self._dependency_failure is not None and self._paused)"
+        not in source
+    )
+
+@pytest.mark.asyncio
+async def test_send_message_forwards_operator_message_without_resuming(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    await workflow_instance.send_message({"message": "Please use Provider Profiles."})
+
+    mock_handle.signal.assert_awaited_once_with(
+        "operator_message",
+        {"message": "Please use Provider Profiles."},
+    )
+    assert workflow_instance._recovery_requested is False
+
+
+@pytest.mark.asyncio
+async def test_send_message_does_not_scan_inside_workflow_replay_path(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    forward_mock = AsyncMock()
+    monkeypatch.setattr(
+        workflow_instance,
+        "_forward_operator_message_to_active_child",
+        forward_mock,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(
+        run_workflow_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+
+    await workflow_instance.send_message(
+        {"message": "Please use token=blocked-secret-value"}
+    )
+
+    forward_mock.assert_awaited_once_with(
+        {"message": "Please use token=blocked-secret-value"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_send_message_forwards_clean_operator_message_with_scan(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "jules"
+    workflow_instance._awaiting_external = True
+
+    forward_mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        workflow_instance,
+        "_forward_operator_message_to_active_child",
+        forward_mock,
+    )
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(
+        run_workflow_module.settings.security,
+        "high_security_mode",
+        True,
+    )
+
+    message = "Please use Provider Profiles exactly."
+    await workflow_instance.send_message({"message": message})
+
+    forward_mock.assert_awaited_once_with({"message": message})
+    assert workflow_instance._recovery_requested is False
+
+
+@pytest.mark.asyncio
+async def test_update_inputs_forwards_runtime_selection_to_active_managed_child(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "model": "claude-opus-4-7",
+                "profileId": "claude_anthropic",
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                    }
+                },
+            }
+        }
+    )
+
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "model": "claude-opus-4-7",
+            "executionProfileRef": "claude_anthropic",
+            "targetRuntime": "claude_code",
+            "parametersPatch": {
+                "model": "claude-opus-4-7",
+                "profileId": "claude_anthropic",
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                    }
+                },
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_inputs_forwards_runtime_selection_from_canonical_workflow_patch(
+    monkeypatch,
+):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                        "effort": "high",
+                    }
+                }
+            }
+        }
+    )
+
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "model": "claude-opus-4-7",
+            "executionProfileRef": "claude_anthropic",
+            "effort": "high",
+            "targetRuntime": "claude_code",
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "model": "claude-opus-4-7",
+                        "profileId": "claude_anthropic",
+                        "effort": "high",
+                    }
+                }
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_inputs_forwards_runtime_profile_clear_to_active_managed_child(
+    monkeypatch,
+):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._active_agent_child_workflow_id = "wf:child"
+    workflow_instance._active_agent_id = "claude_code"
+
+    mock_handle = type("MockHandle", (), {"signal": AsyncMock()})()
+    monkeypatch.setattr(
+        workflow,
+        "get_external_workflow_handle",
+        lambda workflow_id: mock_handle,
+    )
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+
+    result = await workflow_instance.update_inputs(
+        {
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "",
+                    }
+                }
+            }
+        }
+    )
+
+    mock_handle.signal.assert_awaited_once_with(
+        "update_runtime_selection",
+        {
+            "targetRuntime": "claude_code",
+            "executionProfileRef": "",
+            "parametersPatch": {
+                "workflow": {
+                    "runtime": {
+                        "mode": "claude_code",
+                        "profileId": "",
+                    }
+                }
+            },
+        },
+    )
+    assert result["forwardedRuntimeSelectionUpdate"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_send_message_update_uses_temporal_boundary(
+    mock_run_environment, monkeypatch
+):
+    forwarded_payloads = []
+
+    async def fake_forward(self, payload):
+        forwarded_payloads.append(payload)
+        return True
+
+    monkeypatch.setattr(
+        MoonMindUserWorkflow,
+        "_forward_operator_message_to_active_child",
+        fake_forward,
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-send-message",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-send-message",
+                task_queue="test-task-queue-send-message",
+            )
+            await handle.execute_update("Pause")
+            await handle.execute_update(
+                "SendMessage", {"message": "Please use Provider Profiles."}
+            )
+
+            await asyncio.sleep(0.1)
+            status = await handle.query("get_status")
+            assert status.get("paused") is True
+            assert forwarded_payloads == [{"message": "Please use Provider Profiles."}]
+
+            await handle.execute_update("Cancel")
+            result = await handle.result()
+            assert result["status"] == "canceled"
+
+@pytest.mark.asyncio
+async def test_run_workflow_send_message_update_rejects_non_canonical_payload(
+    mock_run_environment,
+):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-send-message-invalid",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-send-message-invalid",
+                task_queue="test-task-queue-send-message-invalid",
+            )
+            await handle.execute_update("Pause")
+
+            with pytest.raises(Exception, match="Workflow update failed"):
+                await handle.execute_update(
+                    "SendMessage",
+                    {"clarificationResponse": "Please use Provider Profiles."},
+                )
+
+            status = await handle.query("get_status")
+            assert status.get("paused") is True
+
+            await handle.execute_update("Cancel")
+            result = await handle.result()
+            assert result["status"] == "canceled"
+
+@pytest.mark.asyncio
+async def test_run_workflow_send_message_update_rejects_blank_message(
+    mock_run_environment,
+):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="test-task-queue-send-message-blank",
+            workflows=[MoonMindUserWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflow_type": "MoonMind.UserWorkflow",
+                    "initial_parameters": {},
+                    "plan_artifact_ref": "ref-123",
+                },
+                id="test-wf-send-message-blank",
+                task_queue="test-task-queue-send-message-blank",
+            )
+            await handle.execute_update("Pause")
+
+            with pytest.raises(Exception, match="Workflow update failed"):
+                await handle.execute_update("SendMessage", {"message": "   "})
+
+            status = await handle.query("get_status")
+            assert status.get("paused") is True
+
+            await handle.execute_update("Cancel")
+            result = await handle.result()
+            assert result["status"] == "canceled"
+
+def test_update_inputs_extracts_clarification_message_from_parameters_patch():
+    workflow_instance = MoonMindUserWorkflow()
+
+    message = workflow_instance._extract_clarification_message(
+        {
+            "parametersPatch": {
+                "message": "Use the Workers page copy for now.",
+            }
+        }
+    )
+
+    assert message == "Use the Workers page copy for now."
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_uses_canonical_activity_boundary(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._finish_summary = {"finishOutcome": {"code": "SUCCESS"}}
+    captured = {}
+
+    async def fake_execute_typed_activity(activity_type, payload, **kwargs):
+        captured["activity_type"] = activity_type
+        captured["payload"] = payload.model_dump(by_alias=True)
+        captured["kwargs"] = kwargs
+        return {
+            "workflowId": "wf-terminal",
+            "state": "completed",
+            "closeStatus": "completed",
+        }
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-terminal",
+            "run_id": "run-terminal",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    workflow_instance._finish_summary = {
+        "schemaVersion": "v1",
+        "finishOutcome": {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        },
+    }
+
+    await workflow_instance._record_terminal_state(
+        state="completed",
+        close_status="completed",
+        summary="Workflow completed successfully",
+    )
+
+    assert captured["activity_type"] == "execution.record_terminal_state"
+    assert captured["payload"] == {
+        "workflowId": "wf-terminal",
+        "state": "completed",
+        "closeStatus": "completed",
+        "summary": "Workflow completed successfully",
+        "finishOutcomeCode": "PUBLISH_DISABLED",
+        "finishOutcomeStage": "publish",
+        "finishOutcomeReason": "publishing disabled",
+        "finishSummary": {
+            "schemaVersion": "v1",
+            "finishOutcome": {
+                "code": "PUBLISH_DISABLED",
+                "stage": "publish",
+                "reason": "publishing disabled",
+            },
+        },
+        "errorCategory": None,
+    }
+    assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE
+    assert captured["kwargs"]["cancellation_type"] == ActivityCancellationType.ABANDON
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_supports_snake_case_finish_outcome(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    captured = {}
+
+    async def fake_execute_typed_activity(activity_type, payload, **kwargs):
+        captured["activity_type"] = activity_type
+        captured["payload"] = payload.model_dump(by_alias=True)
+        captured["kwargs"] = kwargs
+        return {
+            "workflowId": "wf-terminal-snake",
+            "state": "completed",
+            "closeStatus": "completed",
+        }
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-terminal-snake",
+            "run_id": "run-terminal-snake",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+    workflow_instance._finish_summary = {
+        "schema_version": "v1",
+        "finish_outcome": {
+            "code": "PUBLISH_DISABLED",
+            "stage": "publish",
+            "reason": "publishing disabled",
+        },
+    }
+
+    await workflow_instance._record_terminal_state(
+        state="completed",
+        close_status="completed",
+        summary="Workflow completed successfully",
+    )
+
+    assert captured["activity_type"] == "execution.record_terminal_state"
+    assert captured["payload"]["finishOutcomeCode"] == "PUBLISH_DISABLED"
+    assert captured["payload"]["finishOutcomeStage"] == "publish"
+    assert captured["payload"]["finishOutcomeReason"] == "publishing disabled"
+    assert captured["payload"]["finishSummary"] == workflow_instance._finish_summary
+    assert captured["kwargs"]["task_queue"] == ARTIFACTS_TASK_QUEUE
+    assert captured["kwargs"]["cancellation_type"] == ActivityCancellationType.ABANDON
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_state_skips_activity_without_patch(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+
+    async def fake_execute_typed_activity(activity_type, payload, **kwargs):
+        raise AssertionError("terminal state activity should be patch-gated")
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await workflow_instance._record_terminal_state(
+        state="completed",
+        close_status="completed",
+        summary="Workflow completed successfully",
+    )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_dependencies_records_dependency_metadata(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    memo_updates: list[dict[str, object]] = []
+
+    async def fake_wait_condition(predicate, timeout=None):
+        while not predicate():
+            await asyncio.sleep(0)
+
+    async def fake_reconcile(dependency_ids):
+        for workflow_id in dependency_ids:
+            workflow_instance._record_dependency_outcome(
+                prerequisite_workflow_id=workflow_id,
+                terminal_state="completed",
+                close_status="completed",
+                resolved_at="2026-04-05T00:00:00Z",
+                failure_category=None,
+                message=None,
+            )
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1", "dep-2"])
+
+    assert workflow_instance._state == STATE_WAITING_ON_DEPENDENCIES
+    assert workflow_instance._waiting_reason is None
+    assert any(
+        memo.get("waiting_reason") == "dependency_wait" for memo in memo_updates
+    )
+    assert any(
+        (memo.get("dependencies") or {}).get("declaredIds") == ["dep-1", "dep-2"]
+        for memo in memo_updates
+    )
+
+def test_child_state_changed_sets_provider_profile_waiting_reason(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: False)
+
+    workflow_instance.child_state_changed(
+        "awaiting_slot",
+        "Managed provider capacity exhausted.",
+    )
+
+    assert workflow_instance._state == STATE_AWAITING_SLOT
+    assert workflow_instance._summary == "Managed provider capacity exhausted."
+    assert workflow_instance._waiting_reason == "provider_profile_slot"
+    assert workflow_instance._attention_required is False
+
+    workflow_instance._attention_required = True
+    workflow_instance.child_state_changed("launching", "Slot acquired.")
+
+    assert workflow_instance._waiting_reason is None
+    assert workflow_instance._attention_required is False
+
+    workflow_instance._attention_required = True
+    workflow_instance.child_state_changed("running", "Agent started.")
+
+    assert workflow_instance._waiting_reason is None
+    assert workflow_instance._attention_required is False
+
+def test_mm_started_at_stamped_on_launch_and_immutable_across_requeue(monkeypatch):
+    """``mm_started_at`` is set exactly once when the child reports it has
+    crossed from awaiting_slot into launching/running. A subsequent return to
+    ``awaiting_slot`` (cooldown/requeue) and re-launch must not overwrite it.
+    """
+    workflow_instance = MoonMindUserWorkflow()
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    upserts: list = []
+    monkeypatch.setattr(
+        workflow,
+        "upsert_search_attributes",
+        lambda pairs: upserts.append(pairs),
+    )
+
+    launch_now = datetime(2026, 5, 1, 12, 5, tzinfo=timezone.utc)
+    monkeypatch.setattr(workflow, "now", lambda: launch_now)
+
+    workflow_instance.child_state_changed(
+        "awaiting_slot", "Managed provider capacity exhausted."
+    )
+    assert workflow_instance._started_at is None
+
+    workflow_instance.child_state_changed("launching", "Slot acquired.")
+    first_started = workflow_instance._started_at
+    assert first_started == launch_now
+    assert len(upserts) == 1
+
+    # Cooldown returns the run to awaiting_slot, then it relaunches. The
+    # semantic started_at must persist.
+    workflow_instance.child_state_changed("awaiting_slot", "Cooldown.")
+    workflow_instance.child_state_changed("running", "Agent restarted.")
+    assert workflow_instance._started_at == first_started
+    assert len(upserts) == 1
+
+def test_mm_started_at_not_stamped_for_awaiting_slot(monkeypatch):
+    """Awaiting a provider slot must not stamp mm_started_at — that is
+    exactly the case the legacy behavior got wrong."""
+    workflow_instance = MoonMindUserWorkflow()
+    monkeypatch.setattr(workflow_instance, "_update_search_attributes", lambda: None)
+    monkeypatch.setattr(workflow_instance, "_update_memo", lambda: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    upserts: list = []
+    monkeypatch.setattr(
+        workflow,
+        "upsert_search_attributes",
+        lambda pairs: upserts.append(pairs),
+    )
+    monkeypatch.setattr(
+        workflow, "now", lambda: datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+    )
+
+    workflow_instance.child_state_changed("awaiting_slot", "No slot.")
+
+    assert workflow_instance._started_at is None
+    assert upserts == []
+
+@pytest.mark.asyncio
+async def test_legacy_wait_for_dependencies_raises_dependency_specific_failure(monkeypatch):
+    """Legacy fail-fast path: in-flight workflows whose history predates the
+    wait-through-rerun patch must continue raising on a failed prerequisite."""
+    from moonmind.workflows.temporal.workflows.run import (
+        DEPENDENCY_GATE_PATCH,
+        DEPENDENCY_WAIT_THROUGH_RERUN_PATCH,
+    )
+
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+
+    async def fake_wait_condition(predicate, timeout=None):
+        while not predicate():
+            await asyncio.sleep(0)
+
+    async def fake_reconcile(dependency_ids):
+        workflow_id = dependency_ids[0]
+        workflow_instance._record_dependency_outcome(
+            prerequisite_workflow_id=workflow_id,
+            terminal_state="failed",
+            close_status="failed",
+            resolved_at="2026-04-05T00:00:00Z",
+            failure_category="dependency_failed",
+            message="prerequisite failed",
+        )
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
+    # Enable only the gate patch, not the wait-through-rerun patch, so we
+    # exercise the legacy fail-fast code path.
+    monkeypatch.setattr(
+        workflow,
+        "patched",
+        lambda patch_id: patch_id == DEPENDENCY_GATE_PATCH,
+    )
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    with pytest.raises(ValueError, match="prerequisite failed"):
+        await workflow_instance._wait_for_dependencies(["dep-1"])
+
+@pytest.mark.asyncio
+async def test_wait_for_dependencies_can_be_bypassed_by_operator_signal(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    memo_updates: list[dict[str, object]] = []
+
+    async def fake_reconcile(dependency_ids):
+        return None
+
+    async def fake_wait_condition(predicate, timeout=None):
+        workflow_instance._bypass_dependencies(
+            {"payload": {"reason": "No longer needed."}}
+        )
+        assert predicate()
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1", "dep-2"])
+
+    assert workflow_instance._dependency_resolution == "bypassed"
+    assert workflow_instance._unresolved_dependency_ids == set()
+    assert workflow_instance._failed_dependency_id is None
+    assert workflow_instance._dependency_outcomes() == [
+        {
+            "workflowId": "dep-1",
+            "terminalState": "bypassed",
+            "closeStatus": None,
+            "resolvedAt": workflow_instance._dependency_outcomes_by_id["dep-1"]["resolvedAt"],
+            "failureCategory": None,
+            "message": "No longer needed.",
+            "resolution": "bypassed",
+            "failureCount": 0,
+            "lastFailedAt": None,
+        },
+        {
+            "workflowId": "dep-2",
+            "terminalState": "bypassed",
+            "closeStatus": None,
+            "resolvedAt": workflow_instance._dependency_outcomes_by_id["dep-2"]["resolvedAt"],
+            "failureCategory": None,
+            "message": "No longer needed.",
+            "resolution": "bypassed",
+            "failureCount": 0,
+            "lastFailedAt": None,
+        },
+    ]
+    assert all(
+        workflow_instance._dependency_outcomes_by_id[dependency_id]["resolvedAt"].endswith("Z")
+        for dependency_id in ("dep-1", "dep-2")
+    )
+    assert any(
+        (memo.get("dependencies") or {}).get("resolution") == "bypassed"
+        for memo in memo_updates
+    )
+
+@pytest.mark.asyncio
+async def test_wait_for_dependencies_reconciles_again_after_timeout(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    reconcile_calls: list[list[str]] = []
+    wait_timeouts: list[object] = []
+
+    async def fake_reconcile(dependency_ids):
+        reconcile_calls.append(list(dependency_ids))
+        if len(reconcile_calls) == 2:
+            workflow_instance._record_dependency_outcome(
+                prerequisite_workflow_id=dependency_ids[0],
+                terminal_state="completed",
+                close_status="completed",
+                resolved_at="2026-04-05T00:00:00Z",
+                failure_category=None,
+                message=None,
+            )
+
+    async def fake_wait_condition(predicate, timeout=None):
+        wait_timeouts.append(timeout)
+        if len(wait_timeouts) == 1:
+            raise asyncio.TimeoutError()
+        while not predicate():
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: None)
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1"])
+
+    assert reconcile_calls == [["dep-1"], ["dep-1"]]
+    assert wait_timeouts == [DEPENDENCY_RECONCILE_INTERVAL]
+
+@pytest.mark.asyncio
+async def test_skip_dependency_wait_unblocks_dependency_gate(monkeypatch):
+    workflow_instance = MoonMindUserWorkflow()
+    workflow_instance._owner_id = "owner-1"
+    workflow_instance._owner_type = "user"
+    memo_updates: list[dict[str, object]] = []
+
+    async def fake_reconcile(dependency_ids):
+        return None
+
+    async def fake_wait_condition(predicate, timeout=None):
+        workflow_instance.skip_dependency_wait()
+        assert predicate()
+
+    monkeypatch.setattr(workflow_instance, "_reconcile_dependencies", fake_reconcile)
+    monkeypatch.setattr(workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(workflow, "upsert_search_attributes", lambda attr: None)
+    monkeypatch.setattr(workflow, "upsert_memo", lambda memo: memo_updates.append(memo))
+    monkeypatch.setattr(workflow, "patched", lambda _patch_id: True)
+    monkeypatch.setattr(workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(workflow, "info", lambda: workflow_info())
+    monkeypatch.setattr(
+        workflow,
+        "logger",
+        type("Logger", (), {"warning": lambda *a, **k: None, "info": lambda *a, **k: None})(),
+    )
+
+    await workflow_instance._wait_for_dependencies(["dep-1", "dep-2"])
+
+    assert workflow_instance._dependency_resolution == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+    assert workflow_instance._dependency_manual_override_unresolved_count == 2
+    assert workflow_instance._unresolved_dependency_ids == set()
+    assert workflow_instance._failed_dependency_id is None
+    assert workflow_instance._waiting_reason is None
+    assert any(
+        (memo.get("dependencies") or {}).get("resolution")
+        == DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE
+        for memo in memo_updates
+    )

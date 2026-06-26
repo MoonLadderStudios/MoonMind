@@ -1,0 +1,1913 @@
+"""Unit tests for OAuth session API router behavior."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import desc
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.future import select
+from sqlalchemy.orm import sessionmaker
+
+from api_service.db import base as db_base
+from api_service.db.models import (
+    Base,
+    ManagedAgentOAuthSession,
+    ManagedAgentProviderProfile,
+    OAuthSessionStatus,
+    ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
+    ProviderProfileDisabledReason,
+    RuntimeMaterializationMode,
+)
+from api_service.main import app
+from api_service.api.routers.oauth_sessions import (
+    _handle_oauth_terminal_ws_message,
+    _make_terminal_output_sender,
+    oauth_terminal_websocket,
+)
+from moonmind.workflows.temporal.runtime.terminal_bridge import (
+    InMemoryPtyAdapter,
+    TerminalBridgeConnection,
+)
+
+@pytest.fixture(scope="module")
+def _module_db(tmp_path_factory):
+    """Create a single SQLite engine and schema for the module."""
+    import asyncio
+
+    tmp = tmp_path_factory.mktemp("integration_db_oauth")
+    db_url = f"sqlite+aiosqlite:///{tmp}/shared.db"
+
+    async def _setup():
+        engine = create_async_engine(db_url, future=True)
+        session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        return engine, session_maker
+
+    async def _teardown(engine):
+        await engine.dispose()
+
+    engine, session_maker = asyncio.run(_setup())
+    original = (db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker)
+    db_base.DATABASE_URL = db_url
+    db_base.engine = engine
+    db_base.async_session_maker = session_maker
+    yield
+    db_base.DATABASE_URL, db_base.engine, db_base.async_session_maker = original
+    asyncio.run(_teardown(engine))
+
+@pytest.fixture
+def client_app(_module_db) -> AsyncClient:
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver")
+
+def _oauth_payload(profile_id: str) -> dict[str, object]:
+    return {
+        "runtime_id": "codex_cli",
+        "profile_id": profile_id,
+        "volume_ref": "codex_auth_volume",
+        "account_label": "codex account",
+        "max_parallel_runs": 1,
+        "cooldown_after_429_seconds": 300,
+        "rate_limit_policy": "backoff",
+    }
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_expires_stale_active_before_conflict_check(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stale_profile_id = "codex-cli-stale-profile"
+
+    async with db_base.async_session_maker() as session:
+        stale = ManagedAgentOAuthSession(
+            session_id="oas_staleexisting1",
+            runtime_id="codex_cli",
+            profile_id=stale_profile_id,
+            status=OAuthSessionStatus.PENDING,
+            requested_by_user_id="None",
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=80),
+        )
+        session.add(stale)
+        await session.commit()
+
+    async def _noop_start(_session_model):
+        return None
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _noop_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json=_oauth_payload(stale_profile_id),
+        )
+
+    assert response.status_code == 201
+    created = response.json()
+    assert created["profile_id"] == stale_profile_id
+    assert created["status"] == OAuthSessionStatus.PENDING.value
+
+    async with db_base.async_session_maker() as session:
+        stale_row = await session.get(ManagedAgentOAuthSession, "oas_staleexisting1")
+        assert stale_row is not None
+        assert stale_row.status == OAuthSessionStatus.EXPIRED
+        assert stale_row.failure_reason is not None
+
+@pytest.mark.asyncio
+async def test_create_codex_oauth_session_applies_durable_auth_volume_defaults(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+
+    async def _capture_start(session_model):
+        captured["volume_ref"] = session_model.volume_ref
+        captured["volume_mount_path"] = session_model.volume_mount_path
+        captured["session_transport"] = session_model.session_transport
+        captured["metadata_json"] = session_model.metadata_json
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    payload = {
+        "runtime_id": "codex_cli",
+        "profile_id": "codex-cli-default-volume",
+        "account_label": "codex account",
+    }
+    async with client_app as client:
+        response = await client.post("/api/v1/oauth-sessions", json=payload)
+
+    assert response.status_code == 201
+    assert response.json()["session_transport"] == "moonmind_pty_ws"
+    assert captured["volume_ref"] == "codex_auth_volume"
+    assert captured["volume_mount_path"] == "/home/app/.codex"
+    assert captured["session_transport"] == "moonmind_pty_ws"
+    assert captured["metadata_json"]["provider_id"] == "openai"
+    assert captured["metadata_json"]["provider_label"] == "OpenAI"
+
+@pytest.mark.asyncio
+async def test_create_claude_oauth_session_applies_profile_and_transport_defaults(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+    profile_id = "claude_anthropic_route_defaults"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="claude_code",
+                provider_id="anthropic",
+                provider_label="Anthropic",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                account_label="Claude Anthropic OAuth",
+                clear_env_keys=[
+                    "ANTHROPIC_API_KEY",
+                    "CLAUDE_API_KEY",
+                    "OPENAI_API_KEY",
+                ],
+            )
+        )
+        await session.commit()
+
+    async def _capture_start(session_model):
+        captured["profile_id"] = session_model.profile_id
+        captured["volume_ref"] = session_model.volume_ref
+        captured["volume_mount_path"] = session_model.volume_mount_path
+        captured["session_transport"] = session_model.session_transport
+        captured["metadata_json"] = session_model.metadata_json
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json={
+                "runtime_id": "claude_code",
+                "profile_id": profile_id,
+                "account_label": "Claude Anthropic OAuth",
+            },
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["runtime_id"] == "claude_code"
+    assert body["profile_id"] == profile_id
+    assert body["session_transport"] == "moonmind_pty_ws"
+    assert body["profile_summary"]["profile_id"] == profile_id
+    assert body["profile_summary"]["runtime_id"] == "claude_code"
+    assert body["profile_summary"]["provider_id"] == "anthropic"
+    assert captured["profile_id"] == profile_id
+    assert captured["volume_ref"] == "claude_auth_volume"
+    assert captured["volume_mount_path"] == "/home/app/.claude"
+    assert captured["session_transport"] == "moonmind_pty_ws"
+    assert captured["metadata_json"]["provider_id"] == "anthropic"
+    assert captured["metadata_json"]["provider_label"] == "Anthropic"
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_returns_terminal_transport_refs(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-terminal-refs"
+
+    async def _capture_start(session_model):
+        session_model.terminal_session_id = f"term_{session_model.session_id}"
+        session_model.terminal_bridge_id = f"br_{session_model.session_id}"
+        session_model.session_transport = "moonmind_pty_ws"
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json=_oauth_payload(profile_id),
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["terminal_session_id"] == f"term_{body['session_id']}"
+    assert body["terminal_bridge_id"] == f"br_{body['session_id']}"
+    assert body["session_transport"] == "moonmind_pty_ws"
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_accepts_explicit_tmate_transport(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+
+    async def _capture_start(session_model):
+        captured["session_transport"] = session_model.session_transport
+        session_model.terminal_session_id = "https://tmate.io/t/oas_tmate"
+        session_model.terminal_bridge_id = "ssh tmate.io/t/oas_tmate"
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    payload = _oauth_payload("codex-cli-tmate")
+    payload["session_transport"] = "tmate"
+    async with client_app as client:
+        response = await client.post("/api/v1/oauth-sessions", json=payload)
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["session_transport"] == "tmate"
+    assert body["terminal_session_id"] == "https://tmate.io/t/oas_tmate"
+    assert body["terminal_bridge_id"] == "ssh tmate.io/t/oas_tmate"
+    assert captured["session_transport"] == "tmate"
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_rejects_unknown_transport(
+    client_app: AsyncClient, _module_db
+) -> None:
+    payload = _oauth_payload("codex-cli-bad-transport")
+    payload["session_transport"] = "legacy-shell"
+
+    async with client_app as client:
+        response = await client.post("/api/v1/oauth-sessions", json=payload)
+
+    assert response.status_code == 422
+    assert "Unsupported OAuth session transport" in response.text
+
+@pytest.mark.asyncio
+async def test_reconnect_oauth_session_preserves_terminal_transport(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+    old_session_id = "oas_reconnectpty1"
+    profile_id = "codex-cli-reconnect-pty"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=old_session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                session_transport="moonmind_pty_ws",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="None",
+                metadata_json={"provider_id": "openai"},
+            )
+        )
+        await session.commit()
+
+    async def _capture_start(session_model):
+        captured["session_transport"] = session_model.session_transport
+        captured["session_id"] = session_model.session_id
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{old_session_id}/reconnect"
+        )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["session_id"] != old_session_id
+    assert body["session_transport"] == "moonmind_pty_ws"
+    assert captured["session_transport"] == "moonmind_pty_ws"
+
+@pytest.mark.asyncio
+async def test_oauth_session_response_redacts_secret_like_failure_reason(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_redactfailure1"
+    raw_secret = "sk-test-oauth-secret-value"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id="codex-cli-redact-failure",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="None",
+                failure_reason=f"token={raw_secret} in /home/app/.codex/auth.json",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/oauth-sessions/{session_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert raw_secret not in response.text
+    assert "/home/app/.codex/auth.json" not in response.text
+    assert payload["failure_reason"] == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
+
+@pytest.mark.asyncio
+async def test_oauth_session_response_includes_safe_provider_profile_summary(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_profilesummary1"
+    profile_id = "codex-cli-profile-summary"
+    raw_secret = "sk-test-profile-summary-secret"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="codex account",
+                secret_refs={"provider_api_key": "env://OPENAI_API_KEY"},
+                env_template={"OPENAI_API_KEY": raw_secret},
+                enabled=True,
+                is_default=True,
+            )
+        )
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="codex account",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="None",
+                failure_reason=f"token={raw_secret} in /home/app/.codex/auth.json",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/oauth-sessions/{session_id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert raw_secret not in response.text
+    assert "/home/app/.codex/auth.json" not in response.text
+    assert payload["failure_reason"] == "token=[REDACTED] in [REDACTED_AUTH_PATH]"
+    assert payload["profile_summary"] == {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "provider_label": "OpenAI",
+        "credential_source": "oauth_volume",
+        "runtime_materialization_mode": "oauth_home",
+        "account_label": "codex account",
+        "enabled": True,
+        "is_default": True,
+        "rate_limit_policy": "backoff",
+    }
+    assert "secret_refs" not in payload["profile_summary"]
+    assert "env_template" not in payload["profile_summary"]
+    assert "volume_ref" not in payload["profile_summary"]
+    assert "volume_mount_path" not in payload["profile_summary"]
+
+@pytest.mark.asyncio
+async def test_oauth_session_response_omits_profile_summary_for_other_owner(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_profilesummary2"
+    profile_id = "codex-cli-profile-other-owner"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="Other Owner",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="other owner account",
+                owner_user_id=uuid.uuid4(),
+            )
+        )
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.SUCCEEDED,
+                requested_by_user_id="None",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.get(f"/api/v1/oauth-sessions/{session_id}")
+
+    assert response.status_code == 200
+    assert response.json()["profile_summary"] is None
+    assert "Other Owner" not in response.text
+    assert "other owner account" not in response.text
+
+@pytest.mark.asyncio
+async def test_create_codex_oauth_session_uses_configured_volume_defaults(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = {}
+
+    monkeypatch.setenv("CODEX_VOLUME_NAME", "custom_codex_auth")
+    monkeypatch.setenv("CODEX_VOLUME_PATH", "/runtime/codex-home")
+
+    async def _capture_start(session_model):
+        captured["volume_ref"] = session_model.volume_ref
+        captured["volume_mount_path"] = session_model.volume_mount_path
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json={
+                "runtime_id": "codex_cli",
+                "profile_id": "codex-cli-configured-volume",
+                "account_label": "codex account",
+            },
+        )
+
+    assert response.status_code == 201
+    assert captured["volume_ref"] == "custom_codex_auth"
+    assert captured["volume_mount_path"] == "/runtime/codex-home"
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_rejects_profile_owned_by_another_user(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-other-owner"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="other owner",
+                owner_user_id=uuid.uuid4(),
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model):
+        raise AssertionError(
+            "workflow start should not be called for another user's profile"
+        )
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json=_oauth_payload(profile_id),
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not authorized to use this profile ID."
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_returns_conflict_for_non_stale_active(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-busy-profile"
+
+    async with db_base.async_session_maker() as session:
+        active = ManagedAgentOAuthSession(
+            session_id="oas_activeexisting1",
+            runtime_id="codex_cli",
+            profile_id=profile_id,
+            status=OAuthSessionStatus.PENDING,
+            requested_by_user_id="None",
+            created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        )
+        session.add(active)
+        await session.commit()
+
+    async def _unexpected_start(_session_model):
+        raise AssertionError("workflow start should not be called when conflict exists")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post("/api/v1/oauth-sessions", json=_oauth_payload(profile_id))
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "An active OAuth session already exists for this profile."
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_marks_failed_when_workflow_start_fails(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-start-failure"
+
+    async def _raise_start(_session_model):
+        raise RuntimeError("temporal unavailable")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _raise_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json=_oauth_payload(profile_id),
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Failed to start OAuth session workflow. Please retry."
+
+    async with db_base.async_session_maker() as session:
+        query = await session.execute(
+            select(ManagedAgentOAuthSession)
+            .where(ManagedAgentOAuthSession.profile_id == profile_id)
+            .order_by(desc(ManagedAgentOAuthSession.created_at))
+        )
+        failed_row = query.scalars().first()
+        assert failed_row is not None
+        assert failed_row.status == OAuthSessionStatus.FAILED
+        assert failed_row.failure_reason == "Failed to start OAuth session workflow"
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_attach_returns_one_time_websocket_token(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_terminalattach1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id="codex-cli-terminal-attach",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_terminalattach1",
+                terminal_bridge_id="br_oas_terminalattach1",
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["terminal_session_id"] == "term_oas_terminalattach1"
+    assert payload["terminal_bridge_id"] == "br_oas_terminalattach1"
+    assert payload["attach_token"]
+    assert payload["attach_token"] in payload["websocket_url"]
+    assert "docker" not in response.text.lower()
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is not None
+        assert row.metadata_json["terminal_attach_token_sha256"] != payload["attach_token"]
+        assert row.metadata_json["terminal_attach_token_used"] is False
+
+@pytest.mark.asyncio
+async def test_claude_oauth_terminal_attach_allows_awaiting_user_with_hash_only_token(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_claudepaste01"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_terminal_ceremony",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_claudepaste01",
+                terminal_bridge_id="br_oas_claudepaste01",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["terminal_session_id"] == "term_oas_claudepaste01"
+    assert payload["terminal_bridge_id"] == "br_oas_claudepaste01"
+    assert payload["attach_token"]
+    assert payload["attach_token"] in payload["websocket_url"]
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is not None
+        assert row.metadata_json["terminal_attach_token_sha256"] != payload["attach_token"]
+        assert row.metadata_json["terminal_attach_token_used"] is False
+        assert payload["attach_token"] not in str(row.metadata_json)
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_attach_rejects_expired_session(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_terminalexpired1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id="codex-cli-terminal-expired",
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_terminalexpired1",
+                terminal_bridge_id="br_oas_terminalexpired1",
+                expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 410
+    assert response.json()["detail"] == "OAuth terminal session has expired."
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is None
+
+class _FakeWebSocket:
+    def __init__(self) -> None:
+        self.sent_json: list[dict[str, object]] = []
+        self.sent_text: list[str] = []
+        self.closed: list[int] = []
+
+    async def send_json(self, payload: dict[str, object]) -> None:
+        self.sent_json.append(payload)
+
+    async def send_text(self, payload: str) -> None:
+        self.sent_text.append(payload)
+
+    async def close(self, code: int) -> None:
+        self.closed.append(code)
+
+class _FailingWritePtyAdapter(InMemoryPtyAdapter):
+    async def write_bytes(self, data: bytes) -> None:
+        raise BrokenPipeError("auth runner exited")
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_message_handler_proxies_to_pty_with_safe_metadata() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminalwspty1",
+        terminal_bridge_id="br_oas_terminalwspty1",
+        owner_user_id="None",
+    )
+    pty = InMemoryPtyAdapter()
+    websocket = _FakeWebSocket()
+
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"input","data":"codex login\\n"}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+    assert should_close is False
+    assert close_reason is None
+    assert websocket.sent_json[-1] == {"type": "input_ack", "bytes": 12}
+
+    await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"resize","cols":100,"rows":30}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+    await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"heartbeat"}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"close"}'},
+        bridge=bridge,
+        pty_adapter=pty,
+        websocket=websocket,
+    )
+
+    assert should_close is True
+    assert close_reason == "client_closed"
+    assert pty.written == [b"codex login\n"]
+    assert pty.resizes == [(100, 30)]
+    assert websocket.closed == [1000]
+    metadata = bridge.safe_metadata()
+    assert metadata == {
+        "terminal_heartbeat_count": 1,
+        "terminal_input_event_count": 1,
+        "terminal_output_event_count": 0,
+        "terminal_last_cols": 100,
+        "terminal_last_rows": 30,
+    }
+    assert "codex login" not in str(metadata)
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_message_handler_closes_on_pty_write_failure() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminalwsbroken1",
+        terminal_bridge_id="br_oas_terminalwsbroken1",
+        owner_user_id="None",
+    )
+    websocket = _FakeWebSocket()
+
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"input","data":"codex login\\n"}'},
+        bridge=bridge,
+        pty_adapter=_FailingWritePtyAdapter(),
+        websocket=websocket,
+    )
+
+    assert should_close is True
+    assert close_reason == "pty_disconnected"
+    assert websocket.sent_json == [
+        {"type": "error", "detail": "OAuth terminal PTY disconnected."}
+    ]
+    assert websocket.closed == [1011]
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_output_sender_preserves_split_utf8_sequences() -> None:
+    websocket = _FakeWebSocket()
+    send_terminal_output = _make_terminal_output_sender(websocket)
+
+    await send_terminal_output("Auth code: ".encode("utf-8") + b"\xe2")
+    await send_terminal_output(b"\x82\xac\r\n")
+
+    assert websocket.sent_text == ["Auth code: ", "€\r\n"]
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_message_handler_rejects_generic_exec_frame() -> None:
+    bridge = TerminalBridgeConnection(
+        session_id="oas_terminalwsreject1",
+        terminal_bridge_id="br_oas_terminalwsreject1",
+        owner_user_id="None",
+    )
+    websocket = _FakeWebSocket()
+
+    should_close, close_reason = await _handle_oauth_terminal_ws_message(
+        {"text": '{"type":"docker_exec","command":"sh"}'},
+        bridge=bridge,
+        pty_adapter=InMemoryPtyAdapter(),
+        websocket=websocket,
+    )
+
+    assert should_close is True
+    assert close_reason == "generic Docker exec and task terminal frames are not supported"
+    assert websocket.sent_json == [
+        {
+            "type": "error",
+            "detail": "generic Docker exec and task terminal frames are not supported",
+        }
+    ]
+    assert websocket.closed == [4400]
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_rejects_failed_volume_verification(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_verifyfailed1"
+    profile_id = "codex-cli-failed-verify"
+    fallback_profile_id = "codex-cli-failed-verify-fallback"
+    synced_runtimes: list[str] = []
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentProviderProfile).where(
+                ManagedAgentProviderProfile.runtime_id == "codex_cli"
+            )
+        )
+        for row in result.scalars():
+            row.is_default = False
+        await session.flush()
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="codex account",
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                enabled=True,
+                is_default=True,
+                priority=10_100,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=fallback_profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.NONE,
+                runtime_materialization_mode=RuntimeMaterializationMode.API_KEY_ENV,
+                enabled=True,
+                is_default=False,
+                priority=10_000,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        await session.commit()
+
+    stopped = {}
+    failed_signal = {}
+
+    async def _failed_verify(**_kwargs):
+        return {"verified": False, "reason": "no_credentials_found"}
+
+    async def _capture_stop(session_obj):
+        stopped["session_id"] = session_obj.session_id
+        stopped["container_name"] = session_obj.container_name
+
+    async def _capture_fail_signal(session_id, reason):
+        failed_signal["session_id"] = session_id
+        failed_signal["reason"] = reason
+
+    async def _fake_sync(*, session: AsyncSession, runtime_id: str) -> None:
+        synced_runtimes.append(runtime_id)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _failed_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _capture_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._fail_oauth_session_workflow",
+        _capture_fail_signal,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _fake_sync,
+    )
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        row.container_name = "moonmind_auth_oas_verifyfailed1"
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Volume verification failed: no_credentials_found"
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.FAILED
+        assert row.failure_reason == "Volume verification failed: no_credentials_found"
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is False
+        assert profile.is_default is False
+        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+        assert profile.disabled_reason == ProviderProfileDisabledReason.AUTH_INVALID
+        fallback = await session.get(ManagedAgentProviderProfile, fallback_profile_id)
+        assert fallback is not None
+        assert fallback.is_default is True
+    assert stopped == {
+        "session_id": session_id,
+        "container_name": "moonmind_auth_oas_verifyfailed1",
+    }
+    assert failed_signal == {
+        "session_id": session_id,
+        "reason": "Volume verification failed: no_credentials_found",
+    }
+    assert synced_runtimes == ["codex_cli"]
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_registers_oauth_home_codex_profile(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_registercodex1"
+    profile_id = "codex-cli-register-oauth"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="codex account",
+                metadata_json={
+                    "provider_id": "openai",
+                    "provider_label": "OpenAI",
+                    "max_parallel_runs": 2,
+                    "cooldown_after_429_seconds": 300,
+                    "rate_limit_policy": "backoff",
+                },
+            )
+        )
+        await session.commit()
+
+    stopped = {}
+    completed_signal = {}
+
+    async def _successful_verify(**kwargs):
+        assert kwargs["runtime_id"] == "codex_cli"
+        assert kwargs["volume_ref"] == "codex_auth_volume"
+        assert kwargs["volume_mount_path"] == "/home/app/.codex"
+        return {"verified": True, "found": ["auth.json"], "missing": []}
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    async def _capture_stop(session_obj):
+        stopped["session_id"] = session_obj.session_id
+        stopped["container_name"] = session_obj.container_name
+
+    async def _capture_complete_signal(signal_session_id):
+        completed_signal["session_id"] = signal_session_id
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _successful_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _noop_sync,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _capture_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _capture_complete_signal,
+    )
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        row.container_name = "moonmind_auth_oas_registercodex1"
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 200
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.runtime_id == "codex_cli"
+        assert profile.provider_id == "openai"
+        assert profile.provider_label == "OpenAI"
+        assert profile.credential_source == ProviderCredentialSource.OAUTH_VOLUME
+        assert (
+            profile.runtime_materialization_mode
+            == RuntimeMaterializationMode.OAUTH_HOME
+        )
+        assert profile.volume_ref == "codex_auth_volume"
+        assert profile.volume_mount_path == "/home/app/.codex"
+        assert profile.max_parallel_runs == 2
+    assert stopped == {
+        "session_id": session_id,
+        "container_name": "moonmind_auth_oas_registercodex1",
+    }
+    assert completed_signal == {"session_id": session_id}
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_returns_projection_after_verifying_and_registering_states(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_finalizeprojection1"
+    profile_id = "codex-cli-finalize-projection"
+    observed_statuses: list[OAuthSessionStatus] = []
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="codex account",
+                metadata_json={
+                    "provider_id": "openai",
+                    "provider_label": "OpenAI",
+                    "max_parallel_runs": 1,
+                    "cooldown_after_429_seconds": 300,
+                    "rate_limit_policy": "backoff",
+                },
+            )
+        )
+        await session.commit()
+
+    async def _successful_verify(**_kwargs):
+        async with db_base.async_session_maker() as session:
+            row = await session.get(ManagedAgentOAuthSession, session_id)
+            assert row is not None
+            observed_statuses.append(row.status)
+        return {"verified": True}
+
+    async def _capture_sync(*, session: AsyncSession, runtime_id: str):
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        observed_statuses.append(row.status)
+        assert runtime_id == "codex_cli"
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_complete(_session_id):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _successful_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _capture_sync,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _noop_complete,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/finalize",
+            json={"profile_id": "malicious-override"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["session_id"] == session_id
+    assert payload["profile_id"] == profile_id
+    assert payload["status"] == OAuthSessionStatus.SUCCEEDED.value
+    assert payload["profile_summary"] == {
+        "profile_id": profile_id,
+        "runtime_id": "codex_cli",
+        "provider_id": "openai",
+        "provider_label": "OpenAI",
+        "credential_source": "oauth_volume",
+        "runtime_materialization_mode": "oauth_home",
+        "account_label": "codex account",
+        "enabled": True,
+        "is_default": False,
+        "rate_limit_policy": "backoff",
+    }
+    assert observed_statuses == [
+        OAuthSessionStatus.VERIFYING,
+        OAuthSessionStatus.REGISTERING_PROFILE,
+    ]
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is True
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.disabled_reason is None
+        assert profile.last_auth_method == ProviderProfileAuthMethod.OAUTH_VOLUME
+        assert profile.first_authenticated_at is not None
+        assert profile.last_validated_at is not None
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_is_idempotent_for_succeeded_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_finalizesucceeded1"
+    profile_id = "codex-cli-finalize-succeeded"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                provider_label="OpenAI",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                account_label="codex account",
+                owner_user_id=None,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                disabled_reason=None,
+                last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+            )
+        )
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.SUCCEEDED,
+                requested_by_user_id="None",
+                account_label="codex account",
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_verify(**_kwargs):
+        raise AssertionError("succeeded finalize must not verify again")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _unexpected_verify,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == OAuthSessionStatus.SUCCEEDED.value
+    assert payload["profile_summary"]["profile_id"] == profile_id
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_is_idempotent_for_registering_profile_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_finalizeregistering1"
+    profile_id = "codex-cli-finalize-registering"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.REGISTERING_PROFILE,
+                requested_by_user_id="None",
+                account_label="codex account",
+                metadata_json={
+                    "provider_id": "openai",
+                    "provider_label": "OpenAI",
+                    "rate_limit_policy": "backoff",
+                },
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_verify(**_kwargs):
+        raise AssertionError("registering_profile finalize must not verify again")
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_complete(_session_id):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _unexpected_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _noop_sync,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _noop_complete,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == OAuthSessionStatus.SUCCEEDED.value
+    assert payload["profile_summary"]["profile_id"] == profile_id
+
+    async with db_base.async_session_maker() as session:
+        profiles = (
+            await session.execute(
+                select(ManagedAgentProviderProfile).where(
+                    ManagedAgentProviderProfile.profile_id == profile_id
+                )
+            )
+        ).scalars().all()
+        assert len(profiles) == 1
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_rejects_expired_and_superseded_without_profile_mutation(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    expired_session_id = "oas_finalizeexpired1"
+    superseded_session_id = "oas_finalizesuperseded1"
+    profile_id = "codex-cli-finalize-superseded"
+
+    async with db_base.async_session_maker() as session:
+        session.add_all(
+            [
+                ManagedAgentOAuthSession(
+                    session_id=expired_session_id,
+                    runtime_id="codex_cli",
+                    profile_id="codex-cli-finalize-expired",
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    status=OAuthSessionStatus.AWAITING_USER,
+                    requested_by_user_id="None",
+                    expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+                ),
+                ManagedAgentOAuthSession(
+                    session_id=superseded_session_id,
+                    runtime_id="codex_cli",
+                    profile_id=profile_id,
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    status=OAuthSessionStatus.AWAITING_USER,
+                    requested_by_user_id="None",
+                    created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+                ),
+                ManagedAgentOAuthSession(
+                    session_id="oas_finalizenewer1",
+                    runtime_id="codex_cli",
+                    profile_id=profile_id,
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    status=OAuthSessionStatus.BRIDGE_READY,
+                    requested_by_user_id="None",
+                    created_at=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        await session.commit()
+
+    async def _unexpected_verify(**_kwargs):
+        raise AssertionError("invalid finalize must not verify volume")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _unexpected_verify,
+    )
+
+    async with client_app as client:
+        expired_response = await client.post(
+            f"/api/v1/oauth-sessions/{expired_session_id}/finalize"
+        )
+        superseded_response = await client.post(
+            f"/api/v1/oauth-sessions/{superseded_session_id}/finalize"
+        )
+
+    assert expired_response.status_code == 410
+    assert superseded_response.status_code == 409
+
+    async with db_base.async_session_maker() as session:
+        assert await session.get(ManagedAgentProviderProfile, profile_id) is None
+        assert (
+            await session.get(ManagedAgentProviderProfile, "codex-cli-finalize-expired")
+            is None
+        )
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_registers_claude_oauth_profile(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_registerclaude1"
+    profile_id = "claude_anthropic"
+    verify_seen_existing_profile = None
+    synced_runtimes: list[str] = []
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id=profile_id,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="Claude Anthropic OAuth",
+                metadata_json={
+                    "provider_id": "anthropic",
+                    "provider_label": "Anthropic",
+                    "max_parallel_runs": 1,
+                    "cooldown_after_429_seconds": 900,
+                    "rate_limit_policy": "backoff",
+                },
+            )
+        )
+        await session.commit()
+
+    async def _successful_verify(**kwargs):
+        nonlocal verify_seen_existing_profile
+        assert kwargs["runtime_id"] == "claude_code"
+        assert kwargs["volume_ref"] == "claude_auth_volume"
+        assert kwargs["volume_mount_path"] == "/home/app/.claude"
+        async with db_base.async_session_maker() as session:
+            verify_seen_existing_profile = await session.get(
+                ManagedAgentProviderProfile, profile_id
+            )
+        return {
+            "verified": True,
+            "status": "verified",
+            "reason": "ok",
+            "credentials_found_count": 1,
+            "credentials_missing_count": 1,
+        }
+
+    async def _capture_sync(*, session: AsyncSession, runtime_id: str):
+        synced_runtimes.append(runtime_id)
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_complete(_session_id):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _successful_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _capture_sync,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _noop_complete,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == OAuthSessionStatus.SUCCEEDED.value
+    assert response.json()["profile_summary"]["profile_id"] == profile_id
+    assert verify_seen_existing_profile is None
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.SUCCEEDED
+        assert profile is not None
+        assert profile.runtime_id == "claude_code"
+        assert profile.provider_id == "anthropic"
+        assert profile.provider_label == "Anthropic"
+        assert profile.credential_source == ProviderCredentialSource.OAUTH_VOLUME
+        assert (
+            profile.runtime_materialization_mode
+            == RuntimeMaterializationMode.OAUTH_HOME
+        )
+        assert profile.volume_ref == "claude_auth_volume"
+        assert profile.volume_mount_path == "/home/app/.claude"
+        assert "credentials" not in repr(profile.__dict__)
+        assert "token" not in repr(profile.__dict__).lower()
+    assert synced_runtimes == ["claude_code"]
+
+@pytest.mark.asyncio
+async def test_finalize_oauth_session_rejects_other_users_claude_session_before_verify(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudeotheruser1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_other_user",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="different-user",
+                account_label="Claude Anthropic OAuth",
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_verify(**_kwargs):
+        raise AssertionError("unauthorized finalize must not verify volume")
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _unexpected_verify,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Session not found"
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.AWAITING_USER
+        profile = await session.get(
+            ManagedAgentProviderProfile, "claude_anthropic_other_user"
+        )
+        assert profile is None
+
+@pytest.mark.asyncio
+async def test_create_claude_oauth_session_rejects_other_users_profile_id(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "claude_anthropic_owned_elsewhere"
+    owner_id = uuid.uuid4()
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="claude_code",
+                provider_id="anthropic",
+                provider_label="Anthropic",
+                owner_user_id=owner_id,
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                enabled=True,
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model):
+        raise AssertionError("unauthorized create must not start workflow")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions",
+            json={
+                "runtime_id": "claude_code",
+                "profile_id": profile_id,
+                "account_label": "Claude Anthropic OAuth",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not authorized to use this profile ID."
+
+    async with db_base.async_session_maker() as session:
+        query = await session.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.profile_id == profile_id
+            )
+        )
+        assert query.scalars().all() == []
+
+@pytest.mark.asyncio
+async def test_cancel_oauth_session_rejects_other_users_claude_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudecancelother1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_cancel_other_user",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="different-user",
+                account_label="Claude Anthropic OAuth",
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_cancel(_session_id: str) -> None:
+        raise AssertionError("unauthorized cancel must not signal workflow")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.cancel_oauth_session_workflow",
+        _unexpected_cancel,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/cancel")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Session not found"
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.status == OAuthSessionStatus.AWAITING_USER
+
+@pytest.mark.asyncio
+async def test_reconnect_oauth_session_rejects_other_users_claude_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudereconnectother1"
+    profile_id = "claude_anthropic_reconnect_other_user"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id=profile_id,
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.FAILED,
+                requested_by_user_id="different-user",
+                account_label="Claude Anthropic OAuth",
+                metadata_json={"provider_id": "anthropic", "provider_label": "Anthropic"},
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model) -> None:
+        raise AssertionError("unauthorized reconnect must not start workflow")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/reconnect")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Session not found"
+
+    async with db_base.async_session_maker() as session:
+        query = await session.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.profile_id == profile_id
+            )
+        )
+        rows = query.scalars().all()
+        assert len(rows) == 1
+        assert rows[0].session_id == session_id
+
+@pytest.mark.asyncio
+async def test_claude_oauth_terminal_websocket_rejects_replayed_attach_token(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudewsreplay1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_ws_replay",
+                volume_ref="claude_auth_volume",
+                volume_mount_path="/home/app/.claude",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_claudewsreplay1",
+                terminal_bridge_id="br_oas_claudewsreplay1",
+                container_name="moonmind_auth_oas_claudewsreplay1",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._oauth_terminal_pty_adapter_factory",
+        lambda **_kwargs: InMemoryPtyAdapter(),
+    )
+
+    async with client_app as client:
+        attach_response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert attach_response.status_code == 200
+    token = attach_response.json()["attach_token"]
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        assert row.metadata_json is not None
+        row.metadata_json = {
+            **row.metadata_json,
+            "terminal_attach_token_used": True,
+        }
+        await session.commit()
+
+    class _CloseOnlyWebSocket:
+        def __init__(self) -> None:
+            self.closed: list[int] = []
+            self.accepted = False
+
+        async def close(self, code: int) -> None:
+            self.closed.append(code)
+
+        async def accept(self) -> None:
+            self.accepted = True
+            raise AssertionError("replayed tokens must fail before websocket accept")
+
+    websocket = _CloseOnlyWebSocket()
+    await oauth_terminal_websocket(websocket, session_id, token)
+
+    assert websocket.closed == [4403]
+    assert websocket.accepted is False
+
+
+@pytest.mark.asyncio
+async def test_finalize_failed_verification_disables_existing_profile(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failed OAuth verification must leave the visible profile disabled.
+
+    The generic finalize path (used by Codex/Gemini OAuth, not just the
+    Claude-only validate endpoint) must mark the profile
+    auth_state=validation_failed / disabled_reason=auth_invalid, not only fail
+    the OAuth session.
+    """
+    session_id = "oas_failverify_disable1"
+    profile_id = "codex-cli-failverify-disable"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id=profile_id,
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="codex account",
+            )
+        )
+        await session.commit()
+
+    async def _failed_verify(**_kwargs):
+        return {"verified": False, "reason": "no_credentials_found"}
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_fail(_session_id, _reason):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _failed_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._fail_oauth_session_workflow",
+        _noop_fail,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 400
+
+    async with db_base.async_session_maker() as session:
+        oauth_session = await session.get(ManagedAgentOAuthSession, session_id)
+        assert oauth_session is not None
+        assert oauth_session.status == OAuthSessionStatus.FAILED
+
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.enabled is False
+        assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+        assert (
+            profile.disabled_reason.value
+            if profile.disabled_reason
+            else None
+        ) == "auth_invalid"
+        readiness = (profile.command_behavior or {}).get("auth_readiness", {})
+        assert readiness.get("connected") is False
+        assert readiness.get("failure_reason") == "no_credentials_found"
+
+
+@pytest.mark.asyncio
+async def test_finalize_success_stamps_oauth_home_overrides_and_readiness(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OAuth-after-setup profiles persist documented home_path_overrides."""
+    session_id = "oas_gemini_homeoverrides1"
+    profile_id = "gemini-cli-home-overrides"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="gemini_cli",
+                profile_id=profile_id,
+                volume_ref="gemini_auth_volume",
+                volume_mount_path="/var/lib/gemini-auth",
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="None",
+                account_label="gemini account",
+                metadata_json={
+                    "provider_id": "google",
+                    "provider_label": "Google",
+                },
+            )
+        )
+        await session.commit()
+
+    async def _successful_verify(**_kwargs):
+        return {"verified": True}
+
+    async def _noop_sync(**_kwargs):
+        return None
+
+    async def _noop_stop(_session_obj):
+        return None
+
+    async def _noop_complete(_session_id):
+        return None
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.providers.volume_verifiers.verify_volume_credentials",
+        _successful_verify,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions.sync_provider_profile_manager",
+        _noop_sync,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._complete_oauth_session_workflow",
+        _noop_complete,
+    )
+
+    async with client_app as client:
+        response = await client.post(f"/api/v1/oauth-sessions/{session_id}/finalize")
+
+    assert response.status_code == 200
+
+    async with db_base.async_session_maker() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        assert profile is not None
+        assert profile.auth_state == ProviderProfileAuthState.CONNECTED
+        assert profile.home_path_overrides == {
+            "GEMINI_HOME": "/var/lib/gemini-auth",
+            "GEMINI_CLI_HOME": "/var/lib/gemini-auth",
+        }
+        behavior = profile.command_behavior or {}
+        assert behavior.get("auth_strategy") == "gemini_credential_methods"
+        assert behavior.get("auth_status_label") == "Gemini OAuth ready"
+        assert behavior.get("auth_readiness", {}).get("connected") is True

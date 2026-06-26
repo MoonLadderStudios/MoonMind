@@ -1,0 +1,1024 @@
+"""Unit tests for Temporal specific API endpoint behaviors."""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Iterator
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from starlette.routing import NoMatchFound
+
+import api_service.api.routers.executions as executions_module
+from api_service.auth_providers import get_current_user
+from api_service.db.base import get_async_session
+
+BANNED_EXECUTION_RESPONSE_KEYS = {
+    "attempt",
+    "attempts",
+    "stepAttemptId",
+    "taskId",
+    "task" + "RunId",
+    "taskStatus",
+    "taskSource",
+    "taskType",
+    "taskPayload",
+    "taskHref",
+}
+
+
+def _iter_test_routes(routes) -> Iterator[object]:
+    for route in routes:
+        yield route
+        original_router = getattr(route, "original_router", None)
+        child_routes = getattr(original_router, "routes", None)
+        if child_routes is None:
+            child_routes = getattr(route, "routes", None)
+        if child_routes:
+            yield from _iter_test_routes(child_routes)
+
+
+def _assert_no_banned_execution_keys(value) -> None:
+    if isinstance(value, dict):
+        banned = BANNED_EXECUTION_RESPONSE_KEYS.intersection(value)
+        assert not banned, f"banned execution response keys present: {sorted(banned)}"
+        for child in value.values():
+            _assert_no_banned_execution_keys(child)
+    elif isinstance(value, list):
+        for child in value:
+            _assert_no_banned_execution_keys(child)
+
+
+def _override_user_dependencies(app: FastAPI, *, is_superuser: bool) -> MagicMock:
+    # Plain MagicMock: AsyncMock user objects can trigger "never awaited" warnings
+    # when routes or FastAPI touch attributes during teardown.
+    mock_user = MagicMock()
+    mock_user.id = "user-123"
+    mock_user.is_superuser = is_superuser
+    app.dependency_overrides[get_current_user()] = lambda: mock_user
+    for route in _iter_test_routes(app.routes):
+        if hasattr(route, "dependant"):
+            for dep in route.dependant.dependencies:
+                if dep.call.__name__ == "_current_user_fallback":
+                    app.dependency_overrides[dep.call] = lambda: mock_user
+    return mock_user
+
+@pytest.fixture
+def client() -> Iterator[tuple[TestClient, AsyncMock, MagicMock, MagicMock]]:
+    app = FastAPI()
+    app.include_router(executions_module.router)
+    service = AsyncMock()
+    app.dependency_overrides[executions_module._get_service] = lambda: service
+    user = _override_user_dependencies(app, is_superuser=False)
+
+    # MagicMock + explicit AsyncMocks: a bare AsyncMock session makes every
+    # attribute an async mock; incidental access can leave unawaited coroutines.
+    mock_session = MagicMock()
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = []
+    mock_result.scalars.return_value = mock_scalars
+    mock_session.execute = AsyncMock(return_value=mock_result)
+    mock_session.commit = AsyncMock(return_value=None)
+    mock_session.rollback = AsyncMock(return_value=None)
+
+    async def _session_dep():
+        yield mock_session
+
+    app.dependency_overrides[get_async_session] = _session_dep
+
+    with TestClient(app) as test_client:
+        yield test_client, service, user, mock_session
+
+    app.dependency_overrides.clear()
+
+def test_list_executions_source_temporal_bypasses_db_and_queries_temporal(
+    client,
+) -> None:
+    test_client, service, user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        memo_data = {"waiting_reason": "external_completion"}
+
+        async def _memo():
+            return memo_data
+
+        mock_wf = SimpleNamespace()
+        mock_wf.id = "mm:wf-1"
+        mock_wf.run_id = "run-1"
+        mock_wf.namespace = "moonmind"
+        mock_wf.workflow_type = "MoonMind.UserWorkflow"
+        mock_wf.status = 1  # RUNNING
+        mock_wf.memo = _memo
+        mock_wf.search_attributes = {
+            "mm_state": b'"awaiting_external"',
+            "mm_entry": b'["user_workflow"]',
+        }
+        mock_wf.start_time = datetime.now(UTC)
+        mock_wf.execution_time = None
+        mock_wf.close_time = None
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [mock_wf]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+
+        mock_count = SimpleNamespace(count=1)
+        mock_client.count_workflows = AsyncMock(return_value=mock_count)
+
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "workflowType": "MoonMind.UserWorkflow",
+                "state": "awaiting_external",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        item = data["items"][0]
+        assert item["workflowId"] == "mm:wf-1"
+        assert item["runId"] == "run-1"
+        assert item["workflowType"] == "MoonMind.UserWorkflow"
+        assert item["state"] == "awaiting_external"
+        assert item["entry"] == "user_workflow"
+        assert item["waitingReason"] == "external_completion"
+        assert item["detailHref"] == "/workflows/mm:wf-1"
+        assert item["redirectPath"] == "/workflows/mm:wf-1?source=temporal"
+        _assert_no_banned_execution_keys(item)
+
+
+def test_list_executions_source_temporal_defaults_to_workflow_scope(client) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get("/api/executions", params={"source": "temporal"})
+
+        assert response.status_code == 200
+        expected_query = (
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
+            'AND mm_owner_id="user-123"'
+        )
+        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        mock_client.list_workflows.assert_called_once()
+        assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+
+
+def test_list_executions_source_temporal_default_scope_excludes_legacy_run_entry(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get("/api/executions", params={"source": "temporal"})
+
+        assert response.status_code == 200
+        query = mock_client.count_workflows.await_args.kwargs["query"]
+        assert 'mm_entry="user_workflow"' in query
+        assert 'mm_entry="run"' not in query
+
+
+def test_list_executions_source_temporal_default_scope_uses_workflow_query(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal"},
+        )
+
+        assert response.status_code == 200
+        expected_query = (
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
+            'AND mm_owner_id="user-123"'
+        )
+        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+
+
+def test_execution_metrics_source_temporal_returns_operational_aggregates(
+    client,
+) -> None:
+    test_client, _service, _user, mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = []
+    mock_result.scalars.return_value = mock_scalars
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        started = datetime(2026, 6, 3, 10, 0, tzinfo=UTC)
+
+        def _workflow(
+            workflow_id: str,
+            *,
+            duration_seconds: int,
+            cost: float,
+        ) -> SimpleNamespace:
+            async def _memo() -> dict[str, object]:
+                return {"costEstimateUsd": cost}
+
+            return SimpleNamespace(
+                id=workflow_id,
+                run_id=f"run-{workflow_id}",
+                namespace="moonmind",
+                workflow_type="MoonMind.UserWorkflow",
+                status=2,
+                memo=_memo,
+                search_attributes={
+                    "mm_entry": b'["user_workflow"]',
+                    "mm_owner_id": b'["user-123"]',
+                },
+                start_time=started,
+                execution_time=started,
+                close_time=started + timedelta(seconds=duration_seconds),
+            )
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [
+            _workflow("mm:wf-1", duration_seconds=3600, cost=1.25),
+            _workflow("mm:wf-2", duration_seconds=7200, cost=2.75),
+        ]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(
+            side_effect=[
+                SimpleNamespace(count=4),
+                SimpleNamespace(count=2),
+                SimpleNamespace(count=1),
+                SimpleNamespace(count=1),
+            ]
+        )
+
+        response = test_client.get(
+            "/api/executions/metrics",
+            params={"source": "temporal", "repoExact": "MoonLadderStudios/MoonMind"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["totalRuns"] == 4
+    assert body["completedRuns"] == 2
+    assert body["failedRuns"] == 1
+    assert body["canceledRuns"] == 1
+    assert body["terminalRuns"] == 4
+    assert body["successRate"] == 0.5
+    assert body["duration"]["averageSeconds"] == 5400
+    assert body["duration"]["medianSeconds"] == 5400
+    assert body["duration"]["observedCount"] == 2
+    assert body["cost"]["totalEstimateUsd"] == 4
+    assert body["cost"]["averageEstimateUsd"] == 2
+    assert body["cost"]["observedCount"] == 2
+    assert body["sampleSize"] == 2
+    assert mock_client.count_workflows.await_count == 4
+    assert mock_client.list_workflows.call_args.kwargs["page_size"] == 200
+    assert 'mm_repo="MoonLadderStudios/MoonMind"' in mock_client.list_workflows.call_args.kwargs["query"]
+
+
+def test_list_executions_source_temporal_ignores_retired_scope_values(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "scope": "system"},
+        )
+
+    assert response.status_code == 200
+    query = mock_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
+    assert 'mm_entry="user_workflow"' in query
+
+
+def test_list_executions_source_temporal_ignores_workflow_kind_filters_for_workflow_list(
+    client,
+) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "workflowType": "MoonMind.ProviderProfileManager",
+                "entry": "manifest",
+            },
+        )
+
+        assert response.status_code == 200
+        expected_query = (
+            'WorkflowType="MoonMind.UserWorkflow" AND mm_entry="user_workflow" '
+            'AND mm_owner_id="user-123"'
+        )
+        mock_client.count_workflows.assert_awaited_once_with(query=expected_query)
+        assert mock_client.list_workflows.call_args.kwargs["query"] == expected_query
+
+
+def test_list_executions_source_temporal_ignores_unknown_scope(client) -> None:
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = []
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = MagicMock(return_value=mock_iterator)
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=0))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "scope": "surprise"},
+        )
+
+    assert response.status_code == 200
+    query = mock_client.count_workflows.await_args.kwargs["query"]
+    assert 'WorkflowType="MoonMind.UserWorkflow"' in query
+    assert 'mm_entry="user_workflow"' in query
+
+
+def test_normalize_temporal_list_scope_logs_retired_scope_safely(caplog) -> None:
+    retired_scope = " System\nInjected" + ("x" * 100)
+
+    with caplog.at_level(logging.INFO, logger=executions_module.logger.name):
+        scope = executions_module._normalize_temporal_list_scope(
+            retired_scope,
+            workflow_type=None,
+            entry=None,
+        )
+
+    assert scope == "default"
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    logged_scope = caplog.records[0].args[0]
+    assert logged_scope == retired_scope.strip().lower()[:64]
+    assert len(logged_scope) == 64
+    assert "system\\ninjected" in message
+    assert "system\ninjected" not in message
+
+
+def test_execution_router_exposes_recover_route_without_recovery_alias() -> None:
+    app = FastAPI()
+    app.include_router(executions_module.router)
+
+    route_paths = {getattr(route, "path", "") for route in _iter_test_routes(app.routes)}
+
+    assert (
+        app.url_path_for("recover_execution_from_failed_step", workflow_id="wf-1")
+        == "/api/executions/wf-1/recover-from-failed-step"
+    )
+    assert "/api/executions/{workflow_id}/resume-from-failed-step" not in route_paths
+    assert "/api/workflows" not in route_paths
+    with pytest.raises(NoMatchFound):
+        app.url_path_for("resume_execution_from_failed_step", workflow_id="wf-1")
+
+
+def test_task_detail_instructions_include_task_and_step_text() -> None:
+    assert executions_module._derive_full_workflow_instructions(
+        {
+            "instructions": "Top-level task instructions.",
+            "steps": [
+                {"title": "Plan", "instructions": "Write the plan."},
+                {"instructions": "Apply the change."},
+                {"title": "Empty step", "instructions": "   "},
+            ],
+        }
+    ) == (
+        "Top-level task instructions.\n\n"
+        "Step 1: Plan\nWrite the plan.\n\n"
+        "Step 2\nApply the change."
+    )
+
+def test_list_executions_source_temporal_merges_canonical_parameters(
+    client,
+) -> None:
+    """Temporal list uses memo-only parameters; merge DB canonical row for Runtime/Skill."""
+    from types import SimpleNamespace
+
+    test_client, service, user, mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    # One canonical row matching the workflow id from Temporal list
+    canon = SimpleNamespace()
+    canon.workflow_id = "mm:wf-1"
+    canon.parameters = {
+        "targetRuntime": "codex",
+        "task": {"tool": {"name": "fix-ci"}},
+    }
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = [canon]
+    mock_result.scalars.return_value = mock_scalars
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        memo_data = {"waiting_reason": "external_completion"}
+
+        async def _memo():
+            return memo_data
+
+        mock_wf = SimpleNamespace()
+        mock_wf.id = "mm:wf-1"
+        mock_wf.run_id = "run-1"
+        mock_wf.namespace = "moonmind"
+        mock_wf.workflow_type = "MoonMind.UserWorkflow"
+        mock_wf.status = 1
+        mock_wf.memo = _memo
+        mock_wf.search_attributes = {
+            "mm_state": b'"awaiting_external"',
+            "mm_entry": b'["user_workflow"]',
+        }
+        mock_wf.start_time = datetime.now(UTC)
+        mock_wf.execution_time = None
+        mock_wf.close_time = None
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [mock_wf]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+
+        mock_count = SimpleNamespace(count=1)
+        mock_client.count_workflows = AsyncMock(return_value=mock_count)
+
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "workflowType": "MoonMind.UserWorkflow",
+                "state": "awaiting_external",
+            },
+        )
+
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["targetRuntime"] == "codex"
+        assert item["targetSkill"] == "fix-ci"
+
+def test_list_executions_source_temporal_uses_memo_runtime_and_skill_for_child_runs(
+    client,
+) -> None:
+    """Child workflows can lack canonical DB parameters but still publish compact memo visibility."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    test_client, _service, _user, mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = []
+    mock_result.scalars.return_value = mock_scalars
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        async def _memo():
+            return {
+                "entry": "user_workflow",
+                "title": "Resolve PR #1633",
+                "summary": "Resolver child workflow for merge automation.",
+                "targetRuntime": "codex_cli",
+                "targetSkill": "pr-resolver",
+            }
+
+        mock_wf = SimpleNamespace()
+        mock_wf.id = "resolver:pr:1633:head:1045fd00767c:h:f144d66e268f79fd:1"
+        mock_wf.run_id = "run-1"
+        mock_wf.namespace = "moonmind"
+        mock_wf.workflow_type = "MoonMind.UserWorkflow"
+        mock_wf.status = 2  # COMPLETED
+        mock_wf.memo = _memo
+        mock_wf.search_attributes = {
+            "mm_entry": b'["user_workflow"]',
+            "mm_owner_type": b'["user"]',
+            "mm_owner_id": b'["user-123"]',
+            "mm_repo": b'["MoonLadderStudios/Tactics"]',
+        }
+        mock_wf.start_time = datetime.now(UTC)
+        mock_wf.execution_time = mock_wf.start_time
+        mock_wf.close_time = mock_wf.start_time
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [mock_wf]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=1))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "workflowType": "MoonMind.UserWorkflow"},
+        )
+
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["targetRuntime"] == "codex_cli"
+        assert item["targetSkill"] == "pr-resolver"
+        assert item["repository"] == "MoonLadderStudios/Tactics"
+
+def test_list_executions_source_temporal_orders_scheduled_runs_by_latest_scheduled_time(
+    client,
+) -> None:
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    test_client, _service, _user, mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    late_schedule = datetime(2026, 4, 15, 18, 0, tzinfo=UTC)
+    early_schedule = datetime(2026, 4, 15, 9, 0, tzinfo=UTC)
+
+    canonical_late = SimpleNamespace(
+        workflow_id="mm:wf-late",
+        parameters={},
+        scheduled_for=late_schedule,
+    )
+    canonical_early = SimpleNamespace(
+        workflow_id="mm:wf-early",
+        parameters={},
+        scheduled_for=early_schedule,
+    )
+    mock_result = MagicMock()
+    mock_scalars = MagicMock()
+    mock_scalars.all.return_value = [canonical_late, canonical_early]
+    mock_result.scalars.return_value = mock_scalars
+    mock_session.execute = AsyncMock(return_value=mock_result)
+
+    async def _memo():
+        return {}
+
+    def _datetime_bytes(value: datetime) -> bytes:
+        return f'"{value.isoformat().replace("+00:00", "Z")}"'.encode("utf-8")
+
+    def _workflow(workflow_id: str, scheduled_for: datetime) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=workflow_id,
+            run_id=f"run-{workflow_id}",
+            namespace="moonmind",
+            workflow_type="MoonMind.UserWorkflow",
+            status=1,
+            memo=_memo,
+            search_attributes={
+                "mm_state": b'"scheduled"',
+                "mm_entry": b'["user_workflow"]',
+                "mm_scheduled_for": _datetime_bytes(scheduled_for),
+            },
+            start_time=datetime(2026, 4, 15, 1, 0, tzinfo=UTC),
+            execution_time=None,
+            close_time=None,
+        )
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [
+            _workflow("mm:wf-late", late_schedule),
+            _workflow("mm:wf-early", early_schedule),
+        ]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=2))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "workflowType": "MoonMind.UserWorkflow"},
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["workflowId"] for item in items] == ["mm:wf-late", "mm:wf-early"]
+    assert (
+        datetime.fromisoformat(items[0]["scheduledFor"].replace("Z", "+00:00"))
+        == late_schedule
+    )
+    assert items[0]["startedAt"] is None
+    assert items[1]["startedAt"] is None
+
+def test_list_executions_source_temporal_orders_immediate_runs_by_updated_at(
+    client,
+) -> None:
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    test_client, _service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    older_created = datetime(2026, 4, 15, 9, 0, tzinfo=UTC)
+    newer_created = datetime(2026, 4, 15, 10, 0, tzinfo=UTC)
+    older_updated = datetime(2026, 4, 15, 11, 0, tzinfo=UTC)
+    newer_updated = datetime(2026, 4, 15, 12, 0, tzinfo=UTC)
+
+    async def _memo():
+        return {}
+
+    def _datetime_bytes(value: datetime) -> bytes:
+        return f'"{value.isoformat().replace("+00:00", "Z")}"'.encode("utf-8")
+
+    def _workflow(
+        workflow_id: str,
+        *,
+        created_at: datetime,
+        updated_at: datetime,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            id=workflow_id,
+            run_id=f"run-{workflow_id}",
+            namespace="moonmind",
+            workflow_type="MoonMind.UserWorkflow",
+            status=1,
+            memo=_memo,
+            search_attributes={
+                "mm_state": b'"executing"',
+                "mm_entry": b'["user_workflow"]',
+                "mm_updated_at": _datetime_bytes(updated_at),
+            },
+            start_time=created_at,
+            execution_time=None,
+            close_time=None,
+        )
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_iterator = AsyncMock()
+        mock_iterator.current_page = [
+            _workflow(
+                "mm:wf-older-created-newer-updated",
+                created_at=older_created,
+                updated_at=newer_updated,
+            ),
+            _workflow(
+                "mm:wf-newer-created-older-updated",
+                created_at=newer_created,
+                updated_at=older_updated,
+            ),
+        ]
+        mock_iterator.next_page_token = None
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+        mock_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=2))
+
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "workflowType": "MoonMind.UserWorkflow"},
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["workflowId"] for item in items] == [
+        "mm:wf-older-created-newer-updated",
+        "mm:wf-newer-created-older-updated",
+    ]
+    assert items[0]["scheduledFor"] is None
+    assert items[1]["scheduledFor"] is None
+
+def test_describe_execution_source_temporal_syncs_projection(client) -> None:
+    test_client, service, user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    # We patch fetch_workflow_execution and sync_execution_projection
+    with (
+        patch(
+            "moonmind.workflows.temporal.client.fetch_workflow_execution"
+        ) as mock_fetch,
+        patch("api_service.core.sync.sync_execution_projection") as mock_sync,
+        patch(
+            "api_service.api.routers.executions.TemporalClientAdapter"
+        ) as mock_adapter_cls,
+    ):
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_desc = AsyncMock()
+        mock_fetch.return_value = mock_desc
+
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from api_service.db.models import MoonMindWorkflowState
+
+        record = SimpleNamespace()
+        record.workflow_id = "mm:wf-123"
+        record.run_id = "run-1"
+        record.namespace = "moonmind"
+        record.workflow_type = SimpleNamespace(value="MoonMind.UserWorkflow")
+        record.state = MoonMindWorkflowState.EXECUTING
+        record.close_status = None
+        record.owner_id = "user-123"
+        record.owner_type = SimpleNamespace(value="user")
+        record.search_attributes = {}
+        record.memo = {}
+        record.artifact_refs = []
+        record.entry = "user_workflow"
+        record.created_at = datetime.now(UTC)
+        record.started_at = datetime.now(UTC)
+        record.updated_at = datetime.now(UTC)
+        record.closed_at = None
+        record.integration_state = None
+        service.describe_execution.return_value = record
+
+        response = test_client.get("/api/executions/mm:wf-123?source=temporal")
+
+        assert response.status_code == 200
+        mock_fetch.assert_called_once_with(mock_client, "mm:wf-123")
+        mock_sync.assert_called_once()
+        service.describe_execution.assert_awaited_once_with(
+            "mm:wf-123",
+            include_orphaned=True,
+        )
+
+def test_describe_execution_source_temporal_keeps_updated_at_stable_while_refreshing_freshness(
+    client,
+) -> None:
+    test_client, service, _user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.client.fetch_workflow_execution"
+        ) as mock_fetch,
+        patch("api_service.core.sync.sync_execution_projection") as mock_sync,
+        patch(
+            "api_service.api.routers.executions.TemporalClientAdapter"
+        ) as mock_adapter_cls,
+    ):
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+        mock_fetch.return_value = AsyncMock()
+
+        from datetime import UTC, datetime
+        from types import SimpleNamespace
+
+        from api_service.db.models import MoonMindWorkflowState
+
+        semantic_updated_at = datetime(2026, 3, 28, 0, 0, 2, tzinfo=UTC)
+        refreshed_at_1 = datetime(2026, 3, 28, 0, 0, 4, tzinfo=UTC)
+        refreshed_at_2 = datetime(2026, 3, 28, 0, 0, 6, tzinfo=UTC)
+
+        def _record(last_synced_at: datetime) -> SimpleNamespace:
+            record = SimpleNamespace()
+            record.workflow_id = "mm:wf-123"
+            record.run_id = "run-1"
+            record.namespace = "moonmind"
+            record.workflow_type = SimpleNamespace(value="MoonMind.UserWorkflow")
+            record.state = MoonMindWorkflowState.EXECUTING
+            record.close_status = None
+            record.owner_id = "user-123"
+            record.owner_type = SimpleNamespace(value="user")
+            record.search_attributes = {"mm_state": "executing", "mm_entry": "user_workflow"}
+            record.memo = {"title": "Task", "summary": "Running"}
+            record.artifact_refs = []
+            record.entry = "user_workflow"
+            record.created_at = semantic_updated_at
+            record.started_at = semantic_updated_at
+            record.updated_at = semantic_updated_at
+            record.last_synced_at = last_synced_at
+            record.closed_at = None
+            record.integration_state = None
+            record.parameters = {}
+            return record
+
+        service.describe_execution.side_effect = [
+            _record(refreshed_at_1),
+            _record(refreshed_at_2),
+        ]
+
+        first = test_client.get("/api/executions/mm:wf-123?source=temporal")
+        second = test_client.get("/api/executions/mm:wf-123?source=temporal")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["updatedAt"] == semantic_updated_at.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert second.json()["updatedAt"] == semantic_updated_at.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert first.json()["refreshedAt"] == refreshed_at_1.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert second.json()["refreshedAt"] == refreshed_at_2.isoformat().replace(
+            "+00:00", "Z"
+        )
+        assert mock_sync.await_count == 2
+
+def test_describe_execution_canonicalizes_mm_prefix(client) -> None:
+    test_client, service, user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from api_service.db.models import MoonMindWorkflowState
+
+    record = SimpleNamespace()
+    record.workflow_id = "mm:wf-123"
+    record.run_id = "run-1"
+    record.namespace = "moonmind"
+    record.workflow_type = SimpleNamespace(value="MoonMind.UserWorkflow")
+    record.state = MoonMindWorkflowState.EXECUTING
+    record.close_status = None
+    record.owner_id = "user-123"
+    record.owner_type = SimpleNamespace(value="user")
+    record.search_attributes = {}
+    record.memo = {}
+    record.artifact_refs = []
+    record.entry = "user_workflow"
+    record.created_at = datetime.now(UTC)
+    record.started_at = datetime.now(UTC)
+    record.updated_at = datetime.now(UTC)
+    record.closed_at = None
+    record.integration_state = None
+    service.describe_execution.return_value = record
+
+    with (
+        patch(
+            "api_service.api.routers.executions._canonicalize_execution_identifier"
+        ) as mock_canon,
+        patch(
+            "api_service.api.routers.executions.TemporalClientAdapter"
+        ) as mock_adapter_cls,
+    ):
+        mock_adapter = mock_adapter_cls.return_value
+        # Stand-in Temporal client: bare AsyncMock creates stray coroutines if touched;
+        # this path does not use the client when authoritative read is off.
+        mock_client = MagicMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        mock_canon.return_value = ("mm:wf-123", True)
+        response = test_client.get("/api/executions/wf-123")
+
+        assert response.status_code == 200
+        assert response.headers.get("Deprecation") == "true"
+        assert response.headers.get("X-MoonMind-Canonical-WorkflowId") == "mm:wf-123"
+        service.describe_execution.assert_awaited_once_with(
+            "wf-123",
+            include_orphaned=False,
+        )
+
+def test_temporal_unavailability_returns_503(client) -> None:
+    test_client, service, user, _mock_session = client
+
+    executions_module.get_temporal_client_adapter.cache_clear()
+
+    with patch(
+        "api_service.api.routers.executions.TemporalClientAdapter"
+    ) as mock_adapter_cls:
+        mock_adapter = mock_adapter_cls.return_value
+        mock_client = AsyncMock()
+        mock_adapter.get_client = AsyncMock(return_value=mock_client)
+
+        from temporalio.service import RPCError, RPCStatusCode
+
+        mock_iterator = AsyncMock()
+        mock_iterator.fetch_next_page = AsyncMock(
+            side_effect=RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None)
+        )
+        mock_client.list_workflows = lambda **kwargs: mock_iterator
+
+        mock_client.count_workflows = AsyncMock(
+            side_effect=RPCError("Connection failed", RPCStatusCode.UNAVAILABLE, None)
+        )
+
+        response = test_client.get("/api/executions?source=temporal")
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "temporal_unavailable"
+
+# Trigger CI

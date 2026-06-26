@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Fix Comments"
+  short_description: "Resolve PR review comments end-to-end with validation"
+  default_prompt: "Use $pr-fix-comments to fetch PR comments for this branch, decide what still applies, apply fixes, run compile/tests, then commit and push."

@@ -1,0 +1,68 @@
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-02-03T21-03-04Z
+    command: server /data --console-address :9001
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minioadmin}
+    expose:
+      - "9000"
+      - "9001"
+    networks:
+      local-network:
+        aliases:
+          # Keep test MinIO off the production artifact hostname. The test
+          # compose stack uses its own isolated network, so this alias stays
+          # scoped to the test environment and avoids cross-stack DNS bleed.
+          - moonmind-test-temporal-artifacts-s3
+
+  pytest:
+    build:
+      context: .
+      dockerfile: api_service/Dockerfile
+      target: test-runtime
+      args:
+        INSTALL_CODEX_CLI: "false"
+        INSTALL_GEMINI_CLI: "false"
+        INSTALL_TEST_DEPS: "true"
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app
+      - TEST_TYPE=unit
+      - MOONMIND_FORCE_LOCAL_TESTS=1
+      - TEMPORAL_ARTIFACT_BACKEND=${TEMPORAL_ARTIFACT_BACKEND:-s3}
+      - TEMPORAL_ARTIFACT_S3_ENDPOINT=${TEMPORAL_ARTIFACT_S3_ENDPOINT:-http://moonmind-test-temporal-artifacts-s3:9000}
+      - TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT=${TEMPORAL_ARTIFACT_S3_PUBLIC_ENDPOINT:-http://moonmind-test-temporal-artifacts-s3:9000}
+      - TEMPORAL_ARTIFACT_S3_BUCKET=${TEMPORAL_ARTIFACT_S3_BUCKET:-moonmind-temporal-artifacts}
+      - TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID=${TEMPORAL_ARTIFACT_S3_ACCESS_KEY_ID:-minioadmin}
+      - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
+      - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
+    volumes:
+      - ./:/app
+    working_dir: /app
+    # Run all tests (Python + frontend) inside the container. The runtime image
+    # includes npm, so frontend tests are fully supported without --python-only.
+    command: ["bash", "-lc", "/app/tools/test_unit.sh"]
+    depends_on:
+      - minio
+    networks:
+      - local-network
+
+  cli-tooling-smoke:
+    build:
+      context: .
+      dockerfile: api_service/Dockerfile
+      args:
+        INSTALL_CODEX_CLI: "false"
+        INSTALL_GEMINI_CLI: "false"
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app:/app/moonmind
+    command: ["bash", "-lc", "codex --version"]
+    networks:
+      - local-network
+
+networks:
+  local-network:

@@ -1,0 +1,461 @@
+name: Run Pytest Unit Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pytest-unit-tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  select-test-suites:
+    runs-on: ubuntu-latest
+    outputs:
+      unit_fast: ${{ steps.select.outputs.unit_fast }}
+      api_component: ${{ steps.select.outputs.api_component }}
+      temporal_boundary: ${{ steps.select.outputs.temporal_boundary }}
+      integration_ci: ${{ steps.select.outputs.integration_ci }}
+      full_backend: ${{ steps.select.outputs.full_backend }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Compute changed files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base_sha="${{ github.event.pull_request.base.sha }}"
+            head_sha="${{ github.event.pull_request.head.sha }}"
+            git diff --name-only "$base_sha...$head_sha" > /tmp/changed-files.txt
+          elif [[ "${{ github.event_name }}" == "push" && -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > /tmp/changed-files.txt
+          else
+            : > /tmp/changed-files.txt
+          fi
+
+          echo "Changed files:"
+          sed 's/^/  - /' /tmp/changed-files.txt || true
+
+      - name: Select test suites
+        id: select
+        shell: bash
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 tools/select_test_suites.py < /tmp/changed-files.txt
+
+  unit-fast:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.unit_fast == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: Check docs terminology guardrails
+        run: |
+          set -euo pipefail
+          ./tools/check_terminology.sh
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Cache pip dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Set up Node.js for full backend path
+        if: needs.select-test-suites.outputs.full_backend == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Build frontend assets for full backend path
+        if: needs.select-test-suites.outputs.full_backend == 'true'
+        run: |
+          npm ci
+          npm run ui:build
+      - name: Run selected unit suite
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MOONMIND_PYTEST_DURATIONS: "50"
+          MOONMIND_PYTEST_JUNITXML: artifacts/pytest-unit.xml
+        run: |
+          set -euo pipefail
+          if [[ "${{ needs.select-test-suites.outputs.full_backend }}" == "true" ]]; then
+            ./tools/test_unit.sh --python-only
+          else
+            python -m pytest tests/unit \
+              --ignore=tests/unit/workflows/temporal \
+              --ignore=tests/unit/api \
+              --ignore=tests/unit/api_service \
+              -m "not temporal_boundary and not component and not slow" \
+              -q -n auto --dist loadfile --durations=25 \
+              --junitxml=artifacts/pytest-unit-fast.xml
+          fi
+      - name: Verify workflow terminology guardrails
+        run: |
+          set -euo pipefail
+          python tools/verify_workflow_terminology.py --mode all
+      - name: Validate AgentSession deployment safety
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.pull_request.base.sha }}"
+          elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            ./tools/validate_agent_session_deployment_safety.py --base-ref "${{ github.event.before }}"
+          else
+            ./tools/validate_agent_session_deployment_safety.py --base-ref "HEAD~1"
+          fi
+
+  api-component:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.api_component == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev pkg-config
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Run API/component suite
+        run: |
+          set -euo pipefail
+          python -m pytest tests/unit/api tests/unit/api_service tests/component/api \
+            -m "not temporal_boundary and not slow" \
+            -q -n auto --dist loadfile --durations=25 \
+            --junitxml=artifacts/pytest-api-component.xml
+
+  temporal-boundary:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.temporal_boundary == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .[tests]
+      - name: Run Temporal boundary suite
+        run: |
+          set -euo pipefail
+          python -m pytest tests/unit/workflows/temporal \
+            -m "temporal_boundary and not slow" \
+            -q --durations=25 \
+            --junitxml=artifacts/pytest-temporal-boundary.xml
+
+  integration-ci:
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.integration_ci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Run hermetic integration CI suite
+        env:
+          MOONMIND_FORCE_LOCAL_TESTS: "1"
+        run: |
+          set -euo pipefail
+          ./tools/test_integration.sh
+      - name: Capture docker compose diagnostics
+        if: failure()
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/pytest-integration-ci
+          printf 'Collecting docker compose diagnostics\n' > /tmp/pytest-integration-ci/diagnostics-status.txt
+          if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+            COMPOSE_CMD=(docker compose)
+          elif command -v docker-compose >/dev/null 2>&1; then
+            COMPOSE_CMD=(docker-compose)
+          else
+            COMPOSE_CMD=()
+            printf 'docker compose CLI is unavailable\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+          if [[ ${#COMPOSE_CMD[@]} -gt 0 ]]; then
+            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml config > /tmp/pytest-integration-ci/docker-compose-config.txt 2>&1; then
+              printf 'docker compose config failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            fi
+            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml ps -a > /tmp/pytest-integration-ci/docker-compose-ps.txt 2>&1; then
+              printf 'docker compose ps -a failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            fi
+            if ! "${COMPOSE_CMD[@]}" -f docker-compose.test.yaml logs --no-color > /tmp/pytest-integration-ci/docker-compose-logs.txt 2>&1; then
+              printf 'docker compose logs failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+            fi
+          fi
+          if [[ -d var/artifacts ]]; then
+            cp -R var/artifacts /tmp/pytest-integration-ci/var-artifacts || printf 'copying var/artifacts failed\n' >> /tmp/pytest-integration-ci/diagnostics-status.txt
+          fi
+      - name: Upload integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pytest-integration-ci-diagnostics
+          path: /tmp/pytest-integration-ci
+          if-no-files-found: error
+
+  ci-required:
+    needs:
+      - select-test-suites
+      - unit-fast
+      - api-component
+      - temporal-boundary
+      - integration-ci
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Check docs terminology guardrails
+        run: |
+          set -euo pipefail
+          ./tools/check_terminology.sh
+      - name: Verify selected suites passed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ needs.select-test-suites.result }}" != "success" ]]; then
+            echo "::error::select-test-suites ended with result=${{ needs.select-test-suites.result }}"
+            exit 1
+          fi
+
+          check_result() {
+            local selected="$1"
+            local result="$2"
+            local name="$3"
+
+            if [[ "$selected" == "true" && "$result" != "success" ]]; then
+              echo "::error::$name was selected but ended with result=$result"
+              exit 1
+            fi
+          }
+
+          check_result "${{ needs.select-test-suites.outputs.unit_fast }}" \
+                       "${{ needs.unit-fast.result }}" \
+                       "unit-fast"
+
+          check_result "${{ needs.select-test-suites.outputs.api_component }}" \
+                       "${{ needs.api-component.result }}" \
+                       "api-component"
+
+          check_result "${{ needs.select-test-suites.outputs.temporal_boundary }}" \
+                       "${{ needs.temporal-boundary.result }}" \
+                       "temporal-boundary"
+
+          check_result "${{ needs.select-test-suites.outputs.integration_ci }}" \
+                       "${{ needs.integration-ci.result }}" \
+                       "integration-ci"
+
+          echo "All selected backend suites passed."
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Set up Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+        cache: npm
+    - name: Install Node dependencies
+      run: npm ci
+    - name: Run frontend CI
+      run: npm run frontend:ci
+    - name: Upload dashboard dist artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: dashboard-dist
+        path: api_service/static/workflow_console/dist/
+        if-no-files-found: error
+
+  detect-openapi-contract-impact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_check: ${{ steps.detect.outputs.run_check }}
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Detect OpenAPI-affecting changes
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        ensure_commit_available() {
+          local sha="$1"
+
+          if git cat-file -e "${sha}^{commit}" 2>/dev/null; then
+            return 0
+          fi
+
+          git fetch --no-tags --depth=1 origin "$sha"
+        }
+
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          base_sha="${{ github.event.pull_request.base.sha }}"
+          head_sha="${{ github.event.pull_request.head.sha }}"
+          ensure_commit_available "$base_sha"
+          ensure_commit_available "$head_sha"
+          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
+        elif [[ -n "${{ github.event.before }}" && "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+          base_sha="${{ github.event.before }}"
+          head_sha="${{ github.sha }}"
+          ensure_commit_available "$base_sha"
+          ensure_commit_available "$head_sha"
+          changed_files="$(git diff --name-only "$base_sha" "$head_sha")"
+        else
+          echo "run_check=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if bash tools/check_openapi_affecting_changes.sh <<< "$changed_files"; then
+          echo "run_check=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "run_check=false" >> "$GITHUB_OUTPUT"
+        fi
+
+  run-generated-contracts:
+    needs: detect-openapi-contract-impact
+    if: needs.detect-openapi-contract-impact.outputs.run_check == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v7
+      with:
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 1
+    - name: Set up Node.js
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+        cache: npm
+    - name: Install OpenAPI TypeScript generator
+      run: bash tools/install_openapi_typescript.sh
+    - name: Set up Python for OpenAPI generation
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install system dependencies for backend API check
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libcairo2-dev pkg-config
+    - name: Cache pip dependencies
+      uses: actions/cache@v5
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    - name: Install backend dependencies via uv
+      run: |
+        python -m pip install --upgrade pip uv
+        uv pip install --system -e .
+    - name: Verify generated frontend API types are in sync
+      run: npm run contracts:check
+
+  check-generated-contracts:
+    needs:
+      - detect-openapi-contract-impact
+      - run-generated-contracts
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Verify generated contract status
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if [[ "${{ needs.detect-openapi-contract-impact.result }}" != "success" ]]; then
+          echo "::error::detect-openapi-contract-impact ended with result=${{ needs.detect-openapi-contract-impact.result }}"
+          exit 1
+        fi
+
+        if [[ "${{ needs.detect-openapi-contract-impact.outputs.run_check }}" == "true" ]]; then
+          if [[ "${{ needs.run-generated-contracts.result }}" != "success" ]]; then
+            echo "::error::run-generated-contracts was selected but ended with result=${{ needs.run-generated-contracts.result }}"
+            exit 1
+          fi
+          echo "Generated contract verification passed."
+        else
+          echo "No backend/OpenAPI-affecting files changed; generated contract verification skipped intentionally."
+        fi

@@ -1,0 +1,4 @@
+interface:
+  display_name: "MoonSpec Align"
+  short_description: "Analyze and remediate Moon Spec artifact drift."
+  default_prompt: "Use $moonspec-align to analyze the active Moon Spec feature artifacts and implement consistency improvements."

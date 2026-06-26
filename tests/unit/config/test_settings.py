@@ -1,0 +1,1144 @@
+import pytest
+from pydantic import ValidationError
+
+from moonmind.config.settings import (
+    AppSettings,
+    AtlassianSettings,
+    FeatureFlagsSettings,
+    GoogleSettings,
+    MemorySettings,
+    OIDCSettings,
+    OpenAISettings,
+    WorkflowSettings,
+    TemporalDashboardSettings,
+)
+
+# Fixture for default settings, can be customized in tests
+@pytest.fixture
+def app_settings_defaults():
+    return {
+        "google": GoogleSettings(
+            google_chat_model="test-google-chat",
+            google_embedding_model="test-google-embed",
+            google_api_key="test_google_key",  # Required for is_provider_enabled
+        ),
+        "openai": OpenAISettings(
+            openai_chat_model="test-openai-chat",
+            openai_api_key="test_openai_key",  # Required for is_provider_enabled
+        ),
+        # Ensure other required fields for AppSettings have defaults if not provided
+        "default_chat_provider": "google",  # Default to google for fixture
+        "default_embedding_provider": "google",  # Default to google for fixture
+        "qdrant": {"qdrant_enabled": False},  # Disable things not under test
+        "rag": {},
+        "github": {"github_enabled": False},
+        "google_drive": {"google_drive_enabled": False},
+        "atlassian": {
+            "confluence": {"confluence_enabled": False},
+            "jira": {"jira_enabled": False},
+        },
+    }
+
+# Test that the removed fields are indeed gone
+def test_default_model_fields_removed(app_settings_defaults):
+    # Since extra="ignore", these should just be ignored, not raise ValidationError
+    s1 = AppSettings(**app_settings_defaults, default_chat_model="some-model")
+    s2 = AppSettings(**app_settings_defaults, default_embed_model="some-model")
+
+    # Check that they are not present as attributes
+    assert not hasattr(s1, "default_chat_model")
+    assert not hasattr(s2, "default_embed_model")
+
+    settings = AppSettings(**app_settings_defaults)
+    assert not hasattr(settings, "default_chat_model")
+    assert not hasattr(settings, "default_embed_model")
+
+class TestGoogleSettings:
+    def test_google_api_key_accepts_gemini_alias(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+
+        settings = GoogleSettings(_env_file=None)
+
+        assert settings.google_api_key == "gemini-key"
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+class TestAtlassianSettings:
+    def test_atlassian_url_correction(self, monkeypatch):
+        # Test case 1: URL with "https://https://"
+        monkeypatch.setenv("ATLASSIAN_URL", "https://https://example.atlassian.net")
+        settings = AtlassianSettings(_env_file=None)
+        assert settings.atlassian_url == "https://example.atlassian.net"
+
+        # Test case 2: Correct HTTPS URL
+        monkeypatch.setenv("ATLASSIAN_URL", "https://example.atlassian.net")
+        settings2 = AtlassianSettings(_env_file=None)
+        assert settings2.atlassian_url == "https://example.atlassian.net"
+
+        # Test case 3: HTTP URL (should remain unchanged)
+        monkeypatch.setenv("ATLASSIAN_URL", "http://example.atlassian.net")
+        settings3 = AtlassianSettings(_env_file=None)
+        assert settings3.atlassian_url == "http://example.atlassian.net"
+
+        # Test case 4: Empty URL (should remain None or empty)
+        monkeypatch.delenv("ATLASSIAN_URL", raising=False)
+        settings4 = AtlassianSettings(_env_file=None)
+        assert settings4.atlassian_url is None
+
+        # Test case 5: URL that only starts with "https://" once
+        monkeypatch.setenv("ATLASSIAN_URL", "https://another.example.com")
+        settings5 = AtlassianSettings(_env_file=None)
+        assert settings5.atlassian_url == "https://another.example.com"
+
+        # Test case 6: URL with no scheme
+        monkeypatch.setenv("ATLASSIAN_URL", "example.atlassian.net")
+        settings6 = AtlassianSettings(_env_file=None)
+        assert settings6.atlassian_url == "example.atlassian.net"
+
+        # Clean up environment variable
+        monkeypatch.delenv("ATLASSIAN_URL", raising=False)
+
+class TestOIDCSettings:
+    def test_auth_provider_default(self, monkeypatch):
+        """Test that AUTH_PROVIDER defaults to 'disabled'."""
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+        settings = OIDCSettings()
+        assert settings.AUTH_PROVIDER == "disabled"
+
+    def test_auth_provider_env_override(self, monkeypatch):
+        """Test that AUTH_PROVIDER can be set by environment variable."""
+        monkeypatch.setenv("AUTH_PROVIDER", "google")
+        settings = OIDCSettings()
+        assert settings.AUTH_PROVIDER == "google"
+        monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+
+    def test_default_user_defaults(self, monkeypatch):
+        """Test that DEFAULT_USER_ID and DEFAULT_USER_EMAIL default to None."""
+        monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
+        monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
+        settings = OIDCSettings()
+        assert settings.DEFAULT_USER_ID is None
+        assert settings.DEFAULT_USER_EMAIL is None
+
+    def test_default_user_env_override(self, monkeypatch):
+        """Test that DEFAULT_USER_ID and DEFAULT_USER_EMAIL can be set by env vars."""
+        test_id = "test_user_123"
+        test_email = "test@example.com"
+        monkeypatch.setenv("DEFAULT_USER_ID", test_id)
+        monkeypatch.setenv("DEFAULT_USER_EMAIL", test_email)
+
+        settings = OIDCSettings()
+        assert settings.DEFAULT_USER_ID == test_id
+        assert settings.DEFAULT_USER_EMAIL == test_email
+
+        monkeypatch.delenv("DEFAULT_USER_ID", raising=False)
+        monkeypatch.delenv("DEFAULT_USER_EMAIL", raising=False)
+
+class TestTemporalDashboardSettings:
+    def test_default_values(self):
+        settings = TemporalDashboardSettings(_env_file=None)
+        assert settings.actions_enabled is True
+        assert settings.submit_enabled is True
+
+    def test_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", "false")
+        monkeypatch.setenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", "false")
+
+        settings = TemporalDashboardSettings(_env_file=None)
+        assert settings.actions_enabled is False
+        assert settings.submit_enabled is False
+
+        monkeypatch.delenv("TEMPORAL_DASHBOARD_ACTIONS_ENABLED", raising=False)
+        monkeypatch.delenv("TEMPORAL_DASHBOARD_SUBMIT_ENABLED", raising=False)
+
+class TestFeatureFlagsSettings:
+    def test_preset_catalog_reads_prefixed_env(self, monkeypatch):
+        monkeypatch.setenv("FEATURE_FLAGS__PRESET_CATALOG", "1")
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
+        )
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.preset_catalog is True
+        assert settings.preset_catalog_enabled is True
+
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+
+    def test_preset_catalog_keeps_legacy_env_fallback(self, monkeypatch):
+        monkeypatch.setenv("PRESET_CATALOG", "1")
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
+        )
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.preset_catalog is True
+        assert settings.preset_catalog_enabled is True
+
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+
+    def test_preset_catalog_defaults_enabled_without_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
+        )
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.preset_catalog is True
+        assert settings.preset_catalog_enabled is True
+
+    def test_preset_catalog_can_be_disabled_with_prefixed_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+        monkeypatch.setenv("FEATURE_FLAGS__DISABLE_PRESET_CATALOG", "1")
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.preset_catalog_enabled is False
+
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
+        )
+
+    def test_preset_catalog_can_be_disabled_with_legacy_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__PRESET_CATALOG", raising=False)
+        monkeypatch.delenv("PRESET_CATALOG", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__DISABLE_PRESET_CATALOG", raising=False
+        )
+        monkeypatch.setenv("DISABLE_PRESET_CATALOG", "1")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+        assert settings.preset_catalog_enabled is False
+
+        monkeypatch.delenv("DISABLE_PRESET_CATALOG", raising=False)
+
+    def test_live_logs_session_timeline_rollout_defaults_off(self, monkeypatch):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT", raising=False
+        )
+        monkeypatch.delenv("LIVE_LOGS_SESSION_TIMELINE_ROLLOUT", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_session_timeline_rollout == "off"
+        assert settings.live_logs_session_timeline_enabled is False
+
+    def test_live_logs_session_timeline_rollout_accepts_prefixed_env(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+            "codex_managed",
+        )
+        monkeypatch.delenv("LIVE_LOGS_SESSION_TIMELINE_ROLLOUT", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_session_timeline_rollout == "codex_managed"
+        assert settings.live_logs_session_timeline_enabled is True
+
+    def test_live_logs_session_timeline_rollout_rejects_unknown_values(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__LIVE_LOGS_SESSION_TIMELINE_ROLLOUT",
+            "maybe",
+        )
+
+        with pytest.raises(ValidationError):
+            FeatureFlagsSettings(_env_file=None)
+
+    def test_live_logs_structured_history_enabled_defaults_true(self, monkeypatch):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False
+        )
+        monkeypatch.delenv("LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False)
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_structured_history_enabled is True
+
+    def test_live_logs_structured_history_enabled_accepts_unprefixed_env(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", raising=False
+        )
+        monkeypatch.setenv("LIVE_LOGS_STRUCTURED_HISTORY_ENABLED", "false")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.live_logs_structured_history_enabled is False
+
+    def test_jira_create_page_defaults_disabled(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__JIRA_CREATE_PAGE_ENABLED", raising=False)
+        monkeypatch.delenv("JIRA_CREATE_PAGE_ENABLED", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", raising=False
+        )
+        monkeypatch.delenv("JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", raising=False
+        )
+        monkeypatch.delenv("JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
+            raising=False,
+        )
+        monkeypatch.delenv(
+            "JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
+            raising=False,
+        )
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.jira_create_page_enabled is False
+        assert settings.jira_create_page_default_project_key == ""
+        assert settings.jira_create_page_default_board_id == ""
+        assert settings.jira_create_page_remember_last_board_in_session is True
+
+    def test_jira_create_page_accepts_prefixed_env(self, monkeypatch):
+        monkeypatch.setenv("FEATURE_FLAGS__JIRA_CREATE_PAGE_ENABLED", "true")
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
+            "eng",
+        )
+        monkeypatch.setenv("FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", "42")
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
+            "false",
+        )
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.jira_create_page_enabled is True
+        assert settings.jira_create_page_default_project_key == "ENG"
+        assert settings.jira_create_page_default_board_id == "42"
+        assert settings.jira_create_page_remember_last_board_in_session is False
+
+    def test_jira_create_page_accepts_unprefixed_env(self, monkeypatch):
+        monkeypatch.delenv("FEATURE_FLAGS__JIRA_CREATE_PAGE_ENABLED", raising=False)
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", raising=False
+        )
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", raising=False
+        )
+        monkeypatch.delenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION",
+            raising=False,
+        )
+        monkeypatch.setenv("JIRA_CREATE_PAGE_ENABLED", "true")
+        monkeypatch.setenv("JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY", "ops")
+        monkeypatch.setenv("JIRA_CREATE_PAGE_DEFAULT_BOARD_ID", "84")
+        monkeypatch.setenv("JIRA_CREATE_PAGE_REMEMBER_LAST_BOARD_IN_SESSION", "false")
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.jira_create_page_enabled is True
+        assert settings.jira_create_page_default_project_key == "OPS"
+        assert settings.jira_create_page_default_board_id == "84"
+        assert settings.jira_create_page_remember_last_board_in_session is False
+
+    def test_jira_create_page_defaults_trim_operator_values(self, monkeypatch):
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_PROJECT_KEY",
+            " eng ",
+        )
+        monkeypatch.setenv(
+            "FEATURE_FLAGS__JIRA_CREATE_PAGE_DEFAULT_BOARD_ID",
+            " 42 ",
+        )
+
+        settings = FeatureFlagsSettings(_env_file=None)
+
+        assert settings.jira_create_page_default_project_key == "ENG"
+        assert settings.jira_create_page_default_board_id == "42"
+
+class TestMemorySettings:
+    def test_memory_flags_default_fail_open_and_planes_off(self, monkeypatch):
+        for key in (
+            "MEMORY_ENABLED",
+            "MEMORY_PLANNING",
+            "MEMORY_HISTORY",
+            "MEMORY_LONG_TERM",
+            "MEMORY_FAIL_OPEN",
+            "MEMORY_CONTEXT_BUDGET_TOKENS",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is True
+        assert settings.planning == "off"
+        assert settings.history == "off"
+        assert settings.long_term == "off"
+        assert settings.fail_open is True
+        assert settings.context_budget_tokens == 4096
+        assert settings.planning_enabled is False
+        assert settings.history_enabled is False
+        assert settings.long_term_enabled is False
+
+    def test_memory_flags_accept_documented_env_values(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_ENABLED", "true")
+        monkeypatch.setenv("MEMORY_PLANNING", "beads")
+        monkeypatch.setenv("MEMORY_HISTORY", "digest")
+        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
+        monkeypatch.setenv("MEMORY_FAIL_OPEN", "false")
+        monkeypatch.setenv("MEMORY_CONTEXT_BUDGET_TOKENS", "8192")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is True
+        assert settings.planning == "beads"
+        assert settings.history == "digest"
+        assert settings.long_term == "mem0"
+        assert settings.fail_open is False
+        assert settings.context_budget_tokens == 8192
+        assert settings.planning_enabled is True
+        assert settings.history_enabled is True
+        assert settings.long_term_enabled is True
+
+    def test_memory_flags_ignore_generic_env_names(self, monkeypatch):
+        monkeypatch.setenv("ENABLED", "false")
+        monkeypatch.setenv("FAIL_OPEN", "false")
+        monkeypatch.setenv("CONTEXT_BUDGET_TOKENS", "1")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is True
+        assert settings.fail_open is True
+        assert settings.context_budget_tokens == 4096
+
+    def test_memory_provider_values_are_normalized(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_PLANNING", " BEADS ")
+        monkeypatch.setenv("MEMORY_HISTORY", " Digest ")
+        monkeypatch.setenv("MEMORY_LONG_TERM", " MEM0 ")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.planning == "beads"
+        assert settings.history == "digest"
+        assert settings.long_term == "mem0"
+
+    def test_memory_enabled_master_gate_disables_planes(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_ENABLED", "false")
+        monkeypatch.setenv("MEMORY_PLANNING", "beads")
+        monkeypatch.setenv("MEMORY_HISTORY", "digest")
+        monkeypatch.setenv("MEMORY_LONG_TERM", "mem0")
+
+        settings = MemorySettings(_env_file=None)
+
+        assert settings.enabled is False
+        assert settings.planning_enabled is False
+        assert settings.history_enabled is False
+        assert settings.long_term_enabled is False
+
+    def test_memory_flags_reject_unknown_providers(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_PLANNING", "unknown")
+
+        with pytest.raises(ValidationError):
+            MemorySettings(_env_file=None)
+
+    def test_memory_context_budget_requires_positive_value(self, monkeypatch):
+        monkeypatch.setenv("MEMORY_CONTEXT_BUDGET_TOKENS", "0")
+
+        with pytest.raises(ValidationError):
+            MemorySettings(_env_file=None)
+
+class TestWorkflowSettings:
+    @pytest.fixture(autouse=True)
+    def _clear_spec_env(self, monkeypatch):
+        for key in (
+            "MOONMIND_CODEX_MODEL",
+            "MOONMIND_CODEX_EFFORT",
+            "MOONMIND_DEFAULT_RUNTIME",
+            "MOONMIND_DEFAULT_PUBLISH_MODE",
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT",
+            "WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT",
+            "WORKFLOW_SKILLS_CACHE_ROOT",
+            "WORKFLOW_SKILLS_WORKSPACE_ROOT",
+            "WORKFLOW_REPO_ROOT",
+            "WORKFLOW_REPO_ROOT",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+    def test_agent_job_artifact_defaults(self):
+        """Milestone 2 artifact settings should keep stable defaults."""
+
+        assert (
+            WorkflowSettings.model_fields["agent_job_artifact_root"].default
+            == "var/artifacts/agent_jobs"
+        )
+        assert (
+            WorkflowSettings.model_fields["agent_job_artifact_max_bytes"].default
+            == 50 * 1024 * 1024
+        )
+
+    def test_agent_job_artifact_env_overrides(self, monkeypatch):
+        """Environment variables should override queue artifact settings."""
+
+        monkeypatch.setenv("AGENT_JOB_ARTIFACT_ROOT", "/tmp/queue-artifacts")
+        monkeypatch.setenv("AGENT_JOB_ARTIFACT_MAX_BYTES", "2048")
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.agent_job_artifact_root == "/tmp/queue-artifacts"
+        assert settings.agent_job_artifact_max_bytes == 2048
+
+        monkeypatch.delenv("AGENT_JOB_ARTIFACT_ROOT", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ARTIFACT_MAX_BYTES", raising=False)
+
+    def test_agent_job_attachment_defaults(self):
+        """Attachment-related settings should expose stable defaults."""
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.agent_job_attachment_enabled is True
+        assert settings.agent_job_attachment_max_count == 10
+        assert settings.agent_job_attachment_max_bytes == 10 * 1024 * 1024
+        assert settings.agent_job_attachment_total_bytes == 25 * 1024 * 1024
+        assert settings.agent_job_attachment_allowed_content_types == (
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+        )
+
+    def test_agent_job_attachment_env_overrides(self, monkeypatch):
+        """Attachment configuration should respect environment overrides."""
+
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_ENABLED", "0")
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_MAX_COUNT", "2")
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_MAX_BYTES", "1024")
+        monkeypatch.setenv("AGENT_JOB_ATTACHMENT_TOTAL_BYTES", "2048")
+        monkeypatch.setenv(
+            "AGENT_JOB_ATTACHMENT_ALLOWED_TYPES",
+            " image/png , image/jpeg ",
+        )
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.agent_job_attachment_enabled is False
+        assert settings.agent_job_attachment_max_count == 2
+        assert settings.agent_job_attachment_max_bytes == 1024
+        assert settings.agent_job_attachment_total_bytes == 2048
+        assert settings.agent_job_attachment_allowed_content_types == (
+            "image/png",
+            "image/jpeg",
+        )
+
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_ENABLED", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_MAX_COUNT", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_MAX_BYTES", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_TOTAL_BYTES", raising=False)
+        monkeypatch.delenv("AGENT_JOB_ATTACHMENT_ALLOWED_TYPES", raising=False)
+
+    def test_vision_defaults(self):
+        """Vision settings should expose stable defaults."""
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.vision_context_enabled is True
+        assert settings.vision_provider == "gemini_cli"
+        assert settings.vision_model == "models/gemini-2.5-flash"
+        assert settings.vision_max_tokens == 512
+        assert settings.vision_ocr_enabled is True
+
+    def test_vision_env_overrides(self, monkeypatch):
+        """Vision configuration should respect environment overrides."""
+
+        monkeypatch.setenv("MOONMIND_VISION_CONTEXT_ENABLED", "0")
+        monkeypatch.setenv("MOONMIND_VISION_PROVIDER", "openai")
+        monkeypatch.setenv("MOONMIND_VISION_MODEL", "gpt-4o-mini")
+        monkeypatch.setenv("MOONMIND_VISION_MAX_TOKENS", "2048")
+        monkeypatch.setenv("MOONMIND_VISION_OCR_ENABLED", "false")
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.vision_context_enabled is False
+        assert settings.vision_provider == "openai"
+        assert settings.vision_model == "gpt-4o-mini"
+        assert settings.vision_max_tokens == 2048
+        assert settings.vision_ocr_enabled is False
+
+        monkeypatch.delenv("MOONMIND_VISION_CONTEXT_ENABLED", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_PROVIDER", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_MODEL", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_MAX_TOKENS", raising=False)
+        monkeypatch.delenv("MOONMIND_VISION_OCR_ENABLED", raising=False)
+
+    def test_task_default_baselines(self):
+        """Task defaults should provide stable queue execution baselines."""
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.codex_model == "gpt-5.5"
+        assert settings.codex_effort == "high"
+        assert settings.default_runtime == "codex_cli"
+        assert settings.default_publish_mode == "pr"
+        assert settings.claude_volume_name == "claude_auth_volume"
+        assert settings.claude_volume_path == "/home/app/.claude"
+        assert settings.claude_home == "/home/app/.claude"
+        assert settings.github_repository == "MoonLadderStudios/MoonMind"
+
+    def test_task_default_env_overrides(self, monkeypatch):
+        """Task defaults should accept explicit env overrides."""
+
+        monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
+        monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
+        monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "claude")
+        monkeypatch.setenv("MOONMIND_DEFAULT_PUBLISH_MODE", "branch")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic")
+        monkeypatch.setenv("CLAUDE_VOLUME_NAME", "claude_auth_custom")
+        monkeypatch.setenv("CLAUDE_VOLUME_PATH", "/runtime/claude-auth")
+        monkeypatch.setenv("CLAUDE_HOME", "/runtime/claude-home")
+        monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "  Nate Sticco  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "  nsticco@gmail.com  ")
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.codex_model == "gpt-custom-codex"
+        assert settings.codex_effort == "medium"
+        assert settings.default_runtime == "claude_code"
+        assert settings.default_publish_mode == "branch"
+        assert settings.claude_volume_name == "claude_auth_custom"
+        assert settings.claude_volume_path == "/runtime/claude-auth"
+        assert settings.claude_home == "/runtime/claude-home"
+        assert settings.github_repository == "Example/Repo"
+        assert settings.git_user_name == "Nate Sticco"
+        assert settings.git_user_email == "nsticco@gmail.com"
+
+        monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
+        monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
+        monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
+        monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_VOLUME_NAME", raising=False)
+        monkeypatch.delenv("CLAUDE_VOLUME_PATH", raising=False)
+        monkeypatch.delenv("CLAUDE_HOME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+
+    def test_task_default_env_supports_legacy_spec_prefix(self, monkeypatch):
+        """Legacy WORKFLOW_GITHUB_REPOSITORY should remain supported."""
+
+        monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Legacy/Repo")
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.github_repository == "Legacy/Repo"
+
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+
+    def test_manifest_required_capabilities_supports_legacy_spec_prefix(
+        self, monkeypatch
+    ):
+        """Legacy WORKFLOW manifest capability env var should remain supported."""
+
+        monkeypatch.delenv("WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False)
+        monkeypatch.setenv(
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", '["manifest", "planner"]'
+        )
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.manifest_required_capabilities == ("manifest", "planner")
+
+        monkeypatch.delenv(
+            "WORKFLOW_MANIFEST_REQUIRED_CAPABILITIES", raising=False
+        )
+
+    def test_default_publish_mode_rejects_invalid_value(self, monkeypatch):
+        """Default publish mode should validate supported options."""
+
+        monkeypatch.setenv("MOONMIND_DEFAULT_PUBLISH_MODE", "auto")
+        with pytest.raises(
+            ValidationError, match="default_publish_mode must be one of"
+        ):
+            WorkflowSettings(_env_file=None)
+        monkeypatch.delenv("MOONMIND_DEFAULT_PUBLISH_MODE", raising=False)
+
+    def test_default_runtime_rejects_invalid_value(self, monkeypatch):
+        """Default runtime should reject values outside supported execution runtimes."""
+
+        monkeypatch.setenv("MOONMIND_DEFAULT_RUNTIME", "universal")
+        with pytest.raises(
+            ValidationError, match="default_runtime must be one of"
+        ):
+            WorkflowSettings(_env_file=None)
+        monkeypatch.delenv("MOONMIND_DEFAULT_RUNTIME", raising=False)
+
+    def test_git_user_accepts_legacy_spec_env_vars(self, monkeypatch):
+        """Legacy WORKFLOW git user env vars should remain supported."""
+
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "  Legacy User  ")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "  legacy@example.com  ")
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.git_user_name == "Legacy User"
+        assert settings.git_user_email == "legacy@example.com"
+
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+
+    def test_git_user_env_precedence_prefers_workflow_then_spec_then_moonmind(
+        self, monkeypatch
+    ):
+        """Git user resolution should follow WORKFLOW > WORKFLOW > MOONMIND."""
+
+        monkeypatch.setenv("MOONMIND_GIT_USER_NAME", "MoonMind Name")
+        monkeypatch.setenv("MOONMIND_GIT_USER_EMAIL", "moonmind@example.com")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Spec Name")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "spec@example.com")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_NAME", "Workflow Name")
+        monkeypatch.setenv("WORKFLOW_GIT_USER_EMAIL", "workflow@example.com")
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.git_user_name == "Workflow Name"
+        assert settings.git_user_email == "workflow@example.com"
+
+        monkeypatch.delenv("MOONMIND_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("MOONMIND_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_NAME", raising=False)
+        monkeypatch.delenv("WORKFLOW_GIT_USER_EMAIL", raising=False)
+
+    def test_skills_defaults(self):
+        """Skills-first settings should have stable defaults."""
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.skills_enabled is True
+        assert settings.skills_canary_percent == 100
+        assert settings.default_skill == "auto"
+        assert settings.skill_policy_mode == "permissive"
+        assert settings.allowed_skills == ("auto",)
+        assert settings.skills_local_mirror_root == ".agents/skills/local"
+        assert settings.skills_legacy_mirror_root == ".agents/skills"
+        assert settings.live_session_enabled_default is True
+        assert settings.live_session_provider == "none"
+        assert settings.live_session_ttl_minutes == 60
+        assert settings.live_session_rw_grant_ttl_minutes == 15
+        assert settings.live_session_allow_web is False
+
+    def test_skills_overrides(self):
+        """Skill settings should accept explicit override values."""
+
+        settings = WorkflowSettings(
+            _env_file=None,
+            skills_enabled=False,
+            skills_canary_percent=25,
+            default_skill="custom",
+            allowed_skills=("speckit", "custom"),
+            submit_skill="custom",
+        )
+
+        assert settings.skills_enabled is False
+        assert settings.skills_canary_percent == 25
+        assert settings.default_skill == "custom"
+        assert settings.allowed_skills == ("speckit", "custom")
+        assert settings.submit_skill == "custom"
+
+    def test_skills_mirror_env_overrides(self, monkeypatch):
+        """Skill mirror roots should honor explicit WORKFLOW_SKILLS_* env overrides."""
+
+        monkeypatch.setenv("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT", "/tmp/skills-local")
+        monkeypatch.setenv("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT", "/tmp/skills-legacy")
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.skills_local_mirror_root == "/tmp/skills-local"
+        assert settings.skills_legacy_mirror_root == "/tmp/skills-legacy"
+
+        monkeypatch.delenv("WORKFLOW_SKILLS_LOCAL_MIRROR_ROOT", raising=False)
+        monkeypatch.delenv("WORKFLOW_SKILLS_LEGACY_MIRROR_ROOT", raising=False)
+
+    def test_skills_cache_and_workspace_roots_use_workflow_env(self, monkeypatch):
+        """Skills cache/workspace roots should read from WORKFLOW_* env names."""
+
+        monkeypatch.setenv("WORKFLOW_SKILLS_CACHE_ROOT", "/tmp/workflow-cache")
+        monkeypatch.setenv("WORKFLOW_SKILLS_WORKSPACE_ROOT", "workflow-runs")
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.skills_cache_root == "/tmp/workflow-cache"
+        assert settings.skills_workspace_root == "workflow-runs"
+
+        monkeypatch.delenv("WORKFLOW_SKILLS_CACHE_ROOT", raising=False)
+        monkeypatch.delenv("WORKFLOW_SKILLS_WORKSPACE_ROOT", raising=False)
+
+    def test_skills_cache_and_workspace_roots_ignore_spec_env(self, monkeypatch):
+        """Legacy SPEC_SKILLS_* names should no longer configure cache/workspace roots."""
+
+        monkeypatch.setenv("SPEC_SKILLS_CACHE_ROOT", "/tmp/spec-cache")
+        monkeypatch.setenv("SPEC_SKILLS_WORKSPACE_ROOT", "spec-runs")
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.skills_cache_root == "var/skill_cache"
+        assert settings.skills_workspace_root == "runs"
+
+        monkeypatch.delenv("SPEC_SKILLS_CACHE_ROOT", raising=False)
+        monkeypatch.delenv("SPEC_SKILLS_WORKSPACE_ROOT", raising=False)
+
+    def test_repo_root_env_override(self, monkeypatch):
+        """Spec workflow repo root should honor WORKFLOW_REPO_ROOT override."""
+
+        monkeypatch.setenv("WORKFLOW_REPO_ROOT", "/tmp/workspace-root")
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.repo_root == "/tmp/workspace-root"
+        monkeypatch.delenv("WORKFLOW_REPO_ROOT", raising=False)
+
+    def test_live_session_env_overrides(self, monkeypatch):
+        """Live session settings should honor MOONMIND_LIVE_SESSION_* overrides."""
+
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", "false")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_PROVIDER", "none")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", "90")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES", "25")
+        monkeypatch.setenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", "true")
+        monkeypatch.setenv(
+            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
+            "7",
+        )
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.live_session_enabled_default is False
+        assert settings.live_session_provider == "none"
+        assert settings.live_session_ttl_minutes == 90
+        assert settings.live_session_rw_grant_ttl_minutes == 25
+        assert settings.live_session_allow_web is True
+        assert settings.live_session_max_concurrent_per_worker == 7
+
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_ENABLED_DEFAULT", raising=False)
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_PROVIDER", raising=False)
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_TTL_MINUTES", raising=False)
+        monkeypatch.delenv(
+            "MOONMIND_LIVE_SESSION_RW_GRANT_TTL_MINUTES",
+            raising=False,
+        )
+        monkeypatch.delenv("MOONMIND_LIVE_SESSION_ALLOW_WEB", raising=False)
+        monkeypatch.delenv(
+            "MOONMIND_LIVE_SESSION_MAX_CONCURRENT_PER_WORKER",
+            raising=False,
+        )
+
+    def test_log_streaming_env_overrides(self, monkeypatch):
+        """Log streaming should honor MOONMIND_LOG_STREAMING_ENABLED overrides."""
+
+        settings_default = WorkflowSettings(_env_file=None)
+        assert settings_default.log_streaming_enabled is True
+
+        monkeypatch.setenv("MOONMIND_LOG_STREAMING_ENABLED", "false")
+
+        settings = WorkflowSettings(_env_file=None)
+        assert settings.log_streaming_enabled is False
+
+        monkeypatch.delenv("MOONMIND_LOG_STREAMING_ENABLED", raising=False)
+
+    def test_workflow_docker_mode_defaults_to_profiles(self, monkeypatch):
+        """Workflow Docker mode should default to profiles when omitted."""
+
+        monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.workflow_docker_mode == "profiles"
+
+    @pytest.mark.parametrize(
+        "mode",
+        ["disabled", "profiles", "unrestricted"],
+    )
+    def test_workflow_docker_mode_env_override(self, monkeypatch, mode):
+        """Workflow Docker mode should honor MOONMIND_WORKFLOW_DOCKER_MODE."""
+
+        monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", mode)
+
+        settings = WorkflowSettings(_env_file=None)
+
+        assert settings.workflow_docker_mode == mode
+
+        monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
+
+    def test_workflow_docker_mode_rejects_invalid_values(self, monkeypatch):
+        """Workflow Docker mode should fail fast for unsupported values."""
+
+        monkeypatch.setenv("MOONMIND_WORKFLOW_DOCKER_MODE", "anything-goes")
+
+        with pytest.raises(ValidationError, match="workflow_docker_mode"):
+            WorkflowSettings(_env_file=None)
+
+        monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
+
+    def test_app_settings_accepts_workflow_proposals_env(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Workflow proposal env flags should be parsed instead of treated as extra fields."""
+
+        monkeypatch.setenv("MOONMIND_ENABLE_PROPOSALS", "true")
+        monkeypatch.setenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", "2400")
+        settings = AppSettings(_env_file=None, **app_settings_defaults)
+        assert settings.workflow.enable_proposals is True
+        assert settings.workflow.stage_command_timeout_seconds == 2400
+
+        monkeypatch.delenv("MOONMIND_ENABLE_PROPOSALS", raising=False)
+        monkeypatch.delenv("MOONMIND_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", "1800")
+        settings = AppSettings(_env_file=None, **app_settings_defaults)
+        assert settings.workflow.stage_command_timeout_seconds == 1800
+
+        monkeypatch.delenv("WORKFLOW_STAGE_COMMAND_TIMEOUT_SECONDS", raising=False)
+
+    def test_app_settings_accepts_codex_worker_env(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Codex worker env flags should be parsed instead of treated as extra fields."""
+
+        monkeypatch.setenv("MOONMIND_CODEX_MODEL", "gpt-custom-codex")
+        monkeypatch.setenv("MOONMIND_CODEX_EFFORT", "medium")
+
+        settings = AppSettings(_env_file=None, **app_settings_defaults)
+
+        assert settings.workflow.codex_model == "gpt-custom-codex"
+        assert settings.workflow.codex_effort == "medium"
+
+        monkeypatch.delenv("MOONMIND_CODEX_MODEL", raising=False)
+        monkeypatch.delenv("MOONMIND_CODEX_EFFORT", raising=False)
+
+    def test_app_settings_accepts_workflow_github_repository(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Legacy WORKFLOW_GITHUB_REPOSITORY should bootstrap without extra-field errors."""
+
+        monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Example/Repo")
+        settings = AppSettings(_env_file=None, **app_settings_defaults)
+
+        assert settings.workflow.github_repository == "Example/Repo"
+
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+
+    def test_app_settings_workflow_github_repository_preserves_explicit_override(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Explicit workflow repository values should take precedence over env defaults."""
+
+        monkeypatch.setenv("WORKFLOW_GITHUB_REPOSITORY", "Legacy/Repo")
+
+        settings = AppSettings(
+            _env_file=None,
+            **app_settings_defaults,
+            workflow={"github_repository": "Explicit/Repo"},
+        )
+
+        assert settings.workflow.github_repository == "Explicit/Repo"
+
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+
+    def test_app_settings_rejects_workflow_github_repository_with_credentials(
+        self, app_settings_defaults, monkeypatch
+    ):
+        """Legacy workflow repository aliases should reject URLs with embedded credentials."""
+
+        monkeypatch.setenv(
+            "WORKFLOW_GITHUB_REPOSITORY",
+            "https://token@example.com/MoonLadderStudios/MoonMind.git",
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match="must not include embedded credentials",
+        ):
+            AppSettings(_env_file=None, **app_settings_defaults)
+
+        monkeypatch.delenv("WORKFLOW_GITHUB_REPOSITORY", raising=False)
+
+    def test_default_skill_is_added_to_allowlist(self):
+        """Allowlist mode should include default skill in allowlist."""
+
+        settings = WorkflowSettings(
+            _env_file=None,
+            skill_policy_mode="allowlist",
+            default_skill="custom-default",
+            allowed_skills=("speckit",),
+        )
+
+        assert settings.default_skill == "custom-default"
+        assert settings.allowed_skills == ("speckit", "custom-default")
+
+    def test_permissive_mode_does_not_modify_allowlist(self):
+        """Permissive mode should not force default skill into allowlist."""
+
+        settings = WorkflowSettings(
+            _env_file=None,
+            skill_policy_mode="permissive",
+            default_skill="custom-default",
+            allowed_skills=("speckit",),
+        )
+
+        assert settings.default_skill == "custom-default"
+        assert settings.allowed_skills == ("speckit",)
+
+    def test_app_settings_defaults_codex_queue_to_workflow_default(
+        self, app_settings_defaults
+    ):
+        """When codex queue is unset, app settings should align it to default queue."""
+
+        settings = AppSettings(
+            **app_settings_defaults,
+            workflow={
+                "default_queue": "moonmind.jobs",
+                "default_exchange": "moonmind.jobs",
+                "default_routing_key": "moonmind.jobs",
+                "codex_queue": None,
+            },
+        )
+
+        assert settings.workflow.default_queue == "moonmind.jobs"
+        assert settings.workflow.codex_queue == "moonmind.jobs"
+
+def test_workflow_proposal_policy_settings_defaults(app_settings_defaults):
+    """Workflow proposal defaults should expose policy knobs on both settings."""
+
+    settings = AppSettings(_env_file=None, **app_settings_defaults)
+    assert settings.workflow_proposals.proposal_targets_default == "workflow_repo"
+    assert settings.workflow.proposal_targets_default == "workflow_repo"
+    assert settings.workflow_proposals.max_items_workflow_repo_default == 3
+    assert settings.workflow.proposal_max_items_workflow_repo == 3
+    assert settings.workflow_proposals.moonmind_severity_floor_default == "high"
+    assert settings.workflow.proposal_moonmind_severity_floor == "high"
+
+def test_workflow_proposal_policy_env_overrides(app_settings_defaults, monkeypatch) -> None:
+    """Environment variables should override policy defaults everywhere."""
+
+    monkeypatch.setenv("MOONMIND_PROPOSAL_TARGETS", "both")
+    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO", "5")
+    monkeypatch.setenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", "4")
+    monkeypatch.setenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", "medium")
+
+    settings = AppSettings(_env_file=None, **app_settings_defaults)
+
+    assert settings.workflow_proposals.proposal_targets_default == "both"
+    assert settings.workflow.proposal_targets_default == "both"
+    assert settings.workflow_proposals.max_items_workflow_repo_default == 5
+    assert settings.workflow.proposal_max_items_workflow_repo == 5
+    assert settings.workflow_proposals.max_items_moonmind_default == 4
+    assert settings.workflow.proposal_max_items_moonmind == 4
+    assert settings.workflow_proposals.moonmind_severity_floor_default == "medium"
+    assert settings.workflow.proposal_moonmind_severity_floor == "medium"
+
+    monkeypatch.delenv("MOONMIND_PROPOSAL_TARGETS", raising=False)
+    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_WORKFLOW_REPO", raising=False)
+    monkeypatch.delenv("WORKFLOW_PROPOSALS_MAX_ITEMS_MOONMIND", raising=False)
+    monkeypatch.delenv("MOONMIND_MIN_SEVERITY_FOR_MOONMIND", raising=False)
+
+def test_workflow_settings_accept_queue_aliases(monkeypatch) -> None:
+    """WORKFLOW_DEFAULT_* aliases should configure workflow queue defaults."""
+
+    monkeypatch.setenv("WORKFLOW_DEFAULT_QUEUE", "workflow.jobs")
+    monkeypatch.setenv("WORKFLOW_DEFAULT_EXCHANGE", "workflow.jobs")
+    monkeypatch.setenv("WORKFLOW_DEFAULT_ROUTING_KEY", "workflow.jobs")
+
+    settings = WorkflowSettings(_env_file=None)
+
+    assert settings.default_queue == "workflow.jobs"
+    assert settings.default_exchange == "workflow.jobs"
+    assert settings.default_routing_key == "workflow.jobs"
+
+    monkeypatch.delenv("WORKFLOW_DEFAULT_QUEUE", raising=False)
+    monkeypatch.delenv("WORKFLOW_DEFAULT_EXCHANGE", raising=False)
+    monkeypatch.delenv("WORKFLOW_DEFAULT_ROUTING_KEY", raising=False)
+
+class TestAppSettingsRuntimeValidation:
+    def test_app_settings_allows_claude_default_with_api_key(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        defaults = dict(app_settings_defaults)
+        defaults["workflow"] = {"default_runtime": "claude"}
+        defaults["anthropic"] = {"anthropic_api_key": "test-key"}
+
+        settings = AppSettings(**defaults)
+        assert settings.workflow.default_runtime == "claude_code"
+
+    def test_app_settings_maps_claude_alias_to_anthropic_api_key(
+        self, app_settings_defaults, monkeypatch
+    ):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("CLAUDE_API_KEY", "enabled")
+
+        settings = AppSettings(**dict(app_settings_defaults))
+
+        assert settings.anthropic.anthropic_api_key == "enabled"
+
+    def test_app_settings_allows_claude_default_with_claude_alias_key(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "ANTHROPIC_API_KEY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("CLAUDE_API_KEY", "alias-key")
+        defaults = dict(app_settings_defaults)
+        defaults["workflow"] = {"default_runtime": "claude"}
+
+        settings = AppSettings(**defaults)
+        assert settings.workflow.default_runtime == "claude_code"
+
+    def test_app_settings_rejects_jules_default_without_runtime_config(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "JULES_ENABLED",
+            "JULES_API_URL",
+            "JULES_API_KEY",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        defaults = dict(app_settings_defaults)
+        defaults["workflow"] = {"default_runtime": "jules"}
+        defaults["jules"] = {"jules_api_key": None}
+
+        with pytest.raises(
+            ValueError,
+            match="default_runtime=jules requires JULES_API_KEY configured",
+        ):
+            AppSettings(_env_file=None, **defaults)
+
+    def test_app_settings_allows_jules_default_with_runtime_config(
+        self, app_settings_defaults, monkeypatch
+    ):
+        for key in (
+            "MOONMIND_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+            "WORKFLOW_DEFAULT_RUNTIME",
+        ):
+            monkeypatch.delenv(key, raising=False)
+        defaults = dict(app_settings_defaults)
+        defaults["workflow"] = {"default_runtime": "jules"}
+        defaults["jules"] = {
+            "jules_enabled": True,
+            "jules_api_url": "https://jules.example.test",
+            "jules_api_key": "test-key",
+        }
+
+        settings = AppSettings(_env_file=None, **defaults)
+        assert settings.workflow.default_runtime == "jules"

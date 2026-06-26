@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MoonMind</title>
+  <script>
+    (() => {
+      const key = "moonmind.theme";
+      const root = document.documentElement;
+      let stored = null;
+
+      try {
+        const raw = window.localStorage ? window.localStorage.getItem(key) : null;
+        stored = raw === "dark" || raw === "light" ? raw : null;
+        if (raw && !stored && window.localStorage) {
+          window.localStorage.removeItem(key);
+        }
+      } catch (_error) {
+        stored = null;
+      }
+
+      const prefersDark =
+        window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+      const mode = stored || (prefersDark ? "dark" : "light");
+      root.classList.toggle("dark", mode === "dark");
+      root.dataset.theme = mode;
+    })();
+  </script>
+  {{ assets_html | safe }}
+</head>
+
+<body>
+  <main class="dashboard-root">
+    <section class="worker-pause-banner" data-worker-pause hidden aria-live="polite">
+      <p>
+        <span class="worker-pause-label" data-worker-pause-status>Workers: Running</span>
+        <span class="worker-pause-reason" data-worker-pause-reason></span>
+        <a class="worker-pause-manage" href="/settings?section=operations" data-worker-pause-manage>Manage operations</a>
+      </p>
+    </section>
+
+    <div class="dashboard-shell-full">
+      <header class="masthead">
+        <div class="masthead-brand">
+          <img
+            class="masthead-logo"
+            src="/static/workflow_console/moonmindlogo.webp"
+            alt="MoonMind owl and moon logo"
+            width="256"
+            height="199"
+          />
+          <h1>MoonMind</h1>
+        </div>
+
+        <button
+          class="nav-hamburger"
+          type="button"
+          aria-expanded="false"
+          aria-controls="dashboard-nav"
+          aria-label="Toggle navigation menu"
+        >
+          <span class="nav-hamburger-icon" aria-hidden="true"></span>
+        </button>
+
+        <div class="masthead-nav">
+          {% include "_navigation.html" %}
+        </div>
+
+        {% if build_id %}
+        <div class="masthead-title-meta">
+          <div class="version-badge" title="MoonMind image version">
+            <span class="version-badge-value">v{{ build_id }}</span>
+          </div>
+        </div>
+        {% endif %}
+      </header>
+    </div>
+
+    <div id="dashboard-app-root"></div>
+  </main>
+
+  <script>
+    (() => {
+      const btn = document.querySelector('.nav-hamburger');
+      const nav = document.getElementById('dashboard-nav');
+      if (!btn || !nav) return;
+      const setOpen = (open) => {
+        btn.setAttribute('aria-expanded', String(open));
+        nav.classList.toggle('route-nav--open', open);
+      };
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        setOpen(btn.getAttribute('aria-expanded') !== 'true');
+      });
+      document.addEventListener('click', (event) => {
+        if (btn.getAttribute('aria-expanded') === 'true' && !nav.contains(event.target) && !btn.contains(event.target)) {
+          setOpen(false);
+        }
+      });
+      nav.addEventListener('click', (event) => {
+        if (event.target && event.target.closest && event.target.closest('a')) {
+          setOpen(false);
+        }
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && btn.getAttribute('aria-expanded') === 'true') setOpen(false);
+      });
+    })();
+  </script>
+
+  <script id="moonmind-ui-boot" type="application/json">
+    {{ boot_payload | safe }}
+  </script>
+</body>
+
+</html>

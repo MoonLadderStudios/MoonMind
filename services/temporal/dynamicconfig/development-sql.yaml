@@ -1,0 +1,12 @@
+# MoonMind Temporal dynamic config baseline.
+# Keep this file explicit so upgrades can pin cluster behavior in version control.
+# SQL visibility remains the source-of-truth read path for execution listing.
+system.enableReadFromSecondaryVisibility:
+  - value: false
+    constraints: {}
+frontend.enableUpdateWorkflowExecution:
+  - value: true
+    constraints: {}
+frontend.enableUpdateWorkflowExecutionAsyncAccepted:
+  - value: true
+    constraints: {}

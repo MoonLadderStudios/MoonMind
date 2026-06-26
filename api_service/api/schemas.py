@@ -1,0 +1,788 @@
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+
+if TYPE_CHECKING:
+    pass
+
+class CreateJobRequest(BaseModel):
+    """Request body for queue job creation (compatibility shim)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = Field(..., alias="type")
+    priority: int = Field(0, alias="priority")
+    payload: dict[str, Any] = Field(default_factory=dict, alias="payload")
+    affinity_key: Optional[str] = Field(None, alias="affinityKey")
+    max_attempts: int = Field(3, alias="maxAttempts", ge=1)
+    schedule: Optional[Any] = Field(None, alias="schedule")
+
+class UserProfileBaseSchema(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    google_api_key: Optional[str] = Field(
+        default=None,
+        alias="google_api_key_encrypted",
+    )
+    openai_api_key: Optional[str] = Field(
+        default=None,
+        alias="openai_api_key_encrypted",
+    )
+    anthropic_api_key: Optional[str] = Field(
+        default=None,
+        alias="anthropic_api_key_encrypted",
+    )
+
+    @field_validator(
+        "google_api_key",
+        "openai_api_key",
+        "anthropic_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _empty_api_key_is_unset(cls, value: Any) -> Any:
+        if value == "":
+            return None
+        return value
+
+class UserProfileRead(
+    UserProfileBaseSchema
+):  # Renamed UserProfileSchema to UserProfileRead
+    id: int  # Assuming 'id' is the primary key of UserProfile model
+    user_id: uuid.UUID
+    # google_api_key is inherited from UserProfileBaseSchema
+    # Configuration for ORM mode is inherited
+    # google_api_key and openai_api_key are inherited from UserProfileBaseSchema
+    # and will be present in this schema, suitable for internal use or when keys are needed.
+
+# New schema for sanitized output, excluding sensitive API keys.
+class UserProfileReadSanitized(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: uuid.UUID
+    email: str | None = None
+    google_api_key_set: bool = False
+    openai_api_key_set: bool = False
+    anthropic_api_key_set: bool = False
+
+class UserProfileUpdate(UserProfileBaseSchema):
+    # Inherits fields from UserProfileBaseSchema, e.g., google_api_key
+    # No additional fields needed for update beyond what's in base, unless specified
+    pass
+
+# UserProfileCreateSchema remains as is, it was already defined and seems okay.
+class UserProfileCreateSchema(UserProfileBaseSchema):
+    # This schema might be used if creation requires specific fields or is different from update.
+    # For now, it's similar to UserProfileBaseSchema.
+    pass
+
+class ApiKeyStatus(BaseModel):
+    """Schema for displaying API key status."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    openai_api_key_set: bool = False
+    # anthropic_api_key_set: bool = False # Example for other keys
+    # Add other keys as needed
+
+class GitHubTokenProbeRequest(BaseModel):
+    """Targeted GitHub token validation request."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    repo: str = Field(..., min_length=1)
+    mode: Literal["indexing", "publish", "readiness", "full_pr_automation"] = Field(
+        "indexing"
+    )
+    base_branch: Optional[str] = Field(None, alias="baseBranch")
+
+class ManifestStateModel(BaseModel):
+    """Manifest checkpoint state metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state_json: dict[str, Any] | None = Field(None, alias="stateJson")
+    state_updated_at: datetime | None = Field(None, alias="stateUpdatedAt")
+
+class ManifestRunMetadataModel(BaseModel):
+    """Last run summary for a manifest registry entry."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source: Optional[Literal["queue", "temporal"]] = Field(None, alias="source")
+    job_id: Optional[uuid.UUID] = Field(None, alias="jobId")
+    status: Optional[str] = Field(None, alias="status")
+    task_id: Optional[str] = Field(None, alias="taskId")
+    workflow_id: Optional[str] = Field(None, alias="workflowId")
+    temporal_run_id: Optional[str] = Field(None, alias="temporalRunId")
+    workflow_type: Optional[str] = Field(None, alias="workflowType")
+    temporal_status: Optional[Literal["running", "completed", "failed", "canceled"]] = (
+        Field(None, alias="temporalStatus")
+    )
+    manifest_artifact_ref: Optional[str] = Field(None, alias="manifestArtifactRef")
+    link: Optional[str] = Field(None, alias="link")
+    started_at: Optional[datetime] = Field(None, alias="startedAt")
+    finished_at: Optional[datetime] = Field(None, alias="finishedAt")
+
+class ManifestSummaryModel(BaseModel):
+    """List item representing one manifest registry entry."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., alias="name")
+    version: Optional[str] = Field(None, alias="version")
+    content_hash: str = Field(..., alias="contentHash")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+    last_run_job_id: Optional[uuid.UUID] = Field(None, alias="lastRunJobId")
+    last_run_source: Optional[Literal["queue", "temporal"]] = Field(
+        None, alias="lastRunSource"
+    )
+    last_run_status: Optional[str] = Field(None, alias="lastRunStatus")
+    state_updated_at: Optional[datetime] = Field(None, alias="stateUpdatedAt")
+
+class ManifestDetailModel(BaseModel):
+    """Detail response for one manifest registry entry."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str = Field(..., alias="name")
+    version: Optional[str] = Field(None, alias="version")
+    content: str = Field(..., alias="content")
+    content_hash: str = Field(..., alias="contentHash")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+    last_run: Optional[ManifestRunMetadataModel] = Field(None, alias="lastRun")
+    state: ManifestStateModel = Field(default_factory=ManifestStateModel, alias="state")
+
+class ManifestListResponse(BaseModel):
+    """Envelope for manifest list responses."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[ManifestSummaryModel] = Field(default_factory=list, alias="items")
+
+class ManifestUpsertRequest(BaseModel):
+    """Request payload for manifest upsert."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    content: str = Field(..., alias="content", min_length=1)
+
+class ManifestRunOptions(BaseModel):
+    """Optional queue overrides for manifest runs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    dry_run: Optional[bool] = Field(None, alias="dryRun")
+    force_full: Optional[bool] = Field(None, alias="forceFull")
+    max_docs: Optional[int] = Field(None, alias="maxDocs")
+
+    @field_validator("max_docs")
+    @classmethod
+    def _validate_max_docs(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and value < 1:
+            raise ValueError("maxDocs must be >= 1 when provided")
+        return value
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if self.dry_run is not None:
+            payload["dryRun"] = self.dry_run
+        if self.force_full is not None:
+            payload["forceFull"] = self.force_full
+        if self.max_docs is not None:
+            payload["maxDocs"] = self.max_docs
+        return payload
+
+class ManifestRunRequest(BaseModel):
+    """Request payload for registry-backed manifest runs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: str = Field("run", alias="action")
+    title: Optional[str] = Field(None, alias="title")
+    options: Optional[ManifestRunOptions] = Field(None, alias="options")
+    failure_policy: Optional[
+        Literal["fail_fast", "continue_and_report", "best_effort"]
+    ] = Field(None, alias="failurePolicy")
+    max_concurrency: Optional[int] = Field(None, alias="maxConcurrency")
+    tags: dict[str, str] = Field(default_factory=dict, alias="tags")
+    idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def _validate_action(cls, value: Any) -> str:
+        if value is None:
+            return "run"
+        if not isinstance(value, str):
+            raise ValueError("action must be a string and one of: plan, run")
+        normalized = value.strip().lower()
+        if not normalized:
+            return "run"
+        if normalized not in {"plan", "run"}:
+            raise ValueError("action must be one of: plan, run")
+        return normalized
+
+    @field_validator("max_concurrency")
+    @classmethod
+    def _validate_max_concurrency(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None and not 1 <= value <= 500:
+            raise ValueError("maxConcurrency must be between 1 and 500 when provided")
+        return value
+
+class ManifestStateUpdateRequest(BaseModel):
+    """Request payload for manifest state callback updates."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    state_json: dict[str, Any] = Field(..., alias="stateJson")
+    last_run_job_id: Optional[uuid.UUID] = Field(None, alias="lastRunJobId")
+    last_run_status: Optional[str] = Field(None, alias="lastRunStatus")
+    last_run_started_at: Optional[datetime] = Field(None, alias="lastRunStartedAt")
+    last_run_finished_at: Optional[datetime] = Field(None, alias="lastRunFinishedAt")
+
+class ManifestRunQueueMetadata(BaseModel):
+    """Returned queue metadata after submitting a manifest run."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    type: str = Field(..., alias="type")
+    required_capabilities: list[str] = Field(
+        default_factory=list, alias="requiredCapabilities"
+    )
+    manifest_hash: Optional[str] = Field(None, alias="manifestHash")
+
+class ManifestRunResponse(BaseModel):
+    """Response payload when submitting registry manifest runs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source: Literal["queue", "temporal"] = Field(..., alias="source")
+    job_id: Optional[uuid.UUID] = Field(None, alias="jobId")
+    queue: Optional[ManifestRunQueueMetadata] = Field(None, alias="queue")
+    execution: Optional[ManifestRunMetadataModel] = Field(None, alias="execution")
+
+class QueueSystemMetadataModel(BaseModel):
+    """Serialized worker pause metadata shared by claim + heartbeat responses."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    workers_paused: bool = Field(..., alias="workersPaused")
+    mode: Optional[Literal["drain", "quiesce"]] = Field(None, alias="mode")
+    reason: Optional[str] = Field(None, alias="reason")
+    version: int = Field(..., alias="version", ge=1)
+    requested_by_user_id: Optional[uuid.UUID] = Field(None, alias="requestedByUserId")
+    requested_at: Optional[datetime] = Field(None, alias="requestedAt")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+    @staticmethod
+    def from_service_metadata(
+        metadata: "QueueSystemMetadata",
+    ) -> "QueueSystemMetadataModel":
+        mode_value: str | None
+        if metadata.mode is None:
+            mode_value = None
+        elif getattr(metadata.mode, "value", None) is not None:
+            mode_value = str(metadata.mode.value).strip() or None
+        else:
+            mode_value = str(metadata.mode).strip() or None
+
+        return QueueSystemMetadataModel(
+            workers_paused=metadata.workers_paused,
+            mode=mode_value,
+            reason=metadata.reason,
+            version=metadata.version,
+            requested_by_user_id=metadata.requested_by_user_id,
+            requested_at=metadata.requested_at,
+            updated_at=metadata.updated_at,
+        )
+
+class WorkerPauseMetricsModel(BaseModel):
+    """Queued/running counters returned by the worker pause API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    queued: int = Field(..., alias="queued", ge=0)
+    running: int = Field(..., alias="running", ge=0)
+    stale_running: int = Field(..., alias="staleRunning", ge=0)
+    is_drained: bool = Field(..., alias="isDrained")
+    metrics_source: str = Field("legacy", alias="metricsSource")
+
+
+class OperationCommandDescriptorModel(BaseModel):
+    """Discoverable Settings -> Operations command metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    label: str
+    target: str
+    impact: str
+    requires_confirmation: bool = Field(..., alias="requiresConfirmation")
+    required_permission: str = Field(..., alias="requiredPermission")
+    available: bool
+    unavailable_reason: Optional[str] = Field(None, alias="unavailableReason")
+    rollback_action: Optional[str] = Field(None, alias="rollbackAction")
+
+
+class WorkerPauseAuditEventModel(BaseModel):
+    """Append-only audit entry surfaced by the worker pause API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: uuid.UUID = Field(..., alias="id")
+    action: Literal["pause", "resume"] = Field(..., alias="action")
+    target: str = Field("workers", alias="target")
+    mode: Optional[Literal["drain", "quiesce"]] = Field(None, alias="mode")
+    reason: Optional[str] = Field(None, alias="reason")
+    actor_user_id: Optional[uuid.UUID] = Field(None, alias="actorUserId")
+    result_status: Optional[str] = Field(None, alias="resultStatus")
+    signal_status: Optional[str] = Field(None, alias="signalStatus")
+    idempotency_key: Optional[str] = Field(None, alias="idempotencyKey")
+    created_at: datetime = Field(..., alias="createdAt")
+
+class WorkerPauseAuditListModel(BaseModel):
+    """Audit wrapper returned by the worker pause API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    latest: list[WorkerPauseAuditEventModel] = Field(
+        default_factory=list, alias="latest"
+    )
+
+class WorkerPauseSnapshotResponse(BaseModel):
+    """Response envelope for GET/POST /api/system/worker-pause."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    system: QueueSystemMetadataModel = Field(..., alias="system")
+    metrics: WorkerPauseMetricsModel = Field(..., alias="metrics")
+    commands: list[OperationCommandDescriptorModel] = Field(
+        default_factory=list, alias="commands"
+    )
+    audit: WorkerPauseAuditListModel = Field(
+        default_factory=WorkerPauseAuditListModel, alias="audit"
+    )
+    signal_status: Optional[str] = Field(None, alias="signalStatus")
+
+class PresetInputSchema(BaseModel):
+    """Input definition used by presets."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    label: str
+    type: Literal[
+        "text",
+        "textarea",
+        "markdown",
+        "enum",
+        "boolean",
+        "user",
+        "team",
+        "repo_path",
+        "jira_board",
+    ]
+    required: bool = False
+    default: Any = None
+    options: list[str] = Field(default_factory=list)
+    placeholder: Optional[str] = None
+
+class PresetStepSkillSchema(BaseModel):
+    """Skill payload attached to a template step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str = "auto"
+    args: dict[str, Any] = Field(default_factory=dict)
+    required_capabilities: list[str] = Field(
+        default_factory=list, alias="requiredCapabilities"
+    )
+    context: dict[str, Any] = Field(default_factory=dict)
+    permissions: dict[str, Any] = Field(default_factory=dict)
+    autonomy: dict[str, Any] = Field(default_factory=dict)
+    runtime: dict[str, Any] = Field(default_factory=dict)
+
+class PresetStepToolSchema(BaseModel):
+    """Tool payload attached to a template step."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: Optional[str] = None
+    name: Optional[str] = None
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    args: dict[str, Any] = Field(default_factory=dict)
+    required_authorization: Any = Field(None, alias="requiredAuthorization")
+    required_capabilities: list[str] = Field(
+        default_factory=list, alias="requiredCapabilities"
+    )
+    side_effect_policy: Any = Field(None, alias="sideEffectPolicy")
+    retry_policy: Any = Field(None, alias="retryPolicy")
+    execution: dict[str, Any] = Field(default_factory=dict)
+    validation: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("toolVersion", None)
+            return payload
+        return value
+
+class PresetStepBlueprintSchema(BaseModel):
+    """Template step blueprint definition."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: Optional[Literal["step", "include"]] = None
+    type: Optional[Literal["tool", "skill"]] = None
+    slug: Optional[str] = None
+    title: Optional[str] = None
+    instructions: Optional[str] = None
+    alias: Optional[str] = None
+    scope: Optional[Literal["global", "personal"]] = None
+    input_mapping: dict[str, Any] = Field(default_factory=dict, alias="inputMapping")
+    tool: Optional[PresetStepToolSchema] = None
+    skill: Optional[PresetStepSkillSchema] = None
+    annotations: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_preset_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("presetVersion", None)
+            return payload
+        return value
+
+class PresetSummarySchema(BaseModel):
+    """List response model for presets."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    scope: Literal["global", "personal"]
+    scope_ref: Optional[str] = Field(None, alias="scopeRef")
+    title: str
+    description: str
+    preset_digest: Optional[str] = Field(None, alias="presetDigest")
+    tags: list[str] = Field(default_factory=list)
+    is_favorite: bool = Field(False, alias="isFavorite")
+    recent_applied_at: Optional[str] = Field(None, alias="recentAppliedAt")
+    required_capabilities: list[str] = Field(
+        default_factory=list, alias="requiredCapabilities"
+    )
+    release_status: str = Field("draft", alias="releaseStatus")
+
+class PresetListResponseSchema(BaseModel):
+    """Envelope for template list responses."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[PresetSummarySchema] = Field(default_factory=list)
+
+class PresetResponseSchema(PresetSummarySchema):
+    """Detail response model for one preset."""
+
+    inputs: list[PresetInputSchema] = Field(default_factory=list)
+    input_schema: dict[str, Any] = Field(default_factory=dict, alias="inputSchema")
+    ui_schema: dict[str, Any] = Field(default_factory=dict, alias="uiSchema")
+    defaults: dict[str, Any] = Field(default_factory=dict)
+    steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+    reviewed_by: Optional[str] = Field(None, alias="reviewedBy")
+    reviewed_at: Optional[str] = Field(None, alias="reviewedAt")
+
+class PresetCreateRequestSchema(BaseModel):
+    """Request model for creating templates."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: Optional[str] = None
+    title: str
+    description: str
+    scope: Literal["personal", "global"] = "personal"
+    scope_ref: Optional[str] = Field(None, alias="scopeRef")
+    tags: list[str] = Field(default_factory=list)
+    inputs: list[PresetInputSchema] = Field(default_factory=list)
+    steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+    required_capabilities: list[str] = Field(
+        default_factory=list, alias="requiredCapabilities"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("presetVersion", None)
+            return payload
+        return value
+
+class PresetExpandOptionsSchema(BaseModel):
+    """Optional expansion flags."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enforce_step_limit: bool = Field(True, alias="enforceStepLimit")
+
+class PresetExpandRequestSchema(BaseModel):
+    """Request model for template expansion."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
+    options: PresetExpandOptionsSchema = Field(
+        default_factory=PresetExpandOptionsSchema
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def strip_version_identity(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.pop("version", None)
+            payload.pop("presetVersion", None)
+            return payload
+        return value
+
+class PresetAppliedMetadataSchema(BaseModel):
+    """Audit metadata describing one template application."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    preset_digest: Optional[str] = Field(None, alias="presetDigest")
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    step_ids: list[str] = Field(default_factory=list, alias="stepIds")
+    applied_at: Optional[str] = Field(None, alias="appliedAt")
+
+class PresetExpandResponseSchema(BaseModel):
+    """Response model for expanded template step payloads."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    composition: dict[str, Any] = Field(default_factory=dict)
+    applied_template: PresetAppliedMetadataSchema = Field(
+        ..., alias="appliedTemplate"
+    )
+    capabilities: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+class PresetSaveFromWorkflowRequestSchema(BaseModel):
+    """Request model for creating presets from draft workflow steps."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    scope: Literal["personal"] = "personal"
+    scope_ref: Optional[str] = Field(None, alias="scopeRef")
+    slug: Optional[str] = None
+    title: str
+    description: str
+    selected_step_ids: list[str] = Field(default_factory=list, alias="selectedStepIds")
+    steps: list[PresetStepBlueprintSchema] = Field(default_factory=list)
+    suggested_inputs: list[PresetInputSchema] = Field(
+        default_factory=list, alias="suggestedInputs"
+    )
+    tags: list[str] = Field(default_factory=list)
+
+class PresetReviewRequestSchema(BaseModel):
+    """Review workflow request for release status transitions."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    release_status: Literal["draft", "active", "inactive"] = Field(
+        ..., alias="releaseStatus"
+    )
+
+class PresetFavoriteRequestSchema(BaseModel):
+    """Favorite toggle payload."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    scope: Literal["global", "personal"]
+    scope_ref: Optional[str] = Field(None, alias="scopeRef")
+
+class SecretCreateRequest(BaseModel):
+    """Request body to create a new secret."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str = Field(..., description="Unique shorthand string for the secret (e.g., ANTHROPIC_API_KEY)")
+    plaintext: str = Field(..., min_length=1, description="The raw secret value to be encrypted")
+    details: Optional[dict[str, Any]] = Field(default_factory=dict, description="Optional metadata")
+
+class SecretUpdateRequest(BaseModel):
+    """Request body to update an existing secret."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    plaintext: str = Field(..., min_length=1, description="The new raw secret value to be encrypted")
+
+class SecretStatusUpdateRequest(BaseModel):
+    """Request body to change secret status."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal["active", "disabled"] = Field(..., description="New status for the secret")
+
+class SecretMetadataResponse(BaseModel):
+    """Safe metadata representation of a secret, explicitly excluding ciphertext."""
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    slug: str
+    status: str
+    details: dict[str, Any]
+    created_at: datetime = Field(..., alias="createdAt")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+    @computed_field(alias="secretRef")
+    @property
+    def secret_ref(self) -> str:
+        return f"db://{self.slug}"
+
+class SecretListResponse(BaseModel):
+    """Envelope for list of secret metadata."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    items: list[SecretMetadataResponse] = Field(default_factory=list)
+
+class SecretUsageItemResponse(BaseModel):
+    """Metadata-only reference from a consumer to a managed secret."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    consumer_type: str = Field(..., alias="consumerType")
+    object_name: str = Field(..., alias="objectName")
+    reference: str
+    scope: Optional[str] = None
+    setting_key: Optional[str] = Field(None, alias="settingKey")
+
+class SecretUsageDiagnosticResponse(BaseModel):
+    """Redacted diagnostic surfaced by a secret usage lookup."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    code: str
+    message: str
+    severity: str
+
+class SecretUsageResponse(BaseModel):
+    """Envelope for managed secret usage views."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    secret_ref: str = Field(..., alias="secretRef")
+    usages: list[SecretUsageItemResponse] = Field(default_factory=list)
+    diagnostics: list[SecretUsageDiagnosticResponse] = Field(default_factory=list)
+
+class AgentSkillSummaryResponse(BaseModel):
+    """List item representing an agent skill definition."""
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+    author: Optional[str] = None
+    latest_version: Optional[str] = Field(None, alias="latestVersion")
+    updated_at: Optional[datetime] = Field(None, alias="updatedAt")
+
+class AgentSkillVersionResponse(BaseModel):
+    """Detail response for a specific skill version."""
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    version_string: str = Field(..., alias="versionString")
+    format: str
+    artifact_ref: str = Field(..., alias="artifactRef")
+    content_digest: str = Field(..., alias="contentDigest")
+    created_at: datetime = Field(..., alias="createdAt")
+
+class AgentSkillCreateRequest(BaseModel):
+    """Request payload for creating a new agent skill definition."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+    author: Optional[str] = None
+
+class AgentSkillVersionCreateRequest(BaseModel):
+    """Request payload for pushing a new immutable version to an agent skill."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    version_string: str = Field(..., alias="versionString")
+    format: Optional[Literal["markdown", "bundle"]] = Field("markdown")
+    content: str = Field(..., description="The raw skill content to base the version on")
+
+class SkillSetEntryResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    skill_slug: str = Field(..., alias="skillSlug")
+    version_constraint: Optional[str] = Field(None, alias="versionConstraint")
+
+class SkillSetSummaryResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, from_attributes=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+
+class SkillSetDetailResponse(SkillSetSummaryResponse):
+    entries: list[SkillSetEntryResponse] = Field(default_factory=list)
+
+class SkillSetCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    slug: str
+    title: str
+    description: Optional[str] = None
+
+__all__ = [
+    "UserProfileBaseSchema",
+    "UserProfileRead",
+    "UserProfileReadSanitized",
+    "UserProfileUpdate",
+    "UserProfileCreateSchema",
+    "ApiKeyStatus",
+    "PresetAppliedMetadataSchema",
+    "PresetCreateRequestSchema",
+    "PresetExpandOptionsSchema",
+    "PresetExpandRequestSchema",
+    "PresetExpandResponseSchema",
+    "PresetFavoriteRequestSchema",
+    "PresetInputSchema",
+    "PresetListResponseSchema",
+    "PresetResponseSchema",
+    "PresetReviewRequestSchema",
+    "PresetSaveFromWorkflowRequestSchema",
+    "PresetStepBlueprintSchema",
+    "PresetStepSkillSchema",
+    "PresetSummarySchema",
+    "SecretCreateRequest",
+    "SecretUpdateRequest",
+    "SecretStatusUpdateRequest",
+    "SecretMetadataResponse",
+    "SecretListResponse",
+    "SecretUsageItemResponse",
+    "SecretUsageDiagnosticResponse",
+    "SecretUsageResponse",
+    "AgentSkillSummaryResponse",
+    "AgentSkillVersionResponse",
+    "AgentSkillCreateRequest",
+    "AgentSkillVersionCreateRequest",
+    "SkillSetEntryResponse",
+    "SkillSetSummaryResponse",
+    "SkillSetDetailResponse",
+    "SkillSetCreateRequest",
+]

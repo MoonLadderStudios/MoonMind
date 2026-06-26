@@ -1,0 +1,3291 @@
+import asyncio
+import inspect
+from datetime import datetime, timezone, timedelta
+from typing import Any, Callable
+
+import pytest
+
+pytest.importorskip("temporalio")
+
+from moonmind.workflows.temporal.workflows import run as run_workflow_module
+from moonmind.workflows.temporal.workflows.run import (
+    INTEGRATION_POLL_LOOP_PATCH,
+    NATIVE_PR_BRANCH_DEFAULTS_PATCH,
+    NATIVE_PR_LEASE_CONFLICT_GATE_PATCH,
+    NATIVE_PR_PUSH_STATUS_GATE_PATCH,
+    RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+    RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
+    RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
+    RUN_STEP_RETRY_OVERRIDES_PATCH,
+    RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    MoonMindRunWorkflow,
+)
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.managed_session_models import CodexManagedSessionBinding
+from moonmind.workflows.temporal.activity_catalog import (
+    TemporalActivityRetries,
+    TemporalActivityRoute,
+    TemporalActivityTimeouts,
+)
+from moonmind.workloads.tool_bridge import build_dood_tool_definition_payload
+
+def _mock_plan_payload(nodes: list[dict[str, Any]], edges: list[dict[str, Any]] | None = None) -> bytes:
+    import json
+    return json.dumps({
+        "plan_version": "1.0",
+        "metadata": {
+            "title": "Test", 
+            "created_at": "2024-01-01T00:00:00Z", 
+            "registry_snapshot": {"digest": "reg:sha256:123", "artifact_ref": "art:sha256:456"}
+        },
+        "policy": {"failure_mode": "FAIL_FAST", "max_concurrency": 1},
+        "nodes": nodes,
+        "edges": edges or []
+    }).encode("utf-8")
+
+def _mock_resilience_policy_envelope(payload: Any) -> dict[str, Any]:
+    """Return a valid compiled ResiliencePolicy envelope for the MM-880 activity."""
+    from moonmind.schemas.resilience_policy_models import compile_resilience_policy
+
+    data = payload if isinstance(payload, dict) else {}
+    compiled_at = data.get("compiledAt") or "2026-04-07T12:00:00+00:00"
+    return compile_resilience_policy(
+        compiled_at=datetime.fromisoformat(compiled_at),
+        workflow_id=data.get("workflowId"),
+        run_id=data.get("runId"),
+        policy_version=data.get("policyVersion", 1),
+        attempts={
+            "stepMaxAttempts": 3,
+            "stepNoProgressLimit": 2,
+            "jobSelfHealMaxResets": 1,
+        },
+        timeouts={"stepTimeoutSeconds": 900, "stepIdleTimeoutSeconds": 300},
+        provider_cooldown={
+            "cooldownAfter429Seconds": data.get("cooldownAfter429Seconds", 900),
+            "providerProfileId": data.get("providerProfileId"),
+            "rateLimitPolicy": data.get("rateLimitPolicy", {}),
+        },
+        checkpoints={
+            "checkpointRequired": True,
+            "requiredBoundaries": [
+                "after_prepare",
+                "before_execution",
+                "after_execution",
+            ],
+        },
+        idempotency={
+            "sideEffectIdempotencyRequired": True,
+            "keyStrategy": "step_execution_operation",
+        },
+        outbound_scanning={"highSecurityMode": False, "blockOnFinding": False},
+        observability={
+            "liveLogsTimelineEnabled": False,
+            "structuredHistoryEnabled": True,
+        },
+        cost_attribution={
+            "runtimeId": data.get("runtimeId"),
+            "model": data.get("model"),
+            "effort": data.get("effort"),
+        },
+    ).model_dump(by_alias=True, mode="json")
+
+
+def _normalize_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    dump_method = getattr(payload, 'model_dump', getattr(payload, 'dict', None))
+    return dump_method() if dump_method else payload
+
+async def _immediate_wait_condition(
+    predicate: Callable[[], bool],
+    **_kwargs: Any,
+) -> None:
+    assert predicate() is True
+
+def test_run_execution_stage_preserves_conditional_registry_patch_marker() -> None:
+    source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
+
+    patch_call = f"workflow.patched({RUN_CONDITIONAL_REGISTRY_READ_PATCH!r})"
+    constant_call = "workflow.patched(RUN_CONDITIONAL_REGISTRY_READ_PATCH)"
+    assert constant_call in source or patch_call in source
+    call_string = constant_call if constant_call in source else patch_call
+    assert source.index('workflow.patched("jules-bundling-v1")') < source.index(
+        call_string
+    )
+    assert source.index(call_string) < source.index("await load_registry_snapshot()")
+
+
+def test_blocked_external_handoff_skips_current_step_from_call_site() -> None:
+    source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
+    block_start = source.index("if handoff_block_reason:")
+    block = source[block_start : source.index("original_node_inputs", block_start)]
+
+    assert "completed_index=index - 2" in block
+
+
+def test_run_workflow_child_task_queue_is_replay_patched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporal_settings = run_workflow_module.settings.temporal.model_copy(
+        update={"user_workflow_v2_task_queue": "mm.workflow.custom.v2"}
+    )
+    monkeypatch.setattr(run_workflow_module.settings, "temporal", temporal_settings)
+    workflow = MoonMindRunWorkflow()
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH,
+    )
+    assert workflow._workflow_child_task_queue() == "mm.workflow.custom.v2"
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    assert workflow._workflow_child_task_queue() == "mm.workflow"
+
+
+def test_run_workflow_skill_context_includes_remediation_policy() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_remediation_context(
+        {},
+        {
+            "remediation": {"target": {"workflowId": "mm:target"}},
+            "remediationPolicy": {"allowOpsDiagnostics": True},
+        },
+    )
+
+    assert workflow._skill_remediation_context() == {
+        "is_remediation_workflow": True,
+        "remediation": {"target": {"workflowId": "mm:target"}},
+        "remediation_policy": {"allowOpsDiagnostics": True},
+    }
+
+
+@pytest.fixture
+def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._integration = "jules"
+    workflow._repo = "org/repo"
+    
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    
+    # Mock logger
+    logger = type("Logger", (), {"info": lambda *a, **k: None, "warning": lambda *a, **k: None})
+    monkeypatch.setattr(run_workflow_module.workflow, "logger", logger)
+
+    return workflow
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skips_integration_after_merge_gate_cancellation(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    integration_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "art:sha256:456":
+                return (
+                    b'{"skills":[{"name":"repo.noop","version":"1.0",'
+                    b'"description":"No-op","inputs":{"schema":{"type":"object"}},'
+                    b'"outputs":{"schema":{"type":"object"}},'
+                    b'"executor":{"activity_type":"mm.skill.execute",'
+                    b'"selector":{"mode":"by_capability"}},'
+                    b'"requirements":{"capabilities":["sandbox"]},'
+                    b'"policies":{"timeouts":{"start_to_close_seconds":60,'
+                    b'"schedule_to_close_seconds":120},"retries":{"max_attempts":1}}}]}'
+                )
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "step-1",
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": "jules",
+                        },
+                        "inputs": {"instructions": "Do nothing."},
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        _args: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        return {
+            "summary": "No-op completed",
+            "metadata": {"push_status": "not_requested"},
+            "output_refs": [],
+        }
+
+    async def fake_merge_gate(
+        *,
+        parameters: dict[str, Any],
+        pull_request_url: str | None,
+    ) -> None:
+        mock_run_workflow._cancel_requested = True
+        mock_run_workflow._set_state("canceled", summary="merge automation canceled")
+
+    async def fake_integration_stage(
+        *,
+        parameters: dict[str, Any],
+        plan_ref: str | None,
+    ) -> None:
+        integration_calls.append({"parameters": parameters, "plan_ref": plan_ref})
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(mock_run_workflow, "_maybe_start_merge_gate", fake_merge_gate)
+    monkeypatch.setattr(
+        mock_run_workflow,
+        "_run_integration_stage",
+        fake_integration_stage,
+    )
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-1",
+    )
+
+    assert integration_calls == []
+
+@pytest.mark.asyncio
+async def test_run_integration_stage_poll_driven_completion(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, Any]]] = []
+    
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append((activity_type, _normalize_payload(payload)))
+        if activity_type == "artifact.read":
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1", "tracking_ref": "track-1"}
+        if activity_type == "integration.jules.status":
+            # Simulate completion on the first poll
+            return {"normalized_status": "completed", "tracking_ref": "track-2"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        # Simulate timeout so we fall through to polling
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+    
+    # Expected activity calls: artifact.read, start, status
+    assert len(captured) == 3
+    assert captured[0][0] == "artifact.read"
+    assert captured[1][0] == "integration.jules.start"
+    assert captured[2][0] == "integration.jules.status"
+    assert mock_run_workflow._external_status == "completed"
+
+@pytest.mark.asyncio
+async def test_run_integration_poll_completion_invokes_patched_with_stable_id(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compatibility: polling completion must use the replay-stable patch id."""
+    patch_calls: list[str] = []
+
+    def fake_patched(patch_id: str) -> bool:
+        patch_calls.append(patch_id)
+        return True
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
+            )
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1", "tracking_ref": "track-1"}
+        if activity_type == "integration.jules.status":
+            return {"normalized_status": "completed", "tracking_ref": "track-2"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+
+    assert patch_calls, "workflow.patched should be evaluated for integration poll completion"
+    assert INTEGRATION_POLL_LOOP_PATCH in patch_calls
+    assert mock_run_workflow._external_status == "completed"
+
+@pytest.mark.asyncio
+async def test_run_integration_legacy_unpatched_poll_completion_still_completes(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In-flight history without the patch marker: legacy resume path still reaches completed."""
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
+            )
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1", "tracking_ref": "track-1"}
+        if activity_type == "integration.jules.status":
+            return {"normalized_status": "completed", "tracking_ref": "track-2"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+
+    assert mock_run_workflow._external_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_uses_user_max_attempts_for_skill_retry_policy(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._integration = None
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload), kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "jira.check_blockers",
+                                "description": "Check Jira blockers",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.tool.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {
+                                    "capabilities": ["integration:jira"]
+                                },
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 60,
+                                        "schedule_to_close_seconds": 120,
+                                    },
+                                    "retries": {"max_attempts": 1},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "check-blockers",
+                        "tool": {
+                            "type": "skill",
+                            "name": "jira.check_blockers",
+                        },
+                        "inputs": {
+                            "targetIssueKey": "MM-866",
+                            "maxAttempts": 3,
+                        },
+                    }
+                ]
+            )
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_STEP_RETRY_OVERRIDES_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    await mock_run_workflow._run_execution_stage(
+        parameters={},
+        plan_ref="art:sha256:plan",
+    )
+
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 1
+    retry_policy = tool_calls[0][2]["retry_policy"]
+    assert retry_policy.maximum_attempts == 3
+    assert tool_calls[0][1]["invocation_payload"]["inputs"]["maxAttempts"] == 3
+
+
+def test_execute_kwargs_retry_override_preserves_route_retry_policy() -> None:
+    workflow = MoonMindRunWorkflow()
+    route = TemporalActivityRoute(
+        activity_type="mm.tool.execute",
+        task_queue="mm.activity.integrations",
+        fleet="integrations",
+        capability_class="tools",
+        timeouts=TemporalActivityTimeouts(
+            start_to_close_seconds=30,
+            schedule_to_close_seconds=90,
+            heartbeat_timeout_seconds=10,
+        ),
+        retries=TemporalActivityRetries(
+            max_attempts=2,
+            max_interval_seconds=45,
+            non_retryable_error_codes=("invalid_input",),
+        ),
+    )
+
+    kwargs = workflow._execute_kwargs_for_route(route, max_attempts_override=4)
+
+    retry_policy = kwargs["retry_policy"]
+    assert retry_policy.maximum_attempts == 4
+    assert retry_policy.initial_interval == timedelta(seconds=5)
+    assert retry_policy.backoff_coefficient == 2.0
+    assert retry_policy.maximum_interval == timedelta(seconds=45)
+    assert retry_policy.non_retryable_error_types == ["invalid_input"]
+    assert kwargs["heartbeat_timeout"] == timedelta(seconds=10)
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_bundles_consecutive_jules_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._title = "Bundled Jules execution"
+
+    child_calls: list[object] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> Any:
+        if activity_type == "artifact.read":
+            if (payload.get("artifact_ref") if isinstance(payload, dict) else getattr(payload, "artifact_ref", None)) == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            {
+                                "name": "repo.run_tests",
+                                "description": "Run tests",
+                                "inputs": {"schema": {"type": "object"}},
+                                "outputs": {"schema": {"type": "object"}},
+                                "executor": {
+                                    "activity_type": "mm.skill.execute",
+                                    "selector": {"mode": "by_capability"},
+                                },
+                                "requirements": {"capabilities": ["sandbox"]},
+                                "policies": {
+                                    "timeouts": {
+                                        "start_to_close_seconds": 1800,
+                                        "schedule_to_close_seconds": 3600,
+                                    },
+                                    "retries": {"max_attempts": 3},
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                nodes=[
+                    {
+                        "id": "jules-step-1",
+                        "tool": {"type": "agent_runtime", "name": "jules"},
+                        "inputs": {
+                            "repository": "org/repo",
+                            "startingBranch": "main",
+                            "publishMode": "none",
+                            "instructions": "Step 1",
+                        },
+                    },
+                    {
+                        "id": "jules-step-2",
+                        "tool": {"type": "agent_runtime", "name": "jules"},
+                        "inputs": {
+                            "repository": "org/repo",
+                            "startingBranch": "main",
+                            "publishMode": "none",
+                            "instructions": "Step 2",
+                        },
+                    },
+                ]
+            )
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "artifact://bundle/1"}, {"upload_url": "unused"})
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        if activity_type == "resilience.compile_policy":
+            return _mock_resilience_policy_envelope(payload)
+        return {"status": "COMPLETED", "outputs": {}}
+
+    async def fake_execute_child_workflow(
+        workflow_type: str,
+        args: object,
+        **_kwargs: Any,
+    ) -> object:
+        child_calls.append(args)
+        return {"summary": "Bundled run complete", "metadata": {}, "output_refs": []}
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_child_workflow", fake_execute_child_workflow)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_search_attributes", lambda _attributes: None)
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {"namespace": "default", "workflow_id": "wf-1", "run_id": "run-1", "search_attributes": {}},
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "org/repo", "publishMode": "none"},
+        plan_ref="plan-1",
+    )
+
+    assert len(child_calls) == 1
+    request = child_calls[0]
+    assert "Ordered Checklist:" in request.instruction_ref
+    assert "1. Step 1" in request.instruction_ref
+    assert "2. Step 2" in request.instruction_ref
+    assert request.parameters["metadata"]["moonmind"]["bundleManifestRef"] == "artifact://bundle/1"
+    assert request.parameters["metadata"]["moonmind"]["bundleStrategy"] == "one_shot_jules"
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_rejects_dood_skill_tool_in_run_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._repo = "org/repo"
+    workflow._title = "DooD workload"
+    captured: list[tuple[str, Any, dict[str, Any]]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload), kwargs))
+        if activity_type == "artifact.read":
+            artifact_ref = (
+                payload.get("artifact_ref")
+                if isinstance(payload, dict)
+                else getattr(payload, "artifact_ref", None)
+            )
+            if artifact_ref == "art:sha256:456":
+                import json
+
+                return json.dumps(
+                    {
+                        "skills": [
+                            build_dood_tool_definition_payload(
+                                name="container.run_workload",
+                            )
+                        ]
+                    }
+                ).encode("utf-8")
+            return _mock_plan_payload(
+                [
+                    {
+                        "id": "workload-step",
+                        "tool": {
+                            "type": "skill",
+                            "name": "container.run_workload",
+                        },
+                        "inputs": {
+                            "profileId": "local-python",
+                            "repoDir": "/work/agent_jobs/wf-1/repo",
+                            "artifactsDir": (
+                                "/work/agent_jobs/wf-1/artifacts/workload-step"
+                            ),
+                            "command": ["python", "-V"],
+                        },
+                    }
+                ]
+            )
+        if activity_type == "mm.tool.execute":
+            return {
+                "status": "COMPLETED",
+                "outputs": {
+                    "workloadResult": {
+                        "status": "succeeded",
+                        "profileId": "local-python",
+                    }
+                },
+            }
+        return {"status": "COMPLETED", "outputs": {}}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+
+    async def fail_if_child_workflow_starts(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("DooD skill tools must not start MoonMind.AgentRun")
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fail_if_child_workflow_starts,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-1",
+            "run_id": "run-1",
+            "search_attributes": {},
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+
+    await workflow._run_execution_stage(parameters={}, plan_ref="art:sha256:plan")
+
+    tool_calls = [call for call in captured if call[0] == "mm.tool.execute"]
+    assert len(tool_calls) == 1
+    payload = tool_calls[0][1]
+    assert payload["invocation_payload"]["tool"] == {
+        "type": "skill",
+        "name": "container.run_workload",
+    }
+    assert payload["context"]["workflow_id"] == "wf-1"
+    assert payload["context"]["node_id"] == "workload-step"
+    assert payload["principal"] == "owner-1"
+    assert payload["registry_snapshot_ref"] == "art:sha256:456"
+    assert tool_calls[0][2]["task_queue"] == "mm.activity.agent_runtime"
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_skips_integration_after_merge_automation_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    workflow._integration = "jules"
+    workflow._repo = "org/repo"
+    integration_calls = 0
+
+    async def fake_execute_activity(
+        activity_type: str,
+        _payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "noop",
+                    "tool": {
+                        "type": "agent_runtime",
+                        "name": "codex",
+                    },
+                    "inputs": {"instructions": "No-op"},
+                }
+            ]
+        )
+
+    async def fake_maybe_start_merge_gate(
+        *,
+        parameters: dict[str, Any],
+        pull_request_url: str | None,
+    ) -> None:
+        assert parameters["publishMode"] == "none"
+        assert pull_request_url is None
+        workflow._cancel_requested = True
+
+    async def fake_run_integration_stage(
+        *,
+        parameters: dict[str, Any],
+        plan_ref: str | None,
+    ) -> None:
+        nonlocal integration_calls
+        integration_calls += 1
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_ordered_plan_node_payloads",
+        lambda *, nodes, edges: [],
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "now", lambda: datetime.now(timezone.utc))
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == "run-conditional-registry-read-v1",
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        _immediate_wait_condition,
+    )
+    monkeypatch.setattr(workflow, "_maybe_start_merge_gate", fake_maybe_start_merge_gate)
+    monkeypatch.setattr(workflow, "_run_integration_stage", fake_run_integration_stage)
+
+    await workflow._run_execution_stage(
+        parameters={"repo": "org/repo", "publishMode": "none"},
+        plan_ref="plan-1",
+    )
+
+    assert integration_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_wait_if_paused_uses_legacy_gate_when_patch_marker_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._paused = True
+    wait_calls = 0
+
+    async def fake_wait_condition(
+        predicate: Callable[[], bool],
+        **_kwargs: Any,
+    ) -> None:
+        nonlocal wait_calls
+        assert predicate() is False
+        wait_calls += 1
+        workflow._paused = False
+        assert predicate() is True
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda _patch_id: False,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+
+    await workflow._wait_if_paused_at_safe_boundary()
+
+    assert wait_calls == 1
+    assert workflow._paused is False
+
+
+@pytest.mark.asyncio
+async def test_run_execution_stage_honors_pause_between_managed_session_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._owner_id = "owner-1"
+    child_workflow_ids: list[str] = []
+    pause_wait_count = 0
+
+    async def fake_execute_typed_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        assert activity_type == "artifact.read"
+        assert getattr(payload, "artifact_ref", None) == "plan-ref"
+        return _mock_plan_payload(
+            [
+                {
+                    "id": "first",
+                    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                    "inputs": {"instructions": "Run the first managed step."},
+                },
+                {
+                    "id": "second",
+                    "tool": {"type": "agent_runtime", "name": "codex_cli"},
+                    "inputs": {"instructions": "Run the second managed step."},
+                },
+            ],
+            edges=[{"from": "first", "to": "second"}],
+        )
+
+    async def fake_execute_child_workflow(
+        workflow_name: str,
+        request: Any,
+        **kwargs: Any,
+    ) -> Any:
+        assert workflow_name == "MoonMind.AgentRun"
+        child_workflow_ids.append(str(kwargs["id"]))
+        if len(child_workflow_ids) == 1:
+            workflow._paused = True
+        else:
+            assert pause_wait_count == 1
+        return {
+            "summary": "Completed with status completed",
+            "output_refs": [],
+            "failure_class": None,
+            "metadata": {"agentId": getattr(request, "agent_id", None)},
+        }
+
+    async def fake_wait_condition(
+        predicate: Callable[[], bool],
+        **_kwargs: Any,
+    ) -> None:
+        nonlocal pause_wait_count
+        assert workflow._paused is True
+        assert predicate() is False
+        pause_wait_count += 1
+        workflow._paused = False
+        assert predicate() is True
+
+    async def fake_bind_workflow_scoped_session(request: Any) -> Any:
+        return request
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "artifact://manifest"}, {"upload_url": "unused"})
+        if activity_type == "step_checkpoint.create":
+            normalized = _normalize_payload(payload)
+            boundary = str(normalized.get("boundary") or "unknown")
+            checkpoint_id = str(
+                normalized.get("idempotencyKey") or f"checkpoint:{boundary}"
+            )
+            workspace = normalized.get("workspace")
+            workspace_kind = (
+                workspace.get("kind")
+                if isinstance(workspace, dict)
+                else "ephemeral_workspace_ref"
+            )
+            return {
+                "checkpointRef": f"artifact://checkpoint/{boundary}",
+                "checkpointId": checkpoint_id,
+                "contentType": "application/vnd.moonmind.step-execution-checkpoint+json;version=1",
+                "workspaceKind": workspace_kind,
+                "diagnosticRefs": [],
+                "idempotencyKey": checkpoint_id,
+            }
+        raise AssertionError(f"unexpected activity: {activity_type}")
+
+    async def fake_write_manifest_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        return await fake_execute_typed_activity(activity_type, payload, **_kwargs)
+
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": "wf-pause-boundary",
+            "run_id": "run-pause-boundary",
+            "search_attributes": {
+                "mm_owner_type": ["user"],
+                "mm_owner_id": ["owner-1"],
+            },
+        },
+    )
+    monkeypatch.setattr(run_workflow_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(run_workflow_module.workflow, "upsert_memo", lambda _memo: None)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "upsert_search_attributes",
+        lambda _attributes: None,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "now",
+        lambda: datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "logger",
+        type(
+            "Logger",
+            (),
+            {"info": lambda *a, **k: None, "warning": lambda *a, **k: None},
+        ),
+    )
+    monkeypatch.setattr(
+        run_workflow_module,
+        "execute_typed_activity",
+        fake_write_manifest_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "wait_condition",
+        fake_wait_condition,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {RUN_PAUSE_SAFE_BOUNDARIES_PATCH, "run-conditional-registry-read-v1"},
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_maybe_bind_workflow_scoped_session",
+        fake_bind_workflow_scoped_session,
+    )
+
+    await workflow._run_execution_stage(
+        parameters={"publishMode": "none"},
+        plan_ref="plan-ref",
+    )
+
+    assert child_workflow_ids == [
+        "wf-pause-boundary:agent:first",
+        "wf-pause-boundary:agent:second",
+    ]
+    assert pause_wait_count == 1
+    assert workflow._paused is False
+    assert workflow._waiting_reason is None
+
+
+@pytest.mark.asyncio
+async def test_run_integration_stage_signal_driven_completion(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, Any]]] = []
+    
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append((activity_type, _normalize_payload(payload)))
+        if activity_type == "artifact.read":
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1", "tracking_ref": "track-1"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        # Simulate an external event arriving during the wait
+        mock_run_workflow.external_event({
+            "correlation_id": "ext-1",
+            "normalized_status": "completed"
+        })
+        return
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+    
+    # Expected activity calls: artifact.read, start only, because it woke up via signal and skipped polling
+    assert len(captured) == 2
+    assert captured[0][0] == "artifact.read"
+    assert captured[1][0] == "integration.jules.start"
+    assert mock_run_workflow._external_status == "completed"
+
+@pytest.mark.asyncio
+async def test_run_integration_stage_branch_publish_auto_merge_after_signal(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, Any]]] = []
+    
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append((activity_type, _normalize_payload(payload)))
+        if activity_type == "artifact.read":
+            return _mock_plan_payload([{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}])
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1"}
+        if activity_type == "integration.jules.fetch_result":
+            return {"url": "https://github.com/org/repo/pull/123", "summary": "Done"}
+        if activity_type == "repo.merge_pr":
+            return {"merged": True, "summary": "Merged successfully"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        # Simulate signal arriving
+        mock_run_workflow.external_event({
+            "correlation_id": "ext-1",
+            "normalized_status": "completed"
+        })
+        return
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={
+            "repo": "org/repo",
+            "publishMode": "branch",
+            "workspaceSpec": {"startingBranch": "feature-branch"}
+        },
+        plan_ref="plan-1",
+    )
+    
+    # Expected activity calls: fetch plan, start, fetch_result, merge_pr
+    assert len(captured) == 4
+    assert captured[0][0] == "artifact.read"
+    assert captured[1][0] == "integration.jules.start"
+    assert captured[2][0] == "integration.jules.fetch_result"
+    assert captured[3][0] == "repo.merge_pr"
+    
+    # Verify merge_pr payload
+    merge_payload = captured[3][1]
+    # No target_branch should be passed since we didn't override it
+    assert merge_payload == {"pr_url": "https://github.com/org/repo/pull/123"}
+
+@pytest.mark.asyncio
+async def test_run_integration_stage_branch_publish_requires_pr_url(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
+            )
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1"}
+        if activity_type == "integration.jules.fetch_result":
+            return {"summary": "Done"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        mock_run_workflow.external_event(
+            {"correlation_id": "ext-1", "normalized_status": "completed"}
+        )
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    with pytest.raises(ValueError, match="no PR URL found"):
+        await mock_run_workflow._run_integration_stage(
+            parameters={
+                "repo": "org/repo",
+                "publishMode": "branch",
+                "workspaceSpec": {"startingBranch": "feature-branch"},
+            },
+            plan_ref="plan-1",
+        )
+
+@pytest.mark.asyncio
+async def test_run_integration_stage_branch_publish_requires_merge_success(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                [{"id": "1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Do something"}}]
+            )
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-1"}
+        if activity_type == "integration.jules.fetch_result":
+            return {"url": "https://github.com/org/repo/pull/123", "summary": "Done"}
+        if activity_type == "repo.merge_pr":
+            return {"merged": False, "summary": "Merge rejected"}
+        return {}
+
+    async def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        mock_run_workflow.external_event(
+            {"correlation_id": "ext-1", "normalized_status": "completed"}
+        )
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+
+    with pytest.raises(ValueError, match="merge failed"):
+        await mock_run_workflow._run_integration_stage(
+            parameters={
+                "repo": "org/repo",
+                "publishMode": "branch",
+                "workspaceSpec": {"startingBranch": "feature-branch"},
+            },
+            plan_ref="plan-1",
+        )
+
+@pytest.mark.asyncio
+async def test_run_integration_stage_multi_step_bundles_into_single_start(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, Any]]] = []
+    
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        captured.append((activity_type, _normalize_payload(payload)))
+        if activity_type == "artifact.read":
+            return _mock_plan_payload(
+                nodes=[
+                    {"id": "step1", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 1"}},
+                    {"id": "step2", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 2"}},
+                    {"id": "step3", "tool": {"type": "skill", "name": "t"}, "inputs": {"instructions": "Step 3"}},
+                ],
+                edges=[
+                    {"from": "step1", "to": "step2"},
+                    {"from": "step2", "to": "step3"}
+                ]
+            )
+        if activity_type == "artifact.create":
+            return ({"artifact_id": "artifact://bundle/1"}, {"upload_url": "unused"})
+        if activity_type == "artifact.write_complete":
+            return {"ok": True}
+        if activity_type == "integration.jules.start":
+            return {"external_id": "ext-session-123", "tracking_ref": "track-1"}
+        if activity_type == "integration.jules.status":
+            return {"normalized_status": "completed"}
+        return {}
+
+    def fake_wait_condition(cond: Callable[[], bool], timeout: timedelta) -> None:
+        raise asyncio.TimeoutError()
+
+    def fake_patched(patch_id: str) -> bool:
+        return True
+
+    monkeypatch.setattr(run_workflow_module.workflow, "execute_activity", fake_execute_activity)
+    monkeypatch.setattr(run_workflow_module.workflow, "wait_condition", fake_wait_condition)
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    await mock_run_workflow._run_integration_stage(
+        parameters={"repo": "org/repo"},
+        plan_ref="plan-1",
+    )
+    
+    start_calls = [c for c in captured if c[0] == "integration.jules.start"]
+    artifact_create_calls = [c for c in captured if c[0] == "artifact.create"]
+    artifact_write_calls = [c for c in captured if c[0] == "artifact.write_complete"]
+    status_calls = [c for c in captured if c[0] == "integration.jules.status"]
+    
+    assert len(start_calls) == 1
+    description = start_calls[0][1]["parameters"]["description"]
+    assert "Ordered Checklist:" in description
+    assert "1. Step 1" in description
+    assert "2. Step 2" in description
+    assert "3. Step 3" in description
+    assert len(artifact_create_calls) == 1
+    assert len(artifact_write_calls) == 1
+    assert all(c[0] != "integration.jules.send_message" for c in captured)
+    assert len(status_calls) == 1
+    assert mock_run_workflow._external_status == "completed"
+
+def test_determine_publish_completion_fails_for_no_commit_pr_publish(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+            "operator_summary": "Files edited in this run: none.",
+        }
+    }
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result=execution_result,
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "failed"
+    assert "no publishable diff was produced" in message
+    assert "feature/no-op" in message
+    assert "origin/main" in message
+    assert "has no commits ahead of origin/main" in message
+    assert "0 commits ahead" not in message
+    assert "Files edited in this run: none." in message
+    assert publish_failure is True
+
+def test_jira_implement_no_commit_pr_handoff_is_not_required(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+            "operator_summary": "MM-675 was already implemented.",
+        }
+    }
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-7",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result=execution_result,
+    )
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert status == "success"
+    assert "No pull request was required" in message
+    assert "Jira-oriented workflow completed without repository changes" in message
+    assert "MM-675 was already implemented" in message
+    assert "no publishable diff was produced" not in message
+    assert publish_failure is False
+
+
+def test_jira_implement_no_commit_pr_handoff_without_agent_report_is_explicit(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "no_commits",
+            "push_branch": "feature/no-op",
+            "push_base_ref": "origin/main",
+            "push_commit_count": 0,
+        }
+    }
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-7",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters=parameters,
+        execution_result=execution_result,
+    )
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters=parameters
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert status == "success"
+    assert "No pull request was required" in message
+    assert "Jira-oriented workflow completed without repository changes" in message
+    assert (
+        "no structured agent report confirmed whether the Jira issue was "
+        "already implemented"
+    ) in message
+    assert publish_failure is False
+
+
+@pytest.mark.asyncio
+async def test_already_implemented_no_commit_pr_handoff_completes_jira_done(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append({"activityType": activity_type, "payload": payload})
+        return {
+            "status": "succeeded",
+            "required": True,
+            "issueKey": "MM-675",
+            "issueKeySource": "explicit_post_merge",
+            "alreadyDone": False,
+            "transitioned": True,
+            "transitionId": "41",
+            "transitionName": "Done",
+            "toStatusName": "Done",
+            "toStatusCategory": "done",
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = (
+        "No pull request was required because this Jira-oriented workflow completed "
+        "without repository changes. final agent report: MM-675 was already implemented."
+    )
+    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+    expected_evidence = mock_run_workflow._publish_reason[:700]
+
+    await mock_run_workflow._complete_already_implemented_jira_if_needed(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "instructions": "Complete Jira issue MM-675.",
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+
+    assert activity_calls == [
+        {
+            "activityType": "merge_automation.complete_post_merge_jira",
+            "payload": {
+                "parentWorkflowId": "wf-1",
+                "parentRunId": "run-1",
+                "resolverDisposition": "already_implemented_no_changes",
+                "jiraIssueKey": "MM-675",
+                "postMergeJira": {
+                    "enabled": True,
+                    "required": True,
+                    "issueKey": "MM-675",
+                    "strategy": "done_category",
+                },
+                "candidateContext": {
+                    "taskOriginIssueKey": "MM-675",
+                    "taskMetadataIssueKey": "MM-675",
+                    "publishContextIssueKey": "MM-675",
+                    "alreadyImplementedEvidence": expected_evidence,
+                },
+            },
+        }
+    ]
+    assert mock_run_workflow._publish_context[
+        "alreadyImplementedJiraCompletion"
+    ] == {
+        "status": "succeeded",
+        "required": True,
+        "issueKey": "MM-675",
+        "issueKeySource": "explicit_post_merge",
+        "alreadyDone": False,
+        "transitioned": True,
+        "transitionId": "41",
+        "transitionName": "Done",
+        "toStatusName": "Done",
+        "toStatusCategory": "done",
+    }
+    assert "Jira issue MM-675 was moved to Done." in str(
+        mock_run_workflow._publish_reason
+    )
+
+
+@pytest.mark.asyncio
+async def test_already_implemented_jira_completion_requires_no_change_signal(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append({"activityType": activity_type, "payload": payload})
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = "MM-675 was already implemented."
+
+    await mock_run_workflow._complete_already_implemented_jira_if_needed(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "instructions": "Complete Jira issue MM-675.",
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+
+    assert activity_calls == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_no_commit_pr_handoff_does_not_complete_jira_done(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append({"activityType": activity_type, "payload": payload})
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = (
+        "No pull request was required because this Jira-oriented workflow completed "
+        "without repository changes. no structured agent report confirmed whether "
+        "the Jira issue was already implemented."
+    )
+    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+
+    await mock_run_workflow._complete_already_implemented_jira_if_needed(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "instructions": "Complete Jira issue MM-675.",
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+
+    assert activity_calls == []
+    assert "alreadyImplementedJiraCompletion" not in mock_run_workflow._publish_context
+
+
+@pytest.mark.asyncio
+async def test_uncertain_already_implemented_wording_does_not_complete_jira_done(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    activity_calls: list[dict[str, Any]] = []
+
+    async def fake_execute_activity(
+        activity_type: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        activity_calls.append({"activityType": activity_type, "payload": payload})
+        return {"status": "succeeded"}
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = (
+        "No pull request was required because this Jira-oriented workflow completed "
+        "without repository changes. The agent could not confirm if MM-675 was "
+        "already implemented."
+    )
+    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+
+    await mock_run_workflow._complete_already_implemented_jira_if_needed(
+        parameters={
+            "publishMode": "pr",
+            "task": {
+                "instructions": "Complete Jira issue MM-675.",
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+
+    assert activity_calls == []
+    assert "alreadyImplementedJiraCompletion" not in mock_run_workflow._publish_context
+
+
+@pytest.mark.asyncio
+async def test_already_implemented_jira_completion_failure_blocks_success(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_execute_activity(
+        _activity_type: str,
+        _payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        return {
+            "status": "blocked",
+            "required": True,
+            "issueKey": "MM-675",
+            "reason": "Expected exactly one done-category Jira transition.",
+        }
+
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH,
+    )
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_activity",
+        fake_execute_activity,
+    )
+    mock_run_workflow._publish_status = "not_required"
+    mock_run_workflow._publish_reason = "MM-675 was already implemented."
+    mock_run_workflow._publish_context["noChangePublish"] = {"status": "no_commits"}
+
+    with pytest.raises(ValueError, match="Expected exactly one done-category"):
+        await mock_run_workflow._complete_already_implemented_jira_if_needed(
+            parameters={
+                "publishMode": "pr",
+                "task": {
+                    "instructions": "Complete Jira issue MM-675.",
+                    "appliedStepTemplates": [
+                        {"slug": "jira-implement", "version": "1.0.0"},
+                    ],
+                },
+            }
+        )
+
+def test_structured_publish_not_required_satisfies_pr_publish_mode(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "publishOutcome": {
+                "status": "not_required",
+                "reason": "Jira issue already implemented; no pull request required.",
+                "prRequired": False,
+            },
+            "operator_summary": "MM-697 was transitioned to Done.",
+        }
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-8",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
+        },
+        execution_result=execution_result,
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-697"},
+        }
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert mock_run_workflow._publish_context["mergeAutomationStatus"] == "not_applicable"
+    assert status == "success"
+    assert "Jira issue already implemented" in message
+    assert publish_failure is False
+
+def test_record_publish_result_preserves_validated_pr_metadata_for_downstream(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = {
+        "outputs": {
+            "push_status": "pushed",
+            "pullRequestUrl": "https://github.com/org/repo/pull/674",
+            "prMetadata": {
+                "title": "MM-674 Source PR metadata from agent semantics",
+                "body": "Jira: MM-674\nSummary: Implemented.",
+                "jiraIssueKey": "MM-674",
+                "moonSpecPath": "specs/674-pr-metadata",
+                "source": "pr_metadata.json",
+            },
+        }
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-2",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result=execution_result,
+    )
+
+    assert mock_run_workflow._publish_context["pullRequestUrl"] == (
+        "https://github.com/org/repo/pull/674"
+    )
+    assert mock_run_workflow._publish_context["prMetadata"] == {
+        "title": "MM-674 Source PR metadata from agent semantics",
+        "body": "Jira: MM-674\nSummary: Implemented.",
+        "jiraIssueKey": "MM-674",
+        "moonSpecPath": "specs/674-pr-metadata",
+        "source": "pr_metadata.json",
+    }
+
+
+def test_record_execution_context_preserves_provider_native_pr_record(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = mock_run_workflow._map_agent_run_result(
+        AgentRunResult(
+            summary="Provider created PR.",
+            metadata={
+                "prMetadata": {
+                    "title": "Generic title should not win",
+                    "body": "Generic body should not win.",
+                },
+                "providerNativePullRequest": {
+                    "url": "https://github.com/org/repo/pull/676",
+                    "readinessState": "pending",
+                    "headBranch": "feature/provider-native",
+                    "baseBranch": "main",
+                    "source": "jules",
+                    "metadata": {
+                        "title": "MM-676 Capture provider-native PR metadata",
+                        "body": "Jira: MM-676\nSummary: Captured provider metadata.",
+                        "provider": "jules",
+                    },
+                },
+            },
+        )
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-provider-native",
+        execution_result=execution_result,
+    )
+
+    assert mock_run_workflow._publish_context["pullRequestUrl"] == (
+        "https://github.com/org/repo/pull/676"
+    )
+    assert mock_run_workflow._publish_context["readinessState"] == "pending"
+    assert mock_run_workflow._publish_context["branch"] == "feature/provider-native"
+    assert mock_run_workflow._publish_context["baseRef"] == "main"
+    assert mock_run_workflow._publish_context["providerNativePullRequest"] == {
+        "url": "https://github.com/org/repo/pull/676",
+        "readinessState": "pending",
+        "headBranch": "feature/provider-native",
+        "baseBranch": "main",
+        "source": "jules",
+    }
+    assert mock_run_workflow._publish_context["providerNativePrMetadata"] == {
+        "title": "MM-676 Capture provider-native PR metadata",
+        "body": "Jira: MM-676\nSummary: Captured provider metadata.",
+        "provider": "jules",
+    }
+    assert mock_run_workflow._publish_context["prMetadata"] == {
+        "title": "MM-676 Capture provider-native PR metadata",
+        "body": "Jira: MM-676\nSummary: Captured provider metadata.",
+    }
+
+
+def test_jira_implement_task_makes_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "skills": {
+                    "include": [
+                        {"name": "jira-implement"},
+                    ]
+                }
+            },
+        }
+    )
+    # appliedStepTemplates alone must not relax PR creation for the whole run.
+    assert not mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        }
+    )
+    # It only relaxes the no-commit publish fallback when opted in explicitly.
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "tool": {"type": "skill", "name": "auto"},
+                "skill": {"name": "auto"},
+                "appliedStepTemplates": [
+                    {"slug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+    # Templates carrying only presetSlug must also relax the no-commit fallback.
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "tool": {"type": "skill", "name": "auto"},
+                "skill": {"name": "auto"},
+                "appliedStepTemplates": [
+                    {"presetSlug": "jira-implement", "version": "1.0.0"},
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {
+                        "slug": "leaf",
+                        "version": "1.0.0",
+                        "skill": {"name": "jira-implement"},
+                    },
+                ],
+            },
+        }
+    )
+
+
+def test_jira_applied_template_without_composition_marks_task_jira_backed(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert (
+        mock_run_workflow._canonical_jira_issue_key_from_parameters(
+            {
+                "task": {
+                    "instructions": "Run Jira Implement for MM-719.",
+                    "appliedStepTemplates": [
+                        {"slug": "jira-implement", "version": "1.0.0"},
+                    ],
+                },
+            }
+        )
+        == "MM-719"
+    )
+
+
+def test_plain_text_blocked_result_short_circuits_publish(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    message = mock_run_workflow._blocked_outcome_message(
+        {
+            "outputs": {
+                "operator_summary": (
+                    "## Result: BLOCKED - cannot transition Jira issue MM-675\n\n"
+                    "The assessment verdict artifact is unavailable."
+                )
+            }
+        }
+    )
+
+    assert message is not None
+    assert message.startswith("Workflow blocked by plan step:")
+    assert "cannot transition Jira issue MM-675" in message
+
+
+def test_jira_implement_applied_template_makes_no_commit_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        {
+            "publishMode": "pr",
+            "task": {
+                "appliedStepTemplates": [
+                    {
+                        "slug": "jira-implement",
+                        "version": "1.0.0",
+                        "composition": {"includes": []},
+                    }
+                ],
+            },
+        },
+        include_applied_templates=True,
+    )
+
+
+def test_jira_implement_applied_template_legacy_shapes_make_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {"presetSlug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    assert mock_run_workflow._task_applied_template_slugs(
+        parameters,
+        parameters["task"],
+    ) == {"jira-implement"}
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+
+def test_jira_implement_applied_template_composition_includes_make_pr_publish_optional(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    parameters = {
+        "publishMode": "pr",
+        "task": {
+            "appliedStepTemplates": [
+                {
+                    "slug": "parent-flow",
+                    "composition": {
+                        "includes": [
+                            {"presetSlug": "jira-implement"},
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+    assert mock_run_workflow._task_applied_template_slugs(
+        parameters,
+        parameters["task"],
+    ) == {"parent-flow", "jira-implement"}
+    assert not mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+    parameters["task"]["appliedStepTemplates"][0].pop("slug")
+    assert mock_run_workflow._pr_publish_optional_for_task(
+        parameters,
+        include_applied_templates=True,
+    )
+
+
+def test_native_pr_branch_resolution_keeps_legacy_branch_only_replay_shape(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={"push_base_branch": "trunk"},
+        workspace_spec={"branch": "feature/existing"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "release"},
+    )
+
+    assert head_branch == "feature/existing"
+    assert base_branch == "feature/existing"
+
+def test_native_pr_branch_resolution_uses_patched_publish_defaults(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_BRANCH_DEFAULTS_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={"push_base_branch": "trunk"},
+        workspace_spec={"branch": "feature/existing"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "release"},
+    )
+
+    assert head_branch == ""
+    assert base_branch == "release"
+
+def test_native_pr_branch_resolution_mm669_uses_runtime_owned_head_sources(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_BRANCH_DEFAULTS_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={"targetBranch": "legacy-top-level-head"},
+        agent_outputs={},
+        workspace_spec={},
+        last_node_inputs={"targetBranch": "planner-generated-head"},
+        publish_payload={"prBaseBranch": "main"},
+    )
+
+    assert head_branch == "planner-generated-head"
+    assert base_branch == "main"
+
+    head_branch, _ = mock_run_workflow._resolve_native_pr_branches(
+        parameters={"targetBranch": "legacy-top-level-head"},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "workspace-head"},
+        last_node_inputs={"targetBranch": "planner-generated-head"},
+        publish_payload={"prBaseBranch": "main"},
+    )
+
+    assert head_branch == "workspace-head"
+
+    head_branch, _ = mock_run_workflow._resolve_native_pr_branches(
+        parameters={"targetBranch": "legacy-top-level-head"},
+        agent_outputs={"branch": "provider-head"},
+        workspace_spec={"targetBranch": "workspace-head"},
+        last_node_inputs={"targetBranch": "planner-generated-head"},
+        publish_payload={"prBaseBranch": "main"},
+    )
+
+    assert head_branch == "provider-head"
+
+def test_native_pr_push_status_gate_preserves_legacy_protected_branch_fallback(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "protected_branch",
+                "push_branch": "feature/existing",
+            }
+        },
+    )
+
+    assert mock_run_workflow._native_pr_push_status_blocks_creation(
+        "protected_branch"
+    ) is False
+    assert mock_run_workflow._publish_status is None
+
+def test_native_pr_push_status_gate_blocks_protected_branch_when_patched(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_PUSH_STATUS_GATE_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "protected_branch",
+                "push_branch": "feature/existing",
+            }
+        },
+    )
+
+    assert mock_run_workflow._native_pr_push_status_blocks_creation(
+        "protected_branch"
+    ) is True
+    assert mock_run_workflow._publish_status == "failed"
+    assert "feature/existing" in (mock_run_workflow._publish_reason or "")
+
+def test_native_pr_push_status_gate_blocks_unrecovered_lease_conflict(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == NATIVE_PR_LEASE_CONFLICT_GATE_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={
+            "outputs": {
+                "push_status": "lease_conflict",
+                "push_branch": "feature/existing",
+                "push_error": "! [rejected] feature/existing (stale info)",
+            }
+        },
+    )
+
+    assert mock_run_workflow._native_pr_push_status_blocks_creation(
+        "lease_conflict"
+    ) is True
+    assert mock_run_workflow._publish_status == "failed"
+    assert "remote branch 'feature/existing' changed" in (
+        mock_run_workflow._publish_reason or ""
+    )
+
+def test_publish_failure_preservation_is_patch_gated(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_run_workflow._publish_status = "failed"
+    mock_run_workflow._publish_reason = "first publish failure"
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: False)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+
+    assert mock_run_workflow._publish_status == "skipped"
+
+    mock_run_workflow._publish_status = "failed"
+    mock_run_workflow._publish_reason = "first publish failure"
+
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == run_workflow_module.RUN_STOP_ON_PUBLISH_HANDOFF_FAILURE_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+
+    mock_run_workflow._record_publish_result(
+        parameters={"publishMode": "pr"},
+        execution_result={"outputs": {"push_status": "no_commits"}},
+    )
+
+    assert mock_run_workflow._publish_status == "failed"
+    assert mock_run_workflow._publish_reason == "first publish failure"
+
+def test_record_execution_context_resets_last_step_fields_when_current_node_has_no_summary(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "summary": "Completed the substantive step.",
+                "diagnostics_ref": "diag-1",
+            }
+        },
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-2",
+        execution_result={"outputs": {}},
+    )
+
+    assert mock_run_workflow._last_step_id == "step-2"
+    assert mock_run_workflow._last_step_summary is None
+    assert mock_run_workflow._last_diagnostics_ref is None
+
+def test_record_execution_context_summarizes_trusted_jira_downstream_outputs(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="create-implement-tasks",
+        execution_result={
+            "outputs": {
+                "jiraOrchestration": {
+                    "status": "no_downstream_tasks",
+                    "storyCount": 7,
+                    "createdTaskCount": 0,
+                    "dependencyCount": 0,
+                    "failures": [
+                        {
+                            "errorCode": "task_creation_failed",
+                            "message": "Missing required template input 'jira_issue_key'.",
+                        }
+                    ],
+                }
+            }
+        },
+    )
+
+    assert mock_run_workflow._last_step_id == "create-implement-tasks"
+    assert mock_run_workflow._last_step_summary == (
+        "Jira downstream task creation no_downstream_tasks "
+        "(createdTasks=0; stories=7; dependencies=0; "
+        "firstFailure=task_creation_failed: Missing required template input "
+        "'jira_issue_key')."
+    )
+    assert mock_run_workflow._operator_summary == mock_run_workflow._last_step_summary
+
+
+def test_trusted_jira_output_summary_omits_empty_reason_suffix() -> None:
+    summary = MoonMindRunWorkflow._trusted_jira_output_summary(
+        {"storyOutput": {"status": "jira_blocked", "reason": ""}}
+    )
+
+    assert summary == "Jira story output finished with status jira_blocked."
+
+
+def test_record_execution_context_scrubs_operator_summary_and_ignores_negative_commit_count(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "operator_summary": "Final report token ghp_abcdefghijklmnopqrstuvwxyz123456",
+                "push_branch": "feature/no-op",
+                "push_base_ref": "origin/main",
+                "push_commit_count": -1,
+            }
+        },
+    )
+
+    assert mock_run_workflow._operator_summary is not None
+    assert "[REDACTED]" in mock_run_workflow._operator_summary
+    assert "ghp_" not in mock_run_workflow._operator_summary
+    assert "commitCount" not in mock_run_workflow._publish_context
+
+
+def test_determine_publish_completion_fails_when_pr_publish_creates_no_pr(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._integration = None
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "failed"
+    assert message == "publishMode 'pr' requested but no PR was created"
+    assert publish_failure is True
+
+
+def test_moonspec_verify_gate_blocks_pr_publish_completion(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="tpl:jira-orchestrate:1.0.0:13:verify",
+        outputs={
+            "verdict": "ADDITIONAL_WORK_NEEDED",
+            "operator_summary": "Overview route still renders full detail sections.",
+            "diagnostics_ref": "art_verify_report",
+        },
+    )
+
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "failed"
+    assert publish_failure is True
+    assert "MoonSpec verification did not approve publication" in message
+    assert "ADDITIONAL_WORK_NEEDED" in message
+    assert "art_verify_report" in message
+    assert mock_run_workflow._publish_status == "not_required"
+    assert mock_run_workflow._publish_context["publicationBlockedBy"] == (
+        "moonspec_verify"
+    )
+
+
+def test_moonspec_verify_gate_detects_remaining_remediation_budget(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {
+                "title": "Verify remediation 1 of 6",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
+            "skill": {"id": "moonspec-implement"},
+            "inputs": {
+                "title": "Remediate verification gaps 2 of 6",
+            },
+        },
+        {
+            "id": "create-pr",
+            "inputs": {
+                "title": "Create pull request",
+                "annotations": {"jiraOrchestrateRole": "pull-request-handoff"},
+            },
+        },
+    ]
+
+    assert mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    assert not mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=1,
+    )
+
+
+def test_moonspec_verify_text_verdict_parser_is_not_a_branch_boundary(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    verdict = mock_run_workflow._extract_moonspec_verify_verdict_from_text(
+        "Current verdict: ADDITIONAL_WORK_NEEDED. Prior run was FULLY_IMPLEMENTED."
+    )
+
+    assert verdict == "ADDITIONAL_WORK_NEEDED"
+    assert (
+        mock_run_workflow._extract_moonspec_verify_verdict(
+            {"summary": "Current verdict: ADDITIONAL_WORK_NEEDED."}
+        )
+        is None
+    )
+
+
+def test_moonspec_verify_gate_records_nested_summary_and_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="tpl:jira-orchestrate:1.0.0:13:verify",
+        outputs={
+            "verification": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "operator_summary": "Nested verifier summary.",
+                "diagnostics_ref": "art_nested_verify_report",
+                "gateResultRef": "art_nested_gate_result",
+            }
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["summary"] == "Nested verifier summary."
+    assert gate_context["diagnosticsRef"] == "art_nested_verify_report"
+    assert gate_context["gateResultRef"] == "art_nested_gate_result"
+    assert gate_context["recommendedNextAction"] == "reattempt_current_step"
+    assert gate_context["invalid"] is False
+    assert gate_context["degraded"] is False
+
+
+def test_moonspec_verify_gate_fails_closed_for_verdict_looking_prose_output(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={
+            "operator_summary": (
+                "Verdict: ADDITIONAL_WORK_NEEDED. The implementation still has "
+                "unchecked gaps."
+            ),
+            "diagnostics_ref": "art_verify_prose_only",
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["verdict"] == "NO_DETERMINATION"
+    assert gate_context["recommendedNextAction"] == "blocked"
+    assert gate_context["invalid"] is True
+    assert gate_context["degraded"] is True
+    assert gate_context["diagnosticsRef"] == "art_verify_prose_only"
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert "NO_DETERMINATION" in (mock_run_workflow._plan_blocked_message or "")
+
+
+def test_moonspec_verify_blocked_attempt_one_stops_with_remaining_budget(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    ordered_nodes = [
+        {
+            "id": "verify-1",
+            "inputs": {
+                "title": "Verify remediation 1 of 6",
+                "selectedSkill": "moonspec-verify",
+            },
+        },
+        {
+            "id": "remediate-2",
+            "annotations": {"jiraOrchestrateRole": "moonspec-remediation"},
+            "skill": {"id": "moonspec-implement"},
+            "inputs": {"title": "Remediate verification gaps 2 of 6"},
+        },
+    ]
+
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-1",
+        outputs={
+            "verdict": "BLOCKED",
+            "operator_summary": "UE Docker sidecar is not reachable.",
+            "diagnostics_ref": "art_verify_blocked",
+        },
+    )
+
+    assert mock_run_workflow._has_remaining_moonspec_remediation_step(
+        ordered_nodes=ordered_nodes,
+        current_index=0,
+    )
+    assert mock_run_workflow._normalize_moonspec_verify_verdict(
+        mock_run_workflow._moonspec_gate_verdict
+    ) == "BLOCKED"
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert mock_run_workflow._publish_status == "not_required"
+    assert mock_run_workflow._publish_context["publicationBlockedBy"] == (
+        "moonspec_verify"
+    )
+    assert "UE Docker sidecar is not reachable" in (
+        mock_run_workflow._plan_blocked_message or ""
+    )
+
+
+def test_moonspec_verify_gate_degrades_unknown_verdict_to_no_determination(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-1",
+        outputs={
+            "verdict": "UNREAL_VALIDATION_ENVIRONMENT_MISSING",
+            "operator_summary": "Verifier returned an unsupported environment verdict.",
+            "diagnostics_ref": "art_unknown_verdict",
+        },
+    )
+
+    gate_context = mock_run_workflow._publish_context["moonSpecGate"]
+    assert gate_context["verdict"] == "NO_DETERMINATION"
+    assert gate_context["recommendedNextAction"] == "blocked"
+    assert gate_context["invalid"] is True
+    assert gate_context["degraded"] is True
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is True
+    assert "NO_DETERMINATION" in (mock_run_workflow._plan_blocked_message or "")
+    assert "art_unknown_verdict" in (mock_run_workflow._plan_blocked_message or "")
+
+
+def test_moonspec_verify_gate_accepts_fully_implemented_publish(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="tpl:jira-orchestrate:1.0.0:13:verify",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+
+    assert mock_run_workflow._apply_blocking_moonspec_gate_to_publish() is False
+    assert mock_run_workflow._publish_context["moonSpecGate"]["verdict"] == (
+        "FULLY_IMPLEMENTED"
+    )
+
+
+def test_jira_orchestrate_external_handoff_requires_passing_moonspec_gate(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    handoff_node = {
+        "id": "code-review",
+        "inputs": {
+            "annotations": {"jiraOrchestrateRole": "code-review-handoff"},
+        },
+    }
+
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            handoff_node
+        )
+        == (
+            "Jira Orchestrate external handoff requires an accepted MoonSpec "
+            "verification terminal disposition; no controlling verification gate "
+            "has approved advancement."
+        )
+    )
+
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "ADDITIONAL_WORK_NEEDED"},
+    )
+
+    blocked_reason = (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            handoff_node
+        )
+    )
+    assert blocked_reason is not None
+    assert "latest verdict was ADDITIONAL_WORK_NEEDED" in blocked_reason
+
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            handoff_node
+        )
+        is None
+    )
+
+
+def test_jira_orchestrate_external_handoff_uses_preserved_verify_gate_state(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._step_ledger_rows = [
+        {
+            "logicalStepId": "verify-final",
+            "status": "succeeded",
+            "terminalDisposition": "accepted",
+            "preservedFrom": {
+                "workflowId": "mm:source",
+                "runId": "run-source",
+                "logicalStepId": "verify-final",
+                "executionOrdinal": 1,
+            },
+        }
+    ]
+    mock_run_workflow._rebuild_step_ledger_index()
+
+    mock_run_workflow._record_preserved_step_terminal_state(
+        "verify-final",
+        {
+            "id": "verify-final",
+            "tool": {"name": "moonspec-verify"},
+            "inputs": {},
+        },
+    )
+
+    assert mock_run_workflow._step_terminal_dispositions["verify-final"] == "accepted"
+    assert mock_run_workflow._publish_context["moonSpecGate"] == {
+        "logicalStepId": "verify-final",
+        "verdict": "FULLY_IMPLEMENTED",
+    }
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            {
+                "id": "code-review",
+                "inputs": {
+                    "annotations": {"jiraOrchestrateRole": "code-review-handoff"},
+                },
+            }
+        )
+        is None
+    )
+
+
+def _handoff_node(role: str = "pull-request-handoff", node_id: str = "pr-handoff") -> dict[str, Any]:
+    return {
+        "id": node_id,
+        "inputs": {"annotations": {"jiraOrchestrateRole": role}},
+    }
+
+
+def test_handoff_blocked_when_producing_step_not_accepted_despite_passing_verdict(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Strengthened gate: a passing verdict alone is not enough — the producing
+    # MoonSpec verify Step Execution must also be at the accepted terminal
+    # disposition.
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    # Producing step did not reach accepted (e.g. failed/partial attempt).
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = "candidate"
+
+    node = _handoff_node()
+    reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(node)
+
+    assert reason is not None
+    assert "accepted terminal disposition" in reason
+    assert "candidate" in reason
+
+    # The denied non-idempotent external action is recorded as a blocked side
+    # effect at the boundary.
+    records = mock_run_workflow._step_side_effect_records.get("pr-handoff", [])
+    assert records, "expected a blocked side-effect record at the handoff boundary"
+    blocked = records[-1]
+    assert blocked["disposition"] == "blocked"
+    assert blocked["class"] == "external_non_idempotent"
+    assert blocked["operation"] == "repo.publish"
+
+
+def test_handoff_blocked_side_effect_recording_is_idempotent(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = "candidate"
+
+    node = _handoff_node()
+    first_reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        node
+    )
+    second_reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        node
+    )
+
+    assert first_reason == second_reason
+    records = mock_run_workflow._step_side_effect_records.get("pr-handoff", [])
+    assert len(records) == 1
+    assert records[0]["class"] == "external_non_idempotent"
+    assert records[0]["operation"] == "repo.publish"
+    assert records[0]["disposition"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    ["candidate", "discarded", "superseded", "blocked", "failed_with_remaining_work"],
+)
+def test_handoff_blocked_for_each_non_accepted_disposition(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+    disposition: str,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = disposition
+
+    reason = mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+        _handoff_node(node_id=f"handoff-{disposition}")
+    )
+    assert reason is not None
+
+
+def test_handoff_allowed_when_producing_step_accepted_and_gate_approved(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
+    )
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    mock_run_workflow._step_terminal_dispositions["verify-final"] = "accepted"
+
+    node = _handoff_node()
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(node) is None
+    )
+    # No blocked record is created for an allowed handoff.
+    assert not mock_run_workflow._step_side_effect_records.get("pr-handoff")
+
+
+def test_handoff_accepted_disposition_gate_is_replay_guarded(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    # Default fixture leaves workflow.patched -> False, so in-flight runs keep
+    # the legacy verdict-only decision even when the producing step is not yet
+    # recorded as accepted.
+    mock_run_workflow._record_moonspec_verify_gate(
+        node_id="verify-final",
+        outputs={"verdict": "FULLY_IMPLEMENTED"},
+    )
+    assert (
+        mock_run_workflow._jira_orchestrate_external_handoff_block_reason(
+            _handoff_node()
+        )
+        is None
+    )
+
+
+def test_step_side_effect_defaults_to_terminal_disposition_gate(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._step_terminal_dispositions["code-review"] = (
+        "failed_with_remaining_work"
+    )
+
+    blocked = mock_run_workflow._record_step_side_effect(
+        "code-review",
+        effect_class="external_idempotent",
+        operation="jira.transition_issue",
+        target="MM-826",
+        idempotency_key="wf:run:code-review:execution:1:jira-transition:Code Review",
+    )
+
+    assert blocked["workflowStateAccepted"] is False
+    assert blocked["disposition"] == "blocked"
+
+    mock_run_workflow._step_terminal_dispositions["code-review"] = "accepted"
+    accepted = mock_run_workflow._record_step_side_effect(
+        "code-review",
+        effect_class="external_idempotent",
+        operation="jira.transition_issue",
+        target="MM-826",
+        idempotency_key="wf:run:code-review:execution:2:jira-transition:Code Review",
+    )
+
+    assert accepted["workflowStateAccepted"] is True
+    assert accepted["disposition"] == "accepted"
+
+
+def test_native_pr_branch_resolution_prefers_publish_context_branch(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+    mock_run_workflow._publish_context["branch"] = "804-workflow-detail-tabs"
+    mock_run_workflow._publish_context["baseRef"] = "origin/main"
+
+    head_branch, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={"targetBranch": "generated-target"},
+        agent_outputs={"targetBranch": "generated-target"},
+        workspace_spec={
+            "targetBranch": "change-jira-issue-mm-804-to-status-in-pr-c31f93a5",
+            "startingBranch": "main",
+        },
+        last_node_inputs={
+            "targetBranch": "change-jira-issue-mm-804-to-status-in-pr-c31f93a5"
+        },
+        publish_payload={},
+    )
+
+    assert head_branch == "804-workflow-detail-tabs"
+    assert base_branch == "main"
+
+
+def test_native_pr_branch_resolution_normalizes_base_ref_candidates(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", lambda _patch_id: True)
+
+    _, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "feature/expected"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "refs/remotes/origin/release/1.2"},
+    )
+
+    assert base_branch == "release/1.2"
+
+    _, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "feature/expected"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "refs/heads/main"},
+    )
+
+    assert base_branch == "main"
+
+    _, base_branch = mock_run_workflow._resolve_native_pr_branches(
+        parameters={},
+        agent_outputs={},
+        workspace_spec={"targetBranch": "feature/expected"},
+        last_node_inputs={},
+        publish_payload={"prBaseBranch": "refs/heads/origin/main"},
+    )
+
+    assert base_branch == "main"
+
+
+def test_publish_repair_feedback_names_branch_and_managed_publish_contract(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._publish_context["branch"] = "feature/expected"
+    mock_run_workflow._publish_context["baseRef"] = "origin/main"
+
+    feedback = mock_run_workflow._publish_repair_feedback_instruction(
+        failure_message=(
+            "publishMode 'pr' requested, but no publishable diff was produced."
+        )
+    )
+
+    assert "Publish postcondition repair required" in feedback
+    assert "feature/expected" in feedback
+    assert "origin/main" in feedback
+    assert "cherry-pick" in feedback
+    assert "managed publishing will push and create the PR" in feedback
+    assert "Do not transition Jira" in feedback
+
+
+def test_publish_repair_identifies_jira_agent_skill_names(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    assert mock_run_workflow._is_jira_agent_skill_name("jira-issue-updater") is True
+    assert mock_run_workflow._is_jira_agent_skill_name("moonspec-implement") is False
+
+
+@pytest.mark.asyncio
+async def test_publish_repair_runs_one_managed_child_and_returns_result(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = CodexManagedSessionBinding(
+        workflowId="wf-1:session:codex_cli",
+        agentRunId="wf-1",
+        sessionId="sess:wf-1:codex_cli",
+        runtimeId="codex_cli",
+    )
+    mock_run_workflow._codex_session_binding = binding
+    mock_run_workflow._last_publish_repair_node_id = "step-2"
+    mock_run_workflow._last_publish_repair_request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="wf-1",
+        idempotencyKey="wf-1:step-2:run-1",
+        instructionRef="original instructions",
+        managedSession=binding,
+        parameters={"publishMode": "pr"},
+    )
+    mock_run_workflow._publish_context["branch"] = "feature/expected"
+
+    child_requests: list[AgentExecutionRequest] = []
+
+    async def fake_execute_child_workflow(
+        _workflow_type: str,
+        request: AgentExecutionRequest,
+        **_kwargs: Any,
+    ) -> AgentRunResult:
+        child_requests.append(request)
+        return AgentRunResult(
+            summary="repair complete",
+            metadata={"push_status": "pushed", "push_branch": "feature/expected"},
+        )
+
+    def fake_patched(patch_id: str) -> bool:
+        return patch_id == RUN_PUBLISH_REPAIR_FEEDBACK_PATCH
+
+    monkeypatch.setattr(run_workflow_module.workflow, "patched", fake_patched)
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "execute_child_workflow",
+        fake_execute_child_workflow,
+    )
+
+    result = await mock_run_workflow._execution_publish_repair(
+        parameters={"publishMode": "pr"},
+        failure_message="branch has no commits ahead of origin/main",
+    )
+
+    assert result is not None
+    assert result["status"] == "COMPLETED"
+    assert result["outputs"]["push_status"] == "pushed"
+    assert len(child_requests) == 1
+    assert "branch has no commits" in (child_requests[0].instruction_ref or "")
+    assert (
+        child_requests[0].parameters["metadata"]["moonmind"]["publishRepair"][
+            "sourceNodeId"
+        ]
+        == "step-2"
+    )
+
+
+def test_determine_publish_completion_requires_integration_pr_url(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._integration = "jules"
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "failed"
+    assert message == "publishMode 'pr' requested but no PR was created"
+    assert publish_failure is True
+
+def test_determine_publish_completion_succeeds_when_pr_was_created_after_skips(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._integration = "jules"
+    mock_run_workflow._publish_status = "published"
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/123"
+    mock_run_workflow._publish_context["pullRequestUrl"] = (
+        "https://github.com/org/repo/pull/123"
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "pr"}
+    )
+
+    assert status == "success"
+    assert "Pull request: https://github.com/org/repo/pull/123" in message
+    assert publish_failure is False
+
+def test_determine_publish_completion_requires_merge_when_requested(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/123"
+    mock_run_workflow._publish_status = "published"
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-1"},
+        }
+    )
+
+    assert status == "failed"
+    assert message == "merge automation requested but PR was not merged"
+    assert publish_failure is True
+
+def test_determine_publish_completion_accepts_completed_merge_outcome(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._pull_request_url = "https://github.com/org/repo/pull/123"
+    mock_run_workflow._publish_status = "published"
+    mock_run_workflow._publish_context["mergeAutomationStatus"] = "merged"
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "pr",
+            "mergeAutomation": {"enabled": True, "jiraIssueKey": "MM-1"},
+        }
+    )
+
+    assert status == "success"
+    assert publish_failure is False
+
+def test_determine_publish_completion_requires_requested_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert status == "failed"
+    assert message == "reportOutput requested but no final report was created"
+    assert publish_failure is True
+
+def test_record_execution_context_tracks_created_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {"summary": "Report published."},
+            "metadata": {"primaryReportRef": "art_report_1"},
+        },
+    )
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert mock_run_workflow._report_created is True
+    assert mock_run_workflow._report_ref == "art_report_1"
+    assert status == "success"
+    assert publish_failure is False
+
+
+def test_record_execution_context_tracks_mapped_agent_run_report(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    execution_result = mock_run_workflow._map_agent_run_result(
+        {
+            "summary": "Report published.",
+            "metadata": {"primaryReportRef": "art_report_2"},
+        }
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result=execution_result,
+    )
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert mock_run_workflow._report_created is True
+    assert mock_run_workflow._report_ref == "art_report_2"
+    assert status == "success"
+    assert publish_failure is False
+
+
+def test_determine_publish_completion_includes_operator_summary_for_report_runs(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "summary": "Completed with status completed",
+                "operator_summary": (
+                    "The report explains that lunar regolith can shield habitats "
+                    "from radiation and micrometeorites."
+                ),
+            }
+        },
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+
+    assert status == "success"
+    assert (
+        "Final result: The report explains that lunar regolith can shield habitats"
+        in message
+    )
+    assert "Completed with status completed" not in message
+    assert publish_failure is False
+
+def test_determine_publish_completion_prefers_latest_step_summary_over_stale_operator_summary(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "operator_summary": "Prepared the initial deployment notes.",
+            }
+        },
+    )
+    mock_run_workflow._record_execution_context(
+        node_id="step-2",
+        execution_result={
+            "outputs": {
+                "summary": "Published the final report bundle.",
+            }
+        },
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+
+    assert status == "success"
+    assert "Final result: Published the final report bundle" in message
+    assert "Prepared the initial deployment notes" not in message
+    assert publish_failure is False
+
+def test_determine_publish_completion_uses_meaningful_summary_after_generic_operator_summary(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "operator_summary": "Completed.",
+                "summary": "Wrote the operator-facing completion report.",
+            }
+        },
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+
+    assert status == "success"
+    assert "Final result: Wrote the operator-facing completion report" in message
+    assert "Final result: Completed" not in message
+    assert publish_failure is False
+
+def test_determine_publish_completion_omits_pull_request_url_when_publish_mode_none(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    mock_run_workflow._publish_context["pullRequestUrl"] = (
+        "https://github.com/org/repo/pull/123"
+    )
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "outputs": {
+                "summary": "Referenced an existing pull request.",
+            }
+        },
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "none"}
+    )
+
+    assert status == "success"
+    assert "Referenced an existing pull request" in message
+    assert "Pull request:" not in message
+    assert publish_failure is False
+
+def test_determine_publish_completion_fails_for_unknown_branch_publish_outcome(
+    mock_run_workflow: MoonMindRunWorkflow,
+) -> None:
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={"publishMode": "branch"}
+    )
+
+    assert status == "failed"
+    assert message == "branch publish outcome unknown"
+    assert publish_failure is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: a failed step result that carries only a bare error-category
+# token (e.g. a managed runtime that timed out and emitted "execution_error"
+# with no provider detail) must never surface that token as the operator
+# summary. Otherwise the terminal summary, finish-outcome reason, and the
+# workflow's ApplicationError message all collapse to "execution_error" — with
+# nothing actionable for an operator. See mm:4b897068 troubleshooting.
+# ---------------------------------------------------------------------------
+
+def test_humanize_step_failure_summary_replaces_bare_category_token() -> None:
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary="execution_error",
+        tool_name="jira-orchestrate",
+        failure_message="execution_error",
+    )
+    assert summary not in MoonMindRunWorkflow._ERROR_CATEGORY_TOKENS
+    assert "jira-orchestrate failed" in summary
+    assert "(execution_error)" in summary
+    assert "diagnostic" in summary.lower()
+
+
+def test_humanize_step_failure_summary_preserves_real_provider_summary() -> None:
+    provider_summary = (
+        "pr-resolver reported status 'blocked'; ci_running; "
+        "next_step=retry_finalize_after_backoff"
+    )
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary=provider_summary,
+        tool_name="pr-resolver",
+        failure_message="user_error",
+    )
+    assert summary == provider_summary
+
+
+def test_step_failure_summary_preserves_timed_out_child_output_summary() -> None:
+    workflow = MoonMindRunWorkflow()
+    timeout_summary = (
+        "Managed session turn exceeded execution budget 3600s after 9932s; "
+        "request intervention or rerun with a larger budget."
+    )
+    execution_result = {
+        "status": "FAILED",
+        "outputs": {
+            "error": "execution_error",
+            "summary": timeout_summary,
+        },
+    }
+
+    failure_message = workflow._activity_result_failure_message(execution_result)
+    provider_failure_summary = workflow._activity_result_provider_failure_summary(
+        execution_result
+    )
+    operator_failure_summary = (
+        provider_failure_summary
+        or workflow._activity_result_operator_summary(execution_result)
+        or failure_message
+    )
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary=operator_failure_summary,
+        tool_name="codex_cli",
+        failure_message=failure_message,
+    )
+
+    assert failure_message == "execution_error"
+    assert provider_failure_summary is None
+    assert summary == timeout_summary
+
+
+def test_humanize_step_failure_summary_blank_inputs_fall_back_to_tool_failed() -> None:
+    summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+        summary=None,
+        tool_name="codex-runtime",
+        failure_message=None,
+    )
+    assert summary == "codex-runtime failed"
+
+
+def test_humanize_step_failure_summary_handles_all_category_tokens() -> None:
+    for token in ("user_error", "integration_error", "execution_error", "system_error"):
+        summary = MoonMindRunWorkflow._humanize_step_failure_summary(
+            summary=token,
+            tool_name="agent_runtime",
+            failure_message=token,
+        )
+        assert summary not in MoonMindRunWorkflow._ERROR_CATEGORY_TOKENS
+        assert f"({token})" in summary

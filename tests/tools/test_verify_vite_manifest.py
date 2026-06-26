@@ -1,0 +1,81 @@
+"""Regression tests for tools/verify_vite_manifest.py."""
+
+from __future__ import annotations
+
+import textwrap
+from pathlib import Path
+
+import importlib.util
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+def _load_verify_module():
+    path = REPO_ROOT / "tools" / "verify_vite_manifest.py"
+    spec = importlib.util.spec_from_file_location("verify_vite_manifest", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+def test_expected_entrypoints_matches_vite_config() -> None:
+    mod = _load_verify_module()
+    names = mod.expected_entrypoints()
+    assert names == ["dashboard"]
+
+def test_verify_vite_manifest_script_succeeds_on_synthetic_repo(
+    tmp_path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    frontend_dir = repo_root / "frontend"
+    assets_dir = repo_root / "api_service" / "static" / "workflow_console" / "dist" / "assets"
+    manifest_dir = assets_dir.parent / ".vite"
+
+    frontend_dir.mkdir(parents=True)
+    manifest_dir.mkdir(parents=True)
+    assets_dir.mkdir(parents=True)
+
+    (frontend_dir / "vite.config.ts").write_text(
+        textwrap.dedent(
+            """
+            import { resolve } from 'path';
+
+            export default {
+                  build: {
+                rollupOptions: {
+                  input: {
+                    'dashboard': resolve(__dirname, 'src/entrypoints/dashboard.tsx'),
+                  },
+                },
+              },
+            };
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    (manifest_dir / "manifest.json").write_text(
+        textwrap.dedent(
+            """
+            {
+              "entrypoints/dashboard.tsx": {
+                "file": "assets/dashboard.js",
+                "css": ["assets/shared.css"]
+              }
+            }
+            """
+        ).strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    (assets_dir / "dashboard.js").write_text(
+        "console.log('dashboard');\n",
+        encoding="utf-8",
+    )
+    (assets_dir / "shared.css").write_text("body { color: black; }\n", encoding="utf-8")
+
+    mod = _load_verify_module()
+    monkeypatch.setattr(mod, "ROOT", repo_root)
+
+    assert mod.main() == 0

@@ -1,0 +1,434 @@
+"""Runtime configuration helpers for worker-side RAG operations."""
+
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, MutableMapping, Optional, Sequence
+
+from moonmind.config.settings import settings as app_settings
+from moonmind.utils.env_bool import env_to_bool
+
+_SUPPORTED_EMBEDDING_PROVIDERS = frozenset({"google", "openai"})
+_SUPPORTED_MEMORY_PLANNING = frozenset({"off", "beads"})
+_SUPPORTED_MEMORY_HISTORY = frozenset({"off", "digest"})
+_SUPPORTED_MEMORY_LONG_TERM = frozenset({"off", "mem0"})
+
+def _get_env(
+    source: Mapping[str, str] | None, key: str, default: str | None = None
+) -> str | None:
+    if source is not None:
+        if key in source:
+            return str(source[key])
+        return default
+    return os.getenv(key, default)
+
+def _parse_collection_names(raw: str | None) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in str(raw or "").split(","):
+        name = item.strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
+
+@dataclass(slots=True)
+class RagRuntimeSettings:
+    """Normalized settings consumed by CLI, worker doctor, and gateway flows."""
+
+    qdrant_url: Optional[str]
+    qdrant_host: str
+    qdrant_port: int
+    qdrant_api_key: Optional[str]
+    vector_collection: str
+    vector_collections: tuple[str, ...]
+    embedding_provider: str
+    embedding_model: str
+    embedding_dimensions: Optional[int]
+    similarity_top_k: int
+    max_context_chars: int
+    overlay_mode: str
+    overlay_ttl_hours: int
+    overlay_chunk_chars: int
+    overlay_chunk_overlap: int
+    retrieval_gateway_url: Optional[str]
+    statsd_host: Optional[str]
+    statsd_port: Optional[int]
+    job_id: Optional[str]
+    run_id: Optional[str]
+    rag_enabled: bool
+    qdrant_enabled: bool
+    memory_enabled: bool
+    memory_planning: str
+    memory_history: str
+    memory_long_term: str
+    memory_fail_open: bool
+    memory_context_budget_tokens: int
+    planning_workspace_root: Optional[str]
+    beads_command: str
+    memory_namespace_id: str
+    mem0_api_key: Optional[str]
+    mem0_user_id: Optional[str]
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str] | None = None) -> "RagRuntimeSettings":
+        env = source or {}
+        qdrant_url = _get_env(env, "QDRANT_URL")
+        qdrant_host = _get_env(env, "QDRANT_HOST", "qdrant") or "qdrant"
+        qdrant_port = int(_get_env(env, "QDRANT_PORT", "6333") or 6333)
+        qdrant_api_key = _get_env(env, "QDRANT_API_KEY") or None
+        vector_collection = (
+            _get_env(
+                env,
+                "VECTOR_STORE_COLLECTION_NAME",
+                app_settings.vector_store_collection_name,
+            )
+            or app_settings.vector_store_collection_name
+        )
+        vector_collections_raw = _get_env(env, "VECTOR_STORE_COLLECTION_NAMES")
+        if vector_collections_raw:
+            parsed_collections = _parse_collection_names(vector_collections_raw)
+            vector_collections = (
+                vector_collection,
+                *(
+                    item
+                    for item in parsed_collections
+                    if item != vector_collection
+                ),
+            )
+        else:
+            vector_collections = (vector_collection,)
+        embedding_provider = (
+            _get_env(
+                env,
+                "DEFAULT_EMBEDDING_PROVIDER",
+                app_settings.default_embedding_provider,
+            )
+            or app_settings.default_embedding_provider
+        ).lower()
+        if embedding_provider == "google":
+            default_model = app_settings.google.google_embedding_model
+            model_key = "GOOGLE_EMBEDDING_MODEL"
+        else:
+            default_model = getattr(
+                app_settings.openai,
+                "openai_embedding_model",
+                "text-embedding-3-large",
+            )
+            model_key = "OPENAI_EMBEDDING_MODEL"
+        embedding_model = _get_env(env, model_key, default_model)
+        embedding_dimensions_raw = _get_env(
+            env,
+            (
+                "GOOGLE_EMBEDDING_DIMENSIONS"
+                if embedding_provider == "google"
+                else "OPENAI_EMBEDDING_DIMENSIONS"
+            ),
+        )
+        embedding_dimensions = None
+        if embedding_dimensions_raw:
+            try:
+                embedding_dimensions = int(embedding_dimensions_raw)
+            except ValueError:
+                embedding_dimensions = None
+
+        similarity_top_k = int(
+            _get_env(
+                env, "RAG_SIMILARITY_TOP_K", str(app_settings.rag.similarity_top_k)
+            )
+            or app_settings.rag.similarity_top_k
+        )
+        max_context_chars = int(
+            _get_env(
+                env,
+                "RAG_MAX_CONTEXT_LENGTH_CHARS",
+                str(app_settings.rag.max_context_length_chars),
+            )
+            or app_settings.rag.max_context_length_chars
+        )
+        overlay_mode = (
+            _get_env(env, "RAG_OVERLAY_MODE", "collection") or "collection"
+        ).lower()
+        overlay_ttl_hours = int(_get_env(env, "RAG_OVERLAY_TTL_HOURS", "24") or 24)
+        overlay_chunk_chars = int(
+            _get_env(env, "RAG_OVERLAY_CHARS_PER_CHUNK", "1200") or 1200
+        )
+        overlay_chunk_overlap = int(
+            _get_env(env, "RAG_OVERLAY_CHUNK_OVERLAP", "120") or 120
+        )
+        retrieval_gateway_url = _get_env(env, "MOONMIND_RETRIEVAL_URL") or None
+        statsd_host = _get_env(env, "STATSD_HOST") or None
+        statsd_port_raw = _get_env(env, "STATSD_PORT")
+        statsd_port = int(statsd_port_raw) if statsd_port_raw else None
+        job_id = _get_env(env, "JOB_ID") or _get_env(env, "MOONMIND_JOB_ID")
+        run_id = _get_env(env, "RUN_ID") or _get_env(env, "MOONMIND_RUN_ID")
+        rag_enabled = env_to_bool(_get_env(env, "RAG_ENABLED", "true"), default=True)
+        qdrant_enabled = env_to_bool(
+            _get_env(env, "QDRANT_ENABLED", "true"), default=True
+        )
+        memory_enabled = env_to_bool(
+            _get_env(env, "MEMORY_ENABLED", str(app_settings.memory.enabled)),
+            default=app_settings.memory.enabled,
+        )
+        memory_planning = (
+            _get_env(env, "MEMORY_PLANNING", app_settings.memory.planning)
+            or app_settings.memory.planning
+        ).strip().lower()
+        memory_history = (
+            _get_env(env, "MEMORY_HISTORY", app_settings.memory.history)
+            or app_settings.memory.history
+        ).strip().lower()
+        memory_long_term = (
+            _get_env(env, "MEMORY_LONG_TERM", app_settings.memory.long_term)
+            or app_settings.memory.long_term
+        ).strip().lower()
+        memory_fail_open = env_to_bool(
+            _get_env(env, "MEMORY_FAIL_OPEN", str(app_settings.memory.fail_open)),
+            default=app_settings.memory.fail_open,
+        )
+        memory_context_budget_tokens = int(
+            _get_env(
+                env,
+                "MEMORY_CONTEXT_BUDGET_TOKENS",
+                str(app_settings.memory.context_budget_tokens),
+            )
+            or app_settings.memory.context_budget_tokens
+        )
+        if memory_planning not in _SUPPORTED_MEMORY_PLANNING:
+            supported = ", ".join(sorted(_SUPPORTED_MEMORY_PLANNING))
+            raise ValueError(
+                f"MEMORY_PLANNING must be one of: {supported}; got {memory_planning!r}"
+            )
+        if memory_history not in _SUPPORTED_MEMORY_HISTORY:
+            supported = ", ".join(sorted(_SUPPORTED_MEMORY_HISTORY))
+            raise ValueError(
+                f"MEMORY_HISTORY must be one of: {supported}; got {memory_history!r}"
+            )
+        if memory_context_budget_tokens <= 0:
+            raise ValueError("MEMORY_CONTEXT_BUDGET_TOKENS must be greater than 0")
+        planning_workspace_root = (
+            _get_env(env, "MOONMIND_PLANNING_REPOSITORY_ROOT")
+            or _get_env(env, "MOONMIND_REPOSITORY_ROOT")
+            or _get_env(env, "WORKSPACE_PATH")
+            or _get_env(env, "PWD")
+            or None
+        )
+        beads_command = _get_env(env, "BEADS_COMMAND", "bd") or "bd"
+        memory_namespace_id = (
+            _get_env(
+                env,
+                "MEMORY_NAMESPACE_ID",
+                _get_env(env, "MOONMIND_NAMESPACE_ID", "default"),
+            )
+            or "default"
+        ).strip() or "default"
+        mem0_api_key = _get_env(env, "MEM0_API_KEY") or None
+        mem0_user_id = _get_env(env, "MEM0_USER_ID") or None
+
+        return cls(
+            qdrant_url=qdrant_url,
+            qdrant_host=qdrant_host,
+            qdrant_port=qdrant_port,
+            qdrant_api_key=qdrant_api_key,
+            vector_collection=vector_collection,
+            vector_collections=vector_collections,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            embedding_dimensions=embedding_dimensions,
+            similarity_top_k=similarity_top_k,
+            max_context_chars=max_context_chars,
+            overlay_mode=overlay_mode,
+            overlay_ttl_hours=overlay_ttl_hours,
+            overlay_chunk_chars=overlay_chunk_chars,
+            overlay_chunk_overlap=overlay_chunk_overlap,
+            retrieval_gateway_url=retrieval_gateway_url,
+            statsd_host=statsd_host,
+            statsd_port=statsd_port,
+            job_id=job_id,
+            run_id=run_id,
+            rag_enabled=rag_enabled,
+            qdrant_enabled=qdrant_enabled,
+            memory_enabled=memory_enabled,
+            memory_planning=memory_planning,
+            memory_history=memory_history,
+            memory_long_term=memory_long_term,
+            memory_fail_open=memory_fail_open,
+            memory_context_budget_tokens=memory_context_budget_tokens,
+            planning_workspace_root=planning_workspace_root,
+            beads_command=beads_command,
+            memory_namespace_id=memory_namespace_id,
+            mem0_api_key=mem0_api_key,
+            mem0_user_id=mem0_user_id,
+        )
+
+    def resolved_transport(self, preferred: Optional[str]) -> str:
+        if preferred in {"direct", "gateway"}:
+            return preferred
+        if self.retrieval_gateway_url:
+            return "gateway"
+        return "direct"
+
+    def resolve_collections(
+        self, requested: Sequence[str] | None = None
+    ) -> tuple[str, ...]:
+        """Return explicit collections or the configured retrieval collection set."""
+
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in requested or self.vector_collections:
+            name = str(item).strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+        if not names:
+            raise ValueError("At least one retrieval collection is required.")
+        allowed = set(self.vector_collections)
+        outside_allowed = [name for name in names if name not in allowed]
+        if outside_allowed:
+            allowed_list = ", ".join(self.vector_collections)
+            requested_list = ", ".join(outside_allowed)
+            raise ValueError(
+                "Requested retrieval collections are not configured: "
+                f"{requested_list}. Allowed collections: {allowed_list}."
+            )
+        return tuple(names)
+
+    @staticmethod
+    def retrieval_gateway_auth_configured(
+        source: Mapping[str, str] | None = None,
+    ) -> bool:
+        """Return whether a scoped RetrievalGateway token is configured."""
+
+        token = (
+            str(source.get("MOONMIND_RETRIEVAL_TOKEN") or "")
+            if source is not None
+            else os.getenv("MOONMIND_RETRIEVAL_TOKEN", "")
+        ).strip()
+        return bool(token)
+
+    def overlay_collection_name(self, run_id: str) -> str:
+        sanitized = re.sub(r"[^a-zA-Z0-9_-]+", "-", run_id).strip("-") or "overlay"
+        return f"{self.vector_collection}__overlay__{sanitized}"[:128]
+
+    def as_filter_metadata(self) -> MutableMapping[str, str]:
+        data: MutableMapping[str, str] = {}
+        if self.job_id:
+            data["job_id"] = self.job_id
+        if self.run_id:
+            data["run_id"] = self.run_id
+        return data
+
+    def embedding_provider_supported(self) -> bool:
+        """Return whether the configured embedding provider is recognized."""
+
+        return self.embedding_provider.lower() in _SUPPORTED_EMBEDDING_PROVIDERS
+
+    @property
+    def memory_planning_enabled(self) -> bool:
+        """Return whether planning-memory retrieval should run."""
+
+        return self.memory_enabled and self.memory_planning != "off"
+
+    @property
+    def memory_history_enabled(self) -> bool:
+        """Return whether task-history memory should run."""
+
+        return self.memory_enabled and self.memory_history != "off"
+
+    @property
+    def memory_long_term_enabled(self) -> bool:
+        """Return whether long-term memory should run."""
+
+        return self.memory_enabled and self.memory_long_term != "off"
+
+    def embedding_provider_configured(
+        self, source: Mapping[str, str] | None = None
+    ) -> bool:
+        """Return whether provider-specific embedding credentials are configured."""
+
+        provider = self.embedding_provider.lower()
+        if provider == "google":
+            google_key = (
+                str(source.get("GOOGLE_API_KEY") or "")
+                if source is not None
+                else os.getenv("GOOGLE_API_KEY", "")
+            ).strip()
+            return bool(google_key)
+        elif provider == "openai":
+            openai_key = (
+                str(source.get("OPENAI_API_KEY") or "")
+                if source is not None
+                else os.getenv("OPENAI_API_KEY", "")
+            ).strip()
+            return bool(openai_key)
+        return False
+
+    def retrieval_execution_reason(
+        self,
+        source: Mapping[str, str] | None = None,
+        *,
+        preferred_transport: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """Return retrieval execution status and a non-secret reason."""
+
+        if not self.rag_enabled:
+            return False, "rag_disabled"
+        if not self.embedding_provider_supported():
+            return False, "embedding_provider_unsupported"
+
+        transport = self.resolved_transport(preferred_transport)
+        if transport == "gateway":
+            if not self.retrieval_gateway_url:
+                return False, "retrieval_gateway_url_missing"
+            if not self.retrieval_gateway_auth_configured(source):
+                return False, "retrieval_gateway_auth_missing"
+            return True, "ok"
+
+        if not self.embedding_provider_configured(source):
+            return False, "embedding_provider_not_configured"
+        if not self.qdrant_enabled:
+            return False, "qdrant_disabled"
+        return True, "ok"
+
+    def retrieval_executable(
+        self,
+        source: Mapping[str, str] | None = None,
+        *,
+        preferred_transport: Optional[str] = None,
+    ) -> bool:
+        """Return whether retrieval can run with the current runtime settings."""
+
+        executable, _reason = self.retrieval_execution_reason(
+            source, preferred_transport=preferred_transport
+        )
+        return executable
+
+    def planning_memory_enabled(self) -> bool:
+        return self.memory_enabled and self.memory_planning == "beads"
+
+    def resolved_planning_workspace_root(self) -> Path:
+        root = self.planning_workspace_root or os.getcwd()
+        return Path(root).resolve()
+
+    def long_term_memory_enabled(self) -> bool:
+        """Return whether Plane C Mem0 retrieval/writeback should run."""
+
+        return self.memory_enabled and self.memory_long_term == "mem0"
+
+    def long_term_memory_execution_reason(self) -> tuple[bool, str]:
+        """Return long-term memory execution status and a non-secret reason."""
+
+        if not self.memory_enabled:
+            return False, "memory_disabled"
+        if self.memory_long_term == "off":
+            return False, "long_term_memory_disabled"
+        if self.memory_long_term != "mem0":
+            return False, "long_term_memory_unsupported"
+        if not self.mem0_api_key:
+            return False, "mem0_api_key_missing"
+        return True, "ok"

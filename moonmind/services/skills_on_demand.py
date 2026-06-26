@@ -1,0 +1,557 @@
+"""Skills On Demand runtime controls."""
+
+import hashlib
+
+from moonmind.schemas.agent_skill_models import (
+    AgentSkillSourceKind,
+    ResolvedSkillEntry,
+    ResolvedSkillSet,
+    RuntimeSkillMaterialization,
+    SkillsOnDemandAuditEvent,
+    SkillsOnDemandDeniedCode,
+    SkillsOnDemandFailureDiagnostic,
+    SkillsOnDemandMaterializationSummary,
+    SkillsOnDemandRequestAuditResult,
+    SkillCatalogSearchResult,
+    SkillsOnDemandQueryRequest,
+    SkillsOnDemandQueryResult,
+    SkillsOnDemandRequest,
+    SkillsOnDemandRequestResult,
+)
+
+SKILLS_ON_DEMAND_DISABLED_CODE: SkillsOnDemandDeniedCode = "feature_disabled"
+SKILLS_ON_DEMAND_DISABLED_MESSAGE = (
+    "Skills On Demand is disabled for this deployment."
+)
+SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE: SkillsOnDemandDeniedCode = (
+    "enabled_mode_not_implemented"
+)
+SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_MESSAGE = (
+    "Skills On Demand enabled mode is not implemented for this deployment."
+)
+SKILLS_ON_DEMAND_INVALID_REQUEST_CODE: SkillsOnDemandDeniedCode = "invalid_request"
+SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE: SkillsOnDemandDeniedCode = "already_active"
+SKILLS_ON_DEMAND_DISABLED_INSTRUCTION = (
+    "- Skills On Demand is disabled for this run. Use only the active Skills "
+    "already available under the active skill path provided by MoonMind."
+)
+SKILLS_ON_DEMAND_ENABLED_INSTRUCTION = (
+    "- Skills On Demand is enabled. You may ask MoonMind for additional Skill "
+    "metadata with `moonmind.skills.query` or request additional Skills with "
+    "`moonmind.skills.request`. MoonMind must approve and resolve any requested "
+    "Skill before it becomes active. Continue reading active Skill bodies from "
+    "the active skill path, and do not copy full Skill bodies into responses "
+    "unless specifically needed."
+)
+
+
+class SkillsOnDemandService:
+    """Handle runtime on-demand Skill operations."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = False,
+        catalog_entries: list[ResolvedSkillEntry] | None = None,
+        allow_repo_skills: bool = False,
+        allow_local_skills: bool = False,
+    ) -> None:
+        self._enabled = enabled
+        self._catalog_entries = catalog_entries or []
+        self._allow_repo_skills = allow_repo_skills
+        self._allow_local_skills = allow_local_skills
+
+    async def query(
+        self,
+        request: SkillsOnDemandQueryRequest,
+    ) -> SkillsOnDemandQueryResult:
+        if not self._enabled:
+            code, message = self._disabled_contract()
+            return self._denied_result(request, code=code, message=message)
+
+        validation_error = self._validate_query_request(request)
+        if validation_error is not None:
+            return self._denied_result(
+                request,
+                code=SKILLS_ON_DEMAND_INVALID_REQUEST_CODE,
+                message=validation_error,
+            )
+
+        active_skill_names = {
+            skill.skill_name
+            for skill in (request.active_snapshot.skills if request.active_snapshot else [])
+        }
+        query = request.query.strip().lower()
+        results: list[SkillCatalogSearchResult] = []
+        for entry in sorted(self._catalog_entries, key=lambda item: item.skill_name):
+            candidate_text = " ".join(
+                part
+                for part in [
+                    entry.skill_name,
+                    entry.selection_reason or "",
+                ]
+                if part
+            ).lower()
+            if query not in candidate_text:
+                continue
+            results.append(
+                self._project_entry(
+                    entry,
+                    in_current_snapshot=entry.skill_name in active_skill_names,
+                )
+            )
+            if len(results) >= request.max_results:
+                break
+
+        return SkillsOnDemandQueryResult(
+            status="ok",
+            code=None,
+            message=self._result_message(len(results)),
+            results=results,
+            metadata={
+                "result_count": len(results),
+                "denied": False,
+                "query_hash": self._query_hash(request.query),
+            },
+            audit_events=[
+                self._query_audit_event(
+                    request,
+                    result_count=len(results),
+                    denied=False,
+                )
+            ],
+        )
+
+    async def request(
+        self,
+        request: SkillsOnDemandRequest,
+        *,
+        resolved_skillset: ResolvedSkillSet | None = None,
+        materialization: RuntimeSkillMaterialization | None = None,
+    ) -> SkillsOnDemandRequestResult:
+        if not self._enabled:
+            code, message = self._disabled_contract()
+            return self.denied_request_result(request, code=code, message=message)
+
+        validation_error = self._validate_activation_request(request)
+        if validation_error is not None:
+            return self.denied_request_result(
+                request,
+                code=SKILLS_ON_DEMAND_INVALID_REQUEST_CODE,
+                message=validation_error,
+            )
+
+        requested = self.normalized_requested_skills(request)
+        active_snapshot = request.active_snapshot
+        assert active_snapshot is not None
+        active_names = {entry.skill_name for entry in active_snapshot.skills}
+        if all(name in active_names for name in requested):
+            requested_names = list(requested)
+            return SkillsOnDemandRequestResult(
+                status="no_change",
+                code=SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE,
+                message="All requested Skills are already active.",
+                active_snapshot_id=active_snapshot.snapshot_id,
+                parent_snapshot_ref=active_snapshot.snapshot_id,
+                snapshot_id=None,
+                resolved_skillset_ref=active_snapshot.manifest_ref,
+                activation_summary=(
+                    "All requested Skills are already active in the current snapshot."
+                ),
+                metadata={
+                    "requested_skills": requested_names,
+                    "activated_skills": [],
+                    "denied": False,
+                },
+                audit_events=[
+                    self._request_audit_event(
+                        request,
+                        result="no_change",
+                        result_code=SKILLS_ON_DEMAND_ALREADY_ACTIVE_CODE,
+                        parent_snapshot_id=active_snapshot.snapshot_id,
+                        manifest_ref=active_snapshot.manifest_ref,
+                    )
+                ],
+            )
+
+        if resolved_skillset is None:
+            code, message = self._denial_contract()
+            return self.denied_request_result(request, code=code, message=message)
+
+        return self.activated_request_result(
+            request,
+            resolved_skillset=resolved_skillset,
+            materialization=materialization,
+        )
+
+    def denied_request_result(
+        self,
+        request: SkillsOnDemandRequest,
+        *,
+        code: SkillsOnDemandDeniedCode,
+        message: str,
+    ) -> SkillsOnDemandRequestResult:
+        active_snapshot = request.active_snapshot
+        active_snapshot_id = active_snapshot.snapshot_id if active_snapshot else None
+        requested_names = [
+            skill.name.strip()
+            for skill in request.requested_skills
+            if skill.name and skill.name.strip()
+        ]
+        return SkillsOnDemandRequestResult(
+            status="denied",
+            code=code,
+            message=message,
+            active_snapshot_id=active_snapshot_id,
+            parent_snapshot_ref=request.current_snapshot_ref or active_snapshot_id,
+            snapshot_id=None,
+            resolved_skillset_ref=None,
+            activation_summary=None,
+            materialization=None,
+            metadata={
+                "requested_skills": requested_names,
+                "denied": True,
+                "denial_code": code,
+            },
+            diagnostics_ref=self._diagnostics_ref_for(code, active_snapshot_id),
+            failure_diagnostic=SkillsOnDemandFailureDiagnostic(
+                code=code,
+                message=message,
+                current_snapshot_ref=active_snapshot_id,
+                diagnostics_ref=self._diagnostics_ref_for(code, active_snapshot_id),
+            ),
+            audit_events=[
+                self._request_audit_event(
+                    request,
+                    result="denied",
+                    result_code=code,
+                    parent_snapshot_id=request.current_snapshot_ref
+                    or active_snapshot_id,
+                    diagnostics_ref=self._diagnostics_ref_for(code, active_snapshot_id),
+                )
+            ],
+        )
+
+    def activated_request_result(
+        self,
+        request: SkillsOnDemandRequest,
+        *,
+        resolved_skillset: ResolvedSkillSet,
+        materialization: RuntimeSkillMaterialization | None = None,
+    ) -> SkillsOnDemandRequestResult:
+        requested = self.normalized_requested_skills(request)
+        requested_names = list(requested)
+        active_names = {
+            skill.skill_name for skill in (request.active_snapshot.skills if request.active_snapshot else [])
+        }
+        activated_names = [
+            skill.skill_name
+            for skill in resolved_skillset.skills
+            if skill.skill_name in set(requested_names) and skill.skill_name not in active_names
+        ]
+        materialization_summary = self._materialization_summary(
+            materialization,
+            manifest_ref=resolved_skillset.manifest_ref,
+        )
+        activation_summary = self._activation_summary(activated_names)
+        active_snapshot_id = (
+            request.active_snapshot.snapshot_id if request.active_snapshot else None
+        )
+        metadata = {
+            "requested_skills": requested_names,
+            "activated_skills": activated_names,
+            "created_by": "skills_on_demand",
+            "denied": False,
+        }
+        if materialization is not None:
+            activation_timing = materialization.metadata.get(
+                "activationTiming",
+                materialization.metadata.get("activation_timing"),
+            )
+            if activation_timing is not None:
+                metadata["activation_timing"] = activation_timing
+            materialization_verified = materialization.metadata.get(
+                "materializationVerified",
+                materialization.metadata.get("materialization_verified"),
+            )
+            if materialization_verified is not None:
+                metadata["materialization_verified"] = materialization_verified
+        return SkillsOnDemandRequestResult(
+            status="activated",
+            code=None,
+            message=activation_summary,
+            active_snapshot_id=active_snapshot_id,
+            parent_snapshot_ref=request.current_snapshot_ref or active_snapshot_id,
+            snapshot_id=resolved_skillset.snapshot_id,
+            resolved_skillset_ref=resolved_skillset.manifest_ref
+            or resolved_skillset.snapshot_id,
+            activation_summary=activation_summary,
+            materialization=materialization_summary,
+            metadata=metadata,
+            audit_events=[
+                self._request_audit_event(
+                    request,
+                    result="activated",
+                    parent_snapshot_id=request.current_snapshot_ref
+                    or active_snapshot_id,
+                    derived_snapshot_id=resolved_skillset.snapshot_id,
+                    manifest_ref=resolved_skillset.manifest_ref,
+                )
+            ],
+        )
+
+    def normalized_requested_skills(
+        self, request: SkillsOnDemandRequest
+    ) -> list[str]:
+        seen: dict[str, None] = {}
+        for skill in request.requested_skills:
+            name = skill.name.strip()
+            if name not in seen:
+                seen[name] = None
+        return list(seen.keys())
+
+    def _validate_activation_request(
+        self, request: SkillsOnDemandRequest
+    ) -> str | None:
+        if request.active_snapshot is None:
+            return "active_snapshot is required when Skills On Demand is enabled."
+        if not request.current_snapshot_ref or not request.current_snapshot_ref.strip():
+            return "current_snapshot_ref is required when Skills On Demand is enabled."
+        if request.current_snapshot_ref != request.active_snapshot.snapshot_id:
+            return "current_snapshot_ref does not match active_snapshot."
+        if not request.requested_skills:
+            return "requested_skills must contain at least one Skill."
+        seen_names: set[str] = set()
+        for skill in request.requested_skills:
+            if not skill.name.strip():
+                return "requested skill name must not be blank."
+            name = skill.name.strip()
+            if ":" in name:
+                return "requested skill names must not include semantic versions."
+            seen_names.add(name)
+        for field_name in ("reason", "runtime_id", "step_id"):
+            value = getattr(request, field_name)
+            if value is not None and not value.strip():
+                return f"{field_name} must not be blank when provided."
+        return None
+
+    def _denial_contract(self) -> tuple[str, str]:
+        if self._enabled:
+            return (
+                SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_CODE,
+                SKILLS_ON_DEMAND_ENABLED_NOT_IMPLEMENTED_MESSAGE,
+            )
+        return self._disabled_contract()
+
+    def _disabled_contract(self) -> tuple[str, str]:
+        return SKILLS_ON_DEMAND_DISABLED_CODE, SKILLS_ON_DEMAND_DISABLED_MESSAGE
+
+    def _denied_result(
+        self,
+        request: SkillsOnDemandQueryRequest,
+        *,
+        code: SkillsOnDemandDeniedCode,
+        message: str,
+    ) -> SkillsOnDemandQueryResult:
+        current_snapshot_id = request.current_snapshot_ref
+        if current_snapshot_id is None and request.active_snapshot is not None:
+            current_snapshot_id = request.active_snapshot.snapshot_id
+        diagnostics_ref = self._diagnostics_ref_for(code, current_snapshot_id)
+        return SkillsOnDemandQueryResult(
+            status="denied",
+            code=code,
+            message=message,
+            results=[],
+            metadata={
+                "result_count": 0,
+                "denied": True,
+                "denial_code": code,
+            },
+            diagnostics_ref=diagnostics_ref,
+            failure_diagnostic=SkillsOnDemandFailureDiagnostic(
+                code=code,
+                message=message,
+                current_snapshot_ref=current_snapshot_id,
+                diagnostics_ref=diagnostics_ref,
+            ),
+            audit_events=[
+                self._query_audit_event(
+                    request,
+                    result_count=0,
+                    denied=True,
+                    denial_code=code,
+                    diagnostics_ref=diagnostics_ref,
+                )
+            ],
+        )
+
+    def _validate_query_request(
+        self,
+        request: SkillsOnDemandQueryRequest,
+    ) -> str | None:
+        if not request.query.strip():
+            return "Skills On Demand query must not be blank."
+        if request.runtime_id is not None and not request.runtime_id.strip():
+            return "runtime_id must not be blank when provided."
+        if (
+            request.current_snapshot_ref is not None
+            and not request.current_snapshot_ref.strip()
+        ):
+            return "current_snapshot_ref must not be blank when provided."
+        if (
+            request.active_snapshot is not None
+            and request.current_snapshot_ref
+            and request.current_snapshot_ref != request.active_snapshot.snapshot_id
+        ):
+            return "current_snapshot_ref does not match active_snapshot."
+        return None
+
+    def _project_entry(
+        self,
+        entry: ResolvedSkillEntry,
+        *,
+        in_current_snapshot: bool,
+    ) -> SkillCatalogSearchResult:
+        eligible, summary = self._eligibility_for(entry)
+        return SkillCatalogSearchResult(
+            name=entry.skill_name,
+            source_kind=entry.provenance.source_kind,
+            required_capabilities=list(entry.required_capabilities),
+            eligible=eligible,
+            in_current_snapshot=in_current_snapshot,
+            eligibility_summary=summary,
+        )
+
+    def _eligibility_for(self, entry: ResolvedSkillEntry) -> tuple[bool, str]:
+        source_kind = entry.provenance.source_kind
+        if source_kind == AgentSkillSourceKind.REPO and not self._allow_repo_skills:
+            return (
+                False,
+                "Blocked because repo Skill sources are disabled for this query.",
+            )
+        if source_kind == AgentSkillSourceKind.LOCAL and not self._allow_local_skills:
+            return (
+                False,
+                "Blocked because local Skill sources are disabled for this query.",
+            )
+        return True, "Eligible for this runtime and deployment policy."
+
+    def _result_message(self, result_count: int) -> str:
+        if result_count == 1:
+            return "Returned 1 Skill metadata result."
+        return f"Returned {result_count} Skill metadata results."
+
+    def _query_hash(self, query: str) -> str:
+        return hashlib.sha256(query.strip().lower().encode("utf-8")).hexdigest()
+
+    def _query_audit_event(
+        self,
+        request: SkillsOnDemandQueryRequest,
+        *,
+        result_count: int,
+        denied: bool,
+        denial_code: SkillsOnDemandDeniedCode | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> SkillsOnDemandAuditEvent:
+        current_snapshot_id = request.current_snapshot_ref
+        if current_snapshot_id is None and request.active_snapshot is not None:
+            current_snapshot_id = request.active_snapshot.snapshot_id
+        return SkillsOnDemandAuditEvent(
+            event_type="skills_on_demand.query",
+            runtime_id=request.runtime_id.strip()
+            if request.runtime_id and request.runtime_id.strip()
+            else None,
+            current_snapshot_id=current_snapshot_id,
+            query_hash=self._query_hash(request.query),
+            result_count=result_count,
+            denied=denied,
+            denial_code=denial_code,
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    def _request_audit_event(
+        self,
+        request: SkillsOnDemandRequest,
+        *,
+        result: SkillsOnDemandRequestAuditResult,
+        result_code: SkillsOnDemandDeniedCode | None = None,
+        parent_snapshot_id: str | None = None,
+        derived_snapshot_id: str | None = None,
+        manifest_ref: str | None = None,
+        diagnostics_ref: str | None = None,
+    ) -> SkillsOnDemandAuditEvent:
+        return SkillsOnDemandAuditEvent(
+            event_type="skills_on_demand.request",
+            step_id=request.step_id.strip()
+            if request.step_id and request.step_id.strip()
+            else None,
+            runtime_id=request.runtime_id.strip()
+            if request.runtime_id and request.runtime_id.strip()
+            else None,
+            parent_snapshot_id=parent_snapshot_id,
+            requested_skills=self.normalized_requested_skills(request),
+            result=result,
+            result_code=result_code,
+            derived_snapshot_id=derived_snapshot_id,
+            manifest_ref=manifest_ref,
+            diagnostics_ref=diagnostics_ref,
+        )
+
+    def _diagnostics_ref_for(
+        self, code: SkillsOnDemandDeniedCode, snapshot_ref: str | None
+    ) -> str | None:
+        if code not in {
+            "artifact_unavailable",
+            "checksum_mismatch",
+            "materialization_failed",
+            "runtime_refresh_failed",
+        }:
+            return None
+        snapshot = snapshot_ref or "unknown_snapshot"
+        return f"diagnostics://skills-on-demand/{code}/{snapshot}"
+
+    def _activation_summary(self, activated_names: list[str]) -> str:
+        if not activated_names:
+            return "Skills On Demand activated the requested Skills."
+        if len(activated_names) == 1:
+            return (
+                "Skills On Demand activated 1 requested Skill. Newly active Skills: "
+                f"{activated_names[0]}."
+            )
+        return (
+            f"Skills On Demand activated {len(activated_names)} requested Skills. "
+            f"Newly active Skills: {', '.join(activated_names)}."
+        )
+
+    def _materialization_summary(
+        self,
+        materialization: RuntimeSkillMaterialization | None,
+        *,
+        manifest_ref: str | None,
+    ) -> SkillsOnDemandMaterializationSummary | None:
+        if materialization is None:
+            return None
+        visible_path = materialization.metadata.get("visiblePath")
+        if visible_path is None and materialization.workspace_paths:
+            visible_path = materialization.workspace_paths[0]
+        return SkillsOnDemandMaterializationSummary(
+            mode=materialization.materialization_mode,
+            visible_path=visible_path,
+            manifest_ref=manifest_ref
+            or materialization.metadata.get("manifestRef")
+            or materialization.metadata.get("manifestPath"),
+        )
+
+
+def skills_on_demand_disabled_instruction(*, enabled: bool) -> str:
+    """Return runtime guidance when on-demand Skill commands cannot be hidden."""
+
+    return "" if enabled else SKILLS_ON_DEMAND_DISABLED_INSTRUCTION
+
+
+def skills_on_demand_runtime_instruction(*, enabled: bool) -> str:
+    """Return runtime guidance for the current Skills On Demand feature state."""
+
+    if enabled:
+        return SKILLS_ON_DEMAND_ENABLED_INSTRUCTION
+    return SKILLS_ON_DEMAND_DISABLED_INSTRUCTION

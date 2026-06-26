@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira Verify"
+  short_description: "Verify a branch against a Jira issue"
+  default_prompt: "Use $jira-verify to check the current branch against Jira issue KANDY-123 and post the verdict to Jira."

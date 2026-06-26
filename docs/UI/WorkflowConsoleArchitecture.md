@@ -1,0 +1,948 @@
+# Workflow Console Architecture
+
+Status: Active
+Owners: MoonMind Engineering
+Last updated: 2026-06-10
+
+**Implementation tracking:** Rollout and backlog notes live in `docs/tmp/` or gitignored local-only paths (for example `artifacts/`), not as migration checklists in canonical `docs/`.
+
+## 1. Purpose
+
+Define the concrete architecture for the MoonMind dashboard: route model, source model, runtime config, Temporal integration, action mapping, artifact flows, and workflow-oriented presentation rules.
+
+The dashboard is MoonMind's **Workflow Execution console**. The product surface and the durable substrate are both workflow-oriented: the canonical product entity is the **Workflow Execution**, identified by `workflowId`, exactly as defined in `docs/Temporal/WorkflowExecutionProductModel.md`.
+
+This document covers:
+
+- canonical routes and page responsibilities
+- how the workflow console maps to Temporal-backed executions
+- list/detail field and action posture
+- runtime config and feature-flag expectations
+- artifact interaction patterns
+- skill-selection and execution-context presentation rules
+- status and waiting-state presentation requirements
+
+Detailed backend contracts live in the Temporal docs. This document defines the UI architecture that consumes them.
+
+---
+
+## 2. Related docs
+
+- `docs/Temporal/WorkflowExecutionProductModel.md` — canonical product model and terminology
+- `docs/Temporal/TemporalArchitecture.md`
+- `docs/Temporal/WorkflowTypeCatalogAndLifecycle.md`
+- `docs/Temporal/WorkflowRunHistoryAndNewRunSemantics.md`
+- `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
+- `docs/Temporal/StepLedgerAndProgressModel.md`
+- `docs/Temporal/VisibilityAndUiQueryModel.md`
+- `docs/Temporal/WorkflowArtifactSystemDesign.md`
+- `docs/ManagedAgents/LiveLogs.md` — canonical design for artifact-first logs, MoonMind-owned observability APIs, SSE live follow, and the non-terminal log viewer UI
+- `docs/Steps/SkillSystem.md`
+- `docs/UI/DashboardDesignSystem.md`
+- `docs/UI/TypeScriptSystem.md`
+
+---
+
+## 3. Product stance
+
+The dashboard is the operator and user console for MoonMind Workflow Executions.
+
+The primary UX posture is:
+
+- present work as **Workflow Executions** (shortened to **workflows** in UI copy when unambiguous)
+- use Temporal-backed executions as the durable source of truth
+- keep provider/runtime internals mostly out of the main scanning experience
+- expose exact execution state without forcing users to think in raw Temporal or provider-native terms unless they choose advanced/debug detail surfaces
+
+Important distinctions:
+
+- **Workflow Execution** is the primary product term; **workflow** is the UI shorthand
+- `workflowId` is the stable product identity and route key; `runId` is the current/latest Temporal run instance
+- **runtime** is the agent or execution target choice
+- **agent skills** are instruction bundles, not runtimes
+- **Temporal** is the orchestration substrate, not a selectable runtime
+- unqualified MoonMind work is never called a "task"; that word is reserved for Temporal internals (Temporal Task, Workflow Task, Activity Task, Task Queue) and qualified external systems (Jira task, Codex provider task)
+
+---
+
+## 4. Implementation snapshot
+
+The dashboard is a **server-hosted React/Vite UI**:
+
+- FastAPI serves the HTML shell and owns canonical routes
+- FastAPI can optionally load page modules from a configured Vite dev server during local development
+- a frontend-owned shared stylesheet is emitted through the Vite build
+- page behavior is implemented through one Vite-built React entrypoint that selects the requested page module from the boot payload
+- runtime config is generated server-side
+- REST APIs remain the only supported browser/backend boundary
+
+Representative pieces:
+
+- HTML shell: `api_service/templates/react_dashboard.html`
+- navigation partials: `api_service/templates/_navigation.html`
+- shared entrypoint: `frontend/src/entrypoints/dashboard.tsx`
+- lazy-loaded page modules: `frontend/src/entrypoints/*.tsx` (for example `workflow-list.tsx`, `workflow-start.tsx`, `workflow-detail.tsx`, `proposals.tsx`, `schedules.tsx`, `manifests.tsx`, `skills.tsx`, `settings.tsx`, `oauth-terminal.tsx`, `index-health.tsx`)
+- shared stylesheet source: `frontend/src/styles/dashboard.css`
+- generated JS/CSS bundles: `api_service/static/workflow_console/dist/`
+- React/Vite build output: `api_service/static/workflow_console/dist/`
+- runtime config builder: `api_service/api/routers/workflow_console_view_model.py`
+- route shell: `api_service/api/routers/workflow_console.py`
+
+---
+
+## 5. Static asset and CSS invariants
+
+## 5.1 Tailwind content strategy
+
+Tailwind must scan all sources that can contain utility classes, including:
+
+- `api_service/templates/react_dashboard.html`
+- `api_service/templates/_navigation.html`
+- `frontend/src/**/*.{js,jsx,ts,tsx}`
+
+`frontend/src` must be included because production-aligned builds generate CSS before Vite output exists. Scanning only the built `dist` files is not sufficient for Docker correctness.
+
+## 5.2 Build posture
+
+The dashboard relies on two generated outputs with different ownership:
+
+- Vite `dist/` bundles (JS plus extracted CSS) under `api_service/static/workflow_console/dist/`
+- `frontend/src/generated/openapi.ts`
+
+The shared dashboard stylesheet is emitted as part of the Vite build from `frontend/src/styles/dashboard.css`. The Vite `dist/` tree is runtime build output only and is built from source in local verification, CI, and Docker; it is not committed to git. Frontend-consumed API types remain the checked-in generated artifact.
+
+The canonical local commands are:
+
+1. `npm run ui:build:check`
+2. `npm run generate`
+
+`npm run ui:build:check` rebuilds `api_service/static/workflow_console/dist/` from source and verifies the manifest. `npm run generate` regenerates `frontend/src/generated/openapi.ts`.
+
+The canonical CI drift gate for tracked generated files is `npm run contracts:check`, which verifies `frontend/src/generated/openapi.ts` is synchronized with backend schema sources when OpenAPI-affecting files change. OpenAPI generation writes its intermediate schema to a temporary file instead of dirtying a tracked repo-root `openapi.json`.
+
+Representative workflow:
+
+1. install packages
+2. run `npm run generate`
+3. run `npm run ui:build:check`
+4. upload or copy the generated `dist/` tree as needed
+
+## 5.3 Common failure symptom
+
+If a React route renders structurally correct HTML but spacing, grids, or layout styling are missing, the likely cause is stale or incomplete Vite-emitted CSS, usually because the Tailwind content configuration did not scan React source files.
+
+---
+
+## 6. Canonical route map
+
+| Route | Purpose |
+| --- | --- |
+| `/workflows` | Primary workflow list backed by Temporal execution semantics |
+| `/workflows/new` | Start Workflow page for new submissions |
+| `/workflows/{workflowId}` | Primary workflow detail route |
+| `/workflows/{workflowId}/steps` | Workflow detail, Steps tab |
+| `/workflows/{workflowId}/artifacts` | Workflow detail, Artifacts tab |
+| `/workflows/{workflowId}/runs` | Workflow detail, Runs tab |
+| `/proposals` | Proposal queue list |
+| `/proposals/{proposalId}` | Proposal detail |
+| `/schedules` | Recurring schedule list |
+| `/schedules/{definitionId}` | Recurring schedule detail |
+| `/manifests`, `/manifests/{manifestName}` | Manifest pages |
+| `/skills` | Agent skill management |
+| `/settings` | Settings (provider profiles, secrets, operations) |
+| `/oauth-terminal` | OAuth terminal sessions (xterm.js lives here only) |
+| `/index-health` | Index health page |
+
+Convenience redirects: `/secrets` → `/settings?section=providers-secrets`, `/workers` → `/settings?section=operations`, `/manifests/new` → `/manifests`.
+
+Rules:
+
+- `/workflows` and `/workflows/{workflowId}` are the primary product routes
+- legacy `/tasks/*` routes are removed from the route table; they are not redirected (hard switch, no aliases)
+- unknown console routes return a 404 with the `dashboard_route_not_found` detail naming the canonical `/workflows*` routes
+- workflow detail should not require users to understand source-specific route families
+- any execution/debug aliases should remain secondary and resolve back to workflow-oriented canonical routes where possible
+
+---
+
+## 7. Route query parameters
+
+Supported query parameters for workflow list/detail routing include:
+
+| Query parameter | Meaning |
+| --- | --- |
+| `source=temporal` | Debug/override source resolution hint |
+| `workflowType=` | Filter by workflow type |
+| `state=` | Filter by exact `mm_state` |
+| `entry=` | Filter by `mm_entry` |
+| `ownerType=` | Admin/operator owner-class filter |
+| `ownerId=` | Admin/operator owner filter |
+| `nextPageToken=` | Opaque pagination token |
+| `limit=` | Page size / results-per-page state |
+| `repo=` | Optional repo filter |
+| `integration=` | Optional integration filter |
+
+Rules:
+
+- normal end-user workflow pages should be implicitly scoped to the authenticated principal
+- normal end-user UI should not expose arbitrary owner pickers
+- `source=temporal` is an implementation/debug affordance, not a first-class user concept
+- `limit` is pagination/view state, not a primary filter
+- `entry` should stay secondary unless product evidence shows it is independently meaningful to users
+
+---
+
+## 8. Source model
+
+Dashboard navigation may still span multiple product areas, but the main workflow list/detail flow behaves as a **Temporal-native workflow surface**.
+
+## 8.1 Runtime-config sources
+
+Runtime config may still expose sources such as:
+
+- `proposals`
+- `schedules`
+- `temporal`
+- `manifests`
+- `githubBranches` or equivalent MoonMind-owned repository branch lookup endpoint
+
+That does not mean the user-facing workflow UI should give all of those equal primary visibility.
+
+The Start Workflow page branch selector is a data dependency on MoonMind-owned GitHub branch lookup. The browser must call the configured MoonMind API source, not GitHub directly. Runtime config supplies the endpoint template or source key used to fetch branches for the selected repository.
+
+## 8.2 Workflow surface posture
+
+`/workflows` and `/workflows/{workflowId}` treat Temporal-backed executions as the default workflow experience.
+
+Rules:
+
+- keep `/workflows*` as the primary navigation surface
+- do not make browser clients talk directly to Temporal Server or Temporal Web UI
+- always go through MoonMind REST APIs
+- keep `source` routing/query state as an implementation detail
+- avoid wasting primary UI space on a `Source` filter or a constant `Type = Temporal` column when Temporal is the main live execution source
+
+## 8.3 Temporal is not a runtime
+
+Temporal is orchestration, not a worker runtime.
+
+Rules:
+
+- do **not** add `temporal` as a runtime option
+- do **not** overload runtime selection to mean execution engine or skill selection
+- do **not** present skill sets as workflow source types
+- keep runtime choice and agent-skill choice as separate UX concepts
+
+---
+
+## 9. Workflow-oriented information hierarchy
+
+The dashboard should use a strong hierarchy between list and detail.
+
+## 9.1 List pages are for scanning
+
+The list page should focus on the minimum fields needed to compare rows quickly.
+
+High-value list fields:
+
+- title
+- normalized status
+- workflow label
+- runtime
+- start time
+- duration or updated time
+- compact workflow ID
+
+Secondary or overflow metadata should move to detail or row expansion.
+
+## 9.2 Detail pages are for evidence and control
+
+The detail page is the right place for:
+
+- exact execution state
+- step ledger state
+- workflow ID and run ID
+- namespace
+- repository
+- integration
+- owner
+- waiting reason
+- attention requirement
+- execution-context metadata
+- step evidence and checks
+- artifact evidence
+- managed-run observability (artifact-backed logs, diagnostics — not terminal embeds)
+- action surfaces
+
+## 9.3 Preset provenance on workflow surfaces
+
+The dashboard may explain preset-derived work in the workflow list, workflow detail, and edit/rerun reconstruction surfaces, but **Preset provenance** is explanatory metadata, not a runtime execution model.
+
+Rules:
+
+* workflow list rows may show compact preset-derived context only when it helps scanning and does not crowd out title, status, workflow label, runtime, and timing fields
+* workflow detail may show provenance summaries and chips for **Manual**, **Preset**, and **Preset path**
+* edit/rerun reconstruction may show preserved preset bindings, detached state, and include-path context when those values are available from the submitted workflow input snapshot
+* flat steps remain the primary execution ordering model, even when the UI groups or labels steps by preset origin
+* if preset provenance is unavailable, stale, or policy-hidden, the UI falls back to the flat step presentation without implying missing runtime work
+* preset grouping must never imply nested runtime behavior, sub-plans, or separate workflow runs for preset includes
+
+## 9.4 Advanced/debug information stays secondary
+
+Advanced metadata may be shown in a dedicated facts rail, metadata drawer, or debug section, but it should not dominate the normal operator-facing layout.
+
+Examples:
+
+- exact `temporalStatus`
+- exact `closeStatus`
+- raw `rawState`
+- provider/integration-specific metadata
+- latest run ID
+
+---
+
+## 10. Runtime config contract
+
+## 10.1 `sources.temporal`
+
+The runtime config exposes a `sources.temporal` block for the dashboard.
+
+Representative shape (current live endpoint templates from `moonmind/config/settings.py`):
+
+```json
+{
+ "sources": {
+ "temporal": {
+ "list": "/api/executions",
+ "create": "/api/executions",
+ "detail": "/api/executions/{workflowId}",
+ "steps": "/api/executions/{workflowId}/steps",
+ "update": "/api/executions/{workflowId}/update",
+ "signal": "/api/executions/{workflowId}/signal",
+ "cancel": "/api/executions/{workflowId}/cancel",
+ "artifacts": "/api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts",
+ "artifactCreate": "/api/artifacts",
+ "artifactMetadata": "/api/artifacts/{artifactId}",
+ "artifactPresignDownload": "/api/artifacts/{artifactId}/presign-download",
+ "artifactDownload": "/api/artifacts/{artifactId}/download"
+ }
+ }
+}
+```
+
+The `{temporalRunId}` placeholder in the artifacts endpoint template is the current live template token (renames to `{runId}` in the hard switch).
+
+Rules:
+
+* URLs should remain MoonMind API endpoints
+* clients should not construct direct Temporal calls
+* clients should not embed business logic about queue families or worker topology
+
+## 10.2 Status mapping contract
+
+The preferred UI contract for Temporal-backed rows/details is:
+
+* `dashboardStatus` for compatibility grouping
+* `rawState` for exact MoonMind state
+* `temporalStatus` and `closeStatus` for advanced/detail views
+* `waitingReason` and `attentionRequired` for blocked states
+
+The client may contain a fallback compatibility state map, but server-supplied normalized top-level fields are preferred.
+
+## 10.3 Feature flags
+
+The dashboard should use feature flags to stage rollout.
+
+Representative areas:
+
+* Temporal list/detail
+* Temporal actions
+* Temporal submit flows
+* debug fields
+* agent skill selection
+* agent skill detail presentation
+* scheduling on submit
+
+Rollout order should remain read-first:
+
+1. list/detail visibility
+2. actions
+3. submit flows
+4. optional debug surfaces
+
+---
+
+## 11. Detail route and source resolution
+
+## 11.1 Canonical detail route
+
+The canonical product detail route is:
+
+* `/workflows/{workflowId}`
+
+`workflowId` is the durable product identity. This keeps product routing stable while preserving the correct durable identifier.
+
+## 11.2 Source resolution order
+
+The dashboard should resolve detail routes in this order:
+
+1. canonical server-side source mapping / execution index
+2. explicit `?source=temporal` override when present
+3. temporary fallback heuristics only as an implementation safety net
+
+The long-term goal is server-side canonical source resolution, not route-level guesswork.
+
+## 11.3 Detail fetch sequence
+
+Minimum fetch sequence for a Temporal-backed detail page:
+
+1. `GET /api/executions/{workflowId}`
+2. `GET /api/executions/{workflowId}/steps`
+3. `GET /api/executions/{namespace}/{workflowId}/{temporalRunId}/artifacts`
+4. optional per-artifact metadata/download requests as the user expands or downloads artifacts
+
+Rules:
+
+* the Steps surface should load before generic artifact browsing because it is the primary operator comprehension surface
+* artifact fetch must use the latest `runId` returned by the detail response
+* detail routing remains anchored to `workflowId`
+* new runs or Continue-As-New should not force a route identity change
+
+## 11.4 Observability fetch sequence
+
+For the workflow detail observability area (Live Logs panel), the correct fetch sequence is:
+
+1. `GET /api/agent-runs/{id}/observability-summary` — fetch observability summary (run status, artifact refs, live stream availability, and the freshest managed-session snapshot when present)
+2. `GET /api/agent-runs/{id}/logs/merged` — fetch initial merged log tail; **initial content must be visible before any SSE connection is attempted**
+3. If the run is active and `supports_live_streaming: true`, attach to `GET /api/agent-runs/{id}/logs/stream`
+4. If the stream connection fails or is unavailable, remain in artifact-backed mode — do not leave the panel blank
+
+Rules:
+
+* ended runs must skip step 3 entirely; never attempt a live stream connection on a completed run
+* step 2 must always happen first and must always produce visible content when artifacts exist
+* stream failure at step 3 transitions the viewer to `error` state backed by artifact content
+* for managed sessions, `activeTurnId` and related session header fields come from the managed-session record when it is fresher than the run record
+* this sequence replaces any legacy approach of connecting SSE first and loading content through the stream
+
+---
+
+## 12. Detail page architecture
+
+## 12.1 Detail header model
+
+Temporal-backed detail should render:
+
+* primary summary header:
+
+ * title
+ * normalized status badge
+ * concise summary
+ * allowed actions
+
+* compact execution facts row:
+
+ * workflow label
+ * runtime
+ * model/effort when applicable
+ * started time
+ * updated time or duration
+ * current run state
+
+* secondary facts rail or metadata panel:
+
+ * workflow ID
+ * latest run ID
+ * namespace
+ * repository
+ * integration
+ * owner
+ * terminal timestamps
+ * optional execution-context metadata
+
+* durable evidence section:
+
+ * steps
+ * step-scoped logs, diagnostics, and checks
+ * artifacts
+ * outcome summaries
+ * timeline/state transitions
+
+## 12.2 Steps and Observability sections
+
+The workflow detail page must include a dedicated **Steps** section above Timeline and above the generic Artifacts panel.
+
+Each step row should show:
+
+* step number and title
+* exact step status
+* short summary
+* elapsed time or timestamps
+* execution/attempt count
+* dependency blockers when present
+* quick evidence links
+
+Expanded step rows should group:
+
+* **Summary**
+* **Checks**
+* **Logs & Diagnostics**
+* **Artifacts**
+* **Metadata**
+
+Rules:
+
+* the default Steps view is for the latest/current run only
+* the default task detail UX is a single flat, ordered step list with inline dependency metadata
+* The dashboard should not render a separate always-visible DAG/grid for the same step ledger; dependency information belongs in the primary step row/list presentation unless a future explicit product design introduces an optional advanced graph view
+* the plan artifact is the canonical planned-step source; the step-ledger API is the canonical live-state source
+* step rows may carry `childWorkflowId`, `childRunId`, and `agentRunId` (the `agentRunId` ref slot renames to an agent-run identifier in the hard switch)
+* when a step has a `agentRunId` ref, the Logs & Diagnostics area should embed or deep-link the existing `/api/agent-runs/*` observability surfaces for that step
+* the client must not infer step completion or “latest output” by parsing logs or sorting raw artifacts locally
+* preset-derived step metadata may be rendered as Manual, Preset, or Preset path chips, but those chips explain provenance only and do not change step order, dependency semantics, or completion rules
+
+The workflow detail page must include a dedicated **Observability** area for managed-run evidence. This is the canonical UI hierarchy:
+
+* **Live Logs** — merged log stream viewer (artifact-backed by default; upgrades to live follow when active)
+* **Stdout** — artifact-backed stdout viewer with tail, download, copy, and line-wrap
+* **Stderr** — artifact-backed stderr viewer with tail, download, copy, and line-wrap
+* **Diagnostics** — structured run metadata (exit code, failure class, duration, artifact refs, parsed errors)
+* **Artifacts** — full execution artifact listing (consistent with the rest of the dashboard)
+
+Rules:
+
+* Steps remains the primary detail comprehension surface; generic Observability and Artifacts are supporting evidence areas
+* managed-run observability is artifact-backed and MoonMind-native — it does not use terminal embeds
+* `xterm.js` must not appear in this area; it is reserved for OAuth sessions only
+* the observability area follows the fetch sequence defined in §11.4
+
+## 12.3 Log viewer state model
+
+The Live Logs panel has five defined states:
+
+| State | Meaning |
+| --- | --- |
+| `not_available` | No artifacts and no live stream; run may be pre-launch or starting |
+| `starting` | Observability summary or initial tail is loading |
+| `live` | Connected to active live stream; receiving events from supervised runtime |
+| `ended` | Run is terminal; showing final artifact-backed tail only |
+| `error` | Live stream connection failed; viewer shows artifact-backed content |
+
+Allowed state transitions:
+
+* `not_available` → `starting`
+* `starting` → `live` (run is active, stream available)
+* `starting` → `ended` (run already terminal when panel is opened)
+* `starting` → `error` (initial fetch failed)
+* `live` → `ended` (run completes)
+* `live` → `error` (stream connection fails)
+* `error` → `live` (reconnect succeeds and run is still active)
+* `error` → `ended` (run is terminal; reconnect not appropriate)
+
+## 12.4 Panel lifecycle rules
+
+Connection lifecycle is governed by panel open/close and tab visibility:
+
+* **collapsed**: no active connection; no background streaming
+* **open + active run**: fetch summary → fetch tail → connect stream
+* **open + ended run**: fetch summary → fetch tail → no stream connection
+* **collapse**: disconnect immediately
+* **background tab**: disconnect or pause; reconnect on foreground only if panel is open and run is still active
+* **stream error**: transition to `error` state; render artifact-backed content; do not leave panel blank
+* **ended run at any point**: never initiate a stream connection
+
+## 12.5 Degraded mode and fallback behavior
+
+* artifact-backed tail is the default baseline; it must always work
+* live follow is an optional enhancement layered on top
+* stream errors must not erase visible logs; the panel always shows the last artifact-backed state on error
+* ended runs are fully usable through artifact-backed views — operators do not need a live connection to inspect completed work
+* if `supports_live_streaming: false`, the panel shows artifact-backed content with no stream connection attempt
+
+## 12.6 Stream provenance requirements
+
+Log records must carry per-line stream provenance:
+
+* `stdout` — captured from the managed runtime's standard output
+* `stderr` — captured from the managed runtime's standard error
+* `system` — MoonMind supervisor annotations, reconnect notices, truncation warnings
+
+Stream provenance is required for correct line rendering and for the merged view. The API must include `stream` on every record.
+
+## 12.7 Feature flags for observability rollout
+
+* `logStreamingEnabled` — operator-visible disable switch for the observability panel and live-follow behavior; default `true` via `MOONMIND_LOG_STREAMING_ENABLED`
+* a separate UI flag for the new observability panel layout may be used if a side-by-side rollout with a legacy detail view is required
+
+Rollout posture: default-on with an explicit disable path. The read-first fetch sequence still applies: artifact-backed tail before live follow.
+
+## 12.8 Success criteria for the UI layer
+
+* Opening the Live Logs panel shows recent artifact-backed tail content within 2 seconds
+* Active runs can follow live output from the supervised runtime through the panel
+* Collapsing the panel or backgrounding the tab stops live stream connections within a few seconds
+* Completed runs remain inspectable through artifact-backed views without any live connection
+* Stream errors degrade gracefully to artifact-backed content; the panel is never left blank
+
+## 12.9 Timeline/event model
+
+Temporal-backed detail should show a synthesized execution timeline based on:
+
+* exact execution state
+* step-ledger transitions and summaries
+* waiting metadata
+* notable action results
+* artifact evidence
+* proposal/finalization transitions
+* workflow-level outcome summaries
+
+Raw Temporal event history browsing is out of scope unless a dedicated backend contract exists.
+
+## 12.10 Waiting-state presentation
+
+When an execution is blocked:
+
+* show the exact `rawState`
+* show `waitingReason`
+* show whether `attentionRequired` is true
+* avoid implying user action is required when the block is merely external/provider/system waiting
+
+---
+
+## 13. List page architecture
+
+## 13.1 Product posture
+
+`/workflows` is the primary dashboard workflow console surface.
+
+Rules:
+
+* treat Temporal executions as the authoritative dataset for the main list UX
+* do not expose `Source` as a first-order filter
+* keep `source=temporal` as a debug/implementation detail
+* avoid queue-era framing like a constant `Type = Temporal` column
+
+## 13.2 Filter model
+
+Primary list controls should stay narrow and high-signal:
+
+* **Workflow** (mapped internally to `workflowType`)
+* **Status** (mapped to normalized/exact execution state filters)
+* **Runtime**
+* Search, if/when supported by the actual backend contract
+
+Advanced filters may include:
+
+* `repo`
+* `integration`
+* `ownerType`
+* `ownerId`
+
+Rules:
+
+* do not expose both `Workflow Type` and `Entry` when they are not meaningfully distinct to users
+* keep `entry` secondary unless a future workflow class makes it independently useful
+* place page size near pagination/view controls, not in the primary filter bar
+* do not add full skill-set or provider-debug columns to the default list table
+
+## 13.3 Layout and density
+
+The list page should use a two-width strategy:
+
+* masthead/navigation/filter surfaces remain visually constrained and polished
+* the results region expands into a wide console surface on desktop
+* desktop remains table-first
+* narrow/mobile layouts may collapse into cards
+* density should come from hierarchy and clarity, not nested chrome
+
+## 13.4 Row model for Temporal-backed items
+
+| Console field | Temporal source |
+| ------------------- | ---------------------------------------------- |
+| `workflowId` | `workflowId` (stable product identity) |
+| `runId` | latest run instance ID |
+| `title` | `memo.title` or fallback |
+| `summary` | `memo.summary` |
+| `workflowType` | `workflowType` |
+| `runtime` | runtime target from execution fields |
+| `entry` | `searchAttributes.mm_entry` |
+| `status` / `dashboardStatus` | normalized status grouping |
+| `rawState` | exact `state` |
+| `temporalStatus` | `temporalStatus` |
+| `closeStatus` | `closeStatus` |
+| `ownerType` | `searchAttributes.mm_owner_type` |
+| `ownerId` | `searchAttributes.mm_owner_id` |
+| `repository` | `searchAttributes.mm_repo` |
+| `integration` | `searchAttributes.mm_integration` |
+| `waitingReason` | bounded waiting reason |
+| `attentionRequired` | whether current user/operator action is needed |
+| `startedAt` | `startedAt` |
+| `updatedAt` | `updatedAt` |
+| `closedAt` | `closedAt` |
+| `duration` | derived |
+
+Recommended desktop priorities:
+
+* primary column: `title`
+* strong supporting columns: `status`, `workflowType`, `runtime`, `startedAt`, `duration` or `updatedAt`
+* compact secondary column: `workflowId`
+
+Move these to detail or expansion surfaces:
+
+* namespace
+* run ID
+* entry
+* repository
+* integration
+* owner
+* exact finished time
+* deeper execution-context metadata
+
+## 13.5 Sorting and pagination
+
+For Temporal-backed rows:
+
+* primary sort: `mm_updated_at`
+* fallback sort: `updatedAt`
+* deterministic tie-breaker: `workflowId DESC`
+
+Pagination rules:
+
+* use `GET /api/executions`
+* pass canonical supported filters only
+* treat `nextPageToken` as opaque
+* use returned `count` and `countMode` as-is
+* present page size near pagination or view controls, not as a primary filter
+
+---
+
+## 14. Action mapping
+
+## 14.1 Supported Temporal actions
+
+| Console action | Temporal API | Contract |
+| ---------------- | ------------------------------------------ | -------------------------- |
+| Start workflow | `POST /api/executions` | Start workflow |
+| Edit inputs | `POST /api/executions/{workflowId}/update` | `UpdateInputs` |
+| Rename / retitle | `POST /api/executions/{workflowId}/update` | `SetTitle` |
+| Start new run | `POST /api/executions/{workflowId}/update` | `RequestRerun` (renames to `RequestNewRun` in the hard switch) |
+| Approve | `POST /api/executions/{workflowId}/signal` | `Approve` |
+| Pause | `POST /api/executions/{workflowId}/signal` | `Pause` |
+| Resume paused workflow | `POST /api/executions/{workflowId}/signal` | `Resume` |
+| Recover from failed step | `POST /api/executions/{workflowId}/recover-from-failed-step` | Linked follow-up execution |
+| Cancel | `POST /api/executions/{workflowId}/cancel` | Graceful cancel by default |
+
+`ExternalEvent` is part of the execution contract, but normally appears as a system/integration path rather than a direct user-facing button.
+
+## 14.2 Initial UI action matrix
+
+| Temporal state | Allowed actions |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `scheduled` / `initializing` / `waiting_on_dependencies` / `awaiting_slot` / `planning` | cancel, set title |
+| `executing` / `proposals` | cancel, pause, set title |
+| `awaiting_external` | cancel, pause, resume, approve when applicable |
+| `finalizing` | cancel only if policy allows |
+| terminal (`completed`, `failed`, `canceled`) | new run / recovery per policy, view/download artifacts |
+
+## 14.3 Copy guidance
+
+Prefer product language:
+
+* **Start New Run** instead of Continue-As-New
+* **Workflow title** instead of workflow memo title
+* **Pause workflow** / **Resume workflow** instead of raw Temporal jargon
+* **Recover from Failed Step** for checkpointed failed-step recovery; never bare “Resume” for recovery
+
+Advanced/debug views may disclose the underlying implementation terms.
+
+---
+
+## 15. Submit integration
+
+## 15.1 Default posture
+
+Temporal console integration should remain **read-first**.
+
+Rollout order:
+
+1. list/detail visibility
+2. workflow actions on existing Temporal-backed executions
+3. direct submit from `/workflows/new`
+
+## 15.2 Submit UX rules
+
+* runtime selection and skill selection are distinct concerns
+* do not overload the runtime picker to represent skill sets
+* do not expose raw source-precedence logic directly to ordinary users
+* keep submit flows organized around workflow-shaped product language
+* let the backend decide the workflow type and execution routing
+* browser clients call MoonMind APIs only; Jira, GitHub, object storage, Temporal Server, and model providers remain behind MoonMind-controlled API surfaces
+* `/workflows/new` expands composed presets into editable executable steps before submission
+* unresolved preset includes must be rejected before runtime submission; they must not be sent as workflow work for a worker or adapter to resolve later
+* submit surfaces may explain preset provenance, but the submitted execution payload remains flat resolved steps plus durable workflow input snapshot metadata
+* repository, branch, and publish controls live together in the Steps card: choose repo, fetch branch options through the MoonMind branch source, populate the Branch dropdown, then render Publish Mode alongside it
+* `Publish Mode` remains part of workflow submission semantics; this is a visual placement change, not removal from the contract
+
+## 15.3 Backend mapping for submit
+
+The console submits workflow-shaped requests plus workflow-level intent such as:
+
+* instructions
+* runtime choice
+* repository/workspace context, including the single authored branch selection
+* artifacts
+* optional scheduling intent
+* skill-selection intent
+
+The backend resolves those into workflow start inputs and immutable runtime context.
+
+Representative mappings:
+
+* user workflow submit flows → `MoonMind.UserWorkflow` (renames to `MoonMind.UserWorkflow` in the hard switch)
+* manifest-oriented submit flows → `MoonMind.ManifestIngest`
+
+The UI should submit **selection intent**, not full mutable skill bodies inline.
+
+## 15.4 Redirect after create
+
+* immediate execution → `/workflows/{workflowId}?source=temporal`
+* deferred one-time execution → `/workflows/{workflowId}?source=temporal`
+* recurring schedule creation → `/schedules/{definitionId}`
+
+The route should remain stable across new runs and Continue-As-New.
+
+## 15.5 Inline scheduling on submit
+
+`/workflows/new` may include an inline schedule panel allowing:
+
+* run immediately
+* schedule for later
+* recurring schedule
+
+This should remain feature-flagged and staged behind a read-first rollout.
+
+The schedule UI should stay simple:
+
+* no deep policy matrix on initial submit
+* advanced scheduling policy can move to schedule detail pages later
+
+---
+
+## 16. Agent skill UX posture
+
+## 16.1 Core rule
+
+Agent skills are instruction bundles, not runtimes, workflow sources, or queue types.
+
+## 16.2 Submit UX
+
+Preferred submit-time posture:
+
+* named skill sets over overwhelming granular controls
+* concise summary of inherited/default skill context
+* optional advanced drawer for include/exclude behavior and policy-constrained advanced controls
+* no giant query-string serialization of skill selections by default
+
+## 16.3 Detail UX
+
+Detail views may show compact execution-context information such as:
+
+* resolved skill snapshot summary
+* execution-context constraints
+* limited provenance/debug metadata when policy allows
+
+The default list table should not carry heavy skill-set columns.
+
+---
+
+## 17. Artifact integration
+
+## 17.1 General posture
+
+Temporal-managed flows remain artifact-first for large inputs and outputs.
+
+Console implications:
+
+* large user inputs upload as artifacts before create/update when needed
+* workflow detail shows execution-linked artifacts as the durable evidence surface
+* downloads go through MoonMind artifact authorization/grant flows
+
+## 17.2 Required artifact behaviors
+
+The dashboard should support:
+
+* create artifact placeholder
+* upload content directly or through presigned multipart flows
+* complete upload
+* fetch artifact metadata
+* fetch execution-scoped artifact lists
+* download through presigned or direct endpoints
+
+## 17.3 Presentation rules
+
+* render artifact labels and metadata from execution linkage when available
+* prefer preview flows when preview refs exist
+* respect preview/raw access policy signals
+* do not assume all artifacts are safe for inline display
+* treat artifacts as immutable references
+* Expansion summaries or preset include-tree artifacts are secondary explanatory evidence
+* flat steps, step logs, diagnostics, and output artifacts remain the canonical execution evidence
+* the UI must not infer execution order, step completion, or latest output from Expansion summaries
+
+## 17.4 Run scoping
+
+Execution-scoped artifact listing is keyed by:
+
+* `namespace`
+* `workflowId`
+* the run instance ID (the `{temporalRunId}` template token in the current artifacts endpoint)
+
+Default to showing artifacts for the **latest run**. Prior-run browsing, if added later, should be an explicit detail feature.
+
+The generic artifact panel remains secondary to the step-expander artifact groups. When step-scoped evidence is available, the UI should use server-grouped step refs rather than trying to derive “latest step output” client-side from the execution-wide artifact list.
+
+---
+
+## 18. Vocabulary and identifier rules
+
+## 18.1 Vocabulary
+
+* primary product term: **Workflow Execution** (**workflow** in UI copy when unambiguous)
+* `workflowId` is the product identity; `runId` is the current/latest Temporal run instance
+* use **agent skill** or **skill set** for instruction bundles
+* never present Temporal Task Queues as the UI meaning of “queue”
+* use **preset** for operator-facing authored preset concepts
+* use **binding** or **provenance** for internal preset metadata
+* do not describe preset includes as sub-plans or separate workflow runs
+* the word “task” appears only when qualified: Temporal Task, Workflow Task, Activity Task, Task Queue, Jira task, Codex provider task
+
+## 18.2 Identifier policy
+
+For Temporal-backed workflow surfaces:
+
+* `workflowId` — the durable Temporal identity and the main console route handle
+* `runId` — the current/latest run instance; detail/debug metadata, not the main identifier
+* `agentRunId` — managed agent run linkage for observability surfaces
+
+Pending hard-switch renames still visible in live contracts (do not rewrite ahead of the code change):
+
+* the step-ref slot `agentRunId` (renames to an agent-run identifier)
+* the execution field `taskInstructions` (renames in the hard switch)
+* the `{temporalRunId}` artifacts endpoint template token (renames to `{runId}`)
+* frontend fallback parsing of legacy `taskId`/`temporalRunId` response fields (removed when the frontend rename lands)
+
+## 18.3 Source visibility policy
+
+* do not require normal operators to reason about `source` for the main workflow list/detail flow
+* keep source-specific routing/query behavior behind the scenes unless another live execution source becomes product-relevant again
+
+---
+
+## 19. Open questions
+
+1. Should `/workflows/{workflowId}` remain the only canonical Temporal detail route, or should an execution-scoped secondary alias exist for debugging?
+2. Is `awaiting_action` still sufficient as a compatibility grouping once `waitingReason` and `attentionRequired` are fully exposed?
+3. Should direct Temporal-backed create remain fully hidden behind backend routing, or ever be exposed as an advanced feature-flagged path?
+4. Do we need explicit prior-run artifact browsing once Continue-As-New becomes common in real usage?
+5. Should submit show deployment-default skill sets as read-only chips unless the user expands advanced controls?
+6. Is there any proven list-page benefit to a compact skill-set badge, or should that remain detail-only?

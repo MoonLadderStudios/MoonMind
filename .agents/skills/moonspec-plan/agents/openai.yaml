@@ -1,0 +1,4 @@
+interface:
+  display_name: "MoonSpec Plan"
+  short_description: "Create implementation plans and design artifacts."
+  default_prompt: "Use $moonspec-plan to create a Moon Spec implementation plan and design artifacts for the active feature:"

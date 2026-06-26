@@ -1,0 +1,36 @@
+apiVersion: moonmind/v1
+kind: Readers
+metadata:
+  name: moonmind-example
+  description: Example collection of data readers for MoonMind
+spec:
+  readers:
+    - type: GithubRepositoryReader
+      enabled: true
+      init:
+        github_client:
+          _type: llama_index.readers.github.github_client.GithubClient
+          _init:
+            github_token:
+              secretRef:
+                provider: profile
+                key: GITHUB_TOKEN
+            verbose: true
+            concurrent_requests: 10
+            timeout: 5
+            retries: 3
+        owner: MoonLadderStudios
+        repo: MoonMind
+        use_parser: true
+        verbose: true
+        concurrent_requests: 10
+        timeout: 5
+        retries: 3
+        filter_directories:
+          - ["tests"]
+          - "EXCLUDE"
+        filter_file_extensions:
+          - [".md", ".py", ".yaml"]
+          - "INCLUDE"
+      load_data:
+        - branch: main

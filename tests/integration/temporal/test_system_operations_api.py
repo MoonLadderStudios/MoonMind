@@ -1,0 +1,155 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from api_service.api.routers.settings import SETTINGS_CURRENT_USER_DEP
+from api_service.api.routers.system_operations import _get_temporal_execution_service
+from api_service.db.base import get_async_session
+from api_service.db import base as db_base
+from api_service.db.models import Base
+from api_service.main import app
+
+
+pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
+
+class FakeTemporalService:
+    async def send_quiesce_pause_signal(self) -> int:
+        return 0
+
+    async def send_resume_signal(self) -> int:
+        return 0
+
+
+def _override_user() -> object:
+    return SimpleNamespace(
+        id=uuid4(),
+        email="operator@example.com",
+        is_active=True,
+        is_superuser=True,
+    )
+
+
+def test_worker_pause_route_matches_settings_runtime_contract(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/system-ops-int.db")
+
+    async def _setup():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio_run = __import__("asyncio").run
+    asyncio_run(_setup())
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def _session_dep():
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = _session_dep
+    app.dependency_overrides[_get_temporal_execution_service] = FakeTemporalService
+    for route in app.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dependency in dependant.dependencies:
+            if getattr(dependency.call, "__name__", "") == "_current_user_fallback":
+                app.dependency_overrides[dependency.call] = _override_user
+    try:
+        with TestClient(app) as client:
+            settings_page = client.get("/settings?section=operations")
+            snapshot = client.get("/api/system/worker-pause")
+            command = client.post(
+                "/api/system/worker-pause",
+                json={
+                    "action": "pause",
+                    "mode": "drain",
+                    "reason": "Integration maintenance",
+                    "confirmation": "Pause workers confirmed",
+                    "idempotencyKey": "integration-pause-workers",
+                },
+            )
+            duplicate = client.post(
+                "/api/system/worker-pause",
+                json={
+                    "action": "pause",
+                    "mode": "drain",
+                    "reason": "Integration maintenance",
+                    "confirmation": "Pause workers confirmed",
+                    "idempotencyKey": "integration-pause-workers",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+        asyncio_run(engine.dispose())
+
+    assert settings_page.status_code == 200
+    assert snapshot.status_code == 200
+    assert snapshot.json()["system"]["workersPaused"] is False
+    assert {command["id"] for command in snapshot.json()["commands"]} >= {
+        "pause-workers",
+        "resume-workers",
+    }
+    assert command.status_code == 200
+    assert command.json()["system"]["workersPaused"] is True
+    latest = command.json()["audit"]["latest"][0]
+    assert latest["action"] == "pause"
+    assert latest["target"] == "workers"
+    assert latest["reason"] == "Integration maintenance"
+    assert latest["resultStatus"] == "succeeded"
+    assert latest["idempotencyKey"] == "integration-pause-workers"
+    assert duplicate.status_code == 200
+    assert duplicate.json()["audit"]["latest"][0]["idempotencyKey"] == (
+        "integration-pause-workers"
+    )
+
+
+def test_settings_catalog_contract_exposes_apply_semantics(tmp_path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/settings-contract-int.db")
+
+    async def _setup():
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    asyncio_run = __import__("asyncio").run
+    asyncio_run(_setup())
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    original_session_maker = db_base.async_session_maker
+    db_base.async_session_maker = session_maker
+
+    async def _session_dep():
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_async_session] = _session_dep
+    app.dependency_overrides[SETTINGS_CURRENT_USER_DEP] = _override_user
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/settings/catalog",
+                params={"section": "user-workspace", "scope": "workspace"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+        db_base.async_session_maker = original_session_maker
+        asyncio_run(engine.dispose())
+
+    assert response.status_code == 200
+    workflow_descriptors = response.json()["categories"]["Workflow"]
+    default_runtime = next(
+        descriptor
+        for descriptor in workflow_descriptors
+        if descriptor["key"] == "workflow.default_runtime"
+    )
+    assert default_runtime["apply_mode"] == "next_workflow"
+    assert default_runtime["activation_state"] == "active"
+    assert default_runtime["active"] is True
+    assert default_runtime["pending_value"] is None
+    assert default_runtime["affected_process_or_worker"] == "workflow_creation, workflow_runtime"
+    assert default_runtime["completion_guidance"] == (
+        "New workflows will use this value when they are created."
+    )

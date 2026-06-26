@@ -1,0 +1,304 @@
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+from api_service.api.routers.secrets import router
+from api_service.db.base import get_async_session
+from api_service.auth_providers import get_current_user
+
+app = FastAPI()
+app.include_router(router, prefix="/api/v1/secrets")
+
+mock_db_session = AsyncMock()
+
+# Resolve the cached current-user dependency once so overrides target the same
+# callable that FastAPI sees when the router was imported with
+# Depends(get_current_user()).
+_CURRENT_USER_DEP = get_current_user()
+
+
+def _superuser():
+    return SimpleNamespace(
+        id=None, workspace_id=None, is_superuser=True, settings_permissions=set()
+    )
+
+
+def _user_without_permissions():
+    return SimpleNamespace(
+        id=None, workspace_id=None, is_superuser=False, settings_permissions=set()
+    )
+
+
+def _user_with_disable_only():
+    return SimpleNamespace(
+        id=None,
+        workspace_id=None,
+        is_superuser=False,
+        settings_permissions={"secrets.disable"},
+    )
+
+
+app.dependency_overrides[get_async_session] = lambda: mock_db_session
+app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
+
+client = TestClient(app)
+
+@pytest.fixture
+def mock_secrets_service(monkeypatch):
+    mock = AsyncMock()
+    monkeypatch.setattr("api_service.api.routers.secrets.SecretsService", mock)
+    return mock
+
+def test_create_secret(mock_secrets_service):
+    from api_service.db.models import ManagedSecret
+    from datetime import datetime
+    
+    # Mock return value
+    mock_secret = ManagedSecret(slug="NEW_KEY", status="active", details={}, created_at=datetime.utcnow())
+    mock_secrets_service.create_secret.return_value = mock_secret
+    mock_secrets_service.get_secret.return_value = None
+    
+    resp = client.post(
+        "/api/v1/secrets",
+        json={"slug": "NEW_KEY", "plaintext": "new-secret-val"},
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["slug"] == "NEW_KEY"
+    assert data["secretRef"] == "db://NEW_KEY"
+    assert data["status"] == "active"
+    assert "ciphertext" not in data
+    assert "new-secret-val" not in resp.text
+
+def test_create_secret_conflict(mock_secrets_service):
+    from api_service.db.models import ManagedSecret
+    
+    mock_secret = ManagedSecret(slug="TEST_API_KEY", status="active", details={})
+    mock_secrets_service.get_secret.return_value = mock_secret
+    
+    resp = client.post(
+        "/api/v1/secrets",
+        json={"slug": "TEST_API_KEY", "plaintext": "conflict-val"},
+    )
+    assert resp.status_code == 409
+
+def test_list_secrets(mock_secrets_service):
+    from api_service.db.models import ManagedSecret
+    from datetime import datetime
+    
+    mock_secret = ManagedSecret(slug="TEST_API_KEY", status="active", details={}, created_at=datetime.utcnow())
+    mock_secrets_service.list_metadata.return_value = [mock_secret]
+    
+    resp = client.get("/api/v1/secrets")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    assert data["items"][0]["slug"] == "TEST_API_KEY"
+    assert data["items"][0]["secretRef"] == "db://TEST_API_KEY"
+
+def test_update_secret(mock_secrets_service):
+    from api_service.db.models import ManagedSecret
+    from datetime import datetime
+    
+    mock_secret = ManagedSecret(slug="TEST_API_KEY", status="active", details={}, created_at=datetime.utcnow())
+    mock_secrets_service.update_secret.return_value = mock_secret
+    
+    resp = client.put(
+        "/api/v1/secrets/TEST_API_KEY",
+        json={"plaintext": "updated-val"},
+    )
+    assert resp.status_code == 200
+
+def test_rotate_secret(mock_secrets_service):
+    from api_service.db.models import ManagedSecret
+    from datetime import datetime
+    
+    mock_secret = ManagedSecret(slug="TEST_API_KEY", status="rotated", details={}, created_at=datetime.utcnow())
+    mock_secrets_service.rotate_secret.return_value = mock_secret
+    
+    resp = client.post(
+        "/api/v1/secrets/TEST_API_KEY/rotate",
+        json={"plaintext": "rotated-val"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rotated"
+
+def test_update_secret_status(mock_secrets_service):
+    from api_service.db.models import ManagedSecret
+    from datetime import datetime
+    
+    mock_secret = ManagedSecret(slug="TEST_API_KEY", status="disabled", details={}, created_at=datetime.utcnow())
+    mock_secrets_service.set_status.return_value = mock_secret
+    
+    resp = client.put(
+        "/api/v1/secrets/TEST_API_KEY/status",
+        json={"status": "disabled"},
+    )
+    assert resp.status_code == 200, resp.json()
+
+def test_delete_secret(mock_secrets_service):
+    mock_secrets_service.delete_secret.return_value = True
+    
+    resp = client.delete("/api/v1/secrets/TEST_API_KEY")
+    assert resp.status_code == 204
+
+def test_validate_secret(mock_secrets_service):
+    mock_secrets_service.validate_secret_ref.return_value = {
+        "valid": True,
+        "status": "active",
+        "checkedAt": "2026-04-28T00:00:00+00:00",
+        "diagnostics": [
+            {
+                "code": "secret_ref_resolvable",
+                "message": "Managed secret is active.",
+                "severity": "info",
+            }
+        ],
+    }
+    
+    resp = client.get("/api/v1/secrets/TEST_API_KEY/validate")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "valid": True,
+        "status": "active",
+        "checkedAt": "2026-04-28T00:00:00+00:00",
+        "diagnostics": [
+            {
+                "code": "secret_ref_resolvable",
+                "message": "Managed secret is active.",
+                "severity": "info",
+            }
+        ],
+    }
+
+
+def test_validate_secret_response_is_redacted(mock_secrets_service):
+    raw_secret = "sk-test-secret-value"
+    mock_secrets_service.validate_secret_ref.return_value = {
+        "valid": False,
+        "status": "missing",
+        "checkedAt": "2026-04-28T00:00:00+00:00",
+        "diagnostics": [
+            {
+                "code": "secret_ref_unresolved",
+                "message": f"Managed secret is missing; token={raw_secret}",
+                "severity": "error",
+            }
+        ],
+    }
+
+    resp = client.get("/api/v1/secrets/MISSING_SECRET/validate")
+
+    assert resp.status_code == 200
+    assert raw_secret not in resp.text
+    assert resp.json()["diagnostics"][0]["message"] == (
+        "Managed secret is missing; token=[REDACTED]"
+    )
+
+
+def test_secret_usage_endpoint_returns_references_and_object_names_only(
+    mock_secrets_service,
+):
+    raw_secret = "ghp_usage_plaintext"
+    mock_secrets_service.list_secret_usage.return_value = {
+        "secretRef": "db://github-pat-main",
+        "usages": [
+            {
+                "consumerType": "setting_override",
+                "objectName": "Workspace setting integrations.github.token_ref",
+                "reference": "db://github-pat-main",
+                "scope": "workspace",
+                "settingKey": "integrations.github.token_ref",
+            }
+        ],
+        "diagnostics": [],
+    }
+
+    resp = client.get("/api/v1/secrets/github-pat-main/usage")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["secretRef"] == "db://github-pat-main"
+    assert body["usages"][0]["objectName"] == (
+        "Workspace setting integrations.github.token_ref"
+    )
+    assert body["usages"][0]["reference"] == "db://github-pat-main"
+    assert "ciphertext" not in resp.text
+    assert raw_secret not in resp.text
+
+
+def test_secret_usage_endpoint_redacts_missing_secret_diagnostics(
+    mock_secrets_service,
+):
+    raw_secret = "sk-missing-secret"
+    mock_secrets_service.list_secret_usage.return_value = {
+        "secretRef": "db://missing-secret",
+        "usages": [],
+        "diagnostics": [
+            {
+                "code": "secret_ref_unresolved",
+                "message": f"Managed secret is missing; token={raw_secret}",
+                "severity": "error",
+            }
+        ],
+    }
+
+    resp = client.get("/api/v1/secrets/missing-secret/usage")
+
+    assert resp.status_code == 200
+    assert raw_secret not in resp.text
+    assert resp.json()["diagnostics"][0]["message"] == (
+        "Managed secret is missing; token=[REDACTED]"
+    )
+
+
+def _restore_superuser_dep():
+    app.dependency_overrides[_CURRENT_USER_DEP] = _superuser
+
+
+def test_update_secret_status_denied_without_disable_or_rotate_permissions(
+    mock_secrets_service,
+):
+    app.dependency_overrides[_CURRENT_USER_DEP] = _user_without_permissions
+    try:
+        resp = client.put(
+            "/api/v1/secrets/TEST_API_KEY/status",
+            json={"status": "active"},
+        )
+    finally:
+        _restore_superuser_dep()
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert "secrets.disable" in body["detail"] or "secrets.rotate" in body["detail"]
+    mock_secrets_service.set_status.assert_not_called()
+
+
+def test_update_secret_status_allows_re_enable_with_disable_permission(
+    mock_secrets_service,
+):
+    from api_service.db.models import ManagedSecret
+    from datetime import datetime
+
+    mock_secret = ManagedSecret(
+        slug="TEST_API_KEY",
+        status="active",
+        details={},
+        created_at=datetime.utcnow(),
+    )
+    mock_secrets_service.set_status.return_value = mock_secret
+
+    app.dependency_overrides[_CURRENT_USER_DEP] = _user_with_disable_only
+    try:
+        resp = client.put(
+            "/api/v1/secrets/TEST_API_KEY/status",
+            json={"status": "active"},
+        )
+    finally:
+        _restore_superuser_dep()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "active"
+    mock_secrets_service.set_status.assert_awaited()

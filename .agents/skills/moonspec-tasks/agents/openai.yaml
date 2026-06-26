@@ -1,0 +1,4 @@
+interface:
+  display_name: "MoonSpec Tasks"
+  short_description: "Generate a one-story TDD task breakdown"
+  default_prompt: "Generate tasks.md for the active Moon Spec story"

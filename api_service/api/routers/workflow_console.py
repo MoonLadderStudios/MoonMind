@@ -1,0 +1,952 @@
+"""Routes that serve the MoonMind workflow console UI shell."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import io
+import re
+import shutil
+import stat
+import tempfile
+import uuid
+import zipfile
+from collections.abc import Callable
+from html import escape
+from pathlib import Path, PurePosixPath
+from typing import Literal
+
+import yaml
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from api_service.db.base import get_async_session
+from api_service.api.routers.workflow_console_view_model import (
+    build_repository_branch_options,
+    build_repository_issue_options,
+    resolve_dashboard_runtime_config,
+)
+from api_service.auth_providers import get_current_user
+from api_service.db.models import User
+from api_service.services.settings_catalog import settings_permissions_for_user
+from moonmind.config.settings import settings
+from moonmind.services.skill_resolution import (
+    extract_required_capabilities_from_skill_markdown,
+)
+from moonmind.workflows.skills.resolver import (
+    SkillResolutionError,
+    list_available_skill_names,
+    resolve_skill_markdown_path,
+    resolve_skills_local_mirror_root,
+    validate_skill_name,
+)
+
+from api_service.ui_boot import generate_boot_payload
+from api_service.ui_assets import DashboardUIAssetsError, ui_assets
+
+from moonmind.workflows.temporal import TemporalExecutionService
+
+router = APIRouter(prefix="", tags=["workflow-console"])
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+_SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_WORKFLOW_DETAIL_TABS = {"steps", "artifacts", "runs"}
+_RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
+    "manifests",
+    "new",
+    "proposals",
+    "queue",
+    "schedules",
+    "secrets",
+    "settings",
+    "skills",
+    "system",
+    "temporal",
+    "workers",
+}
+_MAX_SKILL_ZIP_BYTES = 50 * 1024 * 1024
+_MAX_SKILL_UNCOMPRESSED_BYTES = 200 * 1024 * 1024
+_MAX_SKILL_FILE_BYTES = 25 * 1024 * 1024
+_MAX_SKILL_ZIP_ENTRIES = 500
+_IMPORTED_SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+_DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
+    "code": "dashboard_route_not_found",
+    "message": (
+        "Workflow console route was not found. Use /workflows, /workflows/new, "
+        "/workflows/{workflowId}, /workflows/{workflowId}/steps, "
+        "/workflows/{workflowId}/artifacts, or /workflows/{workflowId}/runs."
+    ),
+}
+
+class CreateSkillRequest(BaseModel):
+    """Payload for creating a new skill via the dashboard."""
+
+    name: str = Field(..., description="The name of the new skill")
+    markdown: str = Field(..., description="The markdown content of the new skill")
+
+class DashboardSkillOption(BaseModel):
+    """Serializable skill option exposed to dashboard clients."""
+
+    id: str = Field(description="Skill identifier")
+    required_capabilities: list[str] = Field(
+        default_factory=list,
+        alias="requiredCapabilities",
+        description="Default required capabilities declared by Skill metadata",
+    )
+    markdown: str | None = Field(None, description="Markdown content of the skill, if requested")
+
+class DashboardSkillListResponse(BaseModel):
+    """Dashboard response containing available skill options."""
+
+    items: dict[str, list[str]]
+    legacy_items: list[DashboardSkillOption] = Field(
+        default_factory=list, alias="legacyItems"
+    )
+
+class DashboardBranchOption(BaseModel):
+    """Serializable Git branch option exposed to dashboard clients."""
+
+    value: str = Field(description="Branch name")
+    label: str = Field(description="Display label")
+    source: str = Field(description="Branch option source")
+
+class DashboardBranchListResponse(BaseModel):
+    """Dashboard response containing branch options for one repository."""
+
+    items: list[DashboardBranchOption] = Field(default_factory=list)
+    error: str | None = Field(None)
+    default_branch: str | None = Field(None, alias="defaultBranch")
+
+class DashboardIssueOption(BaseModel):
+    """Serializable GitHub issue option exposed to dashboard clients."""
+
+    repository: str
+    number: int
+    title: str = ""
+    body: str = ""
+    url: str = ""
+    state: str = ""
+    labels: list[str] = Field(default_factory=list)
+
+class DashboardIssueListResponse(BaseModel):
+    """Dashboard response containing GitHub issue options for one repository."""
+
+    items: list[DashboardIssueOption] = Field(default_factory=list)
+    error: str | None = Field(None)
+
+class _ValidatedSkillZip(BaseModel):
+    skill_name: str
+    description: str
+    root_prefix: str | None = None
+    manifest_path: PurePosixPath
+
+class SkillImportResponse(BaseModel):
+    """Skill import result returned by the canonical upload contract."""
+
+    import_id: str = Field(..., alias="import_id")
+    status: Literal["saved"]
+    skill_id: str = Field(..., alias="skill_id")
+    version_id: str = Field(..., alias="version_id")
+    version_number: int = Field(..., alias="version_number")
+    name: str
+    description: str
+    warnings: list[dict[str, str]] = Field(default_factory=list)
+
+def _is_safe_detail_segment(segment: str) -> bool:
+    text = segment.strip()
+    if not text:
+        return False
+    if text in {".", ".."}:
+        return False
+    return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
+
+def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
+    normalized = workflow_path.strip("/")
+    if not normalized:
+        return None
+    if normalized != workflow_path or "//" in workflow_path:
+        return None
+    parts = normalized.split("/")
+    if (
+        len(parts) == 1
+        and _is_safe_detail_segment(parts[0])
+        and parts[0].lower() not in _RESERVED_WORKFLOW_ROUTE_SEGMENTS
+    ):
+        return parts[0]
+    if (
+        len(parts) == 2
+        and _is_safe_detail_segment(parts[0])
+        and parts[0].lower() not in _RESERVED_WORKFLOW_ROUTE_SEGMENTS
+        and parts[1] in _WORKFLOW_DETAIL_TABS
+    ):
+        return f"{parts[0]}/{parts[1]}"
+    return None
+
+def _is_execution_admin(user: User | None) -> bool:
+    return bool(user and getattr(user, "is_superuser", False))
+
+def _is_allowed_path(path: str) -> bool:
+    return _normalize_workflow_detail_path(path) is not None
+
+def _raise_dashboard_route_not_found() -> None:
+    raise HTTPException(
+        status_code=404,
+        detail=_DASHBOARD_ROUTE_NOT_FOUND_DETAIL,
+    )
+
+def _resolve_user_dependency_overrides() -> list[Callable[..., object]]:
+    """Return auth dependencies so tests can override them consistently."""
+
+    dependencies: list[Callable[..., object]] = []
+    for route in router.routes:
+        dependant = getattr(route, "dependant", None)
+        if dependant is None:
+            continue
+        for dependency in dependant.dependencies:
+            call = dependency.call
+            if call is None:
+                continue
+            if call.__name__ == "_current_user_fallback" or call.__name__.startswith(
+                "current_"
+            ):
+                dependencies.append(call)
+
+    if not dependencies:
+        dependencies.append(get_current_user())
+    return dependencies
+
+async def _get_temporal_service(
+    session: AsyncSession = Depends(get_async_session),
+) -> TemporalExecutionService:
+    return TemporalExecutionService(
+        session,
+        namespace=settings.temporal.namespace,
+        run_continue_as_new_step_threshold=(
+            settings.temporal.run_continue_as_new_step_threshold
+        ),
+        manifest_continue_as_new_phase_threshold=(
+            settings.temporal.manifest_continue_as_new_phase_threshold
+        ),
+    )
+
+def _dashboard_ui_error_response(page: str, detail: str) -> HTMLResponse:
+    """503 HTML when Vite assets are missing or incomplete (never a silent blank shell)."""
+    body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MoonMind dashboard UI unavailable</title>
+</head>
+<body>
+  <h1>MoonMind dashboard UI unavailable</h1>
+  <p>Missing or incomplete Vite bundle for the shared dashboard entrypoint <code>dashboard</code>.</p>
+  <p>While rendering dashboard page <code>{escape(page)}</code>.</p>
+  <p>{escape(detail)}</p>
+  <p>Rebuild with <code>npm run ui:build</code> or deploy a Docker image that builds the UI from source (see <code>api_service/Dockerfile</code> <code>frontend-builder</code> stage).</p>
+</body>
+</html>"""
+    return HTMLResponse(status_code=503, content=body, media_type="text/html")
+
+def _vite_assets_or_error(page: str) -> HTMLResponse | str:
+    try:
+        return ui_assets("dashboard")
+    except DashboardUIAssetsError as exc:
+        return _dashboard_ui_error_response(page, str(exc))
+
+async def _render_react_page(
+    request: Request,
+    page: str,
+    current_path: str,
+    initial_data: dict | None = None,
+    *,
+    data_wide_panel: bool = False,
+    session: AsyncSession | None = None,
+    user: User | None = None,
+) -> HTMLResponse:
+    boot_initial_data = dict(initial_data or {})
+    boot_layout = dict(boot_initial_data.get("layout") or {})
+    boot_layout["dataWidePanel"] = data_wide_panel
+    boot_initial_data["layout"] = boot_layout
+    dashboard_config = dict(boot_initial_data.get("dashboardConfig") or {})
+    if not dashboard_config:
+        dashboard_config = await resolve_dashboard_runtime_config(
+            current_path, session=session, user=user
+        )
+        boot_initial_data["dashboardConfig"] = dashboard_config
+
+    boot_payload = generate_boot_payload(page, initial_data=boot_initial_data)
+    assets_html = _vite_assets_or_error(page)
+    if isinstance(assets_html, HTMLResponse):
+        return assets_html
+
+    system_config = dict(dashboard_config.get("system") or {})
+
+    return templates.TemplateResponse(
+        request,
+        "react_dashboard.html",
+        {
+            "request": request,
+            "boot_payload": boot_payload,
+            "assets_html": assets_html,
+            "current_path": current_path,
+            "build_id": system_config.get("buildId"),
+        },
+    )
+
+def _is_zip_symlink(info: zipfile.ZipInfo) -> bool:
+    mode = (info.external_attr >> 16) & 0o170000
+    return mode == stat.S_IFLNK
+
+def _is_unsupported_zip_file_type(info: zipfile.ZipInfo) -> bool:
+    mode = (info.external_attr >> 16) & 0o170000
+    return mode not in {0, stat.S_IFREG}
+
+def _normalize_zip_member(name: str) -> PurePosixPath:
+    if "\\" in name:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill zip contains an unsafe path.",
+        )
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill zip contains an unsafe path.",
+        )
+    parts = tuple(part for part in path.parts if part not in ("", "."))
+    if not parts:
+        raise HTTPException(status_code=400, detail="Skill zip contains an empty path.")
+    return PurePosixPath(*parts)
+
+def _is_ignored_zip_member(path: PurePosixPath) -> bool:
+    return "__MACOSX" in path.parts or path.name == ".DS_Store"
+
+def _validate_imported_skill_name(skill_name: str) -> str:
+    try:
+        normalized = validate_skill_name(skill_name)
+    except SkillResolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if _IMPORTED_SKILL_NAME_RE.fullmatch(normalized) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Skill manifest name must use lowercase letters, digits, and single "
+                "hyphens only."
+            ),
+        )
+    return normalized
+
+def _parse_skill_manifest_metadata(markdown: str, parent_name: str) -> tuple[str, str]:
+    lines = markdown.splitlines()
+    if not lines or lines[0] != "---":
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest must be Markdown with YAML frontmatter.",
+        )
+
+    try:
+        end_index = lines[1:].index("---") + 1
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest must close YAML frontmatter with '---'.",
+        ) from exc
+
+    raw_frontmatter = "\n".join(lines[1:end_index])
+    try:
+        metadata = yaml.safe_load(raw_frontmatter) or {}
+    except yaml.YAMLError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest YAML frontmatter is invalid.",
+        ) from exc
+    if not isinstance(metadata, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest YAML frontmatter must be a mapping.",
+        )
+
+    raw_name = metadata.get("name")
+    raw_description = metadata.get("description")
+    if not isinstance(raw_name, str) or not raw_name.strip():
+        raise HTTPException(status_code=400, detail="Skill manifest name is required.")
+    if not isinstance(raw_description, str) or not raw_description.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest description is required.",
+        )
+    if len(raw_description.strip()) > 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest description must be 1024 characters or fewer.",
+        )
+
+    skill_name = _validate_imported_skill_name(raw_name)
+    if skill_name != parent_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Skill manifest name must match the parent directory.",
+        )
+    return skill_name, raw_description.strip()
+
+def _validate_skill_zip(filename: str | None, payload: bytes) -> _ValidatedSkillZip:
+    if not payload:
+        raise HTTPException(status_code=400, detail="Skill zip file is empty.")
+    if len(payload) > _MAX_SKILL_ZIP_BYTES:
+        raise HTTPException(status_code=413, detail="Skill zip file is too large.")
+
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(payload))
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is not a valid zip archive.",
+        ) from exc
+
+    with archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        if not infos:
+            raise HTTPException(status_code=400, detail="Skill zip must contain files.")
+        if len(infos) > _MAX_SKILL_ZIP_ENTRIES:
+            raise HTTPException(
+                status_code=413,
+                detail="Skill zip contains too many files.",
+            )
+
+        total_size = 0
+        normalized_paths: list[PurePosixPath] = []
+        seen_paths: set[PurePosixPath] = set()
+        for info in infos:
+            if info.flag_bits & 0x1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Encrypted skill zip entries are not supported.",
+                )
+            if _is_zip_symlink(info) or _is_unsupported_zip_file_type(info):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Skill zip cannot contain symlinks, hardlinks, or device files.",
+                )
+            if info.file_size > _MAX_SKILL_FILE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Skill zip contains a file that is too large.",
+                )
+            total_size += info.file_size
+            if total_size > _MAX_SKILL_UNCOMPRESSED_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Skill zip expands to too much data.",
+                )
+            normalized_path = _normalize_zip_member(info.filename)
+            if _is_ignored_zip_member(normalized_path):
+                continue
+            if normalized_path in seen_paths:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Skill zip contains duplicate file paths.",
+                )
+            seen_paths.add(normalized_path)
+            normalized_paths.append(normalized_path)
+
+        if not normalized_paths:
+            raise HTTPException(status_code=400, detail="Skill zip must contain skill files.")
+
+        skill_files = [path for path in normalized_paths if path.name.lower() == "skill.md"]
+        top_level_names = {path.parts[0] for path in normalized_paths}
+        nested_skill_files = [
+            path
+            for path in skill_files
+            if len(path.parts) == 2 and path.parts[1].lower() == "skill.md"
+        ]
+
+        if (
+            len(top_level_names) != 1
+            or len(nested_skill_files) != 1
+            or len(skill_files) != 1
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Skill zip must contain one skill directory with one "
+                    "SKILL.md or skill.md file."
+                ),
+            )
+
+        root_prefix = next(iter(top_level_names))
+        skill_name = _validate_imported_skill_name(root_prefix)
+        manifest_path = nested_skill_files[0]
+        try:
+            with archive.open(str(manifest_path)) as manifest_source:
+                manifest_markdown = manifest_source.read().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="Skill manifest must be UTF-8 Markdown.",
+            ) from exc
+        manifest_name, description = _parse_skill_manifest_metadata(
+            manifest_markdown,
+            parent_name=skill_name,
+        )
+        return _ValidatedSkillZip(
+            skill_name=manifest_name,
+            description=description,
+            root_prefix=root_prefix,
+            manifest_path=manifest_path,
+        )
+
+def _write_skill_zip(
+    skill_dir: Path,
+    payload: bytes,
+    validated: _ValidatedSkillZip,
+    *,
+    collision_policy: Literal["reject", "new_version"] = "reject",
+) -> None:
+    parent = skill_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    temp_dir = Path(tempfile.mkdtemp(prefix=".skill-upload-", dir=parent))
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                normalized = _normalize_zip_member(info.filename)
+                if _is_ignored_zip_member(normalized):
+                    continue
+                relative_parts = normalized.parts
+                if validated.root_prefix is not None:
+                    if relative_parts[0] != validated.root_prefix:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Skill zip root changed during extraction.",
+                        )
+                    relative_parts = relative_parts[1:]
+                if relative_parts and relative_parts[-1].lower() == "skill.md":
+                    relative_parts = (*relative_parts[:-1], "SKILL.md")
+                target = temp_dir.joinpath(*relative_parts)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(info) as source, target.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+
+                permissions = (info.external_attr >> 16) & 0o777
+                if permissions & 0o111:
+                    target.chmod(0o755)
+
+        if not (temp_dir / "SKILL.md").is_file():
+            raise HTTPException(status_code=400, detail="Skill zip must contain a SKILL.md file.")
+        if skill_dir.exists():
+            detail = f"Skill '{validated.skill_name}' already exists locally."
+            if collision_policy == "new_version":
+                detail = (
+                    f"Skill '{validated.skill_name}' already exists locally; "
+                    "new_version requires versioned skill storage."
+                )
+            raise HTTPException(status_code=409, detail=detail)
+        shutil.move(str(temp_dir), str(skill_dir))
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+def _build_skill_import_response(
+    payload: bytes,
+    validated: _ValidatedSkillZip,
+) -> SkillImportResponse:
+    content_hash = hashlib.sha256(payload).hexdigest()
+    return SkillImportResponse(
+        import_id=f"skill-import-{uuid.uuid4().hex}",
+        status="saved",
+        skill_id=validated.skill_name,
+        version_id=f"{validated.skill_name}-{content_hash[:12]}",
+        version_number=1,
+        name=validated.skill_name,
+        description=validated.description,
+        warnings=[],
+    )
+
+async def _import_skill_zip(
+    file: UploadFile,
+    collision_policy: Literal["reject", "new_version"],
+) -> SkillImportResponse:
+    payload = await file.read()
+    validated = _validate_skill_zip(file.filename, payload)
+    skills_root = resolve_skills_local_mirror_root()
+    skill_dir = skills_root / validated.skill_name
+    _write_skill_zip(
+        skill_dir,
+        payload,
+        validated,
+        collision_policy=collision_policy,
+    )
+    return _build_skill_import_response(payload, validated)
+
+@router.get("/secrets")
+async def secrets_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> RedirectResponse:
+    """Redirect the legacy secrets page into unified settings."""
+    return RedirectResponse(url="/settings?section=providers-secrets", status_code=307)
+
+@router.get("/workflows", name="workflow_console_root", response_class=HTMLResponse)
+async def workflow_console_root(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered workflow list page."""
+    list_path = "/workflows"
+    dashboard_config = await resolve_dashboard_runtime_config(
+        list_path, session=session, user=_user
+    )
+    return await _render_react_page(
+        request,
+        "workflow-list",
+        list_path,
+        initial_data={"dashboardConfig": dashboard_config},
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
+@router.get("/schedules", response_class=HTMLResponse)
+async def schedules_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered schedules page."""
+    return await _render_react_page(
+        request, "schedules", "/schedules", session=session, user=_user
+    )
+
+@router.get("/schedules/{schedule_id}", response_class=HTMLResponse)
+async def schedule_detail_route(
+    request: Request,
+    schedule_id: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the schedules shell for schedule deep links."""
+    if not _is_safe_detail_segment(schedule_id) or schedule_id.lower() == "new":
+        raise HTTPException(status_code=404, detail="Not Found")
+    return await _render_react_page(
+        request,
+        "schedules",
+        f"/schedules/{schedule_id}",
+        session=session,
+        user=_user,
+    )
+
+@router.get("/manifests", response_class=HTMLResponse)
+async def manifests_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered manifests page."""
+    return await _render_react_page(
+        request, "manifests", "/manifests", session=session, user=_user
+    )
+
+@router.get("/manifests/new", status_code=307, response_class=RedirectResponse)
+async def task_manifest_submit_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> RedirectResponse:
+    """Redirect the legacy manifest submit route into the unified manifests page."""
+    return RedirectResponse(url="/manifests", status_code=307)
+
+@router.get("/manifests/{manifest_name}", response_class=HTMLResponse)
+async def task_manifest_detail_route(
+    request: Request,
+    manifest_name: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the manifests shell for manifest deep links."""
+    if not _is_safe_detail_segment(manifest_name):
+        _raise_dashboard_route_not_found()
+    return await _render_react_page(
+        request,
+        "manifests",
+        f"/manifests/{manifest_name}",
+        session=session,
+        user=_user,
+    )
+
+@router.get("/index-health", response_class=HTMLResponse)
+async def index_health_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered RAG index health page."""
+    return await _render_react_page(
+        request,
+        "index-health",
+        "/index-health",
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
+@router.get("/workers")
+async def task_workers_route(
+    request: Request,
+    _user: User = Depends(get_current_user()),
+) -> RedirectResponse:
+    """Redirect the legacy workers page into unified settings."""
+    return RedirectResponse(url="/settings?section=operations", status_code=307)
+
+@router.get("/settings", response_class=HTMLResponse)
+async def task_settings_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered settings page."""
+    runtime_config = await resolve_dashboard_runtime_config(
+        "/settings", session=session, user=_user
+    )
+    initial_data = {
+        "workerPause": {
+            "get": "/api/system/worker-pause",
+            "post": "/api/system/worker-pause",
+            "shardHealth": "/api/workflows/codex/shards",
+        },
+        "runtimeConfig": runtime_config,
+        "settingsPermissions": sorted(settings_permissions_for_user(_user)),
+    }
+    return await _render_react_page(
+        request,
+        "settings",
+        "/settings",
+        initial_data=initial_data,
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
+@router.get("/oauth-terminal", response_class=HTMLResponse)
+async def oauth_terminal_route(
+    request: Request,
+    session_id: str = Query("", alias="session_id"),
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the OAuth terminal shell launched from Settings."""
+    current_path = "/oauth-terminal"
+    return await _render_react_page(
+        request,
+        "oauth-terminal",
+        current_path,
+        initial_data={"sessionId": session_id},
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
+@router.get("/workflows/new", response_class=HTMLResponse)
+async def task_create_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered workflow start page."""
+    current_path = "/workflows/new"
+    dashboard_config = await resolve_dashboard_runtime_config(
+        current_path, session=session, user=_user
+    )
+    return await _render_react_page(
+        request,
+        "workflow-start",
+        current_path,
+        initial_data={"dashboardConfig": dashboard_config},
+        session=session,
+        user=_user,
+    )
+
+@router.get("/skills", response_class=HTMLResponse)
+async def skills_route(
+    request: Request,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve the React-powered skills page."""
+    return await _render_react_page(
+        request, "skills", "/skills", session=session, user=_user
+    )
+
+@router.get("/workflows/{workflow_path:path}", response_class=HTMLResponse)
+async def workflow_console_route(
+    request: Request,
+    workflow_path: str,
+    session: AsyncSession = Depends(get_async_session),
+    _user: User = Depends(get_current_user()),
+) -> HTMLResponse:
+    """Serve dashboard sub-routes from one HTML shell."""
+
+    normalized = _normalize_workflow_detail_path(workflow_path)
+    if normalized is None:
+        _raise_dashboard_route_not_found()
+
+    detail_path = f"/workflows/{normalized}"
+    dashboard_config = await resolve_dashboard_runtime_config(
+        detail_path, session=session, user=_user
+    )
+    return await _render_react_page(
+        request,
+        "workflow-detail",
+        detail_path,
+        initial_data={"dashboardConfig": dashboard_config},
+        data_wide_panel=True,
+        session=session,
+        user=_user,
+    )
+
+@router.get("/api/workflows/skills", response_model=DashboardSkillListResponse)
+async def list_dashboard_skills(
+    include_content: bool = Query(False, alias="includeContent"),
+    _user: User = Depends(get_current_user()),
+) -> DashboardSkillListResponse:
+    """List currently available skills for workflow submission forms."""
+
+    worker_skills = list(list_available_skill_names())
+    legacy_sorted = sorted(set(worker_skills), key=str)
+
+    async def _get_skill_option(skill_id: str) -> DashboardSkillOption:
+        markdown_content = None
+        required_capabilities: list[str] = []
+        skill_file = resolve_skill_markdown_path(skill_id)
+        if skill_file is not None:
+            skill_markdown = await asyncio.to_thread(
+                skill_file.read_text,
+                encoding="utf-8",
+            )
+            required_capabilities = list(
+                extract_required_capabilities_from_skill_markdown(
+                    skill_markdown,
+                    skill_name=skill_id,
+                    source_label=str(skill_file),
+                )
+            )
+            if include_content:
+                markdown_content = skill_markdown
+        return DashboardSkillOption(
+            id=skill_id,
+            requiredCapabilities=required_capabilities,
+            markdown=markdown_content,
+        )
+
+    legacy_items = await asyncio.gather(
+        *(_get_skill_option(skill_id) for skill_id in legacy_sorted)
+    )
+
+    return DashboardSkillListResponse(
+        items={
+            "worker": worker_skills,
+        },
+        legacyItems=legacy_items,
+    )
+
+@router.get("/api/github/branches", response_model=DashboardBranchListResponse)
+async def list_dashboard_github_branches(
+    repository: str = Query(..., min_length=1),
+    _user: User = Depends(get_current_user()),
+) -> DashboardBranchListResponse:
+    """List GitHub branches through MoonMind so browsers never call GitHub directly."""
+
+    payload = build_repository_branch_options(repository)
+    return DashboardBranchListResponse(**payload)
+
+
+@router.get("/api/github/issues", response_model=DashboardIssueListResponse)
+def list_dashboard_github_issues(
+    repository: str = Query(..., min_length=1),
+    q: str = Query(""),
+    _user: User = Depends(get_current_user()),
+) -> DashboardIssueListResponse:
+    """List GitHub issues through MoonMind so browsers never call GitHub directly."""
+
+    payload = build_repository_issue_options(repository, q)
+    return DashboardIssueListResponse(**payload)
+
+@router.post(
+    "/api/workflows/skills",
+    status_code=201,
+)
+async def create_dashboard_skill(
+    request: CreateSkillRequest,
+    _user: User = Depends(get_current_user()),
+) -> dict[str, str]:
+    """Create a new local skill from the dashboard."""
+
+    try:
+        validated_name = validate_skill_name(request.name)
+    except SkillResolutionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    skills_root = resolve_skills_local_mirror_root()
+    skill_dir = skills_root / validated_name
+
+    try:
+        skill_dir.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill '{validated_name}' already exists locally.",
+        ) from exc
+    skill_file = skill_dir / "SKILL.md"
+    skill_file.write_text(request.markdown, encoding="utf-8")
+
+    return {"status": "success"}
+
+@router.post(
+    "/api/skills/imports",
+    status_code=201,
+    response_model=SkillImportResponse,
+)
+async def create_skill_import(
+    file: UploadFile = File(...),
+    collision_policy: Literal["reject", "new_version"] = Form("reject"),
+    _user: User = Depends(get_current_user()),
+) -> SkillImportResponse:
+    """Create a new local skill from an uploaded zip bundle."""
+
+    return await _import_skill_zip(file, collision_policy)
+
+@router.post(
+    "/api/workflows/skills/upload",
+    status_code=201,
+)
+async def upload_dashboard_skill_zip(
+    file: UploadFile = File(...),
+    _user: User = Depends(get_current_user()),
+) -> dict[str, str]:
+    """Create a new local skill from an uploaded zip bundle."""
+
+    result = await _import_skill_zip(file, "reject")
+
+    return {"status": "success", "skill": result.name}
+
+__all__ = [
+    "router",
+    "_is_allowed_path",
+    "_resolve_user_dependency_overrides",
+]

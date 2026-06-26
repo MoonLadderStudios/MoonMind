@@ -1,0 +1,91 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+model_data/
+outputs/
+temp/
+data/
+!api_service/data/
+!api_service/data/task_step_templates/
+!api_service/data/task_step_templates/*.yaml
+prompts/
+jobs/
+*.code-workspace
+.env
+.env-backup
+.env.*
+!.env-template
+!.env.vllm-template
+.openhands-state-data/
+
+# Codex user-specific data (sessions, logs, auth, history)
+.codex/sessions/
+.codex/log/
+.codex/history.jsonl
+.codex/auth.json
+# Note: .codex/config.toml and .codex/prompts/ should be committed (project config)
+
+# Qwen user-specific data
+.qwen/
+
+# Build artifacts
+build/
+dist/
+# Dashboard Vite output is local/CI build output only.
+api_service/static/task_dashboard/dist/
+*.egg-info/
+uv.lock
+
+# Worker runtime scratch outputs
+agent_jobs/
+
+# Runtime / ephemeral data (never commit)
+/var/
+
+# Runtime / ephemeral artifact output directories
+/artifacts/
+/artifacts.*/
+/specs/
+/deploy/state/.env.deploy
+/deploy/state/desired-state.json
+/deploy/state/locks/
+live_streams.spool
+.specify/feature.json
+
+# Local saved artifacts
+/Saved/
+
+
+# Local-only worker skills mirror
+.agents/skills/local/
+
+# Node/Tailwind build artifacts
+node_modules/
+npm-debug.log*
+*.log
+
+# Coverage + editor artifacts
+.coverage
+coverage/
+.vscode/
+.idea/
+
+# OS + temp files
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+check_defaults.py
+fix_comments.py
+fix_test.py
+register_sa.py
+resolve_conflicts.py
+agentkit_analyze_report.md
+step-*-report.md
+update_http_exception.py
+tmp-comments*.json
+tmp-agentkit-analyze.md
+tmp_skill.md
+tmp_agentkit_clarify.md
