@@ -827,7 +827,7 @@ class TemporalClientAdapter:
         typed_search_attributes = _build_typed_search_attributes(formatted_sa)
 
         async def _do_update(input: Any) -> Any:  # noqa: A002
-            schedule = input.schedule
+            schedule = input.description.schedule
 
             if cron_expression is not None or timezone is not None or jitter_seconds is not None:
                 current_cron = (
