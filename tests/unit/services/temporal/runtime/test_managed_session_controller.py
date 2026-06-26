@@ -46,6 +46,7 @@ def _clear_managed_session_docker_policy_env(
 ) -> None:
     monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", raising=False)
 
 
 class _LocalArtifactStorage:
@@ -4718,6 +4719,68 @@ async def test_controller_reconcile_degrades_when_container_inspect_fails(
     )
 
 
+@pytest.mark.asyncio
+async def test_controller_reconcile_marks_terminal_owner_session_terminated(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-terminal-owner",
+            sessionEpoch=1,
+            agentRunId="task-terminal",
+            containerId="ctr-terminal",
+            threadId="thread-terminal",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://terminal",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+
+    async def _owner_workflow_status(workflow_id: str) -> str:
+        assert workflow_id == "task-terminal"
+        return "TERMINATED"
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        raise AssertionError(f"terminal owner should skip docker inspect: {command}")
+
+    session_supervisor = AsyncMock()
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+        owner_workflow_status_resolver=_owner_workflow_status,
+    )
+
+    reconciled = await controller.reconcile()
+
+    assert [record.session_id for record in reconciled] == ["sess-terminal-owner"]
+    updated = store.load("sess-terminal-owner")
+    assert updated is not None
+    assert updated.status == "terminated"
+    assert updated.active_turn_id is None
+    assert updated.metadata["ownerWorkflowId"] == "task-terminal"
+    assert updated.metadata["ownerWorkflowStatus"] == "TERMINATED"
+    assert updated.metadata["terminationSource"] == "managed_session_reconcile"
+    assert updated.error_message == (
+        "managed session owner workflow is terminal during reconcile: TERMINATED"
+    )
+    session_supervisor.start.assert_not_awaited()
+
+
 def _reap_active_record(session_id: str) -> CodexManagedSessionRecord:
     return CodexManagedSessionRecord(
         sessionId=session_id,
@@ -4754,6 +4817,7 @@ async def test_controller_reaps_orphan_session_containers_and_skips_active(
 ) -> None:
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", "0")
     store = ManagedSessionStore(tmp_path / "session-store")
     store.save(_reap_active_record("sess-active"))
 
@@ -4816,6 +4880,125 @@ async def test_controller_reaps_orphan_session_containers_and_skips_active(
 
 
 @pytest.mark.asyncio
+async def test_controller_reaps_stale_ready_session_after_max_age(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", "3600")
+    store = ManagedSessionStore(tmp_path / "session-store")
+    old_started_at = "2020-01-01T00:00:00Z"
+    recent = datetime.now(tz=UTC).isoformat()
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-stale",
+            sessionEpoch=1,
+            agentRunId="task-stale",
+            containerId="ctr-sess-stale",
+            threadId="thread-stale",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://stale",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt=old_started_at,
+        )
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-recent",
+            sessionEpoch=1,
+            agentRunId="task-recent",
+            containerId="ctr-sess-recent",
+            threadId="thread-recent",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://recent",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt=recent,
+        )
+    )
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-busy",
+            sessionEpoch=1,
+            agentRunId="task-busy",
+            containerId="ctr-sess-busy",
+            threadId="thread-busy",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://busy",
+            status="busy",
+            activeTurnId="turn-busy",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt=old_started_at,
+        )
+    )
+
+    commands: list[tuple[str, ...]] = []
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[:2] == ("docker", "ps"):
+            return 0, "c-stale\nc-recent\nc-busy\n", ""
+        if command[:3] == ("docker", "inspect", "--format"):
+            return (
+                0,
+                "c-stale|sess-stale|managed-session|2020-01-01T00:00:00Z\n"
+                f"c-recent|sess-recent|managed-session|{recent}\n"
+                "c-busy|sess-busy|managed-session|2020-01-01T00:00:00Z\n",
+                "",
+            )
+        if command[:3] == ("docker", "rm", "-f"):
+            if command[-1].startswith("moonmind-session-"):
+                return 1, "", "No such container"
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "rm", "-f"):
+            return 0, "", ""
+        if command[:4] == ("docker", "volume", "ls", "--format"):
+            return 0, "", ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        command_runner=_fake_runner,
+    )
+
+    result = await controller.reap_orphan_session_containers()
+
+    assert result.forced_stale == 1
+    assert result.reaped_session_ids == ("sess-stale",)
+    assert result.reaped_containers == 1
+    assert result.skipped_active == 2
+    removed = {cmd[-1] for cmd in commands if cmd[:3] == ("docker", "rm", "-f")}
+    assert "c-stale" in removed
+    assert "c-recent" not in removed
+    assert "c-busy" not in removed
+    stale_record = store.load("sess-stale")
+    assert stale_record is not None
+    assert stale_record.status == "terminated"
+    assert stale_record.metadata["reapReason"] == "stale_active_session_max_age"
+    assert store.load("sess-recent").status == "ready"
+    assert store.load("sess-busy").status == "busy"
+
+
+@pytest.mark.asyncio
 async def test_controller_reap_skips_orphans_within_grace_window(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -4865,6 +5048,7 @@ async def test_mm870_controller_reaps_orphan_sidecar_volumes_and_skips_boundarie
 ) -> None:
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_ENABLED", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS", raising=False)
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", "0")
     store = ManagedSessionStore(tmp_path / "session-store")
     store.save(_reap_active_record("sess-active"))
     recent = datetime.now(tz=UTC).isoformat()

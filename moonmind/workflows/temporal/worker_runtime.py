@@ -2123,6 +2123,14 @@ def _build_agent_runtime_deps(
     session_network_name = _managed_session_docker_network(
         {"MOONMIND_URL": session_moonmind_url or ""}
     )
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    temporal_client_adapter = TemporalClientAdapter()
+
+    async def _owner_workflow_status_resolver(workflow_id: str) -> object | None:
+        description = await temporal_client_adapter.describe_workflow(workflow_id)
+        return getattr(description, "status", None)
+
     session_controller = DockerCodexManagedSessionController(
         workspace_volume_name=workspace_volume_name,
         codex_volume_name=codex_volume_name,
@@ -2133,6 +2141,7 @@ def _build_agent_runtime_deps(
         session_supervisor=session_supervisor,
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
+        owner_workflow_status_resolver=_owner_workflow_status_resolver,
     )
     workload_registry_path = os.environ.get("MOONMIND_WORKLOAD_PROFILE_REGISTRY", "")
     allowed_image_registries = _csv_env_tuple(
