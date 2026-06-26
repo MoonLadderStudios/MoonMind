@@ -642,7 +642,6 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
                     "instructions": "Fetch issue.",
                     "tool": {
                         "id": "jira.get_issue",
-                        "version": "1.0.0",
                         "inputs": {"issueKey": "MM-559"},
                     },
                     "source": {
@@ -658,7 +657,6 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
                     "instructions": "Implement issue.",
                     "skill": {
                         "id": "moonspec-implement",
-                        "skillVersion": "1.0.0",
                         "args": {"issueKey": "MM-559"},
                     },
                 },

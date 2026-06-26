@@ -250,6 +250,7 @@ def strip_workflow_capability_identity_versions(
         "task_template",
         "presetSchedule",
         "preset_schedule",
+        "source",
     ):
         node = sanitized.get(key)
         if isinstance(node, Mapping):
@@ -2258,7 +2259,10 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
                 },
             }
         else:
-            body_node = dict(body_node)
+            # Canonical queue payloads may be hydrated from pre-cutover stored
+            # records. Preserve historical read tolerance here while keeping
+            # direct WorkflowExecutionSpec validation strict for new submissions.
+            body_node = strip_workflow_capability_identity_versions(body_node)
             if not body_node.get("instructions"):
                 lifted_instruction = payload.get("instructions") or payload.get(
                     "instruction"
