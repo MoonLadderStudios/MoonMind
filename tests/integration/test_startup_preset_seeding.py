@@ -440,6 +440,25 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         result = await session.execute(
             select(Preset)
             .where(
+                Preset.slug == "document-author",
+                Preset.scope_type == PresetScopeType.GLOBAL,
+                Preset.scope_ref.is_(None),
+            )
+
+        )
+        doc_author_template = result.scalar_one_or_none()
+        assert doc_author_template is not None
+        assert doc_author_template.annotations["sourceIssueKey"] == "MM-931"
+        assert doc_author_template.annotations["sourceReference"] == "MM-927"
+        assert len(doc_author_template.steps) == 1
+        assert doc_author_template.steps[0]["type"] == "skill"
+        assert doc_author_template.steps[0]["skill"]["id"] == "document-author"
+        assert "Do not create spec.md" in doc_author_template.steps[0]["instructions"]
+        assert "docs/tmp/" in doc_author_template.steps[0]["instructions"]
+
+        result = await session.execute(
+            select(Preset)
+            .where(
                 Preset.slug == "batch-workflows",
                 Preset.scope_type == PresetScopeType.GLOBAL,
                 Preset.scope_ref.is_(None),

@@ -28,6 +28,14 @@ The key entities, states, and interfaces involved in the design.
 
 What this design deliberately does not do.
 
+### NON-GOAL-001 <concise stable non-goal heading>
+
+The durable exclusion this design owns.
+
 ## 5. Constraints & decisions
 
 Constraints that bound the design and the decisions made within them.
+
+### QUALITY-001 <concise stable quality heading>
+
+The durable quality attribute this design owns.

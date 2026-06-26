@@ -31,3 +31,7 @@ External systems, trust boundaries, and runtime/deployment boundaries.
 ## 5. Constraints & decisions
 
 Non-negotiable constraints and the architecture decisions that shape this system.
+
+### DOC-REQ-001 <concise stable requirement heading>
+
+The durable system-level requirement this document owns.

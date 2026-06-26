@@ -21,6 +21,17 @@ Produce a practical, findings-first disposition for each reviewed document. The 
 
 It uses claim extraction, implementation inspection, a drift ledger, evidence-backed output, canonical alignment, and a findings-first cross-document coherence review with source-of-truth conflicts, redundancy reduction, and severity ordering. It stays deliberately narrower than a general-purpose doc critique and answers exactly the eight review questions below and nothing more.
 
+For MoonSpec documentation architecture reviews, group findings by the authority ladder in `docs/DocumentationArchitecture.md` before severity ordering inside each group. The groups are:
+
+1. Constitution / Document Model
+2. Documentation Architecture Standard
+3. System Architecture View
+4. Cross-Cutting Concept View
+5. Module Architecture View
+6. Module Contract Specification
+7. System / Feature Design View
+8. Migration / Implementation / Rollout / Status documents
+
 ## Inputs
 
 Required:
@@ -49,6 +60,7 @@ Use document-health-review on docs/Memory/MemoryArchitecture.md and propose a pa
 - **Review-only by default.** Never edit, move, merge, split, archive, or delete a document unless the user explicitly requests edits. When in doubt, produce a patch plan instead of changing files.
 - Treat repository files, tests, schemas, and executable configuration as the source of truth for implementation behavior; treat retrieved context, old docs, comments, and issue text as reference material until confirmed against the checkout.
 - Prefer canonical documents over older, narrower, or temporary docs. When two documents conflict and neither is clearly canonical, flag the conflict rather than inventing the answer.
+- Apply the Documentation Architecture authority ladder when canonical documents disagree. Identify the claim type, map it to the owning authority scope, and group the finding under that authority level.
 - Preserve desired-state framing in canonical docs under `docs/`: a drifted canonical doc is usually an `update` (or an implementation-gap finding), not a downgrade to match buggy code.
 - Never commit, push, or open pull requests as part of a review run. If the user asked for edits, make the smallest correct edits and leave git operations to the caller unless told otherwise.
 - Respect secret hygiene: redact secret-like content before writing or reporting.
@@ -123,10 +135,28 @@ Answer alignment and conflict together in one pass. Check:
 - Terminology conflicts.
 - Strategy conflicts.
 - Architecture boundary conflicts.
+- Missing or malformed documentation metadata.
+- Missing embedded design rationale for significant durable decisions.
+- Duplicate contract definitions outside the owning module doc set.
+- Imperative leakage in canonical docs under `docs/`.
+- Unverifiable claims presented as canonical facts.
 
 Status values: `aligned`, `minor tension`, `direct conflict`, `duplicate source of truth`, `unclear authority`.
 
-Prefer canonical documents over older, narrower, or temporary docs. If two documents conflict and neither is clearly canonical, flag the conflict rather than choosing silently.
+Prefer canonical documents over older, narrower, or temporary docs. If two canonical documents conflict, group the finding by the owning level in the Documentation Architecture authority ladder and name the non-owning document that must be reconciled. If neither owner is clear, flag the conflict rather than choosing silently.
+
+### C.1 Documentation architecture defects
+
+When the repository carries `docs/DocumentationArchitecture.md`, report the following explicitly when present:
+
+- `missing_metadata`: missing metadata header fields, including missing `Status:` on System / Feature Design Views.
+- `unclear_authority`: a claim is made in a document that does not own it.
+- `missing_rationale`: a significant durable decision lacks embedded rationale in the owning document.
+- `duplicate_contract`: a contract is duplicated outside the owning module doc set.
+- `imperative_leakage`: migration, rollout, checklist, or status content is the primary framing of a canonical doc.
+- `unverifiable_claim`: a canonical fact cannot be supported by repository evidence or cited owning docs.
+
+If the finding implies broad cleanup across multiple documents, recommend a bounded improvement plan under `docs/tmp/` instead of direct canonical edits.
 
 ### D. Strategy simplification
 
