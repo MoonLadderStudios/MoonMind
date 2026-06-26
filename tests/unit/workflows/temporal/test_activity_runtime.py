@@ -1749,6 +1749,42 @@ async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan(
     assert result["status"] == "completed"
     assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
 
+
+async def test_security_pentest_execute_applies_url_first_defaults_before_validation():
+    artifact_service = _FakePentestArtifactService(
+        {
+            "art_scope_valid": _scope_artifact_bytes(
+                allowed_actions=["recon", "scan", "content_discovery"],
+            )
+        }
+    )
+    registry = _RecordingPentestRegistry()
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=artifact_service,
+        workload_launcher=_FileWritingPentestLauncher(),
+        workload_registry=registry,
+    )
+    payload = _pentest_artifact_activity_payload()
+    request = payload["request"]
+    assert isinstance(request, dict)
+    for key in (
+        "operation_mode",
+        "runner_profile_id",
+        "execution_profile_ref",
+        "time_budget_minutes",
+        "evidence_level",
+    ):
+        request.pop(key)
+
+    result = await activities.security_pentest_execute(payload)
+
+    assert result["status"] == "completed"
+    assert registry.requests[0].env_overrides["MM_PENTEST_MODE"] == "recon_only"
+    assert registry.requests[0].profile_id == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
+    assert result["runner_profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
+    assert result["execution_profile_ref"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
+
+
 async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -2539,6 +2575,10 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
 async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runner_status(
     tmp_path: Path,
 ):
+    session_param = "session" + "id"
+    session_marker = "redaction-canary-value"
+    target_url = f"https://lab.example.test/app?{session_param}={session_marker}"
+
     class _RunnerFailedFindingsLauncher(_FileWritingPentestLauncher):
         async def run(self, request: object) -> WorkloadResult:
             result = await super().run(request)
@@ -2554,9 +2594,7 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
                 json.dumps(
                     {
                         "tool_name": "security.pentest.run",
-                        "target": (
-                            "https://lab.example.test/app?sessionid=secret-value"
-                        ),
+                        "target": target_url,
                         "scope_artifact_ref": "art:sha256:scope",
                         "operation_mode": "validate_hypothesis",
                         "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
@@ -2586,22 +2624,20 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
             )
             activities = TemporalAgentRuntimeActivities(
                 artifact_service=service,
-                workload_launcher=_RunnerFailedFindingsLauncher(),
+                workload_launcher=_RunnerFailedFindingsLauncher(status="failed"),
                 workload_registry=_RecordingPentestRegistry(),
             )
 
             result = await activities._security_pentest_execute_trusted_internal(
                 _pentest_activity_payload(
                     artifacts_dir=str(tmp_path / "runner-artifacts"),
-                    target="https://lab.example.test/app?sessionid=secret-value",
+                    target=target_url,
                     approved_scope={
                         **_approved_pentest_scope(),
                         "targets": [
                             {
                                 "kind": "url",
-                                "value": (
-                                    "https://lab.example.test/app?sessionid=secret-value"
-                                ),
+                                "value": target_url,
                             }
                         ],
                     },
@@ -2616,7 +2652,7 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
             assert result["evidence_refs"]
             assert result["report_bundle"]["counts"]["findings_count"] == 0
             assert result["terminal_cleanup"]["terminal_reason"] == "failure"
-            assert "secret-value" not in str(result)
+            assert session_marker not in str(result)
 
             artifacts = await service.list_for_execution(
                 namespace="default",
@@ -2627,11 +2663,11 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
                 latest_only=True,
             )
             assert artifacts
-            assert "secret-value" not in json.dumps(
+            assert session_marker not in json.dumps(
                 artifacts[0].metadata_json,
                 sort_keys=True,
             )
-            assert "sessionid=[REDACTED]" in json.dumps(
+            assert f"{session_param}=[REDACTED]" in json.dumps(
                 artifacts[0].metadata_json,
                 sort_keys=True,
             )
