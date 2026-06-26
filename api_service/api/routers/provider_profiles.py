@@ -1483,18 +1483,18 @@ def _secret_refs_check(
     problems: list[str] = []
     for role, result in secret_ref_results.items():
         if result.error:
-            problems.append(f"{role}: invalid SecretRef ({result.error})")
+            problems.append(f"{role} binding has invalid SecretRef ({result.error})")
             continue
         if not result.parsed or result.parsed.backend != SecretBackend.DB_ENCRYPTED:
             continue
         status = managed_secret_statuses.get(result.parsed.locator)
         if status is None:
             problems.append(
-                f"{role}: managed secret db://{result.parsed.locator} was not found"
+                f"{role} binding references managed secret db://{result.parsed.locator} was not found"
             )
         elif status != SecretStatus.ACTIVE.value:
             problems.append(
-                f"{role}: managed secret db://{result.parsed.locator} is {status}"
+                f"{role} binding references managed secret db://{result.parsed.locator} is {status}"
             )
 
     return _readiness_check(
