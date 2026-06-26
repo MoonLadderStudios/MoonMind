@@ -1387,20 +1387,32 @@ def _skill_runtime_evidence(
         params.get("skillsMaterialized"),
         task_payload.get("skillRuntime"),
     )
-    selected_skills = _skill_selector_names(materialized.get("selectedSkills"))
+    selected_skills = _skill_selector_names(
+        materialized.get("selectedSkills") if materialized else None
+    )
     if selected_skills is None:
-        selected_skills = _skill_selector_names(materialized.get("activeSkills"))
+        selected_skills = _skill_selector_names(
+            materialized.get("activeSkills") if materialized else None
+        )
     if selected_skills is None:
         selected_skills = task_skills or []
 
     evidence = _selected_skill_evidence(
-        materialized.get("selectedEvidence")
-        or materialized.get("selectedVersions")
-        or materialized.get("skills")
+        (
+            materialized.get("selectedEvidence")
+            or materialized.get("selectedVersions")
+            or materialized.get("skills")
+        )
+        if materialized
+        else None
     )
     provenance = _skill_source_provenance(
-        materialized.get("sourceProvenance")
-        or materialized.get("source_provenance"),
+        (
+            materialized.get("sourceProvenance")
+            or materialized.get("source_provenance")
+        )
+        if materialized
+        else None,
         evidence,
     )
     task_skills_payload = _first_mapping(task_payload.get("skills"))

@@ -7544,6 +7544,26 @@ def test_serialize_execution_preserves_direct_skill_source_provenance() -> None:
         },
     ]
 
+
+def test_serialize_execution_handles_missing_skill_materialization_metadata() -> None:
+    record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
+    record.parameters = {
+        "workflow": {
+            "instructions": "Inspect skill runtime evidence.",
+            "skills": {"sets": ["operator-default"]},
+        },
+        "skillRuntime": None,
+        "skillsMaterialized": None,
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["taskSkills"] == ["operator-default"]
+    assert payload["skillRuntime"]["selectedSkills"] == ["operator-default"]
+    assert payload["skillRuntime"]["selectedEvidence"] == []
+    assert payload["skillRuntime"]["sourceProvenance"] == []
+
+
 def test_serialize_execution_accepts_snake_case_skill_materialization_metadata() -> None:
     record = _build_execution_record(state=MoonMindWorkflowState.EXECUTING)
     record.parameters = {
