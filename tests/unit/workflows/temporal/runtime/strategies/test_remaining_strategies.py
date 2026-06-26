@@ -142,6 +142,29 @@ class TestClaudeCodeProgressProbe:
 
         assert observed == expected_progress_at
 
+    def test_probe_progress_treats_naive_started_at_as_utc(self, tmp_path) -> None:
+        strategy = ClaudeCodeStrategy()
+        workspace_path = tmp_path / "repo"
+        result_path = workspace_path / "var" / "pr_resolver" / "result.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text(
+            '{"mergeAutomationDisposition":"reenter_gate"}',
+            encoding="utf-8",
+        )
+
+        started_at = datetime(2026, 6, 26, 17, 49, 38)
+        expected_progress_at = datetime(2026, 6, 26, 18, 17, 0, tzinfo=UTC)
+        ts = expected_progress_at.timestamp()
+        os.utime(result_path, (ts, ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-naive-started-at",
+            started_at=started_at,
+        )
+
+        assert observed == expected_progress_at
+
     def test_probe_progress_uses_pr_resolver_attempt_artifacts(self, tmp_path) -> None:
         strategy = ClaudeCodeStrategy()
         workspace_path = tmp_path / "repo"

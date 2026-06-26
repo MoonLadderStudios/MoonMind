@@ -155,6 +155,9 @@ class ClaudeCodeStrategy(ManagedRuntimeStrategy):
         if not workspace_root.is_dir():
             return None
 
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+
         threshold_ts = started_at.timestamp() - _CLAUDE_PROGRESS_MTIME_PADDING_SECONDS
         latest_ts: float | None = None
         for candidate in self._iter_pr_resolver_progress_candidates(workspace_root):

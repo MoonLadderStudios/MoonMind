@@ -755,7 +755,8 @@ async def test_heartbeat_persists_claude_pr_resolver_artifact_progress(
             result = await supervisor.supervise(
                 run_id="run-1", process=process, timeout_seconds=30
             )
-    await progress_writer
+    writer_result = await progress_writer
+    assert writer_result is None
 
     assert result.status == "completed"
     assert any("last_log_at" in update for update in running_updates)
