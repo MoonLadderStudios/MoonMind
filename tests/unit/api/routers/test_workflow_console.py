@@ -383,13 +383,15 @@ def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
     for path in (
         "/workflows",
         "/settings",
-        "/workflows/mm:workflow-123",
-        "/workflows/mm:workflow-123/steps",
     ):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":true' in response.text
-    for path in ("/manifests",):
+    for path in (
+        "/manifests",
+        "/workflows/mm:workflow-123",
+        "/workflows/mm:workflow-123/steps",
+    ):
         response = client.get(path)
         assert response.status_code == 200
         assert '"dataWidePanel":false' in response.text

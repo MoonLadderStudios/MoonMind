@@ -206,6 +206,14 @@ describe('Dashboard shared entry', () => {
     );
   });
 
+  it('keeps checkbox label hit areas bounded to visible control text', async () => {
+    const checkboxLabelBlock = cssRuleBlock(dashboardCss, 'label.checkbox');
+
+    expect(checkboxLabelBlock).toContain('display: inline-flex');
+    expect(checkboxLabelBlock).toContain('width: fit-content');
+    expect(checkboxLabelBlock).toContain('max-width: 100%');
+  });
+
   it('defines shared visual atmosphere and glass tokens for light and dark themes', async () => {
     const requiredTokens = [
       '--mm-atmosphere-violet',
