@@ -29,6 +29,9 @@ CONFORMANCE_REVIEW = (
     REPO_ROOT / "docs" / "tmp" / "MoonSpecDocsArchitectureConformanceReview.md"
 )
 MIGRATION_PLAN = REPO_ROOT / "docs" / "tmp" / "MoonSpecDocsFirstAlignmentPlan.md"
+STALE_MIGRATION_PLAN = (
+    REPO_ROOT / "docs" / "tmp" / "DocumentationArchitectureMigrationPlan.md"
+)
 
 FORBIDDEN_DECISION_DIRS = (
     REPO_ROOT / "docs" / "adr",
@@ -141,3 +144,18 @@ def test_migration_plan_records_authority_conflict_outcome() -> None:
     assert "MoonSpecDocsArchitectureConformanceReview.md" in text
     # The recorded outcome: no unresolved authority conflict.
     assert "Unresolved documentation-authority conflicts:" in text
+
+
+def test_stale_documentation_migration_plan_is_not_active_or_contradictory() -> None:
+    if not STALE_MIGRATION_PLAN.exists():
+        pytest.skip(
+            "Historical docs/tmp migration plan may be deleted once the "
+            "Documentation Architecture cleanup is fully closed."
+        )
+    text = _read(STALE_MIGRATION_PLAN)
+    assert "MM-928" in text
+    assert "**Status:** Superseded / closed" in text
+    assert "no longer records active authority conflicts" in text
+    assert "## 7. Historical documentation-authority conflicts (closed)" in text
+    assert "## 7. Unresolved documentation-authority conflicts" not in text
+    assert "Draft / active" not in text

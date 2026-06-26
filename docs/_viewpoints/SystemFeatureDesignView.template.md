@@ -1,12 +1,14 @@
-# <System / Feature Name> — System / Feature Design View
+# \<System / Feature Name\> — System / Feature Design View
 
-**Status:** Draft
+**Status:** Proposed
 **Document Class:** Canonical declarative
 **Viewpoint:** System / Feature Design View
-**Owner:** <team or person>
-**Last Updated:** <YYYY-MM-DD>
-**Audience:** <primary readers>
-**Related:** <links to related canonical docs and/or source issues>
+**Updated:** \<YYYY-MM-DD\>
+**Audience:** \<primary readers\>
+**Authority:** \<feature design claims this document owns while transitional\>
+**Owning Surface:** \<system, module, or feature surface\>
+**Related Docs:** \<links to adjacent canonical docs\>
+**Related Implementation:** \<code modules, entrypoints, or tracking issues\>
 
 > Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
 

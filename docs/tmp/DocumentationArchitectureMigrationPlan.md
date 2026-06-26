@@ -2,9 +2,10 @@
 
 > **Imperative working document — not canonical architecture.**
 > **Type:** Migration Plan (per `docs/DocumentationArchitecture.md` §4 and the MoonSpec Document Model "imperative working documents" class).
-> **Status:** Draft / active (opened 2026-06-24). Time-bound; lives in `docs/tmp/` per Constitution **XV. Canonical Documentation Separates Desired State from Migration Backlog**.
+> **Status:** Superseded / closed by MM-928 (opened 2026-06-24; closed 2026-06-26). Time-bound; lives in `docs/tmp/` per Constitution **XV. Canonical Documentation Separates Desired State from Migration Backlog**.
 > **Authority:** This plan describes *steps to align existing docs with the standard*. It is **not** authoritative desired-state architecture and must never be cited as the source of truth for what the documentation tree *should be*. The authoritative desired state lives in `docs/DocumentationArchitecture.md` (the Standard) and `docs/Workflows/MoonSpecDocumentModel.md` (the Document Model). Where this plan and either of those disagree, **they win**.
-> **Traceability:** MM-907 (*Create a separate migration plan for docs classification and renames*), DESIGN-REQ-017. Source design **MM-900** ("Implement MoonSpec Documentation Architecture Standard"); the canonical standard it applies was authored under **MM-902** (commit `64fa5d0d1`).
+> **Traceability:** MM-907 (*Create a separate migration plan for docs classification and renames*), MM-927 (Moon Spec Doc Architecture Alignment), MM-928 (stabilization cleanup), DESIGN-REQ-017. Source design **MM-900** ("Implement MoonSpec Documentation Architecture Standard"); the canonical standard it applies was authored under **MM-902** (commit `64fa5d0d1`).
+> **Closure note:** This file is retained only as historical `docs/tmp/` working evidence. It no longer records active authority conflicts or active migration direction; the current desired-state rules live in the Standard and Document Model.
 
 ---
 
@@ -12,7 +13,7 @@
 
 This plan exists so that classification and rename cleanup of the **existing** `docs/` tree is tracked as bounded, imperative work — *not* smuggled into the canonical architecture documents as construction-diary prose (Constitution XV; Standard §4 separation rule).
 
-**Goals**
+**Historical goals recorded by this closed plan**
 
 1. Identify existing docs that are clearly **imperative** but currently live beside canonical architecture docs, and move/relabel them.
 2. Identify the **high-value** canonical docs to classify (against the five viewpoints) and, where needed, rename **first**.
@@ -40,26 +41,26 @@ A doc is a **classification target** when its current placement/label is ambiguo
 
 ---
 
-## 3. Imperative docs that currently live beside canonical architecture docs
+## 3. Historical examples of imperative docs beside canonical architecture docs
 
-These are concrete examples found in the current tree (2026-06-24) whose **primary framing is imperative** yet which sit inside canonical `docs/` module/concern directories. They violate the §4 separation rule and should be relocated to `docs/tmp/` (or archived/deleted if the work is complete). This is an enumeration of known offenders, **not** a claim that the list is exhaustive.
+These are concrete examples found in the tree on 2026-06-24 whose **primary framing is imperative** yet which sat inside canonical `docs/` module/concern directories. This section is retained as historical evidence only; it is not an active migration list. Any remaining follow-up belongs in Jira or in the owning canonical document's review, not in this closed plan.
 
 | Doc | Why it is imperative | Action |
 |-----|----------------------|--------|
-| `docs/Temporal/WorkflowLanguageHardSwitchPlan.md` | Header is `Status: Proposed hard-switch implementation plan`; primary framing is a phased cutover plan. | Move to `docs/tmp/WorkflowLanguageHardSwitchPlan.md`; if the hard switch is already complete, archive/delete per §6 and promote any durable target semantics into the relevant Temporal view first. |
-| `docs/ReleaseNotes/MM-730-hard-switch-cutover.md` | A cutover release note: operational sequencing + breaking-change instructions for a specific migration boundary. | Keep release notes as historical record **or** relocate the cutover/rollout sequencing portion to `docs/tmp/`. Decide release-note placement policy (see §7, conflict C2). |
-| `docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md` | Dated batch release note; not desired-state. | Same disposition decision as the row above. |
-| `docs/Rag/ManifestIngestDesign.md` | Self-described "Design **& Implementation**" with implementation-level detail mixed into a canonical Design doc. | Split: keep the design intent as a System / Feature Design View (with a proper `Status:` field), move implementation/rollout detail to `docs/tmp/`. |
+| `docs/Temporal/WorkflowLanguageHardSwitchPlan.md` | Header is `Status: Proposed hard-switch implementation plan`; primary framing is a phased cutover plan. | Historical note; no action is authorized by this closed file. |
+| `docs/ReleaseNotes/MM-730-hard-switch-cutover.md` | A cutover release note: operational sequencing + breaking-change instructions for a specific migration boundary. | Historical note; release-note policy is outside this plan's active scope. |
+| `docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md` | Dated batch release note; not desired-state. | Historical note; release-note policy is outside this plan's active scope. |
+| `docs/Rag/ManifestIngestDesign.md` | Self-described "Design **& Implementation**" with implementation-level detail mixed into a canonical Design doc. | Historical note; no action is authorized by this closed file. |
 
-The bottom of `docs/Rag/ManifestIngestDesign.md` already includes the correct pointer pattern ("Rollout and backlog notes live under `docs/tmp/`…") — confirm the imperative content actually lives there and is not inline.
+The bottom of `docs/Rag/ManifestIngestDesign.md` already included the correct pointer pattern ("Rollout and backlog notes live under `docs/tmp/`..."). This closed plan does not track that follow-up.
 
 ---
 
-## 4. High-value docs to classify first
+## 4. Historical high-value classification notes
 
-Classification effort is prioritized, not uniform. Do these **first** because they are the most-referenced entry points (cited by `CLAUDE.md`, the Standard, or many other docs) and the most likely to be mis-read if their class/viewpoint is ambiguous. Lower-traffic docs are reclassified later or on-touch.
+Classification effort was prioritized, not uniform. These notes are retained to explain the closed plan's scope; they do not create an active backlog.
 
-**Tier 1 — entry points named in `CLAUDE.md` / the Standard (classify first):**
+**Tier 1 — entry points named in `CLAUDE.md` / the Standard:**
 
 1. `docs/MoonMindArchitecture.md` — should read cleanly as the **System Architecture View** (Standard §3.1). Confirm label.
 2. `docs/Steps/SkillSystem.md` — canonical entry for Agent Skills; classify as Module Architecture View or Cross-Cutting Concept View and confirm its naming.
@@ -75,7 +76,7 @@ Classification effort is prioritized, not uniform. Do these **first** because th
 
 - `docs/Workflows/StepReviewGateSystem.md` (currently `Status: Design Draft`), `docs/Rag/ManifestIngestDesign.md` (`Status: Draft`), and any other `*Design.md`. The standard requires the status be exactly one of `Proposed | Accepted | Implemented | Superseded`. Normalize these.
 
-Everything not in Tier 1–3 is explicitly **deferred** and is not part of any completion gate for this plan.
+Everything not in Tier 1-3 was explicitly **deferred** and is not part of any completion gate for this closed plan.
 
 ---
 
@@ -87,7 +88,7 @@ These divergences are recorded so renames are intentional. **Recording a diverge
 |---|------------|------------------------------|-----------------|---------------------|-------------|
 | N1 | **Docs root capitalization** | Standard §7 supports both `docs/` and `Docs/`. | `docs/` (lowercase). | Some downstream trees use `Docs/`. | No action — taxonomy is capitalization-independent; only the path prefix changes. Record only. |
 | N2 | **`…System.md` suffix proliferation** | The five viewpoints have no "System View"; preferred names are `Architecture.md`, `<Feature>Design.md`, `<Surface>Contracts.md`, concept-named. | Many files use `…System.md` (e.g. `SkillSystem.md`, `TemporalSignalsSystem.md`, `WorkflowStepSystem.md`, `SettingsSystem.md`, `StepReviewGateSystem.md`). | Downstream may not use `…System`. | Do **not** mass-rename. When a `…System.md` doc is next substantively edited, decide its viewpoint and rename to the preferred form for that viewpoint. Record the pattern; defer the sweep. |
-| N3 | **Module Architecture View naming** | §3.2 prefers `Architecture.md` or `Overview.md` *inside the module dir*. | MoonMind repeats the module name: `TemporalArchitecture.md`, `WorkflowArchitecture.md`, `ManagedAgentArchitecture.md`. | Varies. | Acceptable variant (`<Module>Architecture.md` is explicitly allowed for the System view in §3.1 and reads clearly here). Record; no forced rename. |
+| N3 | **Module Architecture View naming** | §3.2 now prefers `<ModuleName>ModuleArchitecture.md` inside the module dir. | MoonMind repeats the module name in older files such as `TemporalArchitecture.md`, `WorkflowArchitecture.md`, and `ManagedAgentArchitecture.md`. | Varies. | Historical note only. New module architecture docs use `<ModuleName>ModuleArchitecture.md`; existing filenames are handled on-touch per the standard's incremental adoption policy. |
 | N4 | **Contract placement / naming** | §3.4 + §6: contracts named `<Contract>Contract.md` / `<Surface>Contracts.md`, owned **inside the providing module's doc set**. | `docs/Api/ExecutionsApiContract.md` and `docs/Artifacts/ArtifactPresentationContract.md` sit under surface/concern dirs rather than the providing module's doc set. | Varies. | Tier-2 review: confirm the owning module, and either move the contract into that module's doc set with back-links from consumers, or document why `Api/` is itself the owning surface. See §7 conflict C1. |
 | N5 | **Design `Status:` enum** | §3.3: `Proposed \| Accepted \| Implemented \| Superseded`. | Free-form: `Design Draft`, `Draft (date)`. | Normalize Tier-3 design docs to the enum (§4 Tier 3). |
 | N6 | **Lowercase-hyphen filenames** | MoonMind doc convention is PascalCase `.md`. | `docs/Temporal/ops-runbook.md` (and similar) break the convention. | n/a | On-touch rename to PascalCase (`OpsRunbook.md`) and update references; defer if untouched. |
@@ -111,25 +112,27 @@ When closing this plan, remove it in the same change that lands the last tracked
 
 ---
 
-## 7. Unresolved documentation-authority conflicts (record here or in issue comments)
+## 7. Historical documentation-authority conflicts (closed)
 
-Conflicts surfaced while drafting this plan. Recording them satisfies the MM-907 acceptance criterion that authority conflicts be captured; **resolving** them is follow-up work, not part of this plan.
+The items below were conflicts surfaced while drafting this historical plan. They are **not active authority conflicts** after MM-928: the Standard and Document Model are the desired-state authorities, and unresolved follow-up should be tracked in Jira or in the owning canonical document's review, not by reviving this stale `docs/tmp/` plan.
 
-- **C1 — Contract ownership for shared surfaces.** `docs/Api/ExecutionsApiContract.md` documents an API surface consumed across modules. Standard §6 says each contract is owned by exactly one *providing module*'s doc set; it is unclear whether `Api/` is the providing module's doc set or a global contracts area (which §6 forbids). **Needs a decision** on the owning module before any move. Tracked here pending owner input.
-- **C2 — Release notes vs imperative working docs.** `docs/ReleaseNotes/` holds dated, partly-imperative cutover notes. The standard's four imperative types do not include "release note," and Constitution XV routes migration/rollout sequencing to `docs/tmp/`. **Unresolved:** are release notes a retained historical record exempt from the §4 separation rule, or imperative content that must move? Recorded for owner decision.
-- **C3 — Dual-classified example in the standard.** The Standard cites `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` as an example of *both* a Module Architecture View (§3.2) and a Cross-Cutting Concept View (§3.5). A doc conforms to exactly one viewpoint; this example is ambiguous. **Recorded as a standard-clarification item** (do not silently pick one — escalate to the standard's owner).
-- **C4 — "Research" reports have no viewpoint.** N7 above: deep-research reports are neither one of the five canonical viewpoints nor clearly an imperative working type. **Unresolved** whether the standard should name a "retained research/reference" disposition or whether such reports always belong outside canonical `docs/`.
+- **C1 — Contract ownership for shared surfaces.** Closed as a historical classification question; apply Standard §6 when a contract document is next substantively edited.
+- **C2 — Release notes vs imperative working docs.** Closed as a historical classification question; release-note policy is outside this plan's active scope.
+- **C3 — Dual-classified example in the standard.** Closed by MM-928's standard cleanup: §3.2 now uses a module-architecture filename example rather than the cross-cutting execution-model example.
+- **C4 — "Research" reports have no viewpoint.** Closed as a deferred on-touch classification question, not an active conflict in this plan.
 
-Escalation path for any conflict above: do **not** resolve it by editing canonical docs unilaterally. Raise it with the standard's owner (MM-900/MM-902 lineage) via a Jira issue or PR comment, following the same escalation posture as `moonspec-doc-reconcile` / `document-update`.
+Escalation path for any future conflict: do **not** resolve it by editing canonical docs unilaterally. Raise it with the standard's owner (MM-900/MM-902 lineage) via a Jira issue or PR comment, following the same escalation posture as `moonspec-doc-reconcile` / `document-update`.
 
 ---
 
-## 8. Working sequence (bounded)
+## 8. Historical working sequence (closed)
+
+The sequence below is the closed plan's historical execution outline. It is retained only to explain what this time-bound note once tracked; it is not active guidance and must not be cited as authority for new work.
 
 1. Resolve the Tier-1 classifications in §4 (label-only; no content rewrites).
 2. Relocate the §3 imperative-in-canonical offenders to `docs/tmp/` (or archive if complete), updating all references and deleting old paths in the same change.
 3. Normalize Tier-3 design `Status:` fields (N5).
-4. Record decisions for conflicts C1–C4 (issue/PR comment); apply N4 contract moves only after C1 is decided.
+4. Record decisions for conflicts C1-C4 (issue/PR comment); apply N4 contract moves only after C1 is decided.
 5. Apply N2/N6 renames **on-touch** only; do not schedule a sweep.
 6. When §6 delete/archive criteria are met, delete this file in the closing change.
 

@@ -64,6 +64,17 @@ def test_module_architecture_is_preferred_filename() -> None:
     text = _read()
     assert "<ModuleName>ModuleArchitecture.md" in text
     assert "preferred" in text.lower()
+    assert "docs/<Module>/<ModuleName>ModuleArchitecture.md" in text
+    assert "An `Architecture.md` or `Overview.md` inside the module's doc directory" not in text
+
+
+def test_system_filename_is_durable_and_design_filename_is_transitional() -> None:
+    text = _read()
+    assert "<SystemName>System.md" in text
+    assert "durable system or capability description" in text
+    assert "<FeatureName>Design.md" in text
+    assert "transitional design" in text
+    assert "promote or supersede it when the design becomes settled desired state" in text
 
 
 def test_docs_capitalization_variants_covered() -> None:

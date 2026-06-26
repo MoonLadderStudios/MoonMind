@@ -63,8 +63,8 @@ For each viewpoint below: **Purpose** says why it exists, **Owns** says what con
 
 - **Purpose:** Describe the internal architecture of a single module (an architectural boundary or ownership surface): its responsibilities, internal structure, and how it relates to neighboring modules.
 - **Owns:** That module's internal component model, its responsibilities, and the rationale for its boundary. It does *not* own system-wide structure (System Architecture View) and does *not* own the formal interface another module depends on (that is a Module Contract Specification within this module's doc set).
-- **Preferred naming:** An `Architecture.md` or `Overview.md` inside the module's doc directory, e.g. `docs/<Module>/Architecture.md`.
-- **Example:** `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` (the execution-model architecture for the Temporal runtime boundary).
+- **Preferred naming:** `<ModuleName>ModuleArchitecture.md` inside the module's doc directory, e.g. `docs/<Module>/<ModuleName>ModuleArchitecture.md`.
+- **Example:** `docs/Temporal/TemporalModuleArchitecture.md` (the module architecture entrypoint for the Temporal runtime boundary).
 
 ### 3.3 System / Feature Design View
 
@@ -72,7 +72,7 @@ For each viewpoint below: **Purpose** says why it exists, **Owns** says what con
 - **Owns:** The design intent, the considered options and the chosen approach, and the desired behavior of the feature. It does *not* own the imperative plan to build it (that is an Implementation Plan) and does *not* permanently own settled architecture once the design is realized.
 - **Preferred naming:** `<Feature>Design.md`, placed at the system docs root for system-level features or inside the owning module doc set for module-scoped features.
 - **Status field:** Every System / Feature Design View **must** carry a `Status:` field near the top — one of `Proposed`, `Accepted`, `Implemented`, or `Superseded` — so readers can tell design intent from realized architecture at a glance.
-- **Design → System promotion rule:** When a design reaches `Implemented` and its content is durable desired state, its settled architectural substance **must be promoted** into the appropriate System Architecture View or Module Architecture View, and the Design View is then marked `Superseded` (and pointed at its successor) or removed. A System / Feature Design View is never the permanent home of settled architecture; leaving realized design as the only canonical record is a defect, not a convenience.
+- **Design -> System promotion rule:** When a design reaches `Implemented` and its content is durable desired state, its settled architectural substance **must be promoted** into the appropriate System Architecture View, Module Architecture View, or durable `<SystemName>System.md` concept document, and the Design View is then marked `Superseded` (and pointed at its successor) or removed. A System / Feature Design View is transitional and is never the permanent home of settled architecture; leaving realized design as the only canonical record is a defect, not a convenience.
 - **Example:** A `docs/Workflows/StepReviewGateSystem.md`-style design document carried at `Status: Accepted` while the capability is being designed, later promoted into the relevant architecture view once implemented.
 
 ### 3.4 Module Contract Specification
@@ -230,7 +230,7 @@ docs/
   MoonMindArchitecture.md                 # System Architecture View
   <Feature>Design.md                      # System / Feature Design View (Status: Accepted)
   Workflows/                              # module doc set (architectural boundary)
-    Architecture.md                        # Module Architecture View
+    WorkflowsModuleArchitecture.md         # Module Architecture View
     SkillAndPlanContracts.md               # Module Contract Specification (owned here)
   Security/                               # cross-cutting concern doc set
     OutboundScanPolicy.md                  # Cross-Cutting Concept View
@@ -248,7 +248,7 @@ Docs/
   Features/
     <Feature>Design.md                     # System / Feature Design View (Status: Proposed)
   Billing/                                # module doc set — Bounded Context (passes boundary tests)
-    Architecture.md                        # Module Architecture View
+    BillingModuleArchitecture.md           # Module Architecture View
     BillingApiContract.md                  # Module Contract Specification (owned here)
   Observability/                          # cross-cutting concern doc set
     TelemetryConcepts.md                   # Cross-Cutting Concept View
@@ -337,8 +337,8 @@ New documents use descriptive, PascalCase filenames drawn from a small preferred
 |---|---|
 | `<Topic>Architecture.md` | Top-level or subsystem architecture descriptions (System Architecture View, §3.1). |
 | `<ModuleName>ModuleArchitecture.md` | **Preferred** filename for module-architecture documents — the architecture of a single named module (Module Architecture View, §3.2). |
-| `<Topic>System.md` | A named system or capability (its model, contracts, and operator-visible behavior). |
-| `<Topic>Design.md` | A focused design for a feature or mechanism (System / Feature Design View, §3.3). |
+| `<SystemName>System.md` | A durable system or capability description once its target model, contracts, and operator-visible behavior are settled. |
+| `<FeatureName>Design.md` | A transitional design for a proposed or in-progress feature or mechanism (System / Feature Design View, §3.3); promote or supersede it when the design becomes settled desired state. |
 | `<Topic>Contract.md` | A declarative contract (payload shapes, interface guarantees, boundary semantics — Module Contract Specification, §3.4). |
 | `<Topic>Plan.md` (under `docs/tmp/`) | A time-bound imperative working document. `Plan`-named documents belong under `docs/tmp/`, never in the canonical `docs/` root. |
 

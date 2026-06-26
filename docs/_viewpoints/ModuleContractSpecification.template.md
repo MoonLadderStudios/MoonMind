@@ -1,12 +1,14 @@
-# <Module Name> — Module Contract Specification
+# \<Module Name\> — Module Contract Specification
 
 **Status:** Draft
 **Document Class:** Canonical declarative
 **Viewpoint:** Module Contract Specification
-**Owner:** <team or person>
-**Last Updated:** <YYYY-MM-DD>
-**Audience:** <primary readers>
-**Related:** <links to related canonical docs and/or source issues>
+**Updated:** \<YYYY-MM-DD\>
+**Audience:** \<primary readers\>
+**Authority:** \<module contract claims this document owns\>
+**Owning Surface:** \<providing module or ownership surface\>
+**Related Docs:** \<links to adjacent canonical docs\>
+**Related Implementation:** \<code modules, entrypoints, or tracking issues\>
 
 > Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
 
