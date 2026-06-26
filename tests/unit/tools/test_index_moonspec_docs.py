@@ -123,3 +123,59 @@ def test_default_cli_is_advisory_only_even_with_warnings(tmp_path: Path, monkeyp
     warning_rules = {warning["rule"] for warning in payload["warnings"]}
     assert "missing-index-document-class" in warning_rules
     assert "missing-index-authority" in warning_rules
+
+
+def test_heading_extraction_skips_fenced_code_and_accepts_indentation(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "docs" / "Indented.md",
+        "# Real Document\n\n"
+        "```bash\n"
+        "# Not A Heading\n"
+        "```\n\n"
+        "   ## Indented Section\n\n"
+        "~~~python\n"
+        "### Also Not A Heading\n"
+        "~~~\n",
+    )
+
+    payload = mod.build_index(root=tmp_path)
+
+    anchors = {claim["anchor"] for claim in payload["claims"]}
+    assert "docs/Indented.md#real-document" in anchors
+    assert "docs/Indented.md#indented-section" in anchors
+    assert "docs/Indented.md#not-a-heading" not in anchors
+    assert "docs/Indented.md#also-not-a-heading" not in anchors
+
+
+def test_duplicate_headings_get_unique_markdown_style_anchor_suffixes(
+    tmp_path: Path,
+) -> None:
+    _write(
+        tmp_path / "docs" / "Roadmap.md",
+        "# Roadmap\n\n## Remaining Work\n\nFirst.\n\n## Remaining Work\n\nSecond.\n",
+    )
+
+    payload = mod.build_index(root=tmp_path)
+
+    claims = {claim["anchor"]: claim for claim in payload["claims"]}
+    assert "docs/Roadmap.md#remaining-work" in claims
+    assert "docs/Roadmap.md#remaining-work-1" in claims
+    assert (
+        claims["docs/Roadmap.md#remaining-work"]["id"]
+        != claims["docs/Roadmap.md#remaining-work-1"]["id"]
+    )
+
+
+def test_explicit_paths_are_normalized_relative_to_repo_root(tmp_path: Path) -> None:
+    doc_path = tmp_path / "docs" / "Explicit.md"
+    _write(doc_path, "# Explicit\n\nSome prose.\n")
+
+    payload = mod.build_index(
+        paths=["./docs/Explicit.md", str(doc_path)],
+        root=tmp_path,
+    )
+
+    assert payload["documentCount"] == 1
+    assert payload["documents"][0]["path"] == "docs/Explicit.md"

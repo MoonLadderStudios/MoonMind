@@ -36,7 +36,7 @@ ISSUE = "MM-930"
 DEFAULT_OUTPUT = Path("artifacts/moonspec-doc-index/index.json")
 CONSTITUTION_PATH = ".specify/memory/constitution.md"
 
-HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$")
 METADATA_RE = re.compile(r"^\s*\*\*([^*:\n]+):\*\*\s*(.*?)\s*$")
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 IMPLEMENTATION_TOKEN_RE = re.compile(
@@ -154,7 +154,14 @@ def _anchor_for_heading(heading: str) -> str:
 def _heading_sections(text: str) -> list[tuple[int, str, str]]:
     lines = text.splitlines()
     headings: list[tuple[int, int, str]] = []
+    in_fence = False
     for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
         match = HEADING_RE.match(line)
         if match:
             headings.append((index, len(match.group(1)), match.group(2).strip()))
@@ -186,6 +193,14 @@ def _claim_digest(path: str, heading: str, section_text: str) -> str:
     return "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _unique_anchor(anchor: str, seen: dict[str, int]) -> str:
+    count = seen.get(anchor, 0)
+    seen[anchor] = count + 1
+    if count == 0:
+        return anchor
+    return f"{anchor}-{count}"
+
+
 def _warning(rule: str, path: str, message: str, detail: str = "") -> Finding:
     return Finding(
         rule=rule,
@@ -205,7 +220,21 @@ def _constitution_doc(root: Path) -> tuple[str, str] | None:
 
 
 def _index_paths(paths: Iterable[str], *, root: Path) -> list[str]:
-    docs = [path for path in paths if is_canonical_doc(path)]
+    resolved_root = root.resolve()
+    docs: list[str] = []
+    for path in paths:
+        path_obj = Path(path)
+        try:
+            candidate = path_obj if path_obj.is_absolute() else root / path_obj
+            resolved_candidate = candidate.resolve()
+            if resolved_candidate.is_relative_to(resolved_root):
+                normalized = resolved_candidate.relative_to(resolved_root).as_posix()
+            else:
+                normalized = path_obj.as_posix()
+        except (OSError, RuntimeError, ValueError):
+            normalized = path_obj.as_posix()
+        if is_canonical_doc(normalized):
+            docs.append(normalized)
     if (root / CONSTITUTION_PATH).is_file():
         docs.append(CONSTITUTION_PATH)
     return sorted(dict.fromkeys(docs))
@@ -306,8 +335,9 @@ def build_index(paths: Iterable[str] | None = None, *, root: Path | None = None)
             )
         )
 
+        seen_anchors: dict[str, int] = {}
         for level, heading, section_text in _heading_sections(doc.text):
-            anchor = _anchor_for_heading(heading)
+            anchor = _unique_anchor(_anchor_for_heading(heading), seen_anchors)
             claim_entries.append(
                 ClaimEntry(
                     id=_claim_id(path, anchor),
