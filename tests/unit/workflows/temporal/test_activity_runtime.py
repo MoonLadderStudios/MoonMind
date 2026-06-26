@@ -2575,9 +2575,12 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
 async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runner_status(
     tmp_path: Path,
 ):
-    session_param = "session" + "id"
-    session_marker = "redaction-canary-value"
-    target_url = f"https://lab.example.test/app?{session_param}={session_marker}"
+    sensitive_query_param = "sig"
+    sensitive_query_marker = "redaction-canary-value"
+    target_url = (
+        f"https://lab.example.test/app?{sensitive_query_param}="
+        f"{sensitive_query_marker}"
+    )
 
     class _RunnerFailedFindingsLauncher(_FileWritingPentestLauncher):
         async def run(self, request: object) -> WorkloadResult:
@@ -2652,7 +2655,7 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
             assert result["evidence_refs"]
             assert result["report_bundle"]["counts"]["findings_count"] == 0
             assert result["terminal_cleanup"]["terminal_reason"] == "failure"
-            assert session_marker not in str(result)
+            assert sensitive_query_marker not in str(result)
 
             artifacts = await service.list_for_execution(
                 namespace="default",
@@ -2663,11 +2666,11 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
                 latest_only=True,
             )
             assert artifacts
-            assert session_marker not in json.dumps(
+            assert sensitive_query_marker not in json.dumps(
                 artifacts[0].metadata_json,
                 sort_keys=True,
             )
-            assert f"{session_param}=[REDACTED]" in json.dumps(
+            assert f"{sensitive_query_param}=[REDACTED]" in json.dumps(
                 artifacts[0].metadata_json,
                 sort_keys=True,
             )
