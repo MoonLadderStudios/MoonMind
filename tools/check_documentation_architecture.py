@@ -122,7 +122,7 @@ CANONICAL_CLAIM_ID_RE = re.compile(
 )
 CLAIM_HEADING_RE = re.compile(
     rf"^\s{{0,3}}#{{1,6}}\s+(?:`|\*\*)?"
-    rf"(?P<id>(?:{CANONICAL_CLAIM_PREFIX_RE})(?:-[A-Za-z0-9_]+)?)"
+    rf"(?P<id>(?:{CANONICAL_CLAIM_PREFIX_RE})(?:-[^\s:|`*]*)?)"
     rf"(?:`|\*\*)?(?=\s|:|-|$)"
 )
 
@@ -165,6 +165,8 @@ def is_canonical_doc(path: str) -> bool:
     """True for canonical declarative docs (``docs/**.md`` minus excluded trees)."""
 
     if not path.endswith(".md"):
+        return False
+    if path.endswith(".template.md"):
         return False
     if not _is_under(path, CANONICAL_DOCS_ROOT):
         return False

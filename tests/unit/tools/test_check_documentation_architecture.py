@@ -187,11 +187,13 @@ def test_malformed_canonical_claim_id_heading_is_advisory() -> None:
         _doc(
             "docs/Workflows/Thing.md",
             "# Thing\n\n**Document Class:** Canonical declarative\n\n"
-            "### DOC-REQ-1 Missing zero padding\n",
+            "### DOC-REQ-1 Missing zero padding\n"
+            "### DOC-REQ-001-A Trailing characters\n",
         )
     ]
     findings = mod.check_malformed_claim_ids(docs)
     assert _rules(findings) == {"malformed-claim-id"}
+    assert len(findings) == 2
     assert findings[0].severity == mod.SEVERITY_ADVISORY
 
 
@@ -226,6 +228,24 @@ def test_duplicate_canonical_claim_ids_are_advisory() -> None:
         "docs/A/Thing.md",
         "docs/B/Thing.md",
     }
+
+
+def test_template_claim_ids_are_not_validated() -> None:
+    docs = [
+        _doc(
+            "docs/_viewpoints/SystemArchitectureView.template.md",
+            "# <System Name> -- System Architecture View\n\n"
+            "**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ-001 <concise stable requirement heading>\n",
+        ),
+        _doc(
+            "docs/Workflows/Thing.md",
+            "# Thing\n\n**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ-001 Stable claim\n",
+        ),
+    ]
+    assert mod.check_duplicate_claim_ids(docs) == []
+    assert mod.check_malformed_claim_ids(docs) == []
 
 
 def test_design_req_traceability_is_not_a_canonical_claim_id() -> None:
