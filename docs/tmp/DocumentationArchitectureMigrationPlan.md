@@ -2,9 +2,10 @@
 
 > **Imperative working document — not canonical architecture.**
 > **Type:** Migration Plan (per `docs/DocumentationArchitecture.md` §4 and the MoonSpec Document Model "imperative working documents" class).
-> **Status:** Draft / active (opened 2026-06-24). Time-bound; lives in `docs/tmp/` per Constitution **XV. Canonical Documentation Separates Desired State from Migration Backlog**.
+> **Status:** Superseded / closed by MM-928 (opened 2026-06-24; closed 2026-06-26). Time-bound; lives in `docs/tmp/` per Constitution **XV. Canonical Documentation Separates Desired State from Migration Backlog**.
 > **Authority:** This plan describes *steps to align existing docs with the standard*. It is **not** authoritative desired-state architecture and must never be cited as the source of truth for what the documentation tree *should be*. The authoritative desired state lives in `docs/DocumentationArchitecture.md` (the Standard) and `docs/Workflows/MoonSpecDocumentModel.md` (the Document Model). Where this plan and either of those disagree, **they win**.
-> **Traceability:** MM-907 (*Create a separate migration plan for docs classification and renames*), DESIGN-REQ-017. Source design **MM-900** ("Implement MoonSpec Documentation Architecture Standard"); the canonical standard it applies was authored under **MM-902** (commit `64fa5d0d1`).
+> **Traceability:** MM-907 (*Create a separate migration plan for docs classification and renames*), MM-927 (Moon Spec Doc Architecture Alignment), MM-928 (stabilization cleanup), DESIGN-REQ-017. Source design **MM-900** ("Implement MoonSpec Documentation Architecture Standard"); the canonical standard it applies was authored under **MM-902** (commit `64fa5d0d1`).
+> **Closure note:** This file is retained only as historical `docs/tmp/` working evidence. It no longer records active authority conflicts or active migration direction; the current desired-state rules live in the Standard and Document Model.
 
 ---
 
@@ -87,7 +88,7 @@ These divergences are recorded so renames are intentional. **Recording a diverge
 |---|------------|------------------------------|-----------------|---------------------|-------------|
 | N1 | **Docs root capitalization** | Standard §7 supports both `docs/` and `Docs/`. | `docs/` (lowercase). | Some downstream trees use `Docs/`. | No action — taxonomy is capitalization-independent; only the path prefix changes. Record only. |
 | N2 | **`…System.md` suffix proliferation** | The five viewpoints have no "System View"; preferred names are `Architecture.md`, `<Feature>Design.md`, `<Surface>Contracts.md`, concept-named. | Many files use `…System.md` (e.g. `SkillSystem.md`, `TemporalSignalsSystem.md`, `WorkflowStepSystem.md`, `SettingsSystem.md`, `StepReviewGateSystem.md`). | Downstream may not use `…System`. | Do **not** mass-rename. When a `…System.md` doc is next substantively edited, decide its viewpoint and rename to the preferred form for that viewpoint. Record the pattern; defer the sweep. |
-| N3 | **Module Architecture View naming** | §3.2 prefers `Architecture.md` or `Overview.md` *inside the module dir*. | MoonMind repeats the module name: `TemporalArchitecture.md`, `WorkflowArchitecture.md`, `ManagedAgentArchitecture.md`. | Varies. | Acceptable variant (`<Module>Architecture.md` is explicitly allowed for the System view in §3.1 and reads clearly here). Record; no forced rename. |
+| N3 | **Module Architecture View naming** | §3.2 now prefers `<ModuleName>ModuleArchitecture.md` inside the module dir. | MoonMind repeats the module name in older files such as `TemporalArchitecture.md`, `WorkflowArchitecture.md`, and `ManagedAgentArchitecture.md`. | Varies. | Historical note only. New module architecture docs use `<ModuleName>ModuleArchitecture.md`; existing filenames are handled on-touch per the standard's incremental adoption policy. |
 | N4 | **Contract placement / naming** | §3.4 + §6: contracts named `<Contract>Contract.md` / `<Surface>Contracts.md`, owned **inside the providing module's doc set**. | `docs/Api/ExecutionsApiContract.md` and `docs/Artifacts/ArtifactPresentationContract.md` sit under surface/concern dirs rather than the providing module's doc set. | Varies. | Tier-2 review: confirm the owning module, and either move the contract into that module's doc set with back-links from consumers, or document why `Api/` is itself the owning surface. See §7 conflict C1. |
 | N5 | **Design `Status:` enum** | §3.3: `Proposed \| Accepted \| Implemented \| Superseded`. | Free-form: `Design Draft`, `Draft (date)`. | Normalize Tier-3 design docs to the enum (§4 Tier 3). |
 | N6 | **Lowercase-hyphen filenames** | MoonMind doc convention is PascalCase `.md`. | `docs/Temporal/ops-runbook.md` (and similar) break the convention. | n/a | On-touch rename to PascalCase (`OpsRunbook.md`) and update references; defer if untouched. |
@@ -111,16 +112,16 @@ When closing this plan, remove it in the same change that lands the last tracked
 
 ---
 
-## 7. Unresolved documentation-authority conflicts (record here or in issue comments)
+## 7. Historical documentation-authority conflicts (closed)
 
-Conflicts surfaced while drafting this plan. Recording them satisfies the MM-907 acceptance criterion that authority conflicts be captured; **resolving** them is follow-up work, not part of this plan.
+The items below were conflicts surfaced while drafting this historical plan. They are **not active authority conflicts** after MM-928: the Standard and Document Model are the desired-state authorities, and unresolved follow-up should be tracked in Jira or in the owning canonical document's review, not by reviving this stale `docs/tmp/` plan.
 
-- **C1 — Contract ownership for shared surfaces.** `docs/Api/ExecutionsApiContract.md` documents an API surface consumed across modules. Standard §6 says each contract is owned by exactly one *providing module*'s doc set; it is unclear whether `Api/` is the providing module's doc set or a global contracts area (which §6 forbids). **Needs a decision** on the owning module before any move. Tracked here pending owner input.
-- **C2 — Release notes vs imperative working docs.** `docs/ReleaseNotes/` holds dated, partly-imperative cutover notes. The standard's four imperative types do not include "release note," and Constitution XV routes migration/rollout sequencing to `docs/tmp/`. **Unresolved:** are release notes a retained historical record exempt from the §4 separation rule, or imperative content that must move? Recorded for owner decision.
-- **C3 — Dual-classified example in the standard.** The Standard cites `docs/Temporal/ManagedAndExternalAgentExecutionModel.md` as an example of *both* a Module Architecture View (§3.2) and a Cross-Cutting Concept View (§3.5). A doc conforms to exactly one viewpoint; this example is ambiguous. **Recorded as a standard-clarification item** (do not silently pick one — escalate to the standard's owner).
-- **C4 — "Research" reports have no viewpoint.** N7 above: deep-research reports are neither one of the five canonical viewpoints nor clearly an imperative working type. **Unresolved** whether the standard should name a "retained research/reference" disposition or whether such reports always belong outside canonical `docs/`.
+- **C1 — Contract ownership for shared surfaces.** Closed as a historical classification question; apply Standard §6 when a contract document is next substantively edited.
+- **C2 — Release notes vs imperative working docs.** Closed as a historical classification question; release-note policy is outside this plan's active scope.
+- **C3 — Dual-classified example in the standard.** Closed by MM-928's standard cleanup: §3.2 now uses a module-architecture filename example rather than the cross-cutting execution-model example.
+- **C4 — "Research" reports have no viewpoint.** Closed as a deferred on-touch classification question, not an active conflict in this plan.
 
-Escalation path for any conflict above: do **not** resolve it by editing canonical docs unilaterally. Raise it with the standard's owner (MM-900/MM-902 lineage) via a Jira issue or PR comment, following the same escalation posture as `moonspec-doc-reconcile` / `document-update`.
+Escalation path for any future conflict: do **not** resolve it by editing canonical docs unilaterally. Raise it with the standard's owner (MM-900/MM-902 lineage) via a Jira issue or PR comment, following the same escalation posture as `moonspec-doc-reconcile` / `document-update`.
 
 ---
 

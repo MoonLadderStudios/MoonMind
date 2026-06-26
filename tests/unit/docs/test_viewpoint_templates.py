@@ -35,8 +35,25 @@ def test_canonical_template_embeds_canonical_header(filename: str, viewpoint: st
     text = _read(VIEWPOINTS_DIR / filename)
     assert "**Document Class:** Canonical declarative" in text
     assert f"**Viewpoint:** {viewpoint}" in text
+    for field in (
+        "Updated",
+        "Audience",
+        "Authority",
+        "Owning Surface",
+        "Related Docs",
+        "Related Implementation",
+    ):
+        assert f"**{field}:**" in text
+    for legacy_field in ("Owner", "Last Updated", "Related"):
+        assert f"**{legacy_field}:**" not in text
     # Canonical viewpoints must not carry the imperative-plan markers.
     assert "Imperative working document" not in text
+
+
+def test_system_feature_design_template_uses_allowed_status_value() -> None:
+    text = _read(VIEWPOINTS_DIR / "SystemFeatureDesignView.template.md")
+    assert "**Status:** Proposed" in text
+    assert "**Status:** Draft" not in text
 
 
 def test_plan_template_embeds_imperative_plan_header() -> None:
