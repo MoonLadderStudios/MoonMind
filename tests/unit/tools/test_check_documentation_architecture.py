@@ -182,13 +182,104 @@ def test_decision_record_directory_and_adr_file_are_discouraged() -> None:
     }
 
 
+def test_malformed_canonical_claim_id_heading_is_advisory() -> None:
+    docs = [
+        _doc(
+            "docs/Workflows/Thing.md",
+            "# Thing\n\n**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ-1 Missing zero padding\n"
+            "### DOC-REQ-001-A Trailing characters\n",
+        )
+    ]
+    findings = mod.check_malformed_claim_ids(docs)
+    assert _rules(findings) == {"malformed-claim-id"}
+    assert len(findings) == 2
+    assert findings[0].severity == mod.SEVERITY_ADVISORY
+
+
+def test_claim_heading_prefix_without_number_is_malformed() -> None:
+    docs = [
+        _doc(
+            "docs/Workflows/Thing.md",
+            "# Thing\n\n**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ Missing number\n",
+        )
+    ]
+    findings = mod.check_malformed_claim_ids(docs)
+    assert _rules(findings) == {"malformed-claim-id"}
+
+
+def test_duplicate_canonical_claim_ids_are_advisory() -> None:
+    docs = [
+        _doc(
+            "docs/A/Thing.md",
+            "# Thing A\n\n**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ-001 One claim\n",
+        ),
+        _doc(
+            "docs/B/Thing.md",
+            "# Thing B\n\n**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ-001 Another claim\n",
+        ),
+    ]
+    findings = mod.check_duplicate_claim_ids(docs)
+    assert _rules(findings) == {"duplicate-claim-id"}
+    assert {finding.path for finding in findings} == {
+        "docs/A/Thing.md",
+        "docs/B/Thing.md",
+    }
+
+
+def test_template_claim_ids_are_not_validated() -> None:
+    docs = [
+        _doc(
+            "docs/_viewpoints/SystemArchitectureView.template.md",
+            "# <System Name> -- System Architecture View\n\n"
+            "**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ-001 <concise stable requirement heading>\n",
+        ),
+        _doc(
+            "docs/Workflows/Thing.md",
+            "# Thing\n\n**Document Class:** Canonical declarative\n\n"
+            "### DOC-REQ-001 Stable claim\n",
+        ),
+    ]
+    assert mod.check_duplicate_claim_ids(docs) == []
+    assert mod.check_malformed_claim_ids(docs) == []
+
+
+def test_design_req_traceability_is_not_a_canonical_claim_id() -> None:
+    docs = [
+        _doc(
+            "docs/Workflows/Thing.md",
+            "# Thing\n\n**Document Class:** Canonical declarative\n\n"
+            "Traceability: DESIGN-REQ-008\n\n"
+            "### DOC-REQ-001 Stable claim\n",
+        )
+    ]
+    assert mod.check_malformed_claim_ids(docs) == []
+    assert mod.check_duplicate_claim_ids(docs) == []
+
+
+def test_claim_ids_in_fenced_examples_are_not_validated() -> None:
+    docs = [
+        _doc(
+            "docs/Workflows/Thing.md",
+            "# Thing\n\n**Document Class:** Canonical declarative\n\n"
+            "```markdown\n### DOC-REQ-1 Example only\n```\n",
+        )
+    ]
+    assert mod.check_malformed_claim_ids(docs) == []
+
+
 def test_clean_canonical_doc_produces_no_findings() -> None:
     docs = [
         _doc(
             "docs/Workflows/CleanContract.md",
             "# Clean Contract\n\n**Document Class:** Module Contract Specification\n\n"
             "This document is the authoritative source of truth, owned by the "
-            "workflows module.\n",
+            "workflows module.\n\n"
+            "### CONTRACT-001 Stable guarantee\n",
         )
     ]
     assert mod.run_checks(docs) == []

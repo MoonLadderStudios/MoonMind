@@ -14,6 +14,7 @@ from moonmind.workflows.temporal.workflows.run import (
     NATIVE_PR_LEASE_CONFLICT_GATE_PATCH,
     NATIVE_PR_PUSH_STATUS_GATE_PATCH,
     RUN_CONDITIONAL_REGISTRY_READ_PATCH,
+    RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
     RUN_HANDOFF_ACCEPTED_DISPOSITION_GATE_PATCH,
     RUN_PAUSE_SAFE_BOUNDARIES_PATCH,
     RUN_PUBLISH_REPAIR_FEEDBACK_PATCH,
@@ -3085,6 +3086,103 @@ def test_record_execution_context_tracks_mapped_agent_run_report(
     assert mock_run_workflow._report_created is True
     assert mock_run_workflow._report_ref == "art_report_2"
     assert status == "success"
+    assert publish_failure is False
+
+
+def test_record_execution_context_tracks_direct_pentest_report_result(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
+    )
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result={
+            "status": "completed",
+            "primary_report_ref": "art_pentest_report_1",
+            "report_type": "security_pentest_report",
+            "report_scope": "final",
+            "report_bundle": {
+                "report_bundle_v": 1,
+                "primary_report_ref": {
+                    "artifact_ref_v": 1,
+                    "artifact_id": "art_pentest_report_1",
+                },
+                "report_type": "security_pentest_report",
+                "report_scope": "final",
+            },
+        },
+    )
+
+    status, _message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "none",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert mock_run_workflow._report_created is True
+    assert mock_run_workflow._report_ref == "art_pentest_report_1"
+    assert status == "success"
+    assert publish_failure is False
+
+
+def test_pentest_report_result_makes_pr_publish_not_required(
+    mock_run_workflow: MoonMindRunWorkflow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        run_workflow_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
+    )
+    execution_result = {
+        "status": "completed",
+        "push_status": "no_commits",
+        "primary_report_ref": "art_pentest_report_1",
+        "report_type": "security_pentest_report",
+        "report_scope": "final",
+        "report_bundle": {
+            "report_bundle_v": 1,
+            "primary_report_ref": {
+                "artifact_ref_v": 1,
+                "artifact_id": "art_pentest_report_1",
+            },
+            "report_type": "security_pentest_report",
+            "report_scope": "final",
+        },
+    }
+
+    mock_run_workflow._record_execution_context(
+        node_id="step-1",
+        execution_result=execution_result,
+    )
+    mock_run_workflow._record_publish_result(
+        parameters={
+            "publishMode": "pr",
+            "reportOutput": {"enabled": True, "required": True},
+        },
+        execution_result=execution_result,
+    )
+
+    status, message, publish_failure = mock_run_workflow._determine_publish_completion(
+        parameters={
+            "publishMode": "pr",
+            "reportOutput": {"enabled": True, "required": True},
+        }
+    )
+
+    assert mock_run_workflow._publish_status == "not_required"
+    assert mock_run_workflow._publish_reason == (
+        "security.pentest.run produced a final report artifact; "
+        "PR/branch publication is not applicable"
+    )
+    assert status == "success"
+    assert "PR/branch publication is not applicable" in message
     assert publish_failure is False
 
 

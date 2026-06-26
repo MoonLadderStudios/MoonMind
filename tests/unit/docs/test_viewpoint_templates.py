@@ -64,6 +64,22 @@ def test_plan_template_embeds_imperative_plan_header() -> None:
     assert "Canonical declarative" not in text
 
 
+def test_canonical_templates_show_stable_claim_heading_examples() -> None:
+    expected = {
+        "SystemArchitectureView.template.md": "### DOC-REQ-001",
+        "ModuleArchitectureView.template.md": "### INV-001",
+        "SystemFeatureDesignView.template.md": "### NON-GOAL-001",
+        "ModuleContractSpecification.template.md": "### CONTRACT-001",
+    }
+    for filename, heading in expected.items():
+        assert heading in _read(VIEWPOINTS_DIR / filename)
+
+    feature_text = _read(VIEWPOINTS_DIR / "SystemFeatureDesignView.template.md")
+    assert "### QUALITY-001" in feature_text
+    contract_text = _read(VIEWPOINTS_DIR / "ModuleContractSpecification.template.md")
+    assert "### TEST-001" in contract_text
+
+
 @pytest.mark.parametrize("filename", ALL_TEMPLATES)
 def test_standard_references_each_template(filename: str) -> None:
     standard_text = _read(STANDARD)

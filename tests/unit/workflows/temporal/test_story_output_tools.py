@@ -389,6 +389,7 @@ async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_
                 "description": "As an operator, I can track proposal intent.",
                 "sourceReference": {
                     "sections": ["Section 1"],
+                    "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
                     "coverageIds": ["DESIGN-REQ-001"],
                 },
             }
@@ -426,6 +427,8 @@ async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_
     )
     assert "Source Document: docs/Designs/RuntimeTypes.md" in request.description
     assert "Section 1" in request.description
+    assert "Canonical Claim IDs:" in request.description
+    assert "docs/Designs/RuntimeTypes.md#section-1-001" in request.description
     assert "DESIGN-REQ-001" in request.description
 
 @pytest.mark.asyncio
@@ -443,6 +446,7 @@ async def test_create_jira_issues_reads_story_breakdown_artifact_before_repo_pat
                 "description": "As an operator, I can export from a durable artifact.",
                 "sourceReference": {
                     "sections": ["Section 1"],
+                    "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
                     "coverageIds": ["DESIGN-REQ-001"],
                 },
             }
@@ -540,6 +544,9 @@ async def test_create_jira_issues_reads_story_payload_from_previous_outputs():
                             "description": "As an operator, I can reuse prior output.",
                             "sourceReference": {
                                 "path": "docs/Designs/RuntimeTypes.md",
+                                "claimIds": [
+                                    "docs/Designs/RuntimeTypes.md#section-1-001"
+                                ],
                             },
                         }
                     ]
@@ -562,7 +569,10 @@ async def test_create_jira_issues_reads_story_artifact_ref_from_previous_outputs
                 "id": "STORY-001",
                 "summary": "Create previous-output artifact Jira story",
                 "description": "As an operator, I can reuse a durable handoff.",
-                "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                "sourceReference": {
+                    "path": "docs/Designs/RuntimeTypes.md",
+                    "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
+                },
             }
         ],
     }
@@ -743,7 +753,10 @@ async def test_create_jira_issues_reads_previous_outputs_from_tool_inputs():
                 "id": "STORY-001",
                 "summary": "Create input previous-output Jira story",
                 "description": "As an operator, I can reuse an input handoff.",
-                "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                "sourceReference": {
+                    "path": "docs/Designs/RuntimeTypes.md",
+                    "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
+                },
             }
         ],
     }
@@ -902,6 +915,9 @@ async def test_create_jira_issues_preserves_source_reference_when_description_tr
                     "sourceReference": {
                         "path": "docs/Designs/RuntimeTypes.md",
                         "sections": ["Section 1"],
+                        "claimIds": [
+                            "docs/Designs/RuntimeTypes.md#section-1-001"
+                        ],
                         "coverageIds": ["DESIGN-REQ-001"],
                     },
                 }
@@ -970,6 +986,74 @@ async def test_create_jira_issues_blocks_story_breakdown_when_source_reference_r
     assert "requires sourceReference.path" in result.outputs["storyOutput"]["reason"]
     assert "STORY-001" in result.outputs["storyOutput"]["reason"]
 
+@pytest.mark.asyncio
+async def test_create_jira_issues_blocks_file_backed_story_without_claim_ids():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "storyBreakdown": {
+                "source": {"referencePath": "docs/Designs/RuntimeTypes.md"},
+                "stories": [
+                    {
+                        "id": "STORY-001",
+                        "summary": "Missing canonical claim",
+                        "sourceReference": {
+                            "path": "docs/Designs/RuntimeTypes.md",
+                        },
+                    },
+                ],
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert service.requests == []
+    assert result.outputs["storyOutput"]["status"] == "fallback"
+    assert "requires sourceReference.claimIds" in result.outputs["storyOutput"]["reason"]
+    assert "STORY-001" in result.outputs["storyOutput"]["reason"]
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_accepts_optional_file_backed_story_without_claim_ids():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "sourceReferencePolicy": "optional",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "storyBreakdown": {
+                "stories": [
+                    {
+                        "id": "STORY-001",
+                        "summary": "Optional canonical claim",
+                        "sourceReference": {
+                            "path": "docs/Designs/RuntimeTypes.md",
+                        },
+                    },
+                ],
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert len(service.requests) == 1
+
 @pytest.mark.parametrize("policy", [True, "true", "yes", "1", "on"])
 def test_requires_story_source_reference_accepts_truthy_policy_values(policy):
     assert (
@@ -993,7 +1077,7 @@ def test_requires_story_source_reference_accepts_falsy_policy_values(policy):
     )
 
 @pytest.mark.asyncio
-async def test_create_jira_issues_accepts_string_source_reference_from_breakdown():
+async def test_create_jira_issues_accepts_claim_backed_source_reference_from_breakdown():
     service = _FakeJiraService()
 
     result = await create_jira_issues_from_stories(
@@ -1011,7 +1095,10 @@ async def test_create_jira_issues_accepts_string_source_reference_from_breakdown
                 {
                     "id": "STORY-001",
                     "summary": "String source",
-                    "sourceReference": "docs/Designs/RuntimeTypes.md",
+                    "sourceReference": {
+                        "path": "docs/Designs/RuntimeTypes.md",
+                        "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
+                    },
                 }
             ],
         },
@@ -1035,6 +1122,9 @@ async def test_create_jira_issues_uses_source_document_as_breakdown_fallback_pat
                 "id": "STORY-001",
                 "summary": "Top-level source document",
                 "description": "Create a traced story.",
+                "sourceReference": {
+                    "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
+                },
             }
         ],
     }
@@ -1313,11 +1403,17 @@ async def test_create_jira_issues_fallback_reports_partial_success():
             "stories": [
                 {
                     "summary": "First",
-                    "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                    "sourceReference": {
+                        "path": "docs/Designs/RuntimeTypes.md",
+                        "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
+                    },
                 },
                 {
                     "summary": "Second",
-                    "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                    "sourceReference": {
+                        "path": "docs/Designs/RuntimeTypes.md",
+                        "claimIds": ["docs/Designs/RuntimeTypes.md#section-2-001"],
+                    },
                 },
             ],
         },
@@ -1381,7 +1477,10 @@ async def test_create_jira_issues_issue_mappings_carry_source_design_path():
                 {
                     "id": "STORY-001",
                     "summary": "First",
-                    "sourceReference": {"path": "docs/Designs/RuntimeTypes.md"},
+                    "sourceReference": {
+                        "path": "docs/Designs/RuntimeTypes.md",
+                        "claimIds": ["docs/Designs/RuntimeTypes.md#section-1-001"],
+                    },
                 },
                 {
                     "id": "STORY-002",
@@ -1394,6 +1493,9 @@ async def test_create_jira_issues_issue_mappings_carry_source_design_path():
 
     mappings = result.outputs["jira"]["issueMappings"]
     assert mappings[0]["sourceDesignPath"] == "docs/Designs/RuntimeTypes.md"
+    assert mappings[0]["sourceClaimIds"] == [
+        "docs/Designs/RuntimeTypes.md#section-1-001"
+    ]
     assert mappings[1]["sourceDesignPath"] == ""
 
 @pytest.mark.asyncio
@@ -1409,7 +1511,15 @@ async def test_create_jira_issues_issue_mappings_use_breakdown_source_fallback()
             "storyBreakdown": {
                 "source": {"referencePath": "docs/Designs/RuntimeTypes.md"},
                 "stories": [
-                    {"id": "STORY-001", "summary": "First"},
+                    {
+                        "id": "STORY-001",
+                        "summary": "First",
+                        "sourceReference": {
+                            "claimIds": [
+                                "docs/Designs/RuntimeTypes.md#section-1-001"
+                            ],
+                        },
+                    },
                 ],
             },
         },
@@ -1418,6 +1528,9 @@ async def test_create_jira_issues_issue_mappings_use_breakdown_source_fallback()
 
     mappings = result.outputs["jira"]["issueMappings"]
     assert mappings[0]["sourceDesignPath"] == "docs/Designs/RuntimeTypes.md"
+    assert mappings[0]["sourceClaimIds"] == [
+        "docs/Designs/RuntimeTypes.md#section-1-001"
+    ]
 
 @pytest.mark.asyncio
 async def test_check_jira_blockers_blocks_on_single_outward_unresolved_blocks_link():
@@ -1949,6 +2062,9 @@ async def test_create_jira_orchestrate_tasks_propagates_source_design_path():
                         "summary": "First",
                         "issueKey": "MM-501",
                         "sourceDesignPath": "docs/Designs/RuntimeTypes.md",
+                        "sourceClaimIds": [
+                            "docs/Designs/RuntimeTypes.md#section-1-001"
+                        ],
                     },
                     {
                         "storyId": "STORY-002",
@@ -1968,12 +2084,20 @@ async def test_create_jira_orchestrate_tasks_propagates_source_design_path():
     assert first_task["inputs"]["source_design_path"] == (
         "docs/Designs/RuntimeTypes.md"
     )
+    assert first_task["inputs"]["source_claim_ids"] == [
+        "docs/Designs/RuntimeTypes.md#section-1-001"
+    ]
     assert (
         "Source design document: docs/Designs/RuntimeTypes.md"
         in first_task["instructions"]
     )
+    assert (
+        "Source canonical claim IDs: docs/Designs/RuntimeTypes.md#section-1-001"
+        in first_task["instructions"]
+    )
     second_task = creator.requests[1]["initial_parameters"]["workflow"]
     assert second_task["inputs"]["source_design_path"] == ""
+    assert second_task["inputs"]["source_claim_ids"] == []
     assert "Source design document: not provided" in second_task["instructions"]
 
 @pytest.mark.asyncio

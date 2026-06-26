@@ -59,6 +59,7 @@ For source-backed requests:
    - `**Owning Surface**`: authority scope, module, feature, contract surface, or `none` with reason.
    - `**Stable Claim IDs**`: existing source claim IDs and generated `CLAIM-*` IDs used by the selected story, or `none` with reason.
    - `**Source Issue Traceability**`: preserve issue lineage such as `MM-933` and source issue `MM-927` when present.
+   - When the request comes from a `moonspec-breakdown` story whose `sourceReference` contains stable canonical `claimIds`, list those claim IDs exactly as supplied in `**Stable Claim IDs**` and keep the generated `DESIGN-REQ-*` mapping in the Source Design Requirements section.
 9. If drafting reveals a conflict between the feature request and the canonical source document, surface it as a `[NEEDS CLARIFICATION]` marker or an explicitly flagged conflict in the spec. Do not silently resolve the conflict toward either side; the canonical document wins by default, and evidence that the document itself is wrong must flow to doc reconciliation, not be buried in the spec.
 
 Complete source reading, requirement extraction, and single-story selection before creating the feature directory.
