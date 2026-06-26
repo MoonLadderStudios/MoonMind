@@ -2201,9 +2201,13 @@ async def create_jira_issues_from_stories(
                     dependency_mode=dependency_mode,
                 )
             raise ValueError(reason)
-    missing_claim_ids = _missing_source_claim_story_ids(
-        stories,
-        fallback_path=breakdown_source_path if requires_source_reference else "",
+    missing_claim_ids = (
+        _missing_source_claim_story_ids(
+            stories,
+            fallback_path=breakdown_source_path,
+        )
+        if requires_source_reference
+        else []
     )
     if missing_claim_ids:
         reason = (

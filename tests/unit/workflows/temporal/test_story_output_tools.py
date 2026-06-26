@@ -1021,6 +1021,39 @@ async def test_create_jira_issues_blocks_file_backed_story_without_claim_ids():
     assert "requires sourceReference.claimIds" in result.outputs["storyOutput"]["reason"]
     assert "STORY-001" in result.outputs["storyOutput"]["reason"]
 
+@pytest.mark.asyncio
+async def test_create_jira_issues_accepts_optional_file_backed_story_without_claim_ids():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "sourceReferencePolicy": "optional",
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "storyBreakdown": {
+                "stories": [
+                    {
+                        "id": "STORY-001",
+                        "summary": "Optional canonical claim",
+                        "sourceReference": {
+                            "path": "docs/Designs/RuntimeTypes.md",
+                        },
+                    },
+                ],
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert len(service.requests) == 1
+
 @pytest.mark.parametrize("policy", [True, "true", "yes", "1", "on"])
 def test_requires_story_source_reference_accepts_truthy_policy_values(policy):
     assert (
