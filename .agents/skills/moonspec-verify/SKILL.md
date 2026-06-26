@@ -20,6 +20,7 @@ This skill answers:
 - Is the single story in `spec.md` fully implemented?
 - Do unit tests and integration tests provide credible evidence?
 - Which requirements, scenarios, source design mappings, or constitution rules remain partial, missing, conflicting, or unverified?
+- Which stable canonical source claims are covered by implementation behavior, test evidence, artifact evidence, or a clear gap reason?
 - Did verified implementation evidence contradict claims in the canonical source document, indicating doc drift that reconciliation must handle?
 
 ## Inputs
@@ -132,6 +133,49 @@ Read:
 
 Do not use copied source requirement text in `spec.md` as evidence that behavior exists.
 
+## Canonical Claim Coverage
+
+MM-934 adds this report contract while preserving source issue MM-927 traceability.
+
+When a canonical source document is present, report first-class Canonical Claim
+Coverage over stable canonical claims from that source while preserving the
+existing Source Document Drift section for reconciliation handoff.
+
+Build the claim inventory from the canonical source document's stable claim
+headings and durable claim anchors, such as `DOC-REQ-*`, `CONTRACT-*`, `INV-*`,
+`NON-GOAL-*`, `QUALITY-*`, and `TEST-*`. Use temporary `DESIGN-REQ-*` values
+only as source-issue traceability, not as stable canonical claim IDs. Preserve
+source issue traceability such as MM-927 or related coverage IDs when the
+canonical document provides it, but do not treat traceability prose as proof of
+behavior.
+
+For each in-scope canonical claim, classify the result with separate fields for:
+
+- Implementation status: `VERIFIED`, `PARTIAL`, `MISSING`, `CONFLICT`, or `NO_DETERMINATION`.
+- Verification status: `VERIFIED`, `PARTIAL`, `MISSING`, `CONFLICT`, or `NO_DETERMINATION`.
+- Drift status: `NONE`, `POSSIBLE_DOC_DRIFT`, or `DEFINITE_DOC_DRIFT`.
+
+Each claim row must include at least one durable reference in one of these
+fields:
+
+- Code evidence, such as repository file paths with line numbers or named code symbols.
+- Test evidence, such as test file paths, test names, and command results.
+- Artifact evidence, such as artifact refs, discovery ledger paths, diagnostics refs, or report refs.
+- Gap reason, when evidence is missing, ambiguous, contradictory, or out of scope.
+
+Classify gaps separately:
+
+- Implementation gaps mean required behavior or wiring is absent, partial, or contradictory.
+- Verification gaps mean tests, command evidence, or inspection evidence are missing or insufficient.
+- Doc drift means verified behavior contradicts, supersedes, or reveals ambiguity in the canonical source document.
+
+Doc drift alone does not block `FULLY_IMPLEMENTED` when implementation behavior
+and required verification are correct for the agreed story scope. In that case,
+set the claim's drift status and also record the structured drift in Source Document Drift for `moonspec-doc-reconcile`.
+
+Use durable evidence references instead of pasting large source, code, test,
+artifact, or log content into the report.
+
 ## Verification Inventory
 
 Build an internal inventory before inspecting code:
@@ -142,6 +186,7 @@ Build an internal inventory before inspecting code:
 - One row per edge case that affects behavior.
 - One row per constitution constraint or `CC-*`.
 - One row per in-scope `DESIGN-REQ-*` or `DOC-REQ-*`.
+- One row per stable canonical source claim in scope for the story.
 
 For each row, track:
 
@@ -152,6 +197,7 @@ For each row, track:
 - Current status.
 - Concrete evidence.
 - Remaining gap.
+- For canonical claims, separate implementation gaps, verification gaps, and doc drift.
 
 ## Inspect Evidence
 
@@ -206,6 +252,7 @@ Rules:
 - Treat violated constitution `MUST` rules as blocking failures.
 - Treat original request misalignment as blocking even if later tasks are complete.
 - Source-document drift alone does not block `FULLY_IMPLEMENTED` when the implementation is correct per the agreed story scope; record it in the Source Document Drift section as structured input for `moonspec-doc-reconcile`. Drift becomes blocking only when it reveals the implementation itself contradicts agreed scope.
+- Canonical claim doc drift alone follows the same rule: it is non-blocking when behavior and verification are correct, but implementation gaps and verification gaps remain blocking until resolved or explicitly out of scope.
 
 ## Verdict
 
@@ -255,6 +302,12 @@ Use this structure:
 | Item | Evidence | Status | Notes |
 |------|----------|--------|-------|
 | DESIGN-REQ-001 / CC-001 | [file/test/reference] | VERIFIED/PARTIAL/MISSING/CONFLICT/NO_DETERMINATION | [notes] |
+
+## Canonical Claim Coverage
+
+| Claim | Code Evidence | Test Evidence | Artifact Evidence | Implementation Status | Verification Status | Drift Status | Gap Reason |
+|-------|---------------|---------------|-------------------|-----------------------|---------------------|--------------|------------|
+| DOC-REQ-001 | [file:line or symbol] | [test path/name or command] | [artifact/ref] | VERIFIED/PARTIAL/MISSING/CONFLICT/NO_DETERMINATION | VERIFIED/PARTIAL/MISSING/CONFLICT/NO_DETERMINATION | NONE/POSSIBLE_DOC_DRIFT/DEFINITE_DOC_DRIFT | [clear reason or empty when fully evidenced] |
 
 ## Original Request Alignment
 
