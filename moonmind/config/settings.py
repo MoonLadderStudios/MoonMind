@@ -31,8 +31,7 @@ _PENTEST_APPROVED_RUNNER_IMAGE_REPOSITORY = (
 )
 _PENTEST_APPROVED_RUNNER_IMAGE_TAGS = frozenset(("1.0",))
 _PENTEST_DEFAULT_RUNNER_IMAGE = (
-    "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0@"
-    "sha256:a9e35914533968d4f6e394ea8b08f3c5b885eb136ecfacf4990bfeb04d3a11f6"
+    "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
 )
 _PENTEST_RUNNER_IMAGE_PATTERN = re.compile(
     r"^(?P<repository>"
@@ -1469,7 +1468,11 @@ class PentestSettings(BaseSettings):
     runner_image: str = Field(
         _PENTEST_DEFAULT_RUNNER_IMAGE,
         validation_alias=AliasChoices("MOONMIND_PENTEST_RUNNER_IMAGE"),
-        description="Curated PentestGPT runner image digest-pinned production reference.",
+        description=(
+            "Curated PentestGPT runner image reference. Use an explicit "
+            "digest-pinned override for production deployments that require "
+            "immutable image selection."
+        ),
     )
     unsafe_dev_runner_image_override: bool = Field(
         False,

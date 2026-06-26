@@ -96,10 +96,7 @@ from moonmind.workflows.temporal.artifacts import (
 from moonmind.workflows.temporal.report_artifacts import validate_report_bundle_result
 from moonmind.workloads.registry import RunnerProfileRegistry
 
-PENTEST_RUNNER_IMAGE = (
-    "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0@"
-    "sha256:a9e35914533968d4f6e394ea8b08f3c5b885eb136ecfacf4990bfeb04d3a11f6"
-)
+PENTEST_RUNNER_IMAGE = "ghcr.io/moonladderstudios/moonmind-pentestgpt:1.0"
 
 pytestmark = [pytest.mark.asyncio]
 
