@@ -117,6 +117,96 @@ class TestClaudeCodeProperties:
     def test_default_auth_mode(self) -> None:
         assert ClaudeCodeStrategy().default_auth_mode == "api_key"
 
+
+class TestClaudeCodeProgressProbe:
+    def test_probe_progress_uses_pr_resolver_result_artifact(self, tmp_path) -> None:
+        strategy = ClaudeCodeStrategy()
+        workspace_path = tmp_path / "repo"
+        result_path = workspace_path / "var" / "pr_resolver" / "result.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text(
+            '{"mergeAutomationDisposition":"reenter_gate"}',
+            encoding="utf-8",
+        )
+
+        started_at = datetime(2026, 6, 26, 17, 49, 38, tzinfo=UTC)
+        expected_progress_at = datetime(2026, 6, 26, 18, 17, 0, tzinfo=UTC)
+        ts = expected_progress_at.timestamp()
+        os.utime(result_path, (ts, ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-1",
+            started_at=started_at,
+        )
+
+        assert observed == expected_progress_at
+
+    def test_probe_progress_treats_naive_started_at_as_utc(self, tmp_path) -> None:
+        strategy = ClaudeCodeStrategy()
+        workspace_path = tmp_path / "repo"
+        result_path = workspace_path / "var" / "pr_resolver" / "result.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text(
+            '{"mergeAutomationDisposition":"reenter_gate"}',
+            encoding="utf-8",
+        )
+
+        started_at = datetime(2026, 6, 26, 17, 49, 38)
+        expected_progress_at = datetime(2026, 6, 26, 18, 17, 0, tzinfo=UTC)
+        ts = expected_progress_at.timestamp()
+        os.utime(result_path, (ts, ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-naive-started-at",
+            started_at=started_at,
+        )
+
+        assert observed == expected_progress_at
+
+    def test_probe_progress_uses_pr_resolver_attempt_artifacts(self, tmp_path) -> None:
+        strategy = ClaudeCodeStrategy()
+        workspace_path = tmp_path / "repo"
+        attempt_path = (
+            workspace_path / "var" / "pr_resolver" / "attempts" / "1.json"
+        )
+        attempt_path.parent.mkdir(parents=True)
+        attempt_path.write_text('{"status":"blocked"}', encoding="utf-8")
+
+        started_at = datetime(2026, 6, 26, 17, 49, 38, tzinfo=UTC)
+        expected_progress_at = datetime(2026, 6, 26, 18, 16, 47, tzinfo=UTC)
+        ts = expected_progress_at.timestamp()
+        os.utime(attempt_path, (ts, ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-2",
+            started_at=started_at,
+        )
+
+        assert observed == expected_progress_at
+
+    def test_probe_progress_ignores_pre_run_pr_resolver_artifact(self, tmp_path) -> None:
+        strategy = ClaudeCodeStrategy()
+        workspace_path = tmp_path / "repo"
+        result_path = workspace_path / "var" / "pr_resolver" / "result.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text("{}", encoding="utf-8")
+
+        started_at = datetime(2026, 6, 26, 17, 49, 38, tzinfo=UTC)
+        stale_ts = datetime(2026, 6, 26, 17, 40, 0, tzinfo=UTC).timestamp()
+        os.utime(result_path, (stale_ts, stale_ts))
+
+        observed = strategy.probe_progress_at(
+            workspace_path=str(workspace_path),
+            run_id="run-3",
+            started_at=started_at,
+        )
+
+        assert observed is None
+
+
 _RUNTIME_MODEL_ENV_KEYS = (
     "MOONMIND_CODEX_MODEL",
     "CODEX_MODEL",

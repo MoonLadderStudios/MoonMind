@@ -703,6 +703,64 @@ async def test_heartbeat_persists_output_progress(supervisor_env):
     )
     assert any(u.get("last_log_offset") for u in progress_updates)
 
+
+@pytest.mark.asyncio
+async def test_heartbeat_persists_claude_pr_resolver_artifact_progress(
+    supervisor_env,
+    tmp_path,
+):
+    store, _, _, supervisor = supervisor_env
+    workspace_path = tmp_path / "repo"
+    result_path = workspace_path / "var" / "pr_resolver" / "result.json"
+    workspace_path.mkdir(parents=True)
+    record = ManagedRunRecord(
+        run_id="run-1",
+        agent_id="agent-1",
+        runtime_id="claude_code",
+        status="launching",
+        started_at=datetime.now(tz=UTC),
+        workspace_path=str(workspace_path),
+    )
+    store.save(record)
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "1",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def _write_pr_resolver_result() -> None:
+        await asyncio.sleep(0.1)
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text(
+            '{"mergeAutomationDisposition":"reenter_gate"}',
+            encoding="utf-8",
+        )
+
+    progress_writer = asyncio.create_task(_write_pr_resolver_result())
+    running_updates: list[dict] = []
+    original_update = store.update_status
+
+    def _spy_update(run_id, status, **kwargs):
+        if status == "running":
+            running_updates.append(dict(kwargs))
+        return original_update(run_id, status, **kwargs)
+
+    with patch(
+        "moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL",
+        0.1,
+    ):
+        with patch.object(store, "update_status", side_effect=_spy_update):
+            result = await supervisor.supervise(
+                run_id="run-1", process=process, timeout_seconds=30
+            )
+    writer_result = await progress_writer
+    assert writer_result is None
+
+    assert result.status == "completed"
+    assert any("last_log_at" in update for update in running_updates)
+
 # ---------------------------------------------------------------------------
 # Completion callback tests
 # ---------------------------------------------------------------------------
