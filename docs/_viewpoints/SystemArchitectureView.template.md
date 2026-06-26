@@ -1,14 +1,14 @@
-# <System Name> — System Architecture View
+# \<System Name\> — System Architecture View
 
 **Status:** Draft
 **Document Class:** Canonical declarative
 **Viewpoint:** System Architecture View
-**Updated:** <YYYY-MM-DD>
-**Audience:** <primary readers>
-**Authority:** <system-wide architecture claims this document owns>
-**Owning Surface:** <system, product, or repository surface>
-**Related Docs:** <links to adjacent canonical docs>
-**Related Implementation:** <code modules, entrypoints, or tracking issues>
+**Updated:** \<YYYY-MM-DD\>
+**Audience:** \<primary readers\>
+**Authority:** \<system-wide architecture claims this document owns\>
+**Owning Surface:** \<system, product, or repository surface\>
+**Related Docs:** \<links to adjacent canonical docs\>
+**Related Implementation:** \<code modules, entrypoints, or tracking issues\>
 
 > Template per the [MoonSpec Documentation Architecture Standard](../DocumentationArchitecture.md). Delete this line and any sections that do not apply.
 
