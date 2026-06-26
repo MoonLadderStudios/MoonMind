@@ -3923,7 +3923,8 @@ async def test_signal_pause_allows_awaiting_slot(tmp_path, mock_client_adapter):
             initial_parameters=_valid_user_workflow_parameters(),
             idempotency_key=None,
         )
-        created.state = MoonMindWorkflowState.AWAITING_SLOT
+        source = await service._require_source_execution(created.workflow_id)
+        service._set_state(source, MoonMindWorkflowState.AWAITING_SLOT)
         await session.commit()
 
         await service.signal_execution(
@@ -5070,6 +5071,48 @@ async def test_configure_integration_monitoring_persists_visibility_and_callback
         assert configured.integration_state["callback_correlation_key"]
         assert configured.integration_state["external_operation_id"] == "task-123"
         assert "artifact://events/start" in configured.artifact_refs
+
+
+@pytest.mark.asyncio
+async def test_configure_integration_monitoring_rejects_waiting_states(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        for state in (
+            MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
+            MoonMindWorkflowState.AWAITING_SLOT,
+        ):
+            created = await service.create_execution(
+                workflow_type="MoonMind.UserWorkflow",
+                owner_id=uuid4(),
+                title=f"Run waiting in {state.value}",
+                input_artifact_ref=None,
+                plan_artifact_ref="artifact://plan/1",
+                manifest_artifact_ref=None,
+                failure_policy=None,
+                initial_parameters=_valid_user_workflow_parameters(),
+                idempotency_key=None,
+            )
+            source = await service._require_source_execution(created.workflow_id)
+            service._set_state(source, state)
+            await session.commit()
+
+            with pytest.raises(TemporalExecutionValidationError):
+                await service.configure_integration_monitoring(
+                    workflow_id=created.workflow_id,
+                    integration_name="jules",
+                    correlation_id=None,
+                    external_operation_id=f"task-{state.value}",
+                    normalized_status="running",
+                    provider_status="running",
+                    callback_supported=True,
+                    callback_correlation_key=None,
+                    recommended_poll_seconds=30,
+                    external_url=None,
+                    provider_summary={},
+                    result_refs=[],
+                )
+
 
 @pytest.mark.asyncio
 async def test_configure_integration_monitoring_rejects_blank_external_operation_id(
