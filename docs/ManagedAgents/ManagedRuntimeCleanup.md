@@ -274,7 +274,7 @@ ownerPlane: managed-runtime-workspace-janitor
 lifecycle: retained-state
 candidateSource:
   filesystem:
-    root: ${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}/*
+    root: normalized_managed_runtime_artifact_root()/*
 truthSource:
   stores:
     - ManagedRunStore artifact refs
@@ -403,7 +403,7 @@ Recommended schedule:
 - daily by default, or hourly for high-churn deployments;
 - overlap mode `skip`;
 - catchup mode `last`;
-- disabled or dry-run-only on first rollout.
+- dry-run by default until deletion is explicitly enabled.
 
 This should be separate from `MoonMind.ManagedSessionReconcile` so broad filesystem deletion cannot slow or destabilize live session leak cleanup.
 
@@ -430,12 +430,14 @@ The janitor may discover candidates only under canonical managed-runtime roots:
 ```text
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/workspaces/<workspace_key>
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/<agent_run_id>
-${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}/<job_id>
+normalized_managed_runtime_artifact_root()/<job_id>
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_runs/<run_id>.json
 ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_sessions/<session_id>.json
 ```
 
 A candidate path outside those roots is unsafe and must be skipped.
+
+Artifact roots must be normalized before scanning. The janitor must use the same normalization semantics as `managed_runtime_artifact_root()`: when `MOONMIND_AGENT_RUNTIME_ARTIFACTS` is unset, blank, or set to the agent-jobs root such as `/work/agent_jobs`, the artifact candidate root is `/work/agent_jobs/artifacts`. The janitor must never scan `/work/agent_jobs/*` as artifact directories.
 
 ### 8.4 Ownership grouping
 
@@ -618,17 +620,7 @@ Operators should be able to answer:
 
 ---
 
-## 11. Rollout plan
-
-1. **Document and wire dry-run only.** Create the workflow/activity, store iterators, candidate scanner, and result model. Keep deletion disabled.
-2. **Run dry-run in production.** Confirm counts against observed `/work/agent_jobs` volume evidence.
-3. **Enable bounded workspace deletion.** Keep artifacts and record deletion disabled. Use small path/byte caps.
-4. **Enable artifact deletion later.** Use longer retention and confirm UI/log surfaces do not depend on deleted local files.
-5. **Consider record deletion last.** Leave disabled unless there is a clear operator/audit decision.
-
----
-
-## 12. Acceptance tests
+## 11. Acceptance tests
 
 The implementation should include tests for:
 
@@ -650,7 +642,7 @@ The implementation should include tests for:
 
 ---
 
-## 13. Desired-state statement
+## 12. Desired-state statement
 
 MoonMind cleanup should converge on this rule:
 
