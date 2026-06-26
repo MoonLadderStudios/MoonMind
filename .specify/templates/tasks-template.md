@@ -114,26 +114,26 @@ Examples of foundational tasks (include only what the story truly depends on):
 
 > **NOTE: Write these tests FIRST. Run them, confirm they FAIL for the expected reason, then implement only enough code to make them pass.**
 
-- [ ] T013 [P] Add failing unit test for [domain behavior] covering FR-001 in tests/unit/test_[name].py
-- [ ] T014 [P] Add failing unit test for [edge case] covering FR-002 in tests/unit/test_[name].py
+- [ ] T013 [P] Add failing unit test for [domain behavior] covering CLAIM-001 / FR-001 in tests/unit/test_[name].py
+- [ ] T014 [P] Add failing unit test for [edge case] covering CLAIM-002 / FR-002 in tests/unit/test_[name].py
 - [ ] T015 Run `[UNIT TEST COMMAND]` for tests/unit/test_[name].py to confirm T013-T014 fail for the expected reason
 
 ### Integration Tests (write first) ⚠️
 
-- [ ] T016 [P] Add failing integration test for [user journey] covering SCN-001 in tests/integration/test_[name].py
+- [ ] T016 [P] Add failing integration test for [user journey] covering CLAIM-001 / SCN-001 in tests/integration/test_[name].py
 - [ ] T017 [P] Add failing integration test for [system interaction or contract] covering DESIGN-REQ-001 in tests/integration/test_[name].py
 - [ ] T018 Run `[INTEGRATION TEST COMMAND]` for tests/integration/test_[name].py to confirm T016-T017 fail for the expected reason
 
 ### Implementation
 
-- [ ] T019 [P] Create or update [Entity1] for FR-001 in src/models/[entity1].py
-- [ ] T020 [P] Create or update [Entity2] for FR-002 in src/models/[entity2].py
-- [ ] T021 Implement [Service] for FR-001/FR-002 in src/services/[service].py (depends on T019, T020)
-- [ ] T022 Implement [endpoint/feature/UI/CLI] for SCN-001 in src/[location]/[file].py
-- [ ] T023 Add validation, error handling, and non-goal guardrails for FR-003 in src/[location]/[file].py
+- [ ] T019 [P] Create or update [Entity1] for CLAIM-001 / FR-001 in src/models/[entity1].py
+- [ ] T020 [P] Create or update [Entity2] for CLAIM-002 / FR-002 in src/models/[entity2].py
+- [ ] T021 Implement [Service] for CLAIM-001 / CLAIM-002 / FR-001 / FR-002 in src/services/[service].py (depends on T019, T020)
+- [ ] T022 Implement [endpoint/feature/UI/CLI] for CLAIM-001 / SCN-001 in src/[location]/[file].py
+- [ ] T023 Add validation, error handling, and non-goal guardrails for CLAIM-003 / FR-003 in src/[location]/[file].py
 - [ ] T024 Wire integration boundary for DESIGN-REQ-001 in src/[location]/[file].py
-- [ ] T025 Add logging/observability for the story flow in src/[location]/[file].py
-- [ ] T026 Run `[UNIT TEST COMMAND]` and `[INTEGRATION TEST COMMAND]` for tests/unit/ and tests/integration/, fix failures, and verify the story passes end-to-end
+- [ ] T025 Add logging/observability for the story flow in src/[location]/[file].py (No source claim applies: operational support task)
+- [ ] T026 Run `[UNIT TEST COMMAND]` and `[INTEGRATION TEST COMMAND]` for tests/unit/ and tests/integration/, fix failures, and verify the story passes end-to-end (No source claim applies: validation task)
 
 **Checkpoint**: The story is fully functional, covered by unit and integration tests, and testable independently
 
@@ -143,13 +143,13 @@ Examples of foundational tasks (include only what the story truly depends on):
 
 **Purpose**: Improvements that strengthen the completed story without changing its core scope
 
-- [ ] TXXX [P] Documentation updates in docs/
-- [ ] TXXX Code cleanup and refactoring
-- [ ] TXXX Performance optimization for the story path
-- [ ] TXXX [P] Expand unit test edge-case coverage in tests/unit/
-- [ ] TXXX [P] Expand integration coverage for operational scenarios in tests/integration/
-- [ ] TXXX Security hardening
-- [ ] TXXX Run quickstart.md validation
+- [ ] TXXX [P] Documentation updates in docs/ (No source claim applies: optional polish task)
+- [ ] TXXX Code cleanup and refactoring (No source claim applies: optional polish task)
+- [ ] TXXX Performance optimization for the story path covering CLAIM-001 in src/[location]/[file].py
+- [ ] TXXX [P] Expand unit test edge-case coverage for CLAIM-002 in tests/unit/
+- [ ] TXXX [P] Expand integration coverage for operational scenarios covering DESIGN-REQ-001 in tests/integration/
+- [ ] TXXX Security hardening for CLAIM-003 in src/[location]/[file].py
+- [ ] TXXX Run quickstart.md validation (No source claim applies: validation task)
 - [ ] TXXX Run `/speckit.verify` to validate the final implementation against the original feature request and Source Packet claims
 - [ ] TXXX Run `moonspec-doc-reconcile` for the canonical source document when `spec.md` names a canonical source under docs/
 

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -66,3 +67,20 @@ def test_mm933_tasks_require_claim_mapping_or_explicit_explanation() -> None:
     assert "No source claim applies: <reason>" in template
     assert "Source Packet" in template
     assert "moonspec-doc-reconcile" in template
+
+
+def test_mm933_task_template_examples_map_implementation_tasks_to_claims() -> None:
+    template = (TEMPLATES_DIR / "tasks-template.md").read_text(encoding="utf-8")
+
+    implementation_section = template.split("### Implementation", 1)[1].split(
+        "**Checkpoint**", 1
+    )[0]
+    task_lines = [
+        line for line in implementation_section.splitlines() if line.startswith("- [ ]")
+    ]
+
+    assert task_lines
+    for line in task_lines:
+        has_claim_id = re.search(r"\b(?:CLAIM|DESIGN-REQ|DOC-REQ)-\d{3}\b", line)
+        has_explanation = "No source claim applies:" in line
+        assert has_claim_id or has_explanation, line
