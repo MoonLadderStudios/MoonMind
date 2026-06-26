@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 pytest.importorskip("temporalio")
 
@@ -491,7 +492,7 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
 
         execute_activity.assert_not_called()
 
-    async def test_agent_node_strips_versioned_skill_selector_before_launch(self) -> None:
+    async def test_agent_node_rejects_versioned_skill_selector_before_launch(self) -> None:
         wf = MoonMindRunWorkflow()
         wf._owner_id = "owner-1"
         resolved = ResolvedSkillSet(
@@ -505,16 +506,20 @@ class TestAgentSkillSnapshotResolution(unittest.IsolatedAsyncioTestCase):
             "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
             new=AsyncMock(return_value=resolved),
         ) as execute_activity:
-            ref = await wf._resolve_agent_node_skillset_ref(
-                task_skills={"include": [{"name": "baseline", "version": "9.9.9"}]},
-                node_inputs={},
-                node_id="step-1",
-                existing_skillset_ref=None,
-            )
+            with self.assertRaisesRegex(
+                ValidationError,
+                "workflow.skills.include\\[\\] must not include semantic versions",
+            ):
+                await wf._resolve_agent_node_skillset_ref(
+                    task_skills={
+                        "include": [{"name": "baseline", "version": "9.9.9"}]
+                    },
+                    node_inputs={},
+                    node_id="step-1",
+                    existing_skillset_ref=None,
+                )
 
-        self.assertEqual(ref, "artifact://skillsets/baseline")
-        selector = execute_activity.await_args.kwargs["args"][0]
-        self.assertEqual([entry.name for entry in selector.include], ["baseline"])
+        execute_activity.assert_not_called()
 
     async def test_agent_node_reuses_existing_skillset_ref_without_reresolution(self) -> None:
         wf = MoonMindRunWorkflow()
