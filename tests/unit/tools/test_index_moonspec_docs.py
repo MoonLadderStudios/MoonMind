@@ -220,6 +220,14 @@ def test_stable_claim_prefixes_are_first_class_claim_identities(tmp_path: Path) 
     assert by_id["INV-001"]["summary"] == "Invariant summary"
 
 
+def test_stable_claim_prefix_without_class_mapping_falls_back_to_claim(monkeypatch) -> None:
+    monkeypatch.delitem(mod.CLAIM_PREFIX_CLASS, "TEST")
+
+    stable_claim = mod._parse_stable_claim_heading("TEST-001 Future prefix")
+
+    assert stable_claim == ("TEST-001", "claim", "Future prefix")
+
+
 def test_missing_stable_claims_are_reported_without_inventing_ids(
     tmp_path: Path,
 ) -> None:

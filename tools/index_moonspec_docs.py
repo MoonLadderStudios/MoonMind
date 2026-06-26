@@ -225,7 +225,7 @@ def _parse_stable_claim_heading(heading: str) -> tuple[str, str, str] | None:
         return None
     prefix = claim_id.rsplit("-", 1)[0]
     summary = match.group("summary").strip(" -:\t") or claim_id
-    return claim_id, CLAIM_PREFIX_CLASS[prefix], summary
+    return claim_id, CLAIM_PREFIX_CLASS.get(prefix, "claim"), summary
 
 
 def _claim_digest(path: str, heading: str, section_text: str) -> str:
