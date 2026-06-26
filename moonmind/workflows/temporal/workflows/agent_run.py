@@ -167,6 +167,9 @@ AGENT_RUN_STRUCTURED_PROVIDER_FAILURE_PATCH_ID = (
 AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
     "agent-run-managed-no-progress-reconciliation-v1"
 )
+AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID = (
+    "agent-run-managed-no-progress-cancel-fetch-v1"
+)
 MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
     "agent-run-managed-session-start-after-slot-v1"
 )
@@ -812,6 +815,21 @@ class MoonMindAgentRun:
     @staticmethod
     def _no_progress_grace_seconds(policy: Mapping[str, Any]) -> int:
         return max(0, int(policy.get("noProgressGraceSeconds") or 0))
+
+    @staticmethod
+    def _result_requires_provider_cooldown(result: AgentRunResult | None) -> bool:
+        if result is None:
+            return False
+        metadata = result.metadata if isinstance(result.metadata, Mapping) else {}
+        provider_failure_event = provider_failure_event_from_metadata(
+            metadata.get("providerFailure")
+        )
+        if provider_failure_event is not None:
+            return provider_failure_event_requires_cooldown(provider_failure_event)
+        return provider_error_requires_cooldown(
+            provider_error_code=result.provider_error_code,
+            retry_recommendation=result.retry_recommendation,
+        )
 
     def _intervention_result(
         self,
@@ -1582,6 +1600,17 @@ class MoonMindAgentRun:
             ).total_seconds()
             remaining = min(remaining_grace, remaining_overall)
             if remaining <= 0:
+                if workflow.patched(
+                    AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID
+                ):
+                    return await self._cancel_managed_no_progress_and_fetch_cooldown_result(
+                        request=request,
+                        adapter=adapter,
+                        uses_codex_session_adapter=uses_codex_session_adapter,
+                        use_managed_status_activity=use_managed_status_activity,
+                        poll_interval=poll_interval,
+                        remaining_overall=remaining_overall,
+                    )
                 return None
 
             try:
@@ -1601,6 +1630,90 @@ class MoonMindAgentRun:
                 uses_codex_session_adapter=uses_codex_session_adapter,
                 use_managed_status_activity=use_managed_status_activity,
             )
+
+    async def _cancel_managed_no_progress_and_fetch_cooldown_result(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        adapter: AgentAdapter,
+        uses_codex_session_adapter: bool,
+        use_managed_status_activity: bool,
+        poll_interval: int,
+        remaining_overall: float,
+    ) -> AgentRunResult | None:
+        """Force silent managed runtimes to surface quota/capacity failures.
+
+        Claude Code can remain silent while blocked on provider/session quota and
+        emit the 429/session-limit line only after the process is interrupted.
+        Before converting no-progress into human intervention, cancel the owned
+        process and briefly reconcile the canonical runtime result so provider
+        cooldown handling can take over when the supervisor classifies a 429.
+        """
+
+        if not self.run_id or remaining_overall <= 0:
+            return None
+
+        try:
+            await self._execute_routed_activity(
+                "agent_runtime.cancel",
+                AgentRuntimeCancelInput(
+                    agentKind=request.agent_kind,
+                    runId=str(self.run_id or ""),
+                ),
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+        except Exception:
+            self._get_logger().warning(
+                "Failed to cancel managed runtime during no-progress reconciliation.",
+                exc_info=True,
+            )
+            return None
+
+        reconcile_seconds = min(
+            max(float(poll_interval) * 2.0, 10.0),
+            max(1.0, float(remaining_overall)),
+        )
+        deadline = workflow.now() + timedelta(seconds=reconcile_seconds)
+
+        while True:
+            if self._result_requires_provider_cooldown(self.final_result):
+                return self.final_result
+
+            remaining = (deadline - workflow.now()).total_seconds()
+            if remaining <= 0:
+                return None
+
+            try:
+                completed = await workflow.wait_condition(
+                    lambda: self.completion_event.is_set(),
+                    timeout=timedelta(seconds=min(float(poll_interval), remaining)),
+                )
+            except (asyncio.TimeoutError, TimeoutError):
+                completed = False
+
+            if completed or self.completion_event.is_set():
+                if self._result_requires_provider_cooldown(self.final_result):
+                    return self.final_result
+                return None
+
+            status_obj = await self._poll_managed_status(
+                request=request,
+                adapter=adapter,
+                uses_codex_session_adapter=uses_codex_session_adapter,
+                use_managed_status_activity=use_managed_status_activity,
+            )
+            self.run_status = status_obj.status
+            if status_obj.status in _TERMINAL_RUN_STATUSES:
+                result = await self._fetch_managed_result(
+                    request=request,
+                    adapter=adapter,
+                    uses_codex_session_adapter=uses_codex_session_adapter,
+                    use_managed_status_activity=use_managed_status_activity,
+                )
+                if self._result_requires_provider_cooldown(result):
+                    return result
+                if status_obj.status != RunStatus.cancelled:
+                    return None
 
     async def _ensure_manager_and_signal(
         self,
