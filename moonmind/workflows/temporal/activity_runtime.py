@@ -8307,6 +8307,7 @@ class TemporalAgentRuntimeActivities:
         # fail the reconcile activity, whose reattach/degrade work is primary.
         orphan_containers_reaped = 0
         orphan_reap_skipped_recent = 0
+        orphan_reap_forced_stale = 0
         orphan_volumes_scanned = 0
         orphan_volumes_reaped = 0
         orphan_volume_reap_skipped_active = 0
@@ -8330,6 +8331,9 @@ class TemporalAgentRuntimeActivities:
             )
             orphan_reap_skipped_recent = int(
                 getattr(reap_result, "skipped_recent", 0) or 0
+            )
+            orphan_reap_forced_stale = int(
+                getattr(reap_result, "forced_stale", 0) or 0
             )
             orphan_volumes_scanned = int(
                 getattr(reap_result, "scanned_volumes", 0) or 0
@@ -8355,6 +8359,7 @@ class TemporalAgentRuntimeActivities:
             "orphanContainersReaped": orphan_containers_reaped,
             "orphanSessionIdsReaped": orphan_session_ids_reaped,
             "orphanReapSkippedRecent": orphan_reap_skipped_recent,
+            "orphanReapForcedStale": orphan_reap_forced_stale,
             "orphanVolumesScanned": orphan_volumes_scanned,
             "orphanVolumesReaped": orphan_volumes_reaped,
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,

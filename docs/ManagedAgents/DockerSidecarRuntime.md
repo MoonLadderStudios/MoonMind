@@ -688,12 +688,15 @@ Default posture: destroy the sidecar and its graph storage at session end; prese
 
 Per-session cleanup runs on the graceful `terminate_session` path. When the owning workflow is terminated or crashes, the managed session child is abandoned (`ParentClosePolicy.ABANDON`), so its agent container, docker sidecar, and sidecar volumes can be left running with no live session behind them.
 
-The recurring managed-session reconcile sweep (`MoonMind.ManagedSessionReconcile`) therefore also reaps orphaned session containers. A container carrying the `moonmind.session_id` label is removed when its session is **not active** in the durable session store, subject to a grace window so a freshly launched session is never reaped before its store record is durable. Reaping is best-effort: a failure never fails the reconcile sweep, and the sweep refuses to remove anything when the session store is unavailable.
+The recurring managed-session reconcile sweep (`MoonMind.ManagedSessionReconcile`) therefore also reaps orphaned session containers. A container carrying the `moonmind.session_id` label is removed when its session is **not active** in the durable session store, subject to a grace window so a freshly launched session is never reaped before its store record is durable.
+
+The sweep also reconciles stale active records against Temporal ownership. If a non-terminal session record points at an owning agent workflow that has reached a terminal Temporal status, the record is marked terminated and the container becomes eligible for orphan reaping in the same sweep. As a final guardrail, an old `ready` session with no `activeTurnId` can be force-reaped after the configured maximum age even if the store still marks it active. Reaping is best-effort: a failure never fails the reconcile sweep, and the sweep refuses to remove anything when the session store is unavailable.
 
 | Env var | Default | Meaning |
 |---|---|---|
 | `MOONMIND_MANAGED_SESSION_REAP_ENABLED` | `1` (enabled) | Set to a falsey value (`0`, `false`, `no`, `off`) to disable orphan reaping entirely. |
 | `MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS` | `900` | Minimum age (seconds) before an orphaned container is eligible for reaping. |
+| `MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS` | `172800` | Maximum age (seconds) for a `ready` active-store session with no `activeTurnId` before the sweep force-reaps it. Set to a falsey value to disable this guardrail. |
 
 ---
 

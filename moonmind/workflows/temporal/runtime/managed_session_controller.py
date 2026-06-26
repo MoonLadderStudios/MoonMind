@@ -88,12 +88,24 @@ _SESSION_DOCKER_MODE_DISABLED_VALUES = {"no-docker", "disabled", "none", "off"}
 # window protects against reaping a container whose record is not yet active
 # (mid-launch) or that is being relaunched.
 _DEFAULT_SESSION_REAP_GRACE_SECONDS = 900.0
+_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS = 48 * 60 * 60
 _MANAGED_SESSION_LABEL_KEY = "moonmind.session_id"
 _MANAGED_SESSION_SIDECAR_VOLUME_KIND = "session-docker-sidecar-volume"
 _MANAGED_SESSION_SIDECAR_VOLUME_NAME = re.compile(
     r"^moonmind-session-.+-docker-(graph|socket)$"
 )
 _FALSEY_ENV_VALUES = {"0", "false", "no", "off", ""}
+_TERMINAL_OWNER_WORKFLOW_STATUSES = frozenset(
+    {
+        "COMPLETED",
+        "FAILED",
+        "CANCELED",
+        "CANCELLED",
+        "TERMINATED",
+        "TIMED_OUT",
+        "CONTINUED_AS_NEW",
+    }
+)
 logger = logging.getLogger(__name__)
 
 
@@ -127,11 +139,17 @@ class ManagedSessionReapResult:
     reaped_containers: int = 0
     skipped_active: int = 0
     skipped_recent: int = 0
+    forced_stale: int = 0
     scanned_volumes: int = 0
     reaped_volumes: int = 0
     skipped_active_volumes: int = 0
     skipped_recent_volumes: int = 0
     disabled: bool = False
+
+
+class OwnerWorkflowStatusResolver(Protocol):
+    async def __call__(self, workflow_id: str, /) -> Any:
+        """Return a provider-specific workflow status for *workflow_id*."""
 
 
 def _parse_docker_timestamp(value: str) -> datetime | None:
@@ -160,6 +178,44 @@ def _parse_docker_timestamp(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _coerce_aware_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = _parse_docker_timestamp(value)
+    else:
+        return None
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _normalize_owner_workflow_status(value: Any) -> str:
+    """Normalize Temporal workflow status values for terminal-state checks."""
+
+    if value is None:
+        return ""
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip().upper()
+    raw = getattr(value, "value", value)
+    if isinstance(raw, str):
+        normalized = raw.strip().upper()
+    else:
+        normalized = str(raw).strip().upper()
+    if "." in normalized:
+        normalized = normalized.rsplit(".", 1)[-1]
+    return normalized
+
+
+def _owner_workflow_status_is_terminal(value: Any) -> bool:
+    return _normalize_owner_workflow_status(value) in _TERMINAL_OWNER_WORKFLOW_STATUSES
 
 def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
     normalized = str(value or "").strip()
@@ -319,6 +375,7 @@ class DockerCodexManagedSessionController:
         ),
         command_runner: CommandRunner = _default_command_runner,
         github_auth_brokers: GitHubAuthBrokerManager | Any | None = None,
+        owner_workflow_status_resolver: OwnerWorkflowStatusResolver | None = None,
     ) -> None:
         self._workspace_volume_name = workspace_volume_name
         self._codex_volume_name = codex_volume_name
@@ -335,6 +392,7 @@ class DockerCodexManagedSessionController:
         self._turn_poll_timeout_seconds = turn_poll_timeout_seconds
         self._command_runner = command_runner
         self._github_auth_brokers = github_auth_brokers or GitHubAuthBrokerManager()
+        self._owner_workflow_status_resolver = owner_workflow_status_resolver
 
     @staticmethod
     def _managed_session_user_command_kwargs() -> dict[str, int]:
@@ -3468,12 +3526,83 @@ class DockerCodexManagedSessionController:
             },
         )
 
+    async def _terminal_owner_workflow_status(
+        self,
+        record: CodexManagedSessionRecord,
+    ) -> str | None:
+        resolver = self._owner_workflow_status_resolver
+        if resolver is None:
+            return None
+        try:
+            status = await resolver(record.agent_run_id)
+            if not _owner_workflow_status_is_terminal(status):
+                return None
+            return _normalize_owner_workflow_status(status)
+        except Exception:
+            logger.warning(
+                "Managed session owner workflow status lookup failed for %s",
+                record.session_id,
+                exc_info=True,
+            )
+            return None
+
+    async def _mark_session_terminated_by_reconcile(
+        self,
+        record: CodexManagedSessionRecord,
+        *,
+        reason: str,
+        metadata: Mapping[str, Any],
+    ) -> CodexManagedSessionRecord:
+        if self._session_store is None:
+            return record
+        updated_metadata = {
+            **dict(record.metadata or {}),
+            **dict(metadata),
+            "terminationSource": "managed_session_reconcile",
+            "terminatedAt": datetime.now(tz=UTC).isoformat(),
+        }
+        updated = await self._session_store.update(
+            record.session_id,
+            status="terminated",
+            active_turn_id=None,
+            error_message=reason,
+            metadata=updated_metadata,
+            updated_at=datetime.now(tz=UTC),
+        )
+        await self._github_auth_brokers.stop(record.session_id)
+        self._cleanup_skill_projections_for_session(updated)
+        return updated
+
     async def reconcile(self) -> list[CodexManagedSessionRecord]:
         if self._session_store is None:
             return []
         reconciled: list[CodexManagedSessionRecord] = []
         for record in self._session_store.list_active():
             try:
+                terminal_owner_status = await self._terminal_owner_workflow_status(
+                    record
+                )
+                if terminal_owner_status is not None:
+                    updated = await self._mark_session_terminated_by_reconcile(
+                        record,
+                        reason=(
+                            "managed session owner workflow is terminal during "
+                            f"reconcile: {terminal_owner_status}"
+                        ),
+                        metadata={
+                            "ownerWorkflowId": record.agent_run_id,
+                            "ownerWorkflowStatus": terminal_owner_status,
+                        },
+                    )
+                    reconciled.append(updated)
+                    logger.warning(
+                        "Marked managed session %s terminated because owner "
+                        "workflow %s is terminal: %s",
+                        record.session_id,
+                        record.agent_run_id,
+                        terminal_owner_status,
+                    )
+                    continue
                 container_exists = await self._container_exists(record.container_id)
                 if not container_exists:
                     updated = await self._session_store.update(
@@ -3520,6 +3649,63 @@ class DockerCodexManagedSessionController:
             return max(0.0, float(raw))
         except ValueError:
             return _DEFAULT_SESSION_REAP_GRACE_SECONDS
+
+    @staticmethod
+    def _reap_max_age_seconds() -> float | None:
+        raw = os.environ.get("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS")
+        if raw is None:
+            return float(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS)
+        normalized = raw.strip().lower()
+        if normalized in _FALSEY_ENV_VALUES:
+            return None
+        try:
+            value = float(normalized)
+        except ValueError:
+            return float(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS)
+        if value <= 0:
+            return None
+        return value
+
+    @staticmethod
+    def _newest_container_created_at(
+        containers: Sequence[_ManagedSessionContainer],
+    ) -> datetime | None:
+        return max(
+            (
+                container.created_at
+                for container in containers
+                if container.created_at is not None
+            ),
+            default=None,
+        )
+
+    def _stale_active_session_ids(
+        self,
+        *,
+        active_records: Mapping[str, CodexManagedSessionRecord],
+        by_session: Mapping[str, Sequence[_ManagedSessionContainer]],
+        max_age_seconds: float | None,
+        now: datetime,
+    ) -> set[str]:
+        if max_age_seconds is None:
+            return set()
+        stale: set[str] = set()
+        for session_id, record in active_records.items():
+            if record.status != "ready" or record.active_turn_id:
+                continue
+            newest_container_created_at = self._newest_container_created_at(
+                by_session.get(session_id, ())
+            )
+            age_anchor = (
+                newest_container_created_at or record.updated_at or record.started_at
+            )
+            age_anchor = _coerce_aware_datetime(age_anchor)
+            if age_anchor is None:
+                continue
+            if (now - age_anchor).total_seconds() < max_age_seconds:
+                continue
+            stale.add(session_id)
+        return stale
 
     async def _list_managed_session_containers(
         self,
@@ -3802,19 +3988,28 @@ class DockerCodexManagedSessionController:
             # so refuse to remove anything rather than guess.
             return ManagedSessionReapResult(disabled=True)
 
-        active_session_ids = {
-            record.session_id for record in self._session_store.list_active()
-        }
         grace_seconds = self._reap_grace_seconds()
+        max_age_seconds = self._reap_max_age_seconds()
         now = datetime.now(tz=UTC)
 
         containers = await self._list_managed_session_containers()
         by_session: dict[str, list[_ManagedSessionContainer]] = {}
         for container in containers:
             by_session.setdefault(container.session_id, []).append(container)
+        active_records = {
+            record.session_id: record for record in self._session_store.list_active()
+        }
+        stale_active_session_ids = self._stale_active_session_ids(
+            active_records=active_records,
+            by_session=by_session,
+            max_age_seconds=max_age_seconds,
+            now=now,
+        )
+        active_session_ids = set(active_records) - stale_active_session_ids
 
         skipped_active = 0
         skipped_recent = 0
+        forced_stale = 0
         reaped_containers = 0
         reaped_session_ids: list[str] = []
 
@@ -3822,17 +4017,42 @@ class DockerCodexManagedSessionController:
             if session_id in active_session_ids:
                 skipped_active += len(session_containers)
                 continue
-            newest = max(
-                (
-                    container.created_at
-                    for container in session_containers
-                    if container.created_at is not None
-                ),
-                default=None,
-            )
-            if newest is not None and (now - newest).total_seconds() < grace_seconds:
+            newest = self._newest_container_created_at(session_containers)
+            force_stale = session_id in stale_active_session_ids
+            if (
+                not force_stale
+                and newest is not None
+                and (now - newest).total_seconds() < grace_seconds
+            ):
                 skipped_recent += len(session_containers)
                 continue
+            if force_stale:
+                record = active_records.get(session_id)
+                if record is not None:
+                    try:
+                        await self._mark_session_terminated_by_reconcile(
+                            record,
+                            reason=(
+                                "managed session exceeded reap max age without an "
+                                "active turn"
+                            ),
+                            metadata={
+                                "maxAgeSeconds": max_age_seconds,
+                                "reapReason": "stale_active_session_max_age",
+                            },
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to terminate stale active session %s during reap",
+                            session_id,
+                        )
+                        continue
+                forced_stale += 1
+                logger.warning(
+                    "Reaping stale active managed session %s after max age %s seconds",
+                    session_id,
+                    max_age_seconds,
+                )
             removed_any = False
             for container in session_containers:
                 if await self._remove_container(
@@ -3852,6 +4072,35 @@ class DockerCodexManagedSessionController:
                     "Reaped orphaned managed session containers for session %s",
                     session_id,
                 )
+        for session_id in sorted(stale_active_session_ids - set(by_session)):
+            record = active_records.get(session_id)
+            if record is not None:
+                try:
+                    await self._mark_session_terminated_by_reconcile(
+                        record,
+                        reason=(
+                            "managed session exceeded reap max age without an "
+                            "active turn"
+                        ),
+                        metadata={
+                            "maxAgeSeconds": max_age_seconds,
+                            "reapReason": "stale_active_session_max_age",
+                        },
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to terminate stale active session %s "
+                        "(no containers) during reap",
+                        session_id,
+                    )
+                    continue
+            forced_stale += 1
+            logger.warning(
+                "Marked stale active managed session %s terminated after max age "
+                "%s seconds; no labeled containers were present",
+                session_id,
+                max_age_seconds,
+            )
 
         (
             scanned_volumes,
@@ -3870,6 +4119,7 @@ class DockerCodexManagedSessionController:
             reaped_containers=reaped_containers,
             skipped_active=skipped_active,
             skipped_recent=skipped_recent,
+            forced_stale=forced_stale,
             scanned_volumes=scanned_volumes,
             reaped_volumes=reaped_volumes,
             skipped_active_volumes=skipped_active_volumes,
