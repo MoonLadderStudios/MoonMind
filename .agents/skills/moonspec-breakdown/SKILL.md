@@ -98,7 +98,23 @@ Summarize the design in a few sentences, focusing on:
 - Explicit non-goals and constraints.
 - Migration, rollout, security, durability, observability, and external interface expectations.
 
-### 2. Extract Coverage Points
+### 2. Extract Canonical Claims And Coverage Points
+
+For file-backed declarative documents, identify the selected stable canonical
+claims before creating run-local coverage points:
+
+- If the source document already contains stable claim identifiers, preserve
+  those exact identifiers.
+- If the source document does not contain explicit claim identifiers, derive
+  stable claim IDs from the repo-relative source path, source heading, and claim
+  order within that heading. Use deterministic, path-anchored IDs that remain
+  stable across reruns when surrounding unrelated text changes.
+- Record each selected claim with `id`, `path`, `sections`, and a concise claim
+  summary. The `path` must be the canonical repo-relative document path when
+  the source came from a repo file.
+- For trusted Jira descriptions or pasted workflow instructions that do not
+  have a canonical file path, do not fabricate canonical claim IDs. Use only
+  run-local coverage IDs and preserve the selected source title/key.
 
 Convert the design into normalized major design points with stable IDs: `DESIGN-REQ-001`, `DESIGN-REQ-002`, and so on.
 
@@ -159,9 +175,12 @@ For each story, define:
 
 ### 5. Run The Coverage Gate
 
-Create a coverage matrix from every `DESIGN-REQ-*` point to one or more stories.
+Create a coverage matrix from every selected canonical claim ID and every
+`DESIGN-REQ-*` point to one or more stories.
 
-A coverage point passes only when at least one story explicitly owns it in story scope, acceptance criteria, requirements, or source design coverage. Implied coverage is not enough.
+A coverage point or canonical claim passes only when at least one story
+explicitly owns it in story scope, acceptance criteria, requirements, or source
+design coverage. Implied coverage is not enough.
 
 A point is weakly owned if a reasonable reader cannot tell which story is responsible for implementing or enforcing it.
 
@@ -190,14 +209,15 @@ The JSON file must be an object with:
 - `extractedAt`: ISO-8601 timestamp.
 - `coverageGate`: exactly `PASS - every major design point is owned by at least one story.`
 - `stories`: ordered list of story objects.
-- `coverageMatrix`: mapping from `DESIGN-REQ-*` points to story IDs.
+- `coverageMatrix`: mapping from every selected canonical claim ID or
+  `DESIGN-REQ-*` point to story IDs.
 
 Each story object must include:
 
 - `id`: stable story ID, such as `STORY-001`.
 - `summary`: concise title suitable for a Jira issue summary.
 - `description`: user-story or task narrative.
-- `sourceReference`: object containing `path`, `title`, `sections`, and `coverageIds`. For file-backed designs, `path` must be the same original design document path from `source.referencePath`; do not omit it from any story. For trusted Jira issue descriptions or workflow instructions, set `path` to `null` and preserve the selected source title.
+- `sourceReference`: object containing `path`, `title`, `sections`, `claimIds`, and `coverageIds`. For file-backed designs, `path` must be the same original design document path from `source.referencePath`, and `claimIds` must contain the selected stable canonical claim IDs owned by the story; do not omit either value from any story. For trusted Jira issue descriptions or workflow instructions, set `path` to `null`, set `claimIds` to an empty list, and preserve the selected source title.
 - `independentTest`: how this story can be validated independently.
 - `acceptanceCriteria`: concrete acceptance criteria.
 - `requirements`: functional requirements owned by the story.
@@ -214,7 +234,7 @@ The markdown file must include the same substance for human review:
 - Design summary.
 - Coverage points.
 - Ordered list of story candidates and their independent test criteria.
-- Coverage matrix mapping `DESIGN-REQ-*` points to stories.
+- Coverage matrix mapping every selected canonical claim ID or `DESIGN-REQ-*` point to stories.
 - Dependencies between stories.
 - Out-of-scope items and rationale.
 - Coverage gate result.
@@ -271,9 +291,13 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - The canonical source document remains the source of truth for desired state; breakdown output is a temporary derived view and is never cited as authority over its source.
 - Classify the input per `docs/Workflows/MoonSpecDocumentModel.md` and fail fast on imperative inputs without an explicit override.
 - Preserve the original technical or declarative design verbatim in the breakdown output for later specify.
-- Every story candidate must carry a `sourceReference.path` back to the original declarative document when the source came from a file; otherwise it must carry the selected source title/key with `path: null`.
+- Every story candidate must carry a `sourceReference.path` and non-empty
+  `sourceReference.claimIds` back to stable canonical claims in the original
+  declarative document when the source came from a file; otherwise it must carry
+  the selected source title/key with `path: null` and empty `claimIds`.
 - Prefer vertical user or operational outcomes over technical-layer slices.
-- Extract stable `DESIGN-REQ-*` coverage points before drafting story candidates.
+- Extract stable canonical claim IDs for file-backed documents and run-local
+  `DESIGN-REQ-*` coverage points before drafting story candidates.
 - Do not write specs in this skill.
 - Every major design point, constraint, and non-goal must be explicitly owned by at least one story candidate.
 - Acceptance scenarios must support downstream integration tests; functional requirements and edge cases must support downstream unit tests.

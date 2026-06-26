@@ -50,3 +50,28 @@ def test_moonspec_breakdown_skill_classifies_input_documents() -> None:
     assert "imperative-override" in text
     assert "sourceDocumentClass" in text
     assert "docs/Workflows/MoonSpecDocumentModel.md" in text
+
+
+def test_moonspec_breakdown_skill_requires_stable_canonical_claim_ids() -> None:
+    text = (_SKILLS_DIR / "moonspec-breakdown" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "stable canonical claim IDs" in text
+    assert "sourceReference.claimIds" in text
+    assert "path-anchored IDs" in text
+    assert "do not fabricate canonical claim IDs" in text
+    assert (
+        "coverage matrix from every selected canonical claim ID and every"
+        in text
+    )
+
+
+def test_moonspec_specify_skill_marks_specs_derived_from_claims() -> None:
+    text = (_SKILLS_DIR / "moonspec-specify" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "`**Derived From Canonical Claims**`" in text
+    assert "sourceReference" in text
+    assert "claimIds" in text

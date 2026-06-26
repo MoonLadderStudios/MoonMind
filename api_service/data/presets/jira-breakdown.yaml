@@ -84,9 +84,9 @@ steps:
       Workflow instructions:
       {{ inputs.feature_request }}
 
-      If the input is a readable repo path, use that file as the original declarative document and preserve its path in every story's sourceReference.
-      If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, and set each story's sourceReference.path to null.
-      If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, and set each story's sourceReference.path to null.
+      If the input is a readable repo path, use that file as the original declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
+      If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
+      If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
       Classify the input before extracting stories. If it is primarily an imperative checklist, status tracker, or migration plan and no explicit imperative override was given, fail fast with the moonspec-breakdown imperative-input error instead of decomposing it.
       Record sourceDocumentClass in the breakdown output.
@@ -101,7 +101,7 @@ steps:
       Create one Jira {{ inputs.jira_issue_type }} issue in project {{ inputs.jira_project_key }} for each story from the generated MoonSpec breakdown.
 
       Use the runtime-provided story breakdown JSON path.
-      Every Jira issue must include the Source Document path from the story breakdown when present; otherwise include the source title and Source Jira issue key when present.
+      Every Jira issue must include the Source Document path and canonical claim IDs from the story breakdown when present; otherwise include the source title and Source Jira issue key when present.
       {% if inputs.source_issue_key %}Source Jira issue key: {{ inputs.source_issue_key }}.{% endif %}
       {% if inputs.jira_board_id %}Selected Jira board ID: {{ inputs.jira_board_id }}.{% endif %}
       Dependency mode: {{ inputs.jira_dependency_mode }}.

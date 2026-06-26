@@ -832,6 +832,25 @@ def _missing_source_reference_story_ids(
             missing.append(_story_id(story, index=index))
     return missing
 
+def _story_source_claim_ids(reference: Mapping[str, Any]) -> list[str]:
+    return [
+        _string(item)
+        for item in _list(reference.get("claimIds") or reference.get("claim_ids"))
+        if _string(item)
+    ]
+
+def _missing_source_claim_story_ids(
+    stories: Sequence[Mapping[str, Any]],
+    *,
+    fallback_path: str,
+) -> list[str]:
+    missing: list[str] = []
+    for index, story in enumerate(stories, start=1):
+        reference = _story_source_reference(story, fallback_path=fallback_path)
+        if _string(reference.get("path")) and not _story_source_claim_ids(reference):
+            missing.append(_story_id(story, index=index))
+    return missing
+
 def _requires_story_source_reference(
     *,
     inputs: Mapping[str, Any],
@@ -903,6 +922,15 @@ def _story_description_with_source(
     if sections:
         source_lines.append(
             "Source Sections:\n" + "\n".join(f"- {item}" for item in sections)
+        )
+    claim_ids = [
+        _string(item)
+        for item in _list(reference.get("claimIds") or reference.get("claim_ids"))
+        if _string(item)
+    ]
+    if claim_ids:
+        source_lines.append(
+            "Canonical Claim IDs:\n" + "\n".join(f"- {item}" for item in claim_ids)
         )
     coverage_ids = [
         _string(item)
@@ -1185,12 +1213,25 @@ def _downstream_task_payload(
     source_design_path = _string(
         mapping.get("sourceDesignPath") or mapping.get("source_design_path")
     )
+    source_claim_ids = [
+        _string(item)
+        for item in _list(
+            mapping.get("sourceClaimIds") or mapping.get("source_claim_ids")
+        )
+        if _string(item)
+    ]
+    claim_line = (
+        "Source canonical claim IDs: "
+        + (", ".join(source_claim_ids) if source_claim_ids else "not provided")
+        + ".\n"
+    )
     instructions = (
         f"Run {preset_label} for {issue_key}.\n\n"
         f"Source story: {story_id or summary}.\n"
         f"Source summary: {summary}.\n"
         f"Source Jira issue: {source_issue_key or 'unknown'}.\n"
         f"Source design document: {source_design_path or 'not provided'}.\n"
+        f"{claim_line}"
         f"Original brief reference: {source_brief_ref or 'not provided'}.\n\n"
         f"Use the existing {preset_label} workflow for this Jira issue. "
         "Do not run implementation inline inside the breakdown task."
@@ -1226,6 +1267,7 @@ def _downstream_task_payload(
         "inputs": {
             "jira_issue": jira_issue_input,
             "source_design_path": source_design_path,
+            "source_claim_ids": source_claim_ids,
             "constraints": (
                 f"Preserve source issue {source_issue_key} traceability."
                 if source_issue_key
@@ -1776,6 +1818,7 @@ def _issue_mapping(
         story, fallback_path=fallback_source_path
     )
     mapping["sourceDesignPath"] = _string(source_reference.get("path"))
+    mapping["sourceClaimIds"] = _story_source_claim_ids(source_reference)
     return mapping
 
 async def _create_dependency_links(
@@ -2134,11 +2177,12 @@ async def create_jira_issues_from_stories(
             )
         raise ValueError(reason)
 
-    if _requires_story_source_reference(
+    requires_source_reference = _requires_story_source_reference(
         inputs=inputs,
         story_output=story_output,
         fallback_path=breakdown_source_path,
-    ):
+    )
+    if requires_source_reference:
         missing_source_ids = _missing_source_reference_story_ids(
             stories,
             fallback_path=breakdown_source_path,
@@ -2157,6 +2201,25 @@ async def create_jira_issues_from_stories(
                     dependency_mode=dependency_mode,
                 )
             raise ValueError(reason)
+    missing_claim_ids = _missing_source_claim_story_ids(
+        stories,
+        fallback_path=breakdown_source_path if requires_source_reference else "",
+    )
+    if missing_claim_ids:
+        reason = (
+            "Jira story creation requires sourceReference.claimIds for every "
+            "file-backed story with sourceReference.path or breakdown "
+            "source.referencePath. Missing: "
+            + ", ".join(missing_claim_ids)
+        )
+        if fallback_on_failure:
+            return _fallback_result(
+                reason=reason,
+                inputs=inputs,
+                story_count=len(stories),
+                dependency_mode=dependency_mode,
+            )
+        raise ValueError(reason)
 
     service = jira_service_factory()
     try:
