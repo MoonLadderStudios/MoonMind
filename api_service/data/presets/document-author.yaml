@@ -28,7 +28,7 @@ inputs:
     label: Traceability
     type: text
     required: false
-    default: "MM-931 from MM-927"
+    default: ""
   - name: constraints
     label: Constraints
     type: textarea

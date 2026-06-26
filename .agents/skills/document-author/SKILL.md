@@ -18,7 +18,7 @@ Create one bounded document that fits the repository documentation architecture:
 - imperative plans, rollout notes, implementation checklists, and broad cleanup work live under `docs/tmp/` or gitignored handoff paths;
 - no docs-native authoring workflow creates `spec.md` or writes under `specs/`.
 
-Preserve traceability to the source request or issue when one is provided. For MM-931 work sourced from MM-927, carry both issue keys in local notes, branch/commit/PR text when applicable, and any generated implementation artifact that summarizes the authored document.
+Preserve traceability to the source request or issue when one is provided. Carry any provided issue keys in local notes, branch/commit/PR text when applicable, and any generated implementation artifact that summarizes the authored document.
 
 ## Inputs
 

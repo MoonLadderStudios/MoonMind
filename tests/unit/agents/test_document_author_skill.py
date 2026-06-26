@@ -1,4 +1,4 @@
-"""Content contract tests for the MM-931 document-author skill."""
+"""Content contract tests for the document-author skill."""
 
 from pathlib import Path
 
@@ -57,8 +57,8 @@ def test_document_author_never_creates_docs_native_spec() -> None:
     assert "Confirmation that no docs-native `spec.md` was created" in text
 
 
-def test_document_author_preserves_mm_931_and_mm_927_traceability() -> None:
+def test_document_author_defines_traceability_guidance() -> None:
     text = _read_skill()
 
-    assert "MM-931" in text
-    assert "MM-927" in text
+    assert "traceability" in text
+    assert "issue keys" in text
