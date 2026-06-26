@@ -23,7 +23,7 @@ Do not use this skill to split a broad design into multiple specs; use `/speckit
 ## Inputs
 
 - Treat the user's request text as the feature description.
-- `spec.md` is a temporary execution artifact derived from the request or its canonical source document. It is never the source of truth for desired state (see `docs/Workflows/MoonSpecDocumentModel.md`).
+- `spec.md` is a temporary execution artifact and downstream adapter derived from the request or its canonical source document. It is never the source of truth for desired state (see `docs/Workflows/MoonSpecDocumentModel.md`).
 - Do not ask the user to repeat the request unless it is empty or no independently testable story can be derived.
 - If the feature description is empty, stop with: `ERROR "No feature description provided"`.
 - Preserve the original feature description verbatim in the generated spec's `**Input**` field. Do not summarize or normalize it; `/speckit.verify` relies on this source request.
@@ -47,16 +47,19 @@ For source-backed requests:
    - Normative terms such as must, shall, required, forbidden, cannot, should when used as a requirement.
    - Behavior tables, acceptance criteria, invariants, limits, failure handling, and compatibility constraints.
    - Explicit non-goals or exclusions that constrain scope.
-4. Assign stable IDs: `DESIGN-REQ-001`, `DESIGN-REQ-002`, and so on.
-5. If the source artifact contains multiple independent stories, do not collapse them into one spec. Ask the user to choose one story, or direct them to `/speckit.breakdown` when the goal is to extract stories from a broader technical or declarative design.
-6. If a source requirement is intentionally out of scope for the selected story, keep it in the source mapping as out of scope with a short rationale. Do not silently drop it.
-7. Record the canonical source document path and its document class (per `docs/Workflows/MoonSpecDocumentModel.md`) in a `**Source Document**` line directly below `**Input**` in `spec.md`.
-8. When the request comes from a `moonspec-breakdown` story whose
-   `sourceReference` contains stable canonical `claimIds`, record a
-   `**Derived From Canonical Claims**` line directly below `**Source Document**`
-   in `spec.md`. List the claim IDs exactly as supplied by the breakdown
-   handoff, and keep the generated `DESIGN-REQ-*` mapping in the Source Design
-   Requirements section.
+4. Build a source packet from the source artifact. Record the source document path, document class, viewpoint, owning surface, stable claim IDs, and source issue traceability when present. For canonical docs, derive viewpoint and owning surface from the document metadata header, `docs/DocumentationArchitecture.md`, file path, title, and authority text. If the source already has stable IDs, preserve them. If a concrete source claim has no stable ID, assign `CLAIM-001`, `CLAIM-002`, and so on within the generated packet; do not treat line numbers as stable IDs.
+5. Assign source requirement IDs: `DESIGN-REQ-001`, `DESIGN-REQ-002`, and so on. Link each `DESIGN-REQ-*` to its stable claim ID, or state why no stable source claim applies.
+6. If the source artifact contains multiple independent stories, do not collapse them into one spec. Ask the user to choose one story, or direct them to `/speckit.breakdown` when the goal is to extract stories from a broader technical or declarative design.
+7. If a source requirement is intentionally out of scope for the selected story, keep it in the source mapping as out of scope with a short rationale. Do not silently drop it.
+8. Record the packet in `spec.md` immediately below `**Input**` as `## Source Packet`. Include:
+   - `**Artifact Role**`: state that `spec.md` is a temporary adapter derived from the canonical request or source document, not authoritative desired state.
+   - `**Source Document**`: repo-relative source path, or `original request only` when no document exists.
+   - `**Document Class**`: per `docs/Workflows/MoonSpecDocumentModel.md`.
+   - `**Viewpoint**`: canonical documentation viewpoint, or `none` with reason.
+   - `**Owning Surface**`: authority scope, module, feature, contract surface, or `none` with reason.
+   - `**Stable Claim IDs**`: existing source claim IDs and generated `CLAIM-*` IDs used by the selected story, or `none` with reason.
+   - `**Source Issue Traceability**`: preserve issue lineage such as `MM-933` and source issue `MM-927` when present.
+   - When the request comes from a `moonspec-breakdown` story whose `sourceReference` contains stable canonical `claimIds`, list those claim IDs exactly as supplied in `**Stable Claim IDs**` and keep the generated `DESIGN-REQ-*` mapping in the Source Design Requirements section.
 9. If drafting reveals a conflict between the feature request and the canonical source document, surface it as a `[NEEDS CLARIFICATION]` marker or an explicitly flagged conflict in the spec. Do not silently resolve the conflict toward either side; the canonical document wins by default, and evidence that the document itself is wrong must flow to doc reconciliation, not be buried in the spec.
 
 Complete source reading, requirement extraction, and single-story selection before creating the feature directory.
@@ -162,6 +165,7 @@ Fill the template with concrete details derived from the feature description:
 8. Document assumptions in `## Assumptions` only when assumptions are used; remove the section if no assumptions were made.
 9. For source-backed requests, add `## Source Design Requirements` with:
    - Requirement ID.
+   - Stable claim ID from `## Source Packet`, or an explicit `No stable source claim applies: <reason>` entry.
    - Source citation such as heading, table name, or line number when available.
    - Requirement summary in testable, implementation-agnostic language.
    - Scope status: in scope or out of scope with rationale.

@@ -132,18 +132,27 @@ Given that feature description, do this:
        - Acceptance Scenarios
        - Edge Cases
        If no clear independent story can be derived: ERROR "Cannot determine a single independently testable story"
-    5. Generate Functional Requirements
+    5. Fill the Source Packet section
+       - Set **Artifact Role** to `Temporary adapter derived from the canonical request or source document; not authoritative desired state.`
+       - Set **Source Document** to the canonical `docs/` path when the user explicitly references one; otherwise set it to `original request only`
+       - Set **Document Class** to the referenced document class when known; otherwise set it to `original request`
+       - Set **Viewpoint** and **Owning Surface** from the referenced source document when known; otherwise set each to `none`
+       - Set **Stable Claim IDs** to the applicable `CLAIM-*`, `DESIGN-REQ-*`, or `DOC-REQ-*` IDs when provided by a source document; otherwise set it to `none - original request has no stable claim IDs`
+       - Set **Source Issue Traceability** to any explicit issue keys in the request or source document; otherwise set it to `none`
+       - Do not leave bracketed Source Packet placeholders in `spec.md`
+    6. Generate Functional Requirements
        Each requirement must be testable
        Use reasonable defaults for unspecified details (document assumptions in the Assumptions section when assumptions are used)
-    6. Define Success Criteria
+    7. Define Success Criteria
        Create measurable, technology-agnostic outcomes
        Include both quantitative metrics (time, performance, volume) and qualitative measures (user satisfaction, task completion)
        Each criterion must be verifiable without implementation details
-    7. Identify Key Entities (if data involved)
-    8. Return: SUCCESS (spec ready for planning)
+    8. Identify Key Entities (if data involved)
+    9. Return: SUCCESS (spec ready for planning)
 
 6. Write the specification to SPEC_FILE using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings.
    - Preserve the original user description verbatim in the `**Input**` field. Do not summarize or normalize it; downstream `/speckit.verify` uses it as the source request.
+   - Replace every `## Source Packet` placeholder with concrete values from the user request or referenced source document. If no source document or stable claim ID is available, use `original request only`, `original request`, `none`, and `none - original request has no stable claim IDs` as appropriate.
    - Produce exactly one `## User Story - ...` section.
 
 7. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
