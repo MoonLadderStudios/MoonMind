@@ -84,30 +84,28 @@ async def test_require_skill_not_found(tmp_path):
                 await svc.require_skill("nonexistent")
 
 @pytest.mark.asyncio
-async def test_create_version_success(tmp_path, mock_artifact_service: AsyncMock):
+async def test_update_skill_content_success(tmp_path, mock_artifact_service: AsyncMock):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as db_session:
             svc = AgentSkillsService(session=db_session, artifact_service=mock_artifact_service)
-            skill = await svc.create_skill(slug="versioned-skill", title="Versioned")
+            skill = await svc.create_skill(slug="docs-skill", title="Docs")
 
-            version = await svc.create_version(
-                skill_slug="versioned-skill",
-                version_string="1.0.0",
+            updated = await svc.update_skill_content(
+                skill_slug="docs-skill",
                 content="some markdown content",
             )
 
-            assert version.skill_id == skill.id
-            assert version.version_string == "1.0.0"
-            assert version.format == AgentSkillFormat.MARKDOWN
-            assert version.artifact_ref == "test-artifact-id"
-            assert version.content_digest.startswith("sha256:")
+            assert updated.id == skill.id
+            assert updated.format == AgentSkillFormat.MARKDOWN
+            assert updated.artifact_ref == "test-artifact-id"
+            assert updated.content_digest.startswith("sha256:")
 
             # Verify that the artifact service was awaited
             mock_artifact_service.create.assert_awaited_once()
             mock_artifact_service.write_complete.assert_awaited_once()
 
 @pytest.mark.asyncio
-async def test_create_second_version_preserves_first_version(
+async def test_update_skill_content_replaces_current_content(
     tmp_path, mock_artifact_service: AsyncMock
 ):
     async with template_db(tmp_path) as session_maker:
@@ -115,49 +113,38 @@ async def test_create_second_version_preserves_first_version(
             svc = AgentSkillsService(
                 session=db_session, artifact_service=mock_artifact_service
             )
-            await svc.create_skill(slug="versioned-skill", title="Versioned")
+            await svc.create_skill(slug="docs-skill", title="Docs")
 
-            first = await svc.create_version(
-                skill_slug="versioned-skill",
-                version_string="1.0.0",
+            first = await svc.update_skill_content(
+                skill_slug="docs-skill",
                 content="first markdown content",
             )
-            second = await svc.create_version(
-                skill_slug="versioned-skill",
-                version_string="1.1.0",
+            first_digest = first.content_digest
+
+            second = await svc.update_skill_content(
+                skill_slug="docs-skill",
                 content="second markdown content",
             )
 
-            fetched = await svc.require_skill("versioned-skill")
+            fetched = await svc.require_skill("docs-skill")
 
-            assert first.id != second.id
-            assert [version.version_string for version in fetched.versions] == [
-                "1.0.0",
-                "1.1.0",
-            ]
-            assert fetched.versions[0].artifact_ref == first.artifact_ref
-            assert fetched.versions[0].content_digest == first.content_digest
-            assert fetched.versions[1].artifact_ref == second.artifact_ref
-            assert fetched.versions[1].content_digest == second.content_digest
+            assert second.id == first.id
+            assert fetched.artifact_ref == second.artifact_ref
+            assert fetched.content_digest == second.content_digest
+            assert fetched.content_digest != first_digest
 
 @pytest.mark.asyncio
-async def test_create_version_duplicate(tmp_path, mock_artifact_service: AsyncMock):
+async def test_update_skill_content_rejects_invalid_format(tmp_path, mock_artifact_service: AsyncMock):
     async with template_db(tmp_path) as session_maker:
         async with session_maker() as db_session:
             svc = AgentSkillsService(session=db_session, artifact_service=mock_artifact_service)
-            await svc.create_skill(slug="dup-ver-skill", title="Dup Ver")
+            await svc.create_skill(slug="docs-skill", title="Docs")
 
-            await svc.create_version(
-                skill_slug="dup-ver-skill",
-                version_string="1.0.0",
-                content="first",
-            )
-
-            with pytest.raises(AgentSkillDuplicateError):
-                await svc.create_version(
-                    skill_slug="dup-ver-skill",
-                    version_string="1.0.0",
+            with pytest.raises(ValueError, match="Invalid format"):
+                await svc.update_skill_content(
+                    skill_slug="docs-skill",
                     content="second",
+                    format_str="invalid",
                 )
 
 @pytest.mark.asyncio

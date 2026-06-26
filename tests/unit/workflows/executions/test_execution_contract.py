@@ -10,6 +10,7 @@ from moonmind.workflows.executions.execution_contract import (
     build_runtime_command_preview_config,
     CanonicalWorkflowExecutionPayload,
     ResumeFromFailedStepRef,
+    reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
     strip_workflow_capability_identity_versions,
     WorkflowContractError,
@@ -51,18 +52,15 @@ def test_task_skills_accepts_valid_properties() -> None:
     assert spec.skills.exclude == ["legacy"]
     assert spec.skills.materialization_mode == "hybrid"
 
-def test_task_skills_strip_semantic_version_fields() -> None:
-    spec = WorkflowExecutionSpec.model_validate(
-        {
-            "repository": "test/repo",
-            "instructions": "execute",
-            "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
-        }
-    )
-
-    assert spec.skills is not None
-    assert spec.skills.include is not None
-    assert spec.skills.include[0].name == "test-skill"
+def test_task_skills_reject_semantic_version_fields() -> None:
+    with pytest.raises(ValidationError, match="semantic versions"):
+        WorkflowExecutionSpec.model_validate(
+            {
+                "repository": "test/repo",
+                "instructions": "execute",
+                "skills": {"include": [{"name": "test-skill", "version": "1.0.0"}]},
+            }
+        )
 
     with pytest.raises(ValidationError, match="semantic versions"):
         WorkflowExecutionSpec.model_validate(
@@ -72,6 +70,73 @@ def test_task_skills_strip_semantic_version_fields() -> None:
                 "skills": {"include": [{"name": "test-skill:1.0.0"}]},
             }
         )
+
+
+def test_workflow_capability_identity_rejector_blocks_nested_skill_versions() -> None:
+    payload = {
+        "skills": {
+            "include": [
+                {"name": "pr-resolver", "version": "1.0.0", "skillVersion": "1.0.0"},
+            ],
+        },
+    }
+
+    with pytest.raises(WorkflowContractError, match="semantic versions"):
+        reject_workflow_capability_identity_versions(payload)
+
+
+def test_workflow_capability_identity_rejector_blocks_step_source_versions() -> None:
+    payload = {
+        "steps": [
+            {
+                "instructions": "Run preset-derived step.",
+                "source": {"slug": "jira-implement", "presetVersion": "1.0.0"},
+            },
+        ],
+    }
+
+    with pytest.raises(
+        WorkflowContractError,
+        match=r"workflow\.steps\[0\]\.source",
+    ):
+        reject_workflow_capability_identity_versions(payload)
+
+
+def test_workflow_capability_identity_rejector_blocks_snake_case_nested_presets() -> None:
+    payload = {
+        "task_template": {
+            "slug": "jira-orchestrate",
+            "authored_presets": [
+                {"presetSlug": "jira-implement", "presetVersion": "1.0.0"},
+            ],
+            "applied_step_templates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    with pytest.raises(
+        WorkflowContractError,
+        match=r"workflow\.task_template\.authored_presets\[0\]",
+    ):
+        reject_workflow_capability_identity_versions(payload)
+
+
+def test_workflow_capability_identity_rejector_blocks_snake_case_applied_templates() -> None:
+    payload = {
+        "task_template": {
+            "slug": "jira-orchestrate",
+            "applied_step_templates": [
+                {"slug": "jira-implement", "version": "1.0.0"},
+            ],
+        },
+    }
+
+    with pytest.raises(
+        WorkflowContractError,
+        match=r"workflow\.task_template\.applied_step_templates\[0\]",
+    ):
+        reject_workflow_capability_identity_versions(payload)
 
 
 def test_workflow_capability_identity_sanitizer_strips_nested_skill_versions() -> None:
@@ -631,7 +696,6 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
                     "instructions": "Fetch issue.",
                     "tool": {
                         "id": "jira.get_issue",
-                        "version": "1.0.0",
                         "inputs": {"issueKey": "MM-559"},
                     },
                     "source": {
@@ -647,7 +711,6 @@ def test_task_steps_accept_explicit_tool_and_skill_discriminators() -> None:
                     "instructions": "Implement issue.",
                     "skill": {
                         "id": "moonspec-implement",
-                        "skillVersion": "1.0.0",
                         "args": {"issueKey": "MM-559"},
                     },
                 },

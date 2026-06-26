@@ -9,7 +9,6 @@ from pathlib import Path
 import yaml
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_skill_models import (
@@ -144,34 +143,31 @@ class DeploymentSkillLoader(SkillLoader):
         async with context.async_session_maker() as session:
             stmt = (
                 select(AgentSkillDefinition)
-                .options(selectinload(AgentSkillDefinition.versions))
                 .where(AgentSkillDefinition.slug.in_(requested_names))
             )
 
             res = await session.execute(stmt)
             defs = res.scalars().all()
-            latest_versions_by_artifact: dict[str, typing.Any] = {}
+            artifact_refs: set[str] = set()
             for definition in defs:
-                if definition.versions:
-                    latest_version = definition.versions[-1]
-                    latest_versions_by_artifact[latest_version.artifact_ref] = latest_version
+                if definition.artifact_ref:
+                    artifact_refs.add(definition.artifact_ref)
 
             metadata_by_artifact: dict[str, dict[str, typing.Any]] = {}
-            if latest_versions_by_artifact:
+            if artifact_refs:
                 artifact_stmt = select(
                     TemporalArtifact.artifact_id,
                     TemporalArtifact.metadata_json,
-                ).where(TemporalArtifact.artifact_id.in_(latest_versions_by_artifact))
+                ).where(TemporalArtifact.artifact_id.in_(artifact_refs))
                 artifact_res = await session.execute(artifact_stmt)
                 for artifact_id, metadata_json in artifact_res.all():
                     if isinstance(metadata_json, dict):
                         metadata_by_artifact[str(artifact_id)] = metadata_json
 
             for definition in defs:
-                if not definition.versions:
+                if not definition.artifact_ref:
                     continue
-                latest_version = definition.versions[-1]
-                metadata = metadata_by_artifact.get(latest_version.artifact_ref, {})
+                metadata = metadata_by_artifact.get(definition.artifact_ref, {})
                 required_skills = _required_skill_names_from_artifact_metadata(
                     metadata,
                     owner=definition.slug,
@@ -183,9 +179,9 @@ class DeploymentSkillLoader(SkillLoader):
                 results.append(
                     ResolvedSkillEntry(
                         skill_name=definition.slug,
-                        format=AgentSkillFormat(latest_version.format.value),
-                        content_ref=latest_version.artifact_ref,
-                        content_digest=latest_version.content_digest,
+                        format=AgentSkillFormat(definition.format.value),
+                        content_ref=definition.artifact_ref,
+                        content_digest=definition.content_digest,
                         required_skills=list(required_skills),
                         required_capabilities=list(required_capabilities),
                         provenance=AgentSkillProvenance(

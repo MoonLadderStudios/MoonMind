@@ -144,8 +144,8 @@ from moonmind.workflows.executions.execution_contract import (
     build_authoritative_workflow_input_snapshot,
     is_non_repository_side_effect_skill,
     is_self_managed_publish_skill,
+    reject_workflow_capability_identity_versions,
     resolve_publish_mode_for_skill,
-    strip_workflow_capability_identity_versions,
 )
 from api_service.api.schemas import CreateJobRequest
 from moonmind.workflows import get_temporal_artifact_service
@@ -4960,10 +4960,14 @@ def _invalid_workflow_request(message: str) -> HTTPException:
         },
     )
 
-def _strip_submit_version_identity(task_payload: dict[str, Any]) -> None:
-    sanitized = strip_workflow_capability_identity_versions(task_payload)
-    task_payload.clear()
-    task_payload.update(sanitized)
+def _reject_submit_version_identity(task_payload: dict[str, Any]) -> None:
+    try:
+        reject_workflow_capability_identity_versions(
+            task_payload,
+            field_path="payload.workflow",
+        )
+    except WorkflowContractError as exc:
+        raise _invalid_workflow_request(str(exc)) from exc
 
 def _validation_error_code(message: str) -> str:
     if message.startswith("Dependency not found:"):
@@ -7058,7 +7062,7 @@ async def _create_execution_from_workflow_request(
         raise _invalid_workflow_request(
             f"{shape_name} Temporal submit requests require {required_field}."
         )
-    _strip_submit_version_identity(task_payload)
+    _reject_submit_version_identity(task_payload)
 
     # Resolve child-agent runtime inheritance before downstream normalization
     # consumes targetRuntime / task.runtime fields.  When inheritance applies,
@@ -7140,7 +7144,7 @@ async def _create_execution_from_workflow_request(
             session=session,
             user_id=user.id,
         )
-        _strip_submit_version_identity(task_payload)
+        _reject_submit_version_identity(task_payload)
 
     (
         objective_attachment_refs,

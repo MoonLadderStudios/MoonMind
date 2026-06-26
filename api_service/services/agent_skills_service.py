@@ -8,12 +8,10 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from api_service.db.models import (
     AgentSkillDefinition,
     AgentSkillFormat,
-    AgentSkillVersion,
     SkillSet,
 )
 from moonmind.services.skill_resolution import (
@@ -29,7 +27,7 @@ class AgentSkillNotFoundError(ValueError):
     """Raised when the requested agent skill definition is not found."""
 
 class AgentSkillsService:
-    """Orchestrates CRUD and version immutable storage for agent skills."""
+    """Orchestrates CRUD and current content storage for agent skills."""
 
     def __init__(
         self,
@@ -43,7 +41,6 @@ class AgentSkillsService:
     async def list_skills(self) -> list[AgentSkillDefinition]:
         stmt = (
             select(AgentSkillDefinition)
-            .options(selectinload(AgentSkillDefinition.versions))
             .order_by(AgentSkillDefinition.slug.asc())
         )
         result = await self._session.execute(stmt)
@@ -52,7 +49,6 @@ class AgentSkillsService:
     async def get_skill(self, slug: str) -> AgentSkillDefinition | None:
         stmt = (
             select(AgentSkillDefinition)
-            .options(selectinload(AgentSkillDefinition.versions))
             .where(AgentSkillDefinition.slug == slug)
         )
         result = await self._session.execute(stmt)
@@ -89,17 +85,16 @@ class AgentSkillsService:
         await self._session.refresh(skill)
         return skill
 
-    async def create_version(
+    async def update_skill_content(
         self,
         *,
         skill_slug: str,
-        version_string: str,
         content: str,
         format_str: str = "markdown",
         principal: str = "system:agent-skills",
-    ) -> AgentSkillVersion:
+    ) -> AgentSkillDefinition:
         if self._artifact_service is None:
-            raise RuntimeError("TemporalArtifactService is required to create an agent skill version.")
+            raise RuntimeError("TemporalArtifactService is required to update agent skill content.")
 
         skill = await self.require_skill(skill_slug)
 
@@ -108,29 +103,18 @@ class AgentSkillsService:
         required_skills = extract_required_skill_names_from_skill_markdown(
             content,
             skill_name=skill_slug,
-            source_label=f"deployment skill '{skill_slug}' version '{version_string}'",
+            source_label=f"deployment skill '{skill_slug}'",
         )
         required_capabilities = extract_required_capabilities_from_skill_markdown(
             content,
             skill_name=skill_slug,
-            source_label=f"deployment skill '{skill_slug}' version '{version_string}'",
+            source_label=f"deployment skill '{skill_slug}'",
         )
-
-        # Check for duplicate version early if possible
-        stmt = select(AgentSkillVersion).where(
-            AgentSkillVersion.skill_id == skill.id,
-            AgentSkillVersion.version_string == version_string,
-        )
-        result = await self._session.execute(stmt)
-        if result.scalars().first() is not None:
-            raise AgentSkillDuplicateError(
-                f"Version '{version_string}' already exists for skill '{skill_slug}'."
-            )
 
         try:
             parsed_format = AgentSkillFormat(format_str)
         except ValueError as exc:
-            raise ValueError(f"Invalid format processing skill version '{version_string}': {exc}") from exc
+            raise ValueError(f"Invalid format processing skill '{skill_slug}': {exc}") from exc
         
         # Store content in artifact storage
         artifact, _upload = await self._artifact_service.create(
@@ -140,7 +124,6 @@ class AgentSkillsService:
             sha256=content_digest.removeprefix("sha256:"),
             metadata_json={
                 "skill_slug": skill_slug,
-                "version_string": version_string,
                 "format": format_str,
                 "required_skills": list(required_skills),
                 "required_capabilities": list(required_capabilities),
@@ -154,27 +137,13 @@ class AgentSkillsService:
         )
         artifact_ref = artifact.artifact_id
 
-        version = AgentSkillVersion(
-            skill_id=skill.id,
-            version_string=version_string,
-            format=parsed_format,
-            artifact_ref=artifact_ref,
-            content_digest=content_digest,
-        )
-        self._session.add(version)
-        try:
-            await self._session.flush()
-        except IntegrityError as exc:
-            await self._session.rollback()
-            raise AgentSkillDuplicateError(
-                f"Version '{version_string}' already exists for skill '{skill_slug}'."
-            ) from exc
-
-        # Keep skill updated_at fresh
+        skill.format = parsed_format
+        skill.artifact_ref = artifact_ref
+        skill.content_digest = content_digest
         skill.updated_at = datetime.now(UTC)
         await self._session.commit()
-        await self._session.refresh(version)
-        return version
+        await self._session.refresh(skill)
+        return skill
 
     async def create_skill_set(
         self,

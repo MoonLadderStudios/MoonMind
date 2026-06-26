@@ -161,12 +161,32 @@ def _strip_identity_version_keys(
     return payload
 
 
+def _reject_identity_version_keys(
+    value: Mapping[str, Any],
+    keys: frozenset[str],
+    *,
+    field_path: str,
+) -> None:
+    present = sorted(key for key in keys if key in value)
+    if present:
+        raise WorkflowContractError(
+            f"{field_path} must not include semantic versions for capability selectors: "
+            + ", ".join(present)
+        )
+
+
 def _strip_preset_identity_versions(value: Mapping[str, Any]) -> dict[str, Any]:
     payload = _strip_identity_version_keys(value, _PRESET_IDENTITY_VERSION_KEYS)
     composition = payload.get("composition")
     if isinstance(composition, Mapping):
         payload["composition"] = _strip_preset_identity_versions(composition)
-    for list_key in ("includes", "authoredPresets", "appliedStepTemplates"):
+    for list_key in (
+        "includes",
+        "authoredPresets",
+        "authored_presets",
+        "appliedStepTemplates",
+        "applied_step_templates",
+    ):
         items = payload.get(list_key)
         if isinstance(items, list):
             payload[list_key] = [
@@ -176,6 +196,39 @@ def _strip_preset_identity_versions(value: Mapping[str, Any]) -> dict[str, Any]:
                 for item in items
             ]
     return payload
+
+
+def _reject_preset_identity_versions(
+    value: Mapping[str, Any],
+    *,
+    field_path: str,
+) -> None:
+    _reject_identity_version_keys(
+        value,
+        _PRESET_IDENTITY_VERSION_KEYS,
+        field_path=field_path,
+    )
+    composition = value.get("composition")
+    if isinstance(composition, Mapping):
+        _reject_preset_identity_versions(
+            composition,
+            field_path=f"{field_path}.composition",
+        )
+    for list_key in (
+        "includes",
+        "authoredPresets",
+        "authored_presets",
+        "appliedStepTemplates",
+        "applied_step_templates",
+    ):
+        items = value.get(list_key)
+        if isinstance(items, list):
+            for index, item in enumerate(items):
+                if isinstance(item, Mapping):
+                    _reject_preset_identity_versions(
+                        item,
+                        field_path=f"{field_path}.{list_key}[{index}]",
+                    )
 
 
 def strip_workflow_capability_identity_versions(
@@ -209,6 +262,7 @@ def strip_workflow_capability_identity_versions(
         "task_template",
         "presetSchedule",
         "preset_schedule",
+        "source",
     ):
         node = sanitized.get(key)
         if isinstance(node, Mapping):
@@ -236,6 +290,66 @@ def strip_workflow_capability_identity_versions(
             for step in steps
         ]
     return sanitized
+
+
+def reject_workflow_capability_identity_versions(
+    payload: Mapping[str, Any],
+    *,
+    field_path: str = "workflow",
+) -> None:
+    """Reject stale semantic version fields in newly authored capability selectors."""
+
+    for key in ("tool", "skill"):
+        node = payload.get(key)
+        if isinstance(node, Mapping):
+            _reject_identity_version_keys(
+                node,
+                _CAPABILITY_IDENTITY_VERSION_KEYS,
+                field_path=f"{field_path}.{key}",
+            )
+    skills = payload.get("skills")
+    if isinstance(skills, Mapping):
+        for list_key, items in skills.items():
+            if isinstance(items, list):
+                for index, item in enumerate(items):
+                    if isinstance(item, Mapping):
+                        _reject_identity_version_keys(
+                            item,
+                            _SKILL_IDENTITY_VERSION_KEYS,
+                            field_path=f"{field_path}.skills.{list_key}[{index}]",
+                        )
+    for key in (
+        "taskTemplate",
+        "task_template",
+        "presetSchedule",
+        "preset_schedule",
+        "source",
+    ):
+        node = payload.get(key)
+        if isinstance(node, Mapping):
+            _reject_preset_identity_versions(node, field_path=f"{field_path}.{key}")
+    for key in (
+        "appliedStepTemplates",
+        "applied_step_templates",
+        "authoredPresets",
+        "authored_presets",
+    ):
+        items = payload.get(key)
+        if isinstance(items, list):
+            for index, item in enumerate(items):
+                if isinstance(item, Mapping):
+                    _reject_preset_identity_versions(
+                        item,
+                        field_path=f"{field_path}.{key}[{index}]",
+                    )
+    steps = payload.get("steps")
+    if isinstance(steps, list):
+        for index, step in enumerate(steps):
+            if isinstance(step, Mapping):
+                reject_workflow_capability_identity_versions(
+                    step,
+                    field_path=f"{field_path}.steps[{index}]",
+                )
 
 
 def _skill_metadata_required_capabilities(skill_id: object) -> tuple[str, ...]:
@@ -808,11 +922,12 @@ class WorkflowSkillSelectorExact(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _strip_removed_identity_versions(cls, value: object) -> object:
+    def _reject_removed_identity_versions(cls, value: object) -> object:
         if isinstance(value, Mapping):
-            return _strip_identity_version_keys(
+            _reject_identity_version_keys(
                 value,
                 _SKILL_IDENTITY_VERSION_KEYS,
+                field_path="workflow.skills.include[]",
             )
         return value
 
@@ -987,11 +1102,12 @@ class WorkflowSkillSelection(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _strip_removed_identity_versions(cls, value: object) -> object:
+    def _reject_removed_identity_versions(cls, value: object) -> object:
         if isinstance(value, Mapping):
-            return _strip_identity_version_keys(
+            _reject_identity_version_keys(
                 value,
                 _SKILL_IDENTITY_VERSION_KEYS,
+                field_path="workflow.skill",
             )
         return value
 
@@ -1472,11 +1588,12 @@ class WorkflowStepSource(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _strip_removed_identity_versions(cls, value: object) -> object:
+    def _reject_removed_identity_versions(cls, value: object) -> object:
         if isinstance(value, Mapping):
-            return _strip_identity_version_keys(
+            _reject_identity_version_keys(
                 value,
                 _PRESET_IDENTITY_VERSION_KEYS,
+                field_path="workflow.steps[].source",
             )
         return value
 
@@ -1521,9 +1638,12 @@ class AuthoredPresetBinding(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _strip_removed_identity_versions(cls, value: object) -> object:
+    def _reject_removed_identity_versions(cls, value: object) -> object:
         if isinstance(value, Mapping):
-            return _strip_preset_identity_versions(value)
+            _reject_preset_identity_versions(
+                value,
+                field_path="workflow.authoredPresets[]",
+            )
         return value
 
     @field_validator(
@@ -1599,7 +1719,8 @@ class WorkflowStepSpec(BaseModel):
     def _reject_forbidden_step_overrides(cls, value: object) -> object:
         if not isinstance(value, Mapping):
             return value
-        payload = strip_workflow_capability_identity_versions(value)
+        reject_workflow_capability_identity_versions(value, field_path="workflow.steps[]")
+        payload = dict(value)
         raw_kind = _clean_optional_str(payload.get("kind"))
         if raw_kind is not None and raw_kind.lower() == "include":
             raise WorkflowContractError(
@@ -1883,7 +2004,8 @@ class WorkflowExecutionSpec(BaseModel):
     def _lift_legacy_spec_shape(cls, value: object) -> object:
         if not isinstance(value, Mapping):
             return value
-        payload = strip_workflow_capability_identity_versions(value)
+        reject_workflow_capability_identity_versions(value, field_path="workflow")
+        payload = dict(value)
         runtime_node = payload.get("runtime")
         if isinstance(runtime_node, str):
             payload["runtime"] = {"mode": runtime_node}
@@ -2150,7 +2272,10 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
                 },
             }
         else:
-            body_node = dict(body_node)
+            # Canonical queue payloads may be hydrated from pre-cutover stored
+            # records. Preserve historical read tolerance here while keeping
+            # direct WorkflowExecutionSpec validation strict for new submissions.
+            body_node = strip_workflow_capability_identity_versions(body_node)
             if not body_node.get("instructions"):
                 lifted_instruction = payload.get("instructions") or payload.get(
                     "instruction"
@@ -2917,5 +3042,6 @@ __all__ = [
     "is_self_managed_publish_skill",
     "normalize_queue_job_payload",
     "resolve_publish_mode_for_skill",
+    "reject_workflow_capability_identity_versions",
     "strip_workflow_capability_identity_versions",
 ]

@@ -2000,7 +2000,7 @@ def test_create_task_shaped_execution_rejects_missing_workflow_payload(
     service.create_execution.assert_not_awaited()
 
 
-def test_create_workflow_execution_strips_task_template_version(
+def test_create_workflow_execution_rejects_task_template_version(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -2022,12 +2022,12 @@ def test_create_workflow_execution_strips_task_template_version(
         },
     )
 
-    assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
-    assert task["taskTemplate"] == {"slug": "jira-implement"}
+    assert response.status_code == 422
+    assert "semantic versions" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
-def test_create_workflow_execution_strips_applied_template_version(
+def test_create_workflow_execution_rejects_applied_template_version(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -2051,16 +2051,12 @@ def test_create_workflow_execution_strips_applied_template_version(
         },
     )
 
-    assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
-    assert task["appliedStepTemplates"] == [
-        {
-            "slug": "jira-implement",
-        }
-    ]
+    assert response.status_code == 422
+    assert "semantic versions" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
-def test_create_workflow_execution_strips_tool_version(
+def test_create_workflow_execution_rejects_tool_version(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -2083,13 +2079,12 @@ def test_create_workflow_execution_strips_tool_version(
         },
     )
 
-    assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
-    assert task["tool"] == {"type": "skill", "name": "pr-resolver"}
-    assert task["skill"] == {"name": "pr-resolver"}
+    assert response.status_code == 422
+    assert "semantic versions" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
-def test_create_workflow_execution_strips_skill_version(
+def test_create_workflow_execution_rejects_skill_version(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -2111,13 +2106,12 @@ def test_create_workflow_execution_strips_skill_version(
         },
     )
 
-    assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
-    assert task["tool"] == {"type": "skill", "name": "pr-resolver"}
-    assert task["skill"] == {"name": "pr-resolver"}
+    assert response.status_code == 422
+    assert "semantic versions" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
-def test_create_workflow_execution_strips_versions_from_all_capability_selectors(
+def test_create_workflow_execution_rejects_versions_from_all_capability_selectors(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -2197,33 +2191,9 @@ def test_create_workflow_execution_strips_versions_from_all_capability_selectors
         },
     )
 
-    assert response.status_code == 201
-    task = service.create_execution.await_args.kwargs["initial_parameters"]["workflow"]
-    assert task["tool"] == {
-        "type": "skill",
-        "name": "pr-resolver",
-        "inputs": {"pr": "2680"},
-    }
-    assert task["skills"] == {"include": [{"name": "pr-resolver"}]}
-    assert task["taskTemplate"] == {"slug": "jira-implement"}
-    assert task["presetSchedule"] == {"presetSlug": "jira-implement"}
-    assert task["authoredPresets"] == [{"presetSlug": "jira-implement"}]
-    assert task["appliedStepTemplates"] == [
-        {
-            "slug": "jira-implement",
-            "composition": {
-                "includes": [{"presetSlug": "quality-checks"}],
-            },
-        }
-    ]
-    assert task["steps"][0]["tool"] == {
-        "id": "repo.run_tests",
-        "inputs": {"target": "unit"},
-    }
-    assert task["steps"][1]["skill"] == {
-        "id": "fix-ci",
-        "args": {"pr": "2680"},
-    }
+    assert response.status_code == 422
+    assert "semantic versions" in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
 def test_create_task_shaped_execution_rejects_more_than_10_dependencies(

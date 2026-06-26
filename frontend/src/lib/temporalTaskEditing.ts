@@ -762,7 +762,6 @@ function snapshotDraftTask(
           tool: {
             type: 'skill',
             name: stringValue(primarySkill.name),
-            version: stringValue(primarySkill.version) || '1.0',
             inputs: objectValue(primarySkill.inputs),
           },
           skill: {
