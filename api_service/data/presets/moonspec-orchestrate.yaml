@@ -91,8 +91,8 @@ steps:
       args: {}
   - title: Reconcile declarative docs
     instructions: |-
-      Run moonspec-doc-reconcile only when the final moonspec-verify verdict is FULLY_IMPLEMENTED and spec.md records a canonical source document under docs/{% if inputs.source_design_path %} (source design path: {{ inputs.source_design_path }}){% endif %}.
-      If no canonical source document exists, report no_update_required and finish.
+      Run moonspec-doc-reconcile only when the final moonspec-verify verdict is FULLY_IMPLEMENTED and at least one canonical source candidate exists: spec.md records a canonical source document, the breakdown sourceReference.path points under docs/, or the orchestration step provides a source design path under docs/{% if inputs.source_design_path %} (source design path: {{ inputs.source_design_path }}){% endif %}.
+      If no canonical source candidate exists, report no_update_required and finish.
       Consume the latest verification report, including its Source Document Drift section, plus artifacts/doc-discoveries/<feature>.json when present.
       Apply the update gate strictly: edit canonical docs only for definite, evidence-backed discoveries showing the document is functionally wrong, internally inconsistent, or correctly diverged from for verified best-practice reasons. A no-op outcome is a correct result.
       Report exactly one outcome: updated, no_update_required, or escalated. Escalation creates a Jira issue per the skill and does not retroactively fail verification.

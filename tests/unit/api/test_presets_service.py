@@ -3139,11 +3139,32 @@ async def test_seed_catalog_includes_moonspec_orchestrate_without_report_step(
             assert "moonspec-verify" == expanded["steps"][-2]["skill"]["id"]
             assert expanded["steps"][-1]["title"] == "Reconcile declarative docs"
             assert "moonspec-doc-reconcile" == expanded["steps"][-1]["skill"]["id"]
+            assert "at least one canonical source candidate exists" in expanded[
+                "steps"
+            ][-1]["instructions"]
+            assert "orchestration step provides a source design path under docs/" in expanded[
+                "steps"
+            ][-1]["instructions"]
             assert "no_update_required" in expanded["steps"][-1]["instructions"]
             assert all(
                 step["title"] != "Return orchestration report and defer publish actions"
                 for step in expanded["steps"]
             )
+
+            expanded_with_source_design = await service.expand_template(
+                slug="moonspec-orchestrate",
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "feature_request": "MM-366: Simplify Orchestrate Summary",
+                    "source_design_path": "docs/Designs/RuntimeTypes.md",
+                    "constraints": "Keep the scope narrow.",
+                },
+                context={},
+            )
+            assert "source design path: docs/Designs/RuntimeTypes.md" in expanded_with_source_design[
+                "steps"
+            ][-1]["instructions"]
 
 async def test_sync_seed_templates_creates_missing_seed(tmp_path):
     seed_dir = tmp_path / "seeds"

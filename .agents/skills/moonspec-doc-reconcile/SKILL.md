@@ -14,8 +14,8 @@ This skill operationalizes the reconciliation expectation in `docs/Workflows/Moo
 
 ## Preconditions
 
-- The latest `moonspec-verify` verdict for the active feature is `FULLY_IMPLEMENTED`. If it is not, stop with `NO_UPDATE_REQUIRED` and report that reconciliation only runs after successful verification.
-- At least one canonical source candidate exists: `spec.md` records a `**Source Document**` path under `docs/`, the breakdown `sourceReference.path` points there, or the orchestration step provides a source design path under `docs/`. If no canonical document candidate exists, stop immediately with `NO_UPDATE_REQUIRED` and the rationale `no canonical source document`.
+- The latest `moonspec-verify` verdict for the active feature is `FULLY_IMPLEMENTED`. If it is not, stop with `no_update_required` and report that reconciliation only runs after successful verification.
+- At least one canonical source candidate exists: `spec.md` records a `**Source Document**` path under `docs/`, the breakdown `sourceReference.path` points there, or the orchestration step provides a source design path under `docs/`. If no canonical document candidate exists, stop immediately with `no_update_required` and the rationale `no canonical source document`.
 
 ## Inputs
 
@@ -61,7 +61,7 @@ The following never pass the gate:
 - Stylistic preferences, wording improvements, or speculative future work.
 - Drift in temporary artifacts (`spec.md`, `plan.md`, `tasks.md`); those are disposable and are never reconciled into docs.
 
-When no discovery passes the gate, report `NO_UPDATE_REQUIRED` with a one-line rationale per rejected discovery. A no-op outcome is a correct and common result.
+When no discovery passes the gate, report `no_update_required` with a one-line rationale per rejected discovery. A no-op outcome is a correct and common result.
 
 ## Editing Rules
 
@@ -113,7 +113,7 @@ Also return a short markdown summary suitable for inclusion in a pull request bo
 ## Key Rules
 
 - Run only after `FULLY_IMPLEMENTED` verification.
-- No canonical source document means an immediate `NO_UPDATE_REQUIRED`.
+- No canonical source document means an immediate `no_update_required`.
 - Only `definite`, evidence-backed discoveries that meet the function, consistency, or best-practices test justify edits.
 - Smallest correct edit; desired-state framing preserved; no imperative content in canonical docs.
 - Misaligned updates become Jira issues, never silent edits or silent drops.
