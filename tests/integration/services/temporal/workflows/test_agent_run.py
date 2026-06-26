@@ -191,9 +191,14 @@ async def mock_agent_runtime_status(request: dict) -> dict:
             "metadata": metadata,
         }
     if _managed_status_mode == "silent_then_rate_limited_after_cancel":
-        status = "failed" if _managed_cancel_count else "running"
+        if not _managed_cancel_count:
+            status = "running"
+        elif _managed_fetch_result_count == 0:
+            status = "canceled"
+        else:
+            status = "failed"
         metadata = {"runtimeId": "claude_code"}
-        if status == "failed":
+        if status in {"canceled", "failed"}:
             metadata["finishedAt"] = datetime.now(tz=UTC).isoformat()
             metadata["exitCode"] = -9
         return {
@@ -226,6 +231,15 @@ async def mock_agent_runtime_fetch_result(request: dict) -> dict:
             },
         }
     if _managed_status_mode == "silent_then_rate_limited_after_cancel":
+        if _managed_fetch_result_count == 1:
+            return {
+                "summary": "Managed run canceled before provider classification.",
+                "failureClass": "execution_error",
+                "metadata": {
+                    "normalizedStatus": "canceled",
+                    "fetchRunId": request.get("runId") or request.get("run_id"),
+                },
+            }
         return {
             "summary": "Provider rate limit reached; retry after cooldown.",
             "failureClass": "integration_error",
@@ -1391,7 +1405,7 @@ async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
                     task_queue="agent-run-task-queue",
                 )
 
-                await env.sleep(35)
+                await env.sleep(50)
 
                 manager_state = {}
                 parent_state = {}
@@ -1417,7 +1431,7 @@ async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(
                     "parent_state": parent_state,
                 }
                 assert _managed_cancel_count >= 1, debug_state
-                assert _managed_fetch_result_count >= 1, debug_state
+                assert _managed_fetch_result_count >= 2, debug_state
                 assert manager_state["cooldown_reports"], debug_state
                 assert (
                     manager_state["cooldown_reports"][-1]["cooldown_seconds"]

@@ -1712,6 +1712,8 @@ class MoonMindAgentRun:
                 )
                 if self._result_requires_provider_cooldown(result):
                     return result
+                if status_obj.status != RunStatus.cancelled:
+                    return None
 
     async def _ensure_manager_and_signal(
         self,
