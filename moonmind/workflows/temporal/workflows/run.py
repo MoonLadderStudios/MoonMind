@@ -894,6 +894,8 @@ class MoonMindRunWorkflow:
         # operator diagnosis even after the prerequisite later succeeds.
         self._dependency_failure_counts: dict[str, int] = {}
         self._dependency_last_failed_at: dict[str, str] = {}
+        self._remediation_context: dict[str, Any] = {}
+        self._remediation_policy: dict[str, Any] = {}
 
         # Artifact refs
         self._input_ref: Optional[str] = None
@@ -5589,6 +5591,7 @@ class MoonMindRunWorkflow:
         if not task_parameters:
             task_parameters = self._mapping_value(parameters, "task")
         self._record_bounded_story_loop_context(parameters, task_parameters)
+        self._record_remediation_context(parameters, task_parameters)
         self._declared_dependencies = normalize_dependency_ids(
             task_parameters.get("dependsOn")
         )
@@ -5633,6 +5636,36 @@ class MoonMindRunWorkflow:
             self._scheduled_for = scheduled_for
 
         return workflow_type, parameters, input_ref, plan_ref, scheduled_for
+
+    def _record_remediation_context(
+        self,
+        parameters: Mapping[str, Any],
+        task_parameters: Mapping[str, Any],
+    ) -> None:
+        remediation = task_parameters.get("remediation")
+        self._remediation_context = (
+            dict(remediation) if isinstance(remediation, Mapping) else {}
+        )
+
+        policy = (
+            task_parameters.get("remediationPolicy")
+            or task_parameters.get("remediation_policy")
+            or parameters.get("remediationPolicy")
+            or parameters.get("remediation_policy")
+        )
+        self._remediation_policy = dict(policy) if isinstance(policy, Mapping) else {}
+
+    def _skill_remediation_context(self) -> dict[str, Any]:
+        if not self._remediation_context and not self._remediation_policy:
+            return {}
+        context: dict[str, Any] = {
+            "is_remediation_workflow": bool(self._remediation_context),
+        }
+        if self._remediation_context:
+            context["remediation"] = dict(self._remediation_context)
+        if self._remediation_policy:
+            context["remediation_policy"] = dict(self._remediation_policy)
+        return context
 
     def _has_recurrence_metadata(self, parameters: Mapping[str, Any]) -> bool:
         system_payload = parameters.get("system")
@@ -6547,6 +6580,7 @@ class MoonMindRunWorkflow:
                                 "workflow_id": workflow.info().workflow_id,
                                 "run_id": workflow.info().run_id,
                                 "node_id": node_id,
+                                **self._skill_remediation_context(),
                             },
                             "idempotency_key": step_execution_operation_idempotency_key(
                                 workflow_id=workflow.info().workflow_id,

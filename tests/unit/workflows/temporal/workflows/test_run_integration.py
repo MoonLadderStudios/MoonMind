@@ -149,6 +149,24 @@ def test_run_workflow_child_task_queue_is_replay_patched(
     assert workflow._workflow_child_task_queue() == "mm.workflow"
 
 
+def test_run_workflow_skill_context_includes_remediation_policy() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_remediation_context(
+        {},
+        {
+            "remediation": {"target": {"workflowId": "mm:target"}},
+            "remediationPolicy": {"allowOpsDiagnostics": True},
+        },
+    )
+
+    assert workflow._skill_remediation_context() == {
+        "is_remediation_workflow": True,
+        "remediation": {"target": {"workflowId": "mm:target"}},
+        "remediation_policy": {"allowOpsDiagnostics": True},
+    }
+
+
 @pytest.fixture
 def mock_run_workflow(monkeypatch: pytest.MonkeyPatch) -> MoonMindRunWorkflow:
     workflow = MoonMindRunWorkflow()

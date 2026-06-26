@@ -1189,6 +1189,10 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
         summary=base_summary,
         repair=repair,
         prevention=prevention,
+        ops_diagnostic_artifact_refs={
+            "diagnosis": "art_ops_diagnosis",
+            "token": "art_secret",
+        },
         decision_log_ref="art_decision_log",
         final_audit_ref="art_audit",
         lock_release="released",
@@ -1196,6 +1200,9 @@ def test_remediation_lifecycle_repair_prevention_and_decision_log_are_bounded():
     )
     assert final_summary["repair"]["repairOutcome"] == "repaired"
     assert final_summary["prevention"]["status"] == "findings_reported"
+    assert final_summary["opsDiagnosticArtifactRefs"] == {
+        "diagnosis": "art_ops_diagnosis"
+    }
     assert final_summary["decisionLogRef"] == "art_decision_log"
     assert final_summary["finalAuditRef"] == "art_audit"
     assert final_summary["lockRelease"] == "released"

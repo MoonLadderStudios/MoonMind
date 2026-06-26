@@ -54,6 +54,11 @@ from moonmind.workflows.skills.deployment_execution import (
     InMemoryEvidenceWriter,
     register_deployment_update_tool_handler,
 )
+from moonmind.workflows.skills.ops_diagnostics_execution import (
+    HostDockerComposeOpsDiagnosisRunner,
+    OpsStackDiagnosisExecutor,
+    register_ops_diagnose_stack_tool_handler,
+)
 from moonmind.workflows.skills.skill_dispatcher import SkillActivityDispatcher
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -596,6 +601,28 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
         ),
         excluded_services=excluded_services,
     )
+
+
+def _build_ops_diagnosis_executor() -> OpsStackDiagnosisExecutor | None:
+    update_executor = _build_deployment_update_executor()
+    if update_executor is None:
+        return None
+    runner = update_executor.runner
+    if not isinstance(runner, HostDockerComposeRunner):
+        return None
+    return OpsStackDiagnosisExecutor(
+        evidence_writer=InMemoryEvidenceWriter(),
+        runner=HostDockerComposeOpsDiagnosisRunner(
+            project_dir=runner.project_dir,
+            compose_file=runner.compose_file,
+            project_name=runner.project_name,
+            command_timeout_seconds=runner.command_timeout_seconds,
+            local_project_dir=runner.local_project_dir,
+            env_file=runner.env_file,
+            excluded_services=runner.excluded_services,
+        ),
+    )
+
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
@@ -2255,6 +2282,10 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
             register_deployment_update_tool_handler(
                 dispatcher,
                 executor=_build_deployment_update_executor(),
+            )
+            register_ops_diagnose_stack_tool_handler(
+                dispatcher,
+                executor=_build_ops_diagnosis_executor(),
             )
 
         bindings = build_worker_activity_bindings(
