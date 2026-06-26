@@ -317,7 +317,6 @@ class TestUpdateSchedule:
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
 
         # Mock the input to the update callback
-        mock_update_input = MagicMock()
         mock_schedule = MagicMock()
         mock_schedule.spec.cron_expressions = ["0 0 * * *"]
         mock_schedule.spec.time_zone_name = "UTC"
@@ -328,7 +327,9 @@ class TestUpdateSchedule:
 
         mock_schedule.state.paused = False
         mock_schedule.state.note = ""
-        mock_update_input.schedule = mock_schedule
+        mock_update_input = SimpleNamespace(
+            description=SimpleNamespace(schedule=mock_schedule)
+        )
 
         adapter = _make_adapter(mock_client)
         await adapter.update_schedule(
@@ -362,7 +363,6 @@ class TestUpdateSchedule:
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
 
-        mock_update_input = MagicMock()
         mock_schedule = MagicMock()
         mock_schedule.spec.cron_expressions = ["0 0 * * *"]
         mock_schedule.spec.time_zone_name = "UTC"
@@ -373,7 +373,9 @@ class TestUpdateSchedule:
 
         mock_schedule.state.paused = True # enabled = False
         mock_schedule.state.note = "Original note"
-        mock_update_input.schedule = mock_schedule
+        mock_update_input = SimpleNamespace(
+            description=SimpleNamespace(schedule=mock_schedule)
+        )
 
         adapter = _make_adapter(mock_client)
         await adapter.update_schedule(definition_id=_TEST_UUID)
@@ -401,14 +403,17 @@ class TestUpdateSchedule:
         mock_client = MagicMock()
         mock_client.get_schedule_handle = MagicMock(return_value=handle)
 
-        mock_update_input = MagicMock()
-        mock_update_input.schedule.spec.cron_expressions = ["0 0 * * *"]
-        mock_update_input.schedule.spec.time_zone_name = "UTC"
-        mock_update_input.schedule.spec.jitter = timedelta(seconds=0)
-        mock_update_input.schedule.policy.overlap.name = "SKIP"
-        mock_update_input.schedule.policy.catchup_window = timedelta(minutes=15)
-        mock_update_input.schedule.state.paused = False
-        mock_update_input.schedule.state.note = "Original note"
+        mock_schedule = MagicMock()
+        mock_schedule.spec.cron_expressions = ["0 0 * * *"]
+        mock_schedule.spec.time_zone_name = "UTC"
+        mock_schedule.spec.jitter = timedelta(seconds=0)
+        mock_schedule.policy.overlap.name = "SKIP"
+        mock_schedule.policy.catchup_window = timedelta(minutes=15)
+        mock_schedule.state.paused = False
+        mock_schedule.state.note = "Original note"
+        mock_update_input = SimpleNamespace(
+            description=SimpleNamespace(schedule=mock_schedule)
+        )
 
         adapter = _make_adapter(mock_client)
         workflow_input = {
