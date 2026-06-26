@@ -812,17 +812,17 @@ async def test_default_skill_registry_payload_uses_curated_pentest_tool_definiti
     ]
 
     input_schema = definition["inputs"]["schema"]
-    assert input_schema["required"] == [
-        "target",
-        "scope_artifact_ref",
-        "operation_mode",
-        "runner_profile_id",
-    ]
+    assert input_schema["required"] == ["target"]
     assert input_schema["properties"]["operation_mode"]["enum"] == [
         "recon_only",
         "validate_hypothesis",
         "full_authorized",
     ]
+    assert input_schema["properties"]["operation_mode"]["default"] == "recon_only"
+    assert (
+        input_schema["properties"]["runner_profile_id"]["default"]
+        == "pentestgpt-claude-oauth"
+    )
     assert input_schema["properties"]["provider_selector"][
         "additionalProperties"
     ] is False
@@ -1213,7 +1213,28 @@ class _MalformedFindingsFileLauncher(_FileWritingPentestLauncher):
 
 class _BlockingPentestLauncher(_FakePentestLauncher):
     def __init__(self, *, status: str = "succeeded") -> None:
-        super().__init__(status=status)
+        super().__init__(
+            status=status,
+            findings_payload={
+                "tool_name": "security.pentest.run",
+                "target": "https://lab.example.test",
+                "scope_artifact_ref": "art:sha256:scope",
+                "operation_mode": "validate_hypothesis",
+                "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
+                "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
+                "produced_at": "2026-06-14T00:00:00Z",
+                "findings": [
+                    {
+                        "finding_id": "blocking-finding",
+                        "title": "Blocking launcher finding",
+                        "severity": "low",
+                        "confidence": "supported",
+                        "target": "https://lab.example.test",
+                        "summary": "Valid structured finding for heartbeat test.",
+                    }
+                ],
+            },
+        )
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -1641,7 +1662,7 @@ async def test_security_pentest_execute_emits_all_phase_heartbeats(
         0.01,
     )
     activities = TemporalAgentRuntimeActivities(
-        workload_launcher=_FakePentestLauncher(),
+        workload_launcher=_FileWritingPentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
     )
 
@@ -1716,7 +1737,7 @@ async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan(
     )
     activities = TemporalAgentRuntimeActivities(
         artifact_service=artifact_service,
-        workload_launcher=_FakePentestLauncher(),
+        workload_launcher=_FileWritingPentestLauncher(),
         workload_registry=_RecordingPentestRegistry(),
     )
 
@@ -1727,6 +1748,42 @@ async def test_security_pentest_execute_loads_scope_artifact_before_launch_plan(
     assert artifact_service.reads == [("art_scope_valid", "user-security")]
     assert result["status"] == "completed"
     assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
+
+
+async def test_security_pentest_execute_applies_url_first_defaults_before_validation():
+    artifact_service = _FakePentestArtifactService(
+        {
+            "art_scope_valid": _scope_artifact_bytes(
+                allowed_actions=["recon", "scan", "content_discovery"],
+            )
+        }
+    )
+    registry = _RecordingPentestRegistry()
+    activities = TemporalAgentRuntimeActivities(
+        artifact_service=artifact_service,
+        workload_launcher=_FileWritingPentestLauncher(),
+        workload_registry=registry,
+    )
+    payload = _pentest_artifact_activity_payload()
+    request = payload["request"]
+    assert isinstance(request, dict)
+    for key in (
+        "operation_mode",
+        "runner_profile_id",
+        "execution_profile_ref",
+        "time_budget_minutes",
+        "evidence_level",
+    ):
+        request.pop(key)
+
+    result = await activities.security_pentest_execute(payload)
+
+    assert result["status"] == "completed"
+    assert registry.requests[0].env_overrides["MM_PENTEST_MODE"] == "recon_only"
+    assert registry.requests[0].profile_id == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
+    assert result["runner_profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
+    assert result["execution_profile_ref"] == PENTEST_CLAUDE_OAUTH_PROFILE_ID
+
 
 async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
     monkeypatch: pytest.MonkeyPatch,
@@ -1794,7 +1851,8 @@ async def test_security_pentest_execute_accepts_workflow_invocation_envelope(
     )
 
     assert artifact_service.reads == [("art_scope_valid", "user-security")]
-    assert result["status"] == "completed"
+    assert result["status"] == "failed"
+    assert result["normalization_status"] == "normalizer_error"
     assert result["launch_plan"]["profile_id"] == PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID
     assert len(launcher.requests) == 1
     assert len(materialized_requests) == 1
@@ -2514,6 +2572,59 @@ async def test_security_pentest_execute_publishes_runner_outputs_through_artifac
             ]
 
 
+async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runner_status(
+    tmp_path: Path,
+):
+    target_url = "https://lab.example.test/app"
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifact-store"),
+            )
+            activities = TemporalAgentRuntimeActivities(
+                artifact_service=service,
+                workload_launcher=_FileWritingPentestLauncher(status="failed"),
+                workload_registry=_RecordingPentestRegistry(),
+            )
+
+            result = await activities._security_pentest_execute_trusted_internal(
+                _pentest_activity_payload(
+                    artifacts_dir=str(tmp_path / "runner-artifacts"),
+                    target=target_url,
+                    approved_scope={
+                        **_approved_pentest_scope(),
+                        "targets": [
+                            {
+                                "kind": "url",
+                                "value": target_url,
+                            }
+                        ],
+                    },
+                )
+            )
+
+            assert result["status"] == "failed"
+            assert result["normalization_status"] == "runner_failed"
+            assert result["primary_report_ref"].startswith("art_")
+            assert result["summary_ref"].startswith("art_")
+            assert result["structured_ref"].startswith("art_")
+            assert result["evidence_refs"]
+            assert result["report_bundle"]["counts"]["findings_count"] == 0
+            assert result["terminal_cleanup"]["terminal_reason"] == "failure"
+
+            artifacts = await service.list_for_execution(
+                namespace="default",
+                workflow_id="run-123",
+                run_id="step-pentest-1",
+                principal="user-security",
+                link_type="report.primary",
+                latest_only=True,
+            )
+            assert artifacts
+
+
 async def test_security_pentest_execute_publishes_parsed_structured_findings_when_file_is_malformed(
     tmp_path: Path,
 ):
@@ -2537,7 +2648,8 @@ async def test_security_pentest_execute_publishes_parsed_structured_findings_whe
                 )
             )
 
-            assert result["status"] == "completed"
+            assert result["status"] == "failed"
+            assert result["normalization_status"] == "normalizer_error"
             _structured_artifact, structured_payload = await service.read(
                 artifact_id=result["report_bundle"]["structured_ref"]["artifact_id"],
                 principal="user-security",
@@ -3062,7 +3174,7 @@ async def test_security_pentest_execute_validates_safe_profile_against_registry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    launcher = _FakePentestLauncher()
+    launcher = _FileWritingPentestLauncher()
     registry = RunnerProfileRegistry.load_file(
         Path("config/workloads/default-runner-profiles.yaml"),
         workspace_root=tmp_path,
@@ -3116,7 +3228,8 @@ async def test_security_pentest_execute_materializes_input_files_without_secrets
         )
     )
 
-    assert result["status"] == "completed"
+    assert result["status"] == "failed"
+    assert result["normalization_status"] == "normalizer_error"
     instruction_file = artifacts_dir / "pentest" / "inputs" / "instruction.txt"
     manifest_file = artifacts_dir / "pentest" / "inputs" / "request.json"
     scope_file = artifacts_dir / "pentest" / "inputs" / "approved-scope.json"
@@ -3237,12 +3350,14 @@ async def test_successful_workload_missing_structured_findings_is_not_clean(
         _pentest_activity_payload(artifacts_dir=str(tmp_path / "artifacts"))
     )
 
-    assert result["status"] == "completed"
+    assert result["status"] == "failed"
     assert (
         result["normalized_findings"]["normalization_status"] == "normalizer_error"
     )
     assert result["normalization_status"] == "normalizer_error"
     assert not result["normalized_findings"].get("implies_no_vulnerabilities", False)
+    assert result["failure_classification"]["failure_kind"] == "runtime_action"
+    assert result["terminal_cleanup"]["terminal_reason"] == "failure"
 
 
 async def test_provider_cooldown_does_not_return_clean_findings():

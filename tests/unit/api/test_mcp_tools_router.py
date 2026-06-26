@@ -427,12 +427,13 @@ async def test_list_tools_includes_curated_pentest_execution_tool(
     tools = {tool["name"]: tool for tool in response.json()["tools"]}
     pentest = tools["security.pentest.run"]
     assert "PentestGPT" in pentest["description"]
-    assert pentest["inputSchema"]["required"] == [
-        "target",
-        "scope_artifact_ref",
-        "operation_mode",
-        "runner_profile_id",
-    ]
+    assert pentest["inputSchema"]["required"] == ["target"]
+    assert pentest["inputSchema"]["properties"]["operation_mode"]["default"] == (
+        "recon_only"
+    )
+    assert pentest["inputSchema"]["properties"]["runner_profile_id"]["default"] == (
+        "pentestgpt-claude-oauth"
+    )
     assert (
         pentest["inputSchema"]["x-moonmind-invocation"]
         == "temporal_task_submission"

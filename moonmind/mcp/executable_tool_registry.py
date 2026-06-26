@@ -11,12 +11,7 @@ from moonmind.mcp.tool_registry import ToolMetadata
 
 _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": [
-        "target",
-        "scope_artifact_ref",
-        "operation_mode",
-        "runner_profile_id",
-    ],
+    "required": ["target"],
     "properties": {
         "target": {
             "type": "string",
@@ -26,7 +21,11 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
         "scope_artifact_ref": {
             "type": "string",
             "title": "Approved scope artifact",
-            "description": "ArtifactRef for the approved pentest scope document.",
+            "description": (
+                "Advanced: ArtifactRef for the approved pentest scope document. "
+                "Execution still fails closed until MoonMind has an approved "
+                "scope for the target."
+            ),
         },
         "objective": {
             "type": "string",
@@ -37,6 +36,7 @@ _PENTEST_RUN_INPUT_SCHEMA: dict[str, Any] = {
             "type": "string",
             "title": "Operation mode",
             "enum": ["recon_only", "validate_hypothesis", "full_authorized"],
+            "default": "recon_only",
         },
         "runner_profile_id": {
             "type": "string",

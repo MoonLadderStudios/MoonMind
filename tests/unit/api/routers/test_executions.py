@@ -5074,6 +5074,9 @@ def test_pentest_safe_preset_exposes_only_ordinary_inputs() -> None:
     preset = yaml.safe_load(preset_path.read_text())
     schema_props = set(preset["annotations"]["inputSchema"]["properties"])
     exposed_inputs = {item["name"] for item in preset["inputs"]}
+    required_inputs = {
+        item["name"] for item in preset["inputs"] if item.get("required") is True
+    }
     step_inputs = preset["steps"][0]["tool"]["inputs"]
     privileged = {
         "image",
@@ -5100,6 +5103,10 @@ def test_pentest_safe_preset_exposes_only_ordinary_inputs() -> None:
         "execution_profile_ref",
     }
     assert exposed_inputs == schema_props
+    assert preset["annotations"]["inputSchema"]["required"] == ["target"]
+    assert required_inputs == {"target"}
+    assert preset["annotations"]["uiSchema"]["scope_artifact_ref"]["advanced"] is True
+    assert preset["annotations"]["uiSchema"]["operation_mode"]["advanced"] is True
     assert privileged.isdisjoint(schema_props)
     assert privileged.isdisjoint(exposed_inputs)
     assert step_inputs["runner_profile_id"] == "pentestgpt-claude-oauth"
