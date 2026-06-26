@@ -58,6 +58,10 @@ MAX_PUBLISHED_ARTIFACT_REFS = 20
 MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
     "merge-automation-workflow-child-task-queue-v2"
 )
+MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH = (
+    "merge-automation-resolver-parent-gate-id-v1"
+)
+
 
 @workflow.defn(name=WORKFLOW_NAME)
 class MoonMindMergeAutomationWorkflow:
@@ -68,6 +72,10 @@ class MoonMindMergeAutomationWorkflow:
         if workflow.patched(MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
             return settings.temporal.user_workflow_v2_task_queue
         return WORKFLOW_TASK_QUEUE
+
+    @staticmethod
+    def _resolver_parent_workflow_id() -> str:
+        return str(workflow.info().workflow_id).strip()
 
     def __init__(self) -> None:
         self._status = STATE_WAITING
@@ -616,8 +624,11 @@ class MoonMindMergeAutomationWorkflow:
             if evidence.ready:
                 self._status = STATE_EXECUTING
                 self._publish_visibility()
+                resolver_parent_workflow_id = self._input.parent_workflow_id
+                if workflow.patched(MERGE_AUTOMATION_RESOLVER_PARENT_GATE_ID_PATCH):
+                    resolver_parent_workflow_id = self._resolver_parent_workflow_id()
                 resolver_request = build_resolver_run_request(
-                    parent_workflow_id=self._input.parent_workflow_id,
+                    parent_workflow_id=resolver_parent_workflow_id,
                     pull_request=self._input.pull_request,
                     jira_issue_key=self._input.jira_issue_key,
                     merge_method=self._input.config.resolver.merge_method,
