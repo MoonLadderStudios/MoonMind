@@ -6,7 +6,7 @@
 **Audience:** Anyone authoring or reviewing durable documentation, or wiring documentation checks into tooling
 **Purpose:** Describe the **advisory, non-blocking** validation that flags obvious drift from the [MoonSpec Documentation Architecture Standard](DocumentationArchitecture.md) and the [MoonSpec Document Model](Workflows/MoonSpecDocumentModel.md), so reviewers catch documentation-architecture problems early.
 
-> **Traceability:** This is the deliverable of **MM-908** (source design **MM-900**, "Implement MoonSpec Documentation Architecture Standard"); it covers **DESIGN-REQ-018**. It builds on the taxonomy authored in **MM-902**.
+> **Traceability:** This is the deliverable of **MM-908** (source design **MM-900**, "Implement MoonSpec Documentation Architecture Standard"); it covers **DESIGN-REQ-018**. It builds on the taxonomy authored in **MM-902**. Stable canonical claim ID validation is added under **MM-929**, preserving source issue **MM-927** traceability.
 
 ---
 
@@ -47,6 +47,8 @@ Each check maps to one acceptance criterion of MM-908 and emits a finding with a
 | `duplicate-canonical-authority` | Two canonical docs sharing an H1 title (overlapping authority), or more than one root-level System Architecture View. | [Standard §3.1](DocumentationArchitecture.md), [Document Model — Precedence](Workflows/MoonSpecDocumentModel.md) |
 | `contract-missing-authority-statement` | A contract doc (`*Contract.md` / `*Contracts.md`) with no authority statement naming its single authoritative owner / source of truth. | [Standard §6.1](DocumentationArchitecture.md) |
 | `discouraged-decision-record` | A separate `decisions/` directory or ADR-style doc, introduced instead of embedding rationale in the owning canonical view. | [Standard §8](DocumentationArchitecture.md) |
+| `malformed-claim-id` | A canonical claim heading using a malformed stable ID. | [Standard §14](DocumentationArchitecture.md) |
+| `duplicate-claim-id` | A stable canonical claim ID reused for multiple canonical claims. | [Standard §14](DocumentationArchitecture.md) |
 
 ## 4. Reviewer checklist
 
@@ -57,6 +59,7 @@ When reviewing a change that adds or moves durable docs, confirm:
 - [ ] No two canonical docs claim the **same authority** (same title / same scope); there is one root-level System Architecture View.
 - [ ] Each **contract** doc states who **owns** it and that it is the **single source of truth** for that interface.
 - [ ] Rationale is **embedded** in the owning canonical view rather than added as a separate `decisions/` or ADR-style doc.
+- [ ] Stable canonical claim headings use `PREFIX-NNN` with one of `DOC-REQ`, `CONTRACT`, `INV`, `NON-GOAL`, `QUALITY`, or `TEST`, and no stable ID is reused for a different canonical claim.
 
 ## 5. Document Class marker convention
 
