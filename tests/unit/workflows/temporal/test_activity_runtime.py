@@ -2577,43 +2577,6 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
 ):
     target_url = "https://lab.example.test/app"
 
-    class _RunnerFailedFindingsLauncher(_FileWritingPentestLauncher):
-        async def run(self, request: object) -> WorkloadResult:
-            result = await super().run(request)
-            workload_request = getattr(request, "request", request)
-            artifacts_dir = Path(str(getattr(workload_request, "artifacts_dir")))
-            findings_path = (
-                artifacts_dir
-                / "pentest"
-                / "findings"
-                / "findings.normalizer-input.json"
-            )
-            findings_path.write_text(
-                json.dumps(
-                    {
-                        "tool_name": "security.pentest.run",
-                        "target": target_url,
-                        "scope_artifact_ref": "art:sha256:scope",
-                        "operation_mode": "validate_hypothesis",
-                        "runner_profile_id": PENTEST_CLAUDE_OAUTH_RUNNER_PROFILE_ID,
-                        "execution_profile_ref": PENTEST_CLAUDE_OAUTH_PROFILE_ID,
-                        "produced_at": "2026-06-14T00:00:00Z",
-                        "findings": [],
-                        "summary": {
-                            "findings_count": 0,
-                            "confirmed_findings_count": 0,
-                            "high_or_critical_count": 0,
-                        },
-                        "normalization_status": "runner_failed",
-                    },
-                    sort_keys=True,
-                    indent=2,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            return result
-
     async with temporal_db(tmp_path) as session_maker:
         async with session_maker() as session:
             service = TemporalArtifactService(
@@ -2622,7 +2585,7 @@ async def test_security_pentest_execute_preserves_report_refs_for_non_clean_runn
             )
             activities = TemporalAgentRuntimeActivities(
                 artifact_service=service,
-                workload_launcher=_RunnerFailedFindingsLauncher(status="failed"),
+                workload_launcher=_FileWritingPentestLauncher(status="failed"),
                 workload_registry=_RecordingPentestRegistry(),
             )
 
