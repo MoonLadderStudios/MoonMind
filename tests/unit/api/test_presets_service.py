@@ -2131,6 +2131,15 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "Inline workflow source." in expanded_with_null_optional_sources[
                 "steps"
             ][0]["instructions"]
+            assert "inline workflow-instruction override" in (
+                expanded_with_null_optional_sources["steps"][0]["instructions"]
+            )
+            assert "imperative-override" in (
+                expanded_with_null_optional_sources["steps"][0]["instructions"]
+            )
+            assert "fail fast with the moonspec-breakdown imperative-input error" not in (
+                expanded_with_null_optional_sources["steps"][0]["instructions"]
+            )
 
             expanded_with_path_and_issue = await service.expand_template(
                 slug="jira-breakdown",
@@ -2152,6 +2161,12 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "docs/Designs/RuntimeTypes.md" in expanded_with_path_and_issue[
                 "steps"
             ][0]["instructions"]
+            assert "inline workflow-instruction override" not in (
+                expanded_with_path_and_issue["steps"][0]["instructions"]
+            )
+            assert "fail fast with the moonspec-breakdown imperative-input error" in (
+                expanded_with_path_and_issue["steps"][0]["instructions"]
+            )
 
             with pytest.raises(PresetValidationError) as excinfo:
                 await service.expand_template(
@@ -2176,6 +2191,78 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             "recoverable": True,
         }
     ]
+
+@pytest.mark.parametrize(
+    ("slug", "extra_inputs"),
+    [
+        ("jira-breakdown", {}),
+        (
+            "jira-breakdown-orchestrate",
+            {"publish_mode": "pr_with_merge_automation"},
+        ),
+        (
+            "jira-breakdown-implement",
+            {"publish_mode": "pr_with_merge_automation"},
+        ),
+    ],
+)
+async def test_jira_breakdown_presets_allow_inline_instruction_roadmaps(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    slug: str,
+    extra_inputs: dict[str, str],
+):
+    monkeypatch.setattr(settings.atlassian.jira, "jira_allowed_projects", None)
+    monkeypatch.setattr(
+        settings.atlassian.jira,
+        "jira_project_defaults_by_repository",
+        None,
+    )
+    seed_dir = (
+        Path(__file__).resolve().parents[3]
+        / "api_service"
+        / "data"
+        / "presets"
+    )
+
+    async with template_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = PresetCatalogService(session)
+            await service.sync_seed_templates(seed_dir=seed_dir)
+
+            expanded = await service.expand_template(
+                slug=slug,
+                scope="global",
+                scope_ref=None,
+                inputs={
+                    "feature_request": (
+                        "Use this recommendation roadmap as breakdown input:\n"
+                        "1. Make the workflow list title-first.\n"
+                        "2. Move advanced filters into a drawer.\n"
+                        "3. Make errors friendly by default."
+                    ),
+                    "source_design_path": "",
+                    "source_issue_key": "",
+                    "jira_project_key": "MM",
+                    "jira_issue_type": "Story",
+                    "jira_dependency_mode": "none",
+                    **extra_inputs,
+                },
+                context={
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "codex_cli",
+                },
+            )
+
+    breakdown_instructions = expanded["steps"][0]["instructions"]
+    assert "inline workflow-instruction override" in breakdown_instructions
+    assert "decompose the actionable desired system behavior" in (
+        breakdown_instructions
+    )
+    assert "imperative-override" in breakdown_instructions
+    assert "fail fast with the moonspec-breakdown imperative-input error" not in (
+        breakdown_instructions
+    )
 
 async def test_seed_catalog_includes_document_health_update_preset(tmp_path):
     """MM-889: a Document Health Update preset runs review then remediate steps."""

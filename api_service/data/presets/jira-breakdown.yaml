@@ -88,7 +88,11 @@ steps:
       If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
+      {% if (inputs.source_design_path or '') | trim == '' and (inputs.source_issue_key or '') | trim == '' %}
+      When the selected input falls through to literal Workflow Instructions text instead of a readable repo path, treat this as an explicit inline workflow-instruction override for the moonspec-breakdown input classification gate: if the instructions are primarily framed as steps, phases, recommendations, checklist items, or a roadmap, decompose the actionable desired system behavior into Jira-ready MoonSpec stories instead of failing fast solely because the inline text is imperative. Record sourceDocumentClass as imperative-override for that case; otherwise record declarative-text.
+      {% else %}
       Classify the input before extracting stories. If it is primarily an imperative checklist, status tracker, or migration plan and no explicit imperative override was given, fail fast with the moonspec-breakdown imperative-input error instead of decomposing it.
+      {% endif %}
       Record sourceDocumentClass in the breakdown output.
       Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
     skill:
