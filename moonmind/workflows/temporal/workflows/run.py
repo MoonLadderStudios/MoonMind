@@ -3547,7 +3547,7 @@ class MoonMindRunWorkflow:
         execution_result: Any,
         updated_at: datetime,
     ) -> None:
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         if not isinstance(outputs, Mapping):
             return
 
@@ -3638,11 +3638,20 @@ class MoonMindRunWorkflow:
             ),
         }
         artifacts = {
-            "outputSummary": _output_ref("outputSummaryRef", "output_summary_ref")
+            "outputSummary": _output_ref(
+                "outputSummaryRef",
+                "output_summary_ref",
+                "summaryRef",
+                "summary_ref",
+            )
             or _artifact_class_ref("output.summary"),
             "outputPrimary": _output_ref(
                 "outputPrimaryRef",
                 "output_primary_ref",
+                "primaryRef",
+                "primary_ref",
+                "primaryReportRef",
+                "primary_report_ref",
             )
             or _artifact_class_ref("output.primary"),
             "runtimeStdout": _output_ref(
@@ -3665,7 +3674,12 @@ class MoonMindRunWorkflow:
                 "logArtifactRef",
                 "log_artifact_ref",
             ),
-            "runtimeDiagnostics": _output_ref("diagnosticsRef", "diagnostics_ref")
+            "runtimeDiagnostics": _output_ref(
+                "diagnosticsRef",
+                "diagnostics_ref",
+                "diagnosticsArtifactRef",
+                "diagnostics_artifact_ref",
+            )
             or _artifact_class_ref("runtime.diagnostics"),
             "providerSnapshot": _output_ref(
                 "providerSnapshotRef",
@@ -4289,13 +4303,29 @@ class MoonMindRunWorkflow:
         logical_step_id: str,
         execution_result: Any,
     ) -> bool:
-        outputs = self._get_from_result(execution_result, "outputs")
+        outputs = self._effective_result_outputs(execution_result)
         row_outputs = self._step_execution_compact_output_refs(logical_step_id)
         merged_outputs: dict[str, Any] = {}
         if isinstance(outputs, Mapping):
             merged_outputs.update(dict(outputs))
+            self._merge_direct_output_evidence(merged_outputs, outputs)
         merged_outputs.update(row_outputs)
         return logical_step_success_allowed(outputs=merged_outputs)
+
+    @staticmethod
+    def _merge_direct_output_evidence(
+        merged_outputs: dict[str, Any],
+        outputs: Mapping[str, Any],
+    ) -> None:
+        for source_key, target_key in (
+            ("primary_report_ref", "primaryRef"),
+            ("primaryReportRef", "primaryRef"),
+            ("summary_ref", "summaryRef"),
+            ("summaryRef", "summaryRef"),
+        ):
+            value = outputs.get(source_key)
+            if isinstance(value, str) and value.strip():
+                merged_outputs.setdefault(target_key, value.strip())
 
     def _review_gate_active(
         self,
@@ -7547,8 +7577,8 @@ class MoonMindRunWorkflow:
             return outputs
         if not workflow.patched(RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH):
             return None
-        if isinstance(result, Mapping) and any(
-            key in result for key in _DIRECT_EXECUTABLE_OUTPUT_KEYS
+        if isinstance(result, Mapping) and not _DIRECT_EXECUTABLE_OUTPUT_KEYS.isdisjoint(
+            result
         ):
             return result
         return None
@@ -9355,16 +9385,18 @@ class MoonMindRunWorkflow:
                 self._publish_context["mergeAutomationStatus"] = "not_applicable"
             return
 
+        report_not_required_reason = self._report_only_publish_not_required_reason(
+            outputs
+        )
+        if report_not_required_reason is not None:
+            self._publish_status = "not_required"
+            self._publish_reason = report_not_required_reason
+            if self._merge_automation_requested(parameters):
+                self._publish_context["mergeAutomationStatus"] = "not_applicable"
+            return
+
         push_status = self._coerce_text(outputs.get("push_status"))
         if push_status is None:
-            report_not_required_reason = (
-                self._report_only_publish_not_required_reason(outputs)
-            )
-            if report_not_required_reason is not None:
-                self._publish_status = "not_required"
-                self._publish_reason = report_not_required_reason
-                if self._merge_automation_requested(parameters):
-                    self._publish_context["mergeAutomationStatus"] = "not_applicable"
             return
         self._record_publish_metadata_context(outputs)
 

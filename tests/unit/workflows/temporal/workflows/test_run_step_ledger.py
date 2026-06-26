@@ -1252,6 +1252,56 @@ def test_run_groups_child_lineage_and_evidence_into_step_row(
         "stepExecutionManifestRefs": [],
     }
 
+
+def test_run_records_direct_report_outputs_as_accepted_step_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_DIRECT_TOOL_REPORT_OUTPUTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
+    execution_result = {
+        "status": "COMPLETED",
+        "primary_report_ref": "art_pentest_report_1",
+        "summary_ref": "art_pentest_summary_1",
+        "diagnostics_artifact_ref": "art_pentest_diag_1",
+        "report_type": "security_pentest_report",
+    }
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[
+            {
+                "id": "pentest",
+                "tool": {"type": "skill", "name": "security.pentest.run"},
+                "inputs": {"title": "Run pentest"},
+            }
+        ],
+        dependency_map={"pentest": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "pentest",
+        updated_at=now,
+        summary="Running pentest",
+    )
+    workflow._record_step_result_evidence(
+        "pentest",
+        execution_result=execution_result,
+        updated_at=now,
+    )
+
+    step = workflow.get_step_ledger()["steps"][0]
+
+    assert step["artifacts"]["outputPrimary"] == "art_pentest_report_1"
+    assert step["artifacts"]["outputSummary"] == "art_pentest_summary_1"
+    assert step["artifacts"]["runtimeDiagnostics"] == "art_pentest_diag_1"
+    assert workflow._step_has_accepted_output_evidence("pentest", execution_result)
+
+
 def test_run_waiting_state_captures_child_workflow_lineage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

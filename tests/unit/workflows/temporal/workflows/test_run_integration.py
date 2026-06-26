@@ -3124,6 +3124,7 @@ def test_pentest_report_result_makes_pr_publish_not_required(
     )
     execution_result = {
         "status": "completed",
+        "push_status": "no_commits",
         "primary_report_ref": "art_pentest_report_1",
         "report_type": "security_pentest_report",
         "report_scope": "final",
