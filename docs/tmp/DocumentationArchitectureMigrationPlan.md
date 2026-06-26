@@ -13,7 +13,7 @@
 
 This plan exists so that classification and rename cleanup of the **existing** `docs/` tree is tracked as bounded, imperative work — *not* smuggled into the canonical architecture documents as construction-diary prose (Constitution XV; Standard §4 separation rule).
 
-**Goals**
+**Historical goals recorded by this closed plan**
 
 1. Identify existing docs that are clearly **imperative** but currently live beside canonical architecture docs, and move/relabel them.
 2. Identify the **high-value** canonical docs to classify (against the five viewpoints) and, where needed, rename **first**.
@@ -41,26 +41,26 @@ A doc is a **classification target** when its current placement/label is ambiguo
 
 ---
 
-## 3. Imperative docs that currently live beside canonical architecture docs
+## 3. Historical examples of imperative docs beside canonical architecture docs
 
-These are concrete examples found in the current tree (2026-06-24) whose **primary framing is imperative** yet which sit inside canonical `docs/` module/concern directories. They violate the §4 separation rule and should be relocated to `docs/tmp/` (or archived/deleted if the work is complete). This is an enumeration of known offenders, **not** a claim that the list is exhaustive.
+These are concrete examples found in the tree on 2026-06-24 whose **primary framing is imperative** yet which sat inside canonical `docs/` module/concern directories. This section is retained as historical evidence only; it is not an active migration list. Any remaining follow-up belongs in Jira or in the owning canonical document's review, not in this closed plan.
 
 | Doc | Why it is imperative | Action |
 |-----|----------------------|--------|
-| `docs/Temporal/WorkflowLanguageHardSwitchPlan.md` | Header is `Status: Proposed hard-switch implementation plan`; primary framing is a phased cutover plan. | Move to `docs/tmp/WorkflowLanguageHardSwitchPlan.md`; if the hard switch is already complete, archive/delete per §6 and promote any durable target semantics into the relevant Temporal view first. |
-| `docs/ReleaseNotes/MM-730-hard-switch-cutover.md` | A cutover release note: operational sequencing + breaking-change instructions for a specific migration boundary. | Keep release notes as historical record **or** relocate the cutover/rollout sequencing portion to `docs/tmp/`. Decide release-note placement policy (see §7, conflict C2). |
-| `docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md` | Dated batch release note; not desired-state. | Same disposition decision as the row above. |
-| `docs/Rag/ManifestIngestDesign.md` | Self-described "Design **& Implementation**" with implementation-level detail mixed into a canonical Design doc. | Split: keep the design intent as a System / Feature Design View (with a proper `Status:` field), move implementation/rollout detail to `docs/tmp/`. |
+| `docs/Temporal/WorkflowLanguageHardSwitchPlan.md` | Header is `Status: Proposed hard-switch implementation plan`; primary framing is a phased cutover plan. | Historical note; no action is authorized by this closed file. |
+| `docs/ReleaseNotes/MM-730-hard-switch-cutover.md` | A cutover release note: operational sequencing + breaking-change instructions for a specific migration boundary. | Historical note; release-note policy is outside this plan's active scope. |
+| `docs/ReleaseNotes/2026-06-02-jira-implement-workflow-batch.md` | Dated batch release note; not desired-state. | Historical note; release-note policy is outside this plan's active scope. |
+| `docs/Rag/ManifestIngestDesign.md` | Self-described "Design **& Implementation**" with implementation-level detail mixed into a canonical Design doc. | Historical note; no action is authorized by this closed file. |
 
-The bottom of `docs/Rag/ManifestIngestDesign.md` already includes the correct pointer pattern ("Rollout and backlog notes live under `docs/tmp/`…") — confirm the imperative content actually lives there and is not inline.
+The bottom of `docs/Rag/ManifestIngestDesign.md` already included the correct pointer pattern ("Rollout and backlog notes live under `docs/tmp/`..."). This closed plan does not track that follow-up.
 
 ---
 
-## 4. High-value docs to classify first
+## 4. Historical high-value classification notes
 
-Classification effort is prioritized, not uniform. Do these **first** because they are the most-referenced entry points (cited by `CLAUDE.md`, the Standard, or many other docs) and the most likely to be mis-read if their class/viewpoint is ambiguous. Lower-traffic docs are reclassified later or on-touch.
+Classification effort was prioritized, not uniform. These notes are retained to explain the closed plan's scope; they do not create an active backlog.
 
-**Tier 1 — entry points named in `CLAUDE.md` / the Standard (classify first):**
+**Tier 1 — entry points named in `CLAUDE.md` / the Standard:**
 
 1. `docs/MoonMindArchitecture.md` — should read cleanly as the **System Architecture View** (Standard §3.1). Confirm label.
 2. `docs/Steps/SkillSystem.md` — canonical entry for Agent Skills; classify as Module Architecture View or Cross-Cutting Concept View and confirm its naming.
@@ -76,7 +76,7 @@ Classification effort is prioritized, not uniform. Do these **first** because th
 
 - `docs/Workflows/StepReviewGateSystem.md` (currently `Status: Design Draft`), `docs/Rag/ManifestIngestDesign.md` (`Status: Draft`), and any other `*Design.md`. The standard requires the status be exactly one of `Proposed | Accepted | Implemented | Superseded`. Normalize these.
 
-Everything not in Tier 1–3 is explicitly **deferred** and is not part of any completion gate for this plan.
+Everything not in Tier 1-3 was explicitly **deferred** and is not part of any completion gate for this closed plan.
 
 ---
 
@@ -125,12 +125,14 @@ Escalation path for any future conflict: do **not** resolve it by editing canoni
 
 ---
 
-## 8. Working sequence (bounded)
+## 8. Historical working sequence (closed)
+
+The sequence below is the closed plan's historical execution outline. It is retained only to explain what this time-bound note once tracked; it is not active guidance and must not be cited as authority for new work.
 
 1. Resolve the Tier-1 classifications in §4 (label-only; no content rewrites).
 2. Relocate the §3 imperative-in-canonical offenders to `docs/tmp/` (or archive if complete), updating all references and deleting old paths in the same change.
 3. Normalize Tier-3 design `Status:` fields (N5).
-4. Record decisions for conflicts C1–C4 (issue/PR comment); apply N4 contract moves only after C1 is decided.
+4. Record decisions for conflicts C1-C4 (issue/PR comment); apply N4 contract moves only after C1 is decided.
 5. Apply N2/N6 renames **on-touch** only; do not schedule a sweep.
 6. When §6 delete/archive criteria are met, delete this file in the closing change.
 
