@@ -78,7 +78,7 @@ export function SkillProvenanceBadge({
     : '';
   
   return (
-    <div className="card mt-4 bg-gray-50 border border-gray-200 p-4 rounded-lg">
+    <div className="mt-4">
       <h3 className="mt-0 text-base">Agent Skill Provenance</h3>
       <dl className="queue-card-fields mb-0">
         <div>

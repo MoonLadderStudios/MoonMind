@@ -5874,11 +5874,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .td-evidence-region {
   min-width: 0;
-  padding: 0.85rem;
-  border: 1px solid rgb(var(--mm-border) / 0.58);
-  border-radius: 0.8rem;
-  background: rgb(var(--mm-panel) / 0.9);
-  box-shadow: 0 16px 36px -30px rgb(var(--mm-ink) / 0.48);
 }
 
 .td-facts-region,
