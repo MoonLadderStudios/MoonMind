@@ -762,7 +762,10 @@ interface StepState {
   pentestScopeDraft: PentestScopeDraftState;
   skillId: string;
   skillArgs: string;
-  skillRequiredCapabilities: string;
+  // MM-936: explicit, user-authored required capabilities for this step. The
+  // chip selector treats this as the only removable capability source; derived
+  // capabilities (skill/tool/preset/runtime/publish) are computed for display.
+  explicitRequiredCapabilities: string[];
   runtimeMode: string;
   runtimeModel: string;
   runtimeEffort: string;
@@ -1500,7 +1503,7 @@ function createStepStateEntry(
     pentestScopeDraft: createPentestScopeDraftState(),
     skillId: "",
     skillArgs: "",
-    skillRequiredCapabilities: "",
+    explicitRequiredCapabilities: [],
     runtimeMode: "",
     runtimeModel: "",
     runtimeEffort: "",
@@ -1803,7 +1806,9 @@ function createStepStateEntriesFromTemporalDraft(
           : "",
       skillArgs:
         step.stepType === "skill" ? stringifySkillArgs(step.skillArgs) : "",
-      skillRequiredCapabilities: step.skillRequiredCapabilities.join(","),
+      explicitRequiredCapabilities: mergeCapabilities(
+        step.skillRequiredCapabilities,
+      ),
       runtimeMode: step.runtime?.mode || "",
       runtimeModel: step.runtime?.model || "",
       runtimeEffort: step.runtime?.effort || "",
@@ -1852,7 +1857,6 @@ function createStepStateEntriesFromTemporalDraft(
 function hasAdvancedStepOptionValues(steps: StepState[]): boolean {
   return steps.some(
     (step) =>
-      Boolean(step.skillRequiredCapabilities.trim()) ||
       Boolean(step.skillArgs.trim()) ||
       Boolean(step.runtimeMode.trim()) ||
       Boolean(step.runtimeModel.trim()) ||
@@ -1949,6 +1953,225 @@ function mergeCapabilities(...groups: Array<string[] | undefined | null>): strin
   );
 }
 
+// MM-936: Capabilities Plus Button.
+//
+// The step authoring surface presents a single "Add to step" affordance that
+// unifies image attachments and required capabilities. `inputAttachments` and
+// `requiredCapabilities` remain separate backend concepts; only the authoring
+// surface is unified. This frontend capability registry controls how known
+// capability tokens are labelled in the menu and chip row. Backend
+// normalization of the `requiredCapabilities` contract remains authoritative.
+type CapabilityGroup = "Code" | "Integrations" | "Runtime";
+
+interface CapabilityCatalogEntry {
+  token: string;
+  label: string;
+  shortLabel: string;
+  description: string;
+  icon: string;
+  group: CapabilityGroup;
+  common?: boolean;
+}
+
+export const CAPABILITY_CATALOG: Record<string, CapabilityCatalogEntry> = {
+  git: {
+    token: "git",
+    label: "Git repository",
+    shortLabel: "Git",
+    description: "Prepare a repository checkout for this step.",
+    icon: "🌱",
+    group: "Code",
+    common: true,
+  },
+  gh: {
+    token: "gh",
+    label: "GitHub CLI / PRs",
+    shortLabel: "GitHub",
+    description:
+      "Allow GitHub repository and PR operations through the runtime path.",
+    icon: "🐙",
+    group: "Integrations",
+    common: true,
+  },
+  jira: {
+    token: "jira",
+    label: "Jira",
+    shortLabel: "Jira",
+    description:
+      "Allow Jira issue access through the trusted integration path.",
+    icon: "📋",
+    group: "Integrations",
+  },
+  docker: {
+    token: "docker",
+    label: "Docker",
+    shortLabel: "Docker",
+    description: "Allow container builds and Docker operations for this step.",
+    icon: "🐳",
+    group: "Runtime",
+  },
+  codex_cli: {
+    token: "codex_cli",
+    label: "Codex CLI",
+    shortLabel: "Codex",
+    description: "Run this step through the Codex CLI runtime.",
+    icon: "✨",
+    group: "Runtime",
+  },
+};
+
+// Capability tokens offered, in order, by the "Add to step" menu.
+const CAPABILITY_MENU_TOKENS: string[] = [
+  "git",
+  "gh",
+  "jira",
+  "docker",
+  "codex_cli",
+];
+
+function normalizeCapabilityToken(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function capabilityCatalogEntry(token: string): CapabilityCatalogEntry {
+  const normalized = normalizeCapabilityToken(token);
+  const known = CAPABILITY_CATALOG[normalized];
+  if (known) {
+    return known;
+  }
+  return {
+    token: normalized,
+    label: normalized,
+    shortLabel: normalized,
+    description: "Custom capability required before this step launches.",
+    icon: "•",
+    group: "Runtime",
+  };
+}
+
+type CapabilitySourceKind =
+  | "explicit"
+  | "preset"
+  | "skill"
+  | "tool"
+  | "runtime"
+  | "publish"
+  | "template";
+
+const CAPABILITY_SOURCE_LABELS: Record<CapabilitySourceKind, string> = {
+  explicit: "added to this step",
+  preset: "from preset",
+  skill: "from skill",
+  tool: "from tool",
+  runtime: "from runtime",
+  publish: "from publish mode",
+  template: "from template",
+};
+
+interface CapabilityContribution {
+  token: string;
+  sourceKind: CapabilitySourceKind;
+  sourceLabel: string;
+  removable: boolean;
+}
+
+interface StepCapabilityChip {
+  token: string;
+  label: string;
+  description: string;
+  icon: string;
+  sources: CapabilityContribution[];
+  removable: boolean;
+}
+
+interface BuildCapabilityChipsArgs {
+  explicit?: string[] | null | undefined;
+  skill?: string[] | null | undefined;
+  generatedSkill?: string[] | null | undefined;
+  generatedTool?: string[] | null | undefined;
+  preset?: string[] | null | undefined;
+  runtime?: string[] | null | undefined;
+  publish?: string[] | null | undefined;
+  template?: string[] | null | undefined;
+}
+
+// Compute the display chips for a step's required capabilities. Sources are
+// additive and backend normalization is authoritative, so a capability chip is
+// only removable when the sole contribution is the explicit step authoring
+// field. Derived contributions (preset, skill, tool, runtime, publish mode,
+// template) keep the chip non-removable and carry provenance for display.
+export function buildCapabilityChips(
+  args: BuildCapabilityChipsArgs,
+): StepCapabilityChip[] {
+  const contributionGroups: Array<{
+    tokens: string[] | null | undefined;
+    sourceKind: CapabilitySourceKind;
+  }> = [
+    { tokens: args.explicit, sourceKind: "explicit" },
+    { tokens: args.skill, sourceKind: "skill" },
+    { tokens: args.generatedSkill, sourceKind: "skill" },
+    { tokens: args.generatedTool, sourceKind: "tool" },
+    { tokens: args.preset, sourceKind: "preset" },
+    { tokens: args.template, sourceKind: "template" },
+    { tokens: args.runtime, sourceKind: "runtime" },
+    { tokens: args.publish, sourceKind: "publish" },
+  ];
+
+  const chipsByToken = new Map<string, StepCapabilityChip>();
+  const order: string[] = [];
+
+  for (const group of contributionGroups) {
+    for (const rawToken of group.tokens || []) {
+      const token = normalizeCapabilityToken(String(rawToken || ""));
+      if (!token) {
+        continue;
+      }
+      let chip = chipsByToken.get(token);
+      if (!chip) {
+        const entry = capabilityCatalogEntry(token);
+        chip = {
+          token,
+          label: entry.label,
+          description: entry.description,
+          icon: entry.icon,
+          sources: [],
+          removable: false,
+        };
+        chipsByToken.set(token, chip);
+        order.push(token);
+      }
+      if (chip.sources.some((source) => source.sourceKind === group.sourceKind)) {
+        continue;
+      }
+      chip.sources.push({
+        token,
+        sourceKind: group.sourceKind,
+        sourceLabel: CAPABILITY_SOURCE_LABELS[group.sourceKind],
+        removable: group.sourceKind === "explicit",
+      });
+    }
+  }
+
+  return order.map((token) => {
+    const chip = chipsByToken.get(token) as StepCapabilityChip;
+    const removable =
+      chip.sources.length > 0 &&
+      chip.sources.every((source) => source.sourceKind === "explicit");
+    return { ...chip, removable };
+  });
+}
+
+// The provenance label rendered on a derived (non-removable) chip, e.g.
+// "from preset". Returns null for chips whose only source is explicit.
+export function capabilityChipProvenanceLabel(
+  chip: StepCapabilityChip,
+): string | null {
+  const derived = chip.sources.find(
+    (source) => source.sourceKind !== "explicit",
+  );
+  return derived ? derived.sourceLabel : null;
+}
+
 function stringifySkillArgs(
   args: Record<string, unknown> | null | undefined,
 ): string {
@@ -1967,20 +2190,6 @@ function stringifySkillArgs(
   }
 }
 
-function extractCapabilityCsv(value: unknown): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  return value
-    .map((item) =>
-      String(item || "")
-        .trim()
-        .toLowerCase(),
-    )
-    .filter(Boolean)
-    .join(",");
-}
-
 function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
   if (!step) {
     return true;
@@ -1992,7 +2201,7 @@ function isEmptyStepStateEntry(step: StepState | null | undefined): boolean {
     (!step.toolInputs.trim() || step.toolInputs.trim() === "{}") &&
     !step.skillId.trim() &&
     !step.skillArgs.trim() &&
-    !step.skillRequiredCapabilities.trim() &&
+    step.explicitRequiredCapabilities.length === 0 &&
     !step.presetKey.trim() &&
     !step.templateStepId.trim() &&
     !step.templateInstructions.trim() &&
@@ -2338,18 +2547,6 @@ function isImageOnlyPolicy(policy: AttachmentPolicy): boolean {
   );
 }
 
-function attachmentControlLabel(policy: AttachmentPolicy): string {
-  return isImageOnlyPolicy(policy) ? "Images" : "Input Attachments";
-}
-
-function attachmentAddButtonLabel(
-  policy: AttachmentPolicy,
-  stepNumber: number,
-): string {
-  const noun = isImageOnlyPolicy(policy) ? "images" : "attachments";
-  return `Add ${noun} to Step ${stepNumber}`;
-}
-
 function attachmentFilePickerLabel(
   policy: AttachmentPolicy,
   stepNumber: number,
@@ -2512,6 +2709,7 @@ function deriveRequiredCapabilities(args: {
   publishMode: string;
   taskSkillRequiredCapabilities: string[];
   stepSkillRequiredCapabilities: string[];
+  explicitStepCapabilities: string[];
   templateCapabilities: string[];
 }): string[] {
   return Array.from(
@@ -2523,6 +2721,7 @@ function deriveRequiredCapabilities(args: {
         ...(args.publishMode === "pr" ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
         ...args.stepSkillRequiredCapabilities,
+        ...args.explicitStepCapabilities,
         ...args.templateCapabilities
           .map((item) => item.trim().toLowerCase())
           .filter(Boolean),
@@ -2613,7 +2812,10 @@ function mapExpandedStepToState(
       : {},
     skillId: isToolStep ? "" : String(tool.name || tool.id || "").trim(),
     skillArgs: isToolStep ? "" : stringifySkillArgs(inlineInputs),
-    skillRequiredCapabilities: extractCapabilityCsv(tool.requiredCapabilities),
+    // Capabilities declared by an expanded preset's generated tool/skill are
+    // derived (non-removable) chips computed from generatedTool/generatedSkill,
+    // so the explicit authoring field starts empty for expanded steps.
+    explicitRequiredCapabilities: [],
     templateStepId: stepId,
     templateInstructions: instructions,
     templateAttachments,
@@ -4429,6 +4631,148 @@ export const LIQUID_GL_OPTIONS = {
 const DEFAULT_PRIORITY = 0;
 const DEFAULT_MAX_ATTEMPTS = 3;
 
+interface StepContextMenuProps {
+  stepNumber: number;
+  attachmentPolicy: AttachmentPolicy;
+  presentCapabilityTokens: string[];
+  onAddImage: () => void;
+  onAddCapability: (token: string) => void;
+  onAddCustomCapability: () => void;
+}
+
+// MM-936: The single "Add to step" affordance rendered beneath each step's
+// instruction box. It unifies image attachments and required capabilities into
+// one elegant menu without merging the underlying backend concepts.
+function StepContextMenu({
+  stepNumber,
+  attachmentPolicy,
+  presentCapabilityTokens,
+  onAddImage,
+  onAddCapability,
+  onAddCustomCapability,
+}: StepContextMenuProps) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    function handlePointerDown(event: MouseEvent) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(event.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
+
+  const menuLabel = `Add to Step ${stepNumber}`;
+  const imageItemLabel = isImageOnlyPolicy(attachmentPolicy)
+    ? "Image…"
+    : "Attachment…";
+
+  return (
+    <div className="queue-step-context-menu" ref={containerRef}>
+      <button
+        type="button"
+        className="queue-step-attachment-add-button queue-step-context-menu-button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={menuLabel}
+        title={menuLabel}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span aria-hidden="true">+</span>
+        <span className="queue-step-context-menu-button-text">Add to step</span>
+      </button>
+      {open ? (
+        <div
+          className="queue-step-context-menu-popover"
+          role="menu"
+          aria-label={menuLabel}
+        >
+          {attachmentPolicy.enabled ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                className="queue-step-context-menu-item"
+                onClick={() => {
+                  setOpen(false);
+                  onAddImage();
+                }}
+              >
+                {imageItemLabel}
+              </button>
+              <div
+                className="queue-step-context-menu-separator"
+                role="separator"
+              />
+            </>
+          ) : null}
+          <p className="queue-step-context-menu-group-label">Capabilities</p>
+          {CAPABILITY_MENU_TOKENS.map((token) => {
+            const entry = capabilityCatalogEntry(token);
+            const alreadyPresent = presentCapabilityTokens.includes(token);
+            return (
+              <button
+                key={token}
+                type="button"
+                role="menuitem"
+                className="queue-step-context-menu-item queue-step-context-menu-capability"
+                disabled={alreadyPresent}
+                aria-disabled={alreadyPresent}
+                title={entry.description}
+                onClick={() => {
+                  setOpen(false);
+                  onAddCapability(token);
+                }}
+              >
+                <span
+                  className="queue-step-context-menu-capability-icon"
+                  aria-hidden="true"
+                >
+                  {entry.icon}
+                </span>
+                <span className="queue-step-context-menu-capability-label">
+                  {entry.label}
+                </span>
+                <span className="queue-step-context-menu-capability-token">
+                  {entry.token}
+                </span>
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            role="menuitem"
+            className="queue-step-context-menu-item"
+            onClick={() => {
+              setOpen(false);
+              onAddCustomCapability();
+            }}
+          >
+            Custom capability…
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
@@ -6207,7 +6551,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       isDefault: Boolean(profile.is_default),
     }));
 
-  const attachmentLabel = attachmentControlLabel(attachmentPolicy);
+  // MM-936: the primary step always carries the publish-mode capability (gh)
+  // when publishing as a PR, surfaced as a non-removable derived chip.
+  const stepPublishModeRequiresGh =
+    normalizePublishModeForSubmit(publishMode) === "pr";
   const attachmentTargetValidation = useMemo(
     () =>
       validateAttachmentTargets(
@@ -6490,6 +6837,55 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         return nextStep;
       }),
     );
+  }
+
+  // MM-936: Append one or more explicit capability tokens to a step. Tokens are
+  // normalized and de-duplicated; existing tokens (including derived ones) are
+  // preserved. The chip selector only ever mutates the explicit field.
+  function addStepCapabilities(localId: string, tokens: string[]) {
+    const normalized = mergeCapabilities(tokens);
+    if (normalized.length === 0) {
+      return;
+    }
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId
+          ? {
+              ...step,
+              explicitRequiredCapabilities: mergeCapabilities(
+                step.explicitRequiredCapabilities,
+                normalized,
+              ),
+            }
+          : step,
+      ),
+    );
+  }
+
+  function removeStepCapability(localId: string, token: string) {
+    const normalized = normalizeCapabilityToken(token);
+    setSteps((current) =>
+      current.map((step) =>
+        step.localId === localId
+          ? {
+              ...step,
+              explicitRequiredCapabilities:
+                step.explicitRequiredCapabilities.filter(
+                  (existing) => existing !== normalized,
+                ),
+            }
+          : step,
+      ),
+    );
+  }
+
+  function promptForCustomStepCapability(localId: string) {
+    const value = window.prompt(
+      "Add a custom capability token (for example: unity, qdrant). Separate multiple tokens with commas.",
+    );
+    if (value) {
+      addStepCapabilities(localId, parseCapabilitiesCsv(value));
+    }
   }
 
   function handleStepInstructionsChange(localId: string, value: string) {
@@ -6844,11 +7240,11 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           step.stepType === "skill" &&
           (step.skillId.trim() ||
             step.skillArgs.trim() ||
-            step.skillRequiredCapabilities.trim())
+            step.explicitRequiredCapabilities.length > 0)
         ) {
           nextStep.skillId = "";
           nextStep.skillArgs = "";
-          nextStep.skillRequiredCapabilities = "";
+          nextStep.explicitRequiredCapabilities = [];
         }
 
         if (
@@ -7474,9 +7870,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       }
       const blueprint: Record<string, unknown> = { instructions };
       const skillId = step.skillId.trim();
-      const caps = showAdvancedStepOptions
-        ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
-        : [];
+      // MM-936: explicit capabilities are authored through the always-visible
+      // chip selector, so they persist into presets regardless of Advanced mode.
+      const caps = step.explicitRequiredCapabilities;
       const skillArgsRaw = showAdvancedStepOptions ? step.skillArgs.trim() : "";
       if (skillId || skillArgsRaw || caps.length > 0) {
         let skillArgs: Record<string, unknown> = {};
@@ -8113,9 +8509,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const taskSkillRequiredCapabilities = primaryStepIsSkill
       ? mergeCapabilities(
           primarySkillDetail?.requiredCapabilities,
-          showAdvancedStepOptions
-            ? parseCapabilitiesCsv(String(primaryStep?.skillRequiredCapabilities || ""))
-            : [],
+          primaryStep?.explicitRequiredCapabilities,
         )
       : [];
     const primarySchemaInputs = primaryStep
@@ -8249,9 +8643,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       const stepSkillCaps = stepIsSkill
         ? mergeCapabilities(
             stepSkillDetail?.requiredCapabilities,
-            showAdvancedStepOptions
-              ? parseCapabilitiesCsv(step.skillRequiredCapabilities)
-              : [],
+            step.explicitRequiredCapabilities,
           )
         : [];
       const stepToolDefinition =
@@ -8812,6 +9204,14 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const templateCapabilities = submissionAppliedTemplates.flatMap(
       (entry) => entry.capabilities || [],
     );
+    // MM-936: Explicit step capabilities authored via the chip selector bubble
+    // into the task's normalized requiredCapabilities for every step type, not
+    // only skill steps. Skill steps additionally carry them on the step payload.
+    const explicitStepCapabilities = mergeCapabilities(
+      ...submissionSteps.map((step) =>
+        step ? step.explicitRequiredCapabilities : [],
+      ),
+    );
     const mergedCapabilities = deriveRequiredCapabilities({
       runtimeMode: normalizedRuntime,
       stepRuntimeModes: normalizedSteps
@@ -8824,6 +9224,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       publishMode: effectivePublishMode,
       taskSkillRequiredCapabilities,
       stepSkillRequiredCapabilities,
+      explicitStepCapabilities,
       templateCapabilities,
     });
 
@@ -9663,6 +10064,21 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               )
                 ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
                 : [];
+              // MM-936: derive the capability chip row for this step. Explicit
+              // chips are removable; skill/tool/runtime/publish-derived chips are
+              // non-removable and carry provenance.
+              const stepCapabilityChips = buildCapabilityChips({
+                explicit: step.explicitRequiredCapabilities,
+                skill: selectedSkillDetail?.requiredCapabilities,
+                generatedSkill: step.generatedSkill?.requiredCapabilities,
+                generatedTool: step.generatedTool?.requiredCapabilities,
+                runtime: step.runtimeMode ? [step.runtimeMode] : [],
+                publish:
+                  isPrimaryStep && stepPublishModeRequiresGh ? ["gh"] : [],
+              });
+              const stepCapabilityTokens = stepCapabilityChips.map(
+                (chip) => chip.token,
+              );
               const toolSearchText = toolSearchTextByStep[step.localId] || "";
               const trustedToolDefinitions = trustedToolsQuery.data || [];
               const toolChoiceGroups = groupedToolChoices(
@@ -10354,22 +10770,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           />
                         </label>
                       ) : null}
-                      {showAdvancedStepOptions ? (
-                        <label>
-                          {`Step ${index + 1} Skill Required Capabilities (optional CSV)`}
-                          <input
-                            data-step-field="skillRequiredCapabilities"
-                            data-step-index={String(index)}
-                            value={step.skillRequiredCapabilities}
-                            placeholder="docker,qdrant,unity"
-                            onChange={(event) =>
-                              updateStep(step.localId, {
-                                skillRequiredCapabilities: event.target.value,
-                              })
-                            }
-                          />
-                        </label>
-                      ) : null}
                       {selectedSkillDetail ? (
                         <SchemaCapabilityFields
                           fields={visibleSkillSchemaFields}
@@ -10539,54 +10939,115 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                       }
                     />
                     <RuntimeCommandPreviewMessage preview={instructionPreview} />
+                    <div
+                      className="queue-step-context"
+                      aria-label={`Add to Step ${index + 1}`}
+                    >
+                      <StepContextMenu
+                        stepNumber={index + 1}
+                        attachmentPolicy={attachmentPolicy}
+                        presentCapabilityTokens={stepCapabilityTokens}
+                        onAddImage={() =>
+                          document
+                            .getElementById(
+                              `queue-step-attachments-${step.localId}`,
+                            )
+                            ?.click()
+                        }
+                        onAddCapability={(token) =>
+                          addStepCapabilities(step.localId, [token])
+                        }
+                        onAddCustomCapability={() =>
+                          promptForCustomStepCapability(step.localId)
+                        }
+                      />
+                      {stepCapabilityChips.length > 0 ? (
+                        <ul
+                          className="queue-step-capability-chips"
+                          aria-label={`Step ${index + 1} capabilities`}
+                        >
+                          {stepCapabilityChips.map((chip) => {
+                            const provenance =
+                              capabilityChipProvenanceLabel(chip);
+                            const detailText = chip.removable
+                              ? chip.token
+                              : provenance || chip.token;
+                            return (
+                              <li
+                                key={chip.token}
+                                className={`queue-step-capability-chip${
+                                  chip.removable ? "" : " is-derived"
+                                }`}
+                              >
+                                <span
+                                  className="queue-step-capability-chip-icon"
+                                  aria-hidden="true"
+                                >
+                                  {chip.icon}
+                                </span>
+                                <span className="queue-step-capability-chip-label">
+                                  {chip.label}
+                                </span>
+                                <span className="queue-step-capability-chip-detail">
+                                  {`· ${detailText}`}
+                                </span>
+                                {chip.removable ? (
+                                  <button
+                                    type="button"
+                                    className="queue-step-icon-button destructive queue-step-capability-chip-remove"
+                                    aria-label={`Remove ${chip.label} capability from Step ${index + 1}`}
+                                    title={`Remove ${chip.label} capability from Step ${index + 1}`}
+                                    onClick={() =>
+                                      removeStepCapability(
+                                        step.localId,
+                                        chip.token,
+                                      )
+                                    }
+                                  >
+                                    <CloseIcon />
+                                    <span className="sr-only">{`Remove ${chip.label} capability from Step ${index + 1}`}</span>
+                                  </button>
+                                ) : (
+                                  <span
+                                    className="queue-step-capability-chip-lock"
+                                    aria-label={`${chip.label} capability is required ${
+                                      provenance || "by this step"
+                                    } and cannot be removed here. Change the preset or generated step to remove it.`}
+                                    title={`This capability is required ${
+                                      provenance || "by this step"
+                                    }. Change the preset or generated step to remove it.`}
+                                  >
+                                    🔒
+                                  </span>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      ) : null}
+                    </div>
                     {attachmentPolicy.enabled ? (
                       <div className="queue-step-attachments">
-                        <div className="queue-step-attachment-control">
-                          <span className="queue-step-attachment-label">
-                            {`${attachmentLabel} (optional)`}
-                          </span>
-                          <button
-                            type="button"
-                            className="queue-step-attachment-add-button"
-                            aria-label={attachmentAddButtonLabel(
-                              attachmentPolicy,
-                              index + 1,
-                            )}
-                            title={attachmentAddButtonLabel(
-                              attachmentPolicy,
-                              index + 1,
-                            )}
-                            onClick={() =>
-                              document
-                                .getElementById(
-                                  `queue-step-attachments-${step.localId}`,
-                                )
-                                ?.click()
-                            }
-                          >
-                            +
-                          </button>
-                          <input
-                            id={`queue-step-attachments-${step.localId}`}
-                            className="sr-only"
-                            type="file"
-                            data-step-field="attachments"
-                            data-step-index={String(index)}
-                            accept={attachmentPolicy.allowedContentTypes.join(",")}
-                            multiple
-                            aria-label={attachmentFilePickerLabel(
-                              attachmentPolicy,
-                              index + 1,
-                            )}
-                            onChange={(event) => {
-                              updateStepAttachments(
-                                step.localId,
-                                Array.from(event.currentTarget.files || []),
-                              );
-                              event.currentTarget.value = "";
-                            }}
-                          />
-                        </div>
+                        <input
+                          id={`queue-step-attachments-${step.localId}`}
+                          className="sr-only"
+                          type="file"
+                          data-step-field="attachments"
+                          data-step-index={String(index)}
+                          accept={attachmentPolicy.allowedContentTypes.join(",")}
+                          multiple
+                          aria-label={attachmentFilePickerLabel(
+                            attachmentPolicy,
+                            index + 1,
+                          )}
+                          onChange={(event) => {
+                            updateStepAttachments(
+                              step.localId,
+                              Array.from(event.currentTarget.files || []),
+                            );
+                            event.currentTarget.value = "";
+                          }}
+                        />
                         {attachmentTargetErrors[
                           attachmentTargetKey(step.localId)
                         ] ? (
