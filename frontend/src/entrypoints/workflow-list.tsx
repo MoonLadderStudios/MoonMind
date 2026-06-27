@@ -1028,6 +1028,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     [filters],
   );
   const hasActiveFilters = activeFilters.length > 0;
+  const hasWorkflowListNotices =
+    !listEnabled ||
+    Boolean(ignoredWorkflowScopeState) ||
+    filterValidationErrors.length > 0;
 
   const updateDraftText = (field: 'workflowId' | 'title', value: string) => {
     setDraftFilters((current) => ({
@@ -1344,77 +1348,25 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   return (
     <div className="stack">
-      <section className="workflow-list-control-deck" aria-label="Workflow list filters">
-        {!listEnabled ? (
-          <div className="notice error">Temporal workflow list is disabled in server configuration.</div>
-        ) : null}
-        {ignoredWorkflowScopeState ? (
-          <div className="notice warning">
-            Workflow scope filters are not available on Workflows. Showing workflow runs only.
-          </div>
-        ) : null}
-        {filterValidationErrors.length > 0 ? (
-          <div className="notice error" role="alert">
-            {filterValidationErrors.map((message) => (
-              <div key={message}>{message}</div>
-            ))}
-          </div>
-        ) : null}
-
-        <div className="workflow-list-filter-bar">
-          <button
-            type="button"
-            className={`workflow-list-filter-trigger${hasActiveFilters ? ' is-active' : ''}`}
-            ref={drawerToggleRef}
-            aria-haspopup="dialog"
-            aria-expanded={drawerOpen}
-            onClick={(event) => openDrawer(null, event.currentTarget)}
-          >
-            <svg
-              aria-hidden="true"
-              className="workflow-list-filter-trigger-icon"
-              viewBox="0 0 16 16"
-              focusable="false"
-            >
-              <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
-            </svg>
-            <span>Filters</span>
-            {hasActiveFilters ? (
-              <span className="workflow-list-filter-trigger-count" aria-hidden="true">
-                {activeFilters.length}
-              </span>
-            ) : null}
-          </button>
-          {hasActiveFilters ? (
-            <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
-              {activeFilters.map(({ field, label, value }) => (
-                <span className="workflow-list-filter-chip" key={`${label}:${value}`}>
-                  <button
-                    type="button"
-                    className="workflow-list-filter-chip-open"
-                    data-filter-field={field}
-                    onClick={(event) => openDrawer(field, event.currentTarget)}
-                    aria-label={`${label} filter: ${value}`}
-                  >
-                    <span>{label}</span>
-                    <strong>{value}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    className="workflow-list-filter-chip-remove"
-                    onClick={() => removeActiveFilter(field)}
-                    aria-label={`Remove ${label} filter`}
-                  >
-                    ×
-                  </button>
-                </span>
+      {hasWorkflowListNotices ? (
+        <section className="workflow-list-notices-deck" aria-label="Workflow list notices">
+          {!listEnabled ? (
+            <div className="notice error">Temporal workflow list is disabled in server configuration.</div>
+          ) : null}
+          {ignoredWorkflowScopeState ? (
+            <div className="notice warning">
+              Workflow scope filters are not available on Workflows. Showing workflow runs only.
+            </div>
+          ) : null}
+          {filterValidationErrors.length > 0 ? (
+            <div className="notice error" role="alert">
+              {filterValidationErrors.map((message) => (
+                <div key={message}>{message}</div>
               ))}
             </div>
-          ) : (
-            <span className="workflow-list-filter-empty small">No filters applied.</span>
-          )}
-        </div>
-      </section>
+          ) : null}
+        </section>
+      ) : null}
 
       {drawerOpen ? (
         <div
@@ -1533,6 +1485,57 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       >
         <header className="workflow-list-results-header">
           <h2 className="page-title" id="workflow-list-title">Workflows</h2>
+          <div className="workflow-list-filter-bar">
+            <button
+              type="button"
+              className={`workflow-list-filter-trigger${hasActiveFilters ? ' is-active' : ''}`}
+              ref={drawerToggleRef}
+              aria-haspopup="dialog"
+              aria-expanded={drawerOpen}
+              onClick={(event) => openDrawer(null, event.currentTarget)}
+            >
+              <svg
+                aria-hidden="true"
+                className="workflow-list-filter-trigger-icon"
+                viewBox="0 0 16 16"
+                focusable="false"
+              >
+                <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+              </svg>
+              <span>Filters</span>
+              {hasActiveFilters ? (
+                <span className="workflow-list-filter-trigger-count" aria-hidden="true">
+                  {activeFilters.length}
+                </span>
+              ) : null}
+            </button>
+            {hasActiveFilters ? (
+              <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
+                {activeFilters.map(({ field, label, value }) => (
+                  <span className="workflow-list-filter-chip" key={`${label}:${value}`}>
+                    <button
+                      type="button"
+                      className="workflow-list-filter-chip-open"
+                      data-filter-field={field}
+                      onClick={(event) => openDrawer(field, event.currentTarget)}
+                      aria-label={`${label} filter: ${value}`}
+                    >
+                      <span>{label}</span>
+                      <strong>{value}</strong>
+                    </button>
+                    <button
+                      type="button"
+                      className="workflow-list-filter-chip-remove"
+                      onClick={() => removeActiveFilter(field)}
+                      aria-label={`Remove ${label} filter`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </header>
         {isLoading ? (
           <p className="loading workflow-list-empty-message">Loading workflows...</p>
