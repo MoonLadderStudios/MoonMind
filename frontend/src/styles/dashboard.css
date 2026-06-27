@@ -4057,6 +4057,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   box-shadow: 0 12px 30px rgb(0 0 0 / 0.18);
 }
 
+.queue-step-context-menu-title {
+  margin: 0.1rem 0.4rem 0.2rem;
+  color: rgb(var(--mm-text));
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
 .queue-step-context-menu-group-label {
   margin: 0.25rem 0.4rem 0.1rem;
   color: rgb(var(--mm-muted));

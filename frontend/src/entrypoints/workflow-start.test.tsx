@@ -16244,6 +16244,9 @@ describe("Task Create governed Tool authoring", () => {
     });
 
     fireEvent.click(addToStep);
+    const menu = within(step).getByRole("menu", { name: "Add to step" });
+    expect(within(menu).getByText("Add to step")).toBeTruthy();
+    expect(within(menu).getByText("Capabilities")).toBeTruthy();
     fireEvent.click(within(step).getByRole("menuitem", { name: /^Docker/ }));
 
     const chip = await within(step).findByText("Docker");
@@ -16263,6 +16266,89 @@ describe("Task Create governed Tool authoring", () => {
       requiredCapabilities?: string[];
     };
     expect(payload.requiredCapabilities).toContain("docker");
+  });
+
+  it("shows the image action only when step attachments are allowed and uses the existing picker", async () => {
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, "click");
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const picker = within(step).getByLabelText("Step 1 image file picker");
+    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+
+    const menu = within(step).getByRole("menu", { name: "Add to step" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Image…" }));
+
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(clickSpy.mock.instances[0]).toBe(picker);
+    clickSpy.mockRestore();
+  });
+
+  it("omits image actions from the Add to step menu when attachments are disabled", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withDisabledAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+
+    const menu = within(step).getByRole("menu", { name: "Add to step" });
+    expect(within(menu).queryByRole("menuitem", { name: "Image…" })).toBeNull();
+    expect(
+      within(menu).queryByRole("menuitem", { name: "Attachment…" }),
+    ).toBeNull();
+    expect(
+      within(menu).getByRole("menuitem", { name: /Git repository/ }),
+    ).toBeTruthy();
+  });
+
+  it("supports keyboard navigation and Escape close in the Add to step menu", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const addToStep = within(step).getByRole("button", {
+      name: "Add to Step 1",
+    });
+
+    fireEvent.click(addToStep);
+    const menu = within(step).getByRole("menu", { name: "Add to step" });
+    const gitItem = within(menu).getByRole("menuitem", {
+      name: /Git repository/,
+    });
+    const jiraItem = within(menu).getByRole("menuitem", { name: /^Jira/ });
+    const customItem = within(menu).getByRole("menuitem", {
+      name: "Custom capability…",
+    });
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(gitItem);
+    });
+
+    fireEvent.keyDown(document, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(jiraItem);
+
+    fireEvent.keyDown(document, { key: "End" });
+    expect(document.activeElement).toBe(customItem);
+
+    fireEvent.keyDown(document, { key: "Home" });
+    expect(document.activeElement).toBe(gitItem);
+
+    fireEvent.keyDown(document, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(customItem);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => {
+      expect(within(step).queryByRole("menu", { name: "Add to step" }))
+        .toBeNull();
+    });
   });
 
   it("removes explicit capability chips but keeps derived chips locked", async () => {
