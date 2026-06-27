@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactElement } from "react";
+import type {
+  FocusEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  ReactElement,
+} from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
@@ -4867,9 +4871,34 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
   const provenance = capabilityChipProvenanceLabel(chip);
   const detailText = chip.removable ? chip.token : provenance || chip.token;
   const explanation = chip.removable ? chip.description : derivedCapabilityExplanation(chip);
+  const handleDerivedBlur = (event: FocusEvent<HTMLLIElement>) => {
+    if (
+      event.relatedTarget instanceof Node &&
+      event.currentTarget.contains(event.relatedTarget)
+    ) {
+      return;
+    }
+    setShowExplanation(false);
+  };
+  const handleDerivedKeyDown = (event: ReactKeyboardEvent<HTMLLIElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    setShowExplanation((value) => !value);
+  };
   return (
     <li
       className={`queue-step-capability-chip${chip.removable ? "" : " is-derived"}`}
+      tabIndex={chip.removable ? undefined : 0}
+      onClick={
+        chip.removable
+          ? undefined
+          : () => setShowExplanation((value) => !value)
+      }
+      onFocus={chip.removable ? undefined : () => setShowExplanation(true)}
+      onBlur={chip.removable ? undefined : handleDerivedBlur}
+      onKeyDown={chip.removable ? undefined : handleDerivedKeyDown}
     >
       <span className="queue-step-capability-chip-icon" aria-hidden="true">
         {chip.icon}
@@ -4894,12 +4923,13 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
           aria-label={`${chip.label} capability provenance`}
           title={explanation}
           aria-expanded={showExplanation}
-          onClick={() => setShowExplanation((value) => !value)}
-          onFocus={() => setShowExplanation(true)}
-          onBlur={() => setShowExplanation(false)}
+          onClick={(event) => {
+            event.stopPropagation();
+            setShowExplanation((value) => !value);
+          }}
         >
           <span aria-hidden="true">🔒</span>
-          <span className="sr-only">{explanation}</span>
+          <span className="sr-only">Show capability provenance</span>
         </button>
       )}
       {!chip.removable && showExplanation ? (

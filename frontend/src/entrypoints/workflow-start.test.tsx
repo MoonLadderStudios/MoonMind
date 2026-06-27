@@ -16387,6 +16387,45 @@ describe("Task Create governed Tool authoring", () => {
   });
 
   it("renders selected preset capabilities as derived non-removable chips", async () => {
+    const defaultFetch = fetchSpy.getMockImplementation();
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "speckit-demo",
+            scope: "global",
+            title: "Spec Kit Demo",
+            description: "Seed a two-step planning flow.",
+            latestVersion: "1.2.3",
+            version: "1.2.3",
+            requiredCapabilities: ["jira"],
+            inputs: [],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "speckit-demo",
+                scope: "global",
+                title: "Spec Kit Demo",
+                description: "Seed a two-step planning flow.",
+                latestVersion: "1.2.3",
+                version: "1.2.3",
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return defaultFetch
+        ? defaultFetch(input, init)
+        : Promise.reject(new Error(`Unhandled request: ${url}`));
+    });
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     const step = (await screen.findByText("Step 1")).closest(
@@ -16410,11 +16449,12 @@ describe("Task Create governed Tool authoring", () => {
         name: "Remove Jira capability from Step 1",
       }),
     ).toBeNull();
-    fireEvent.click(
+    expect(
       within(chip).getByRole("button", {
         name: "Jira capability provenance",
       }),
-    );
+    ).toBeTruthy();
+    fireEvent.focus(chip);
     expect(
       await within(chip).findByText(/Change the selected preset source/),
     ).toBeTruthy();
