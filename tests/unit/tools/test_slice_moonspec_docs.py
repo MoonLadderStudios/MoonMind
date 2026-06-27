@@ -123,6 +123,13 @@ def test_build_doc_slice_payload_maps_doc_index_claims_to_story_candidate(
     )
 
 
+def test_string_helper_preserves_falsy_non_none_values() -> None:
+    assert mod._string(False) == "False"
+    assert mod._string(0) == "0"
+    assert mod._string(0.0) == "0.0"
+    assert mod._string(None) == ""
+
+
 def test_implementation_packets_preserve_source_packet_traceability() -> None:
     slices, packets = mod.build_doc_slice_payload(
         _doc_index(),
@@ -202,6 +209,31 @@ def test_write_doc_slice_artifacts_emits_compact_artifact_paths(tmp_path: Path) 
     )
     assert "The payload body of docs/Workflows/ExampleDesign.md" not in slices_text
     assert "The payload body of docs/Workflows/ExampleDesign.md" not in packets_text
+
+
+def test_build_doc_slice_payload_rejects_non_doc_index_json() -> None:
+    packets_path = "artifacts/moonspec-doc-slices/run/implementation-packets.json"
+    try:
+        mod.build_doc_slice_payload(
+            {},
+            index_path=Path("artifacts/moonspec-doc-index/index.json"),
+            index_digest="sha256:index",
+            slices_path="artifacts/moonspec-doc-slices/run/doc-slices.json",
+            packets_path=packets_path,
+        )
+    except ValueError as exc:
+        assert "index_moonspec_docs" in str(exc)
+    else:
+        raise AssertionError("Expected non-doc-index JSON to be rejected")
+
+
+def test_default_output_dir_is_unique_within_same_second() -> None:
+    first = mod._default_output_dir()
+    second = mod._default_output_dir()
+
+    assert first != second
+    assert first.parent == mod.DEFAULT_OUTPUT_ROOT
+    assert second.parent == mod.DEFAULT_OUTPUT_ROOT
 
 
 def test_temporary_spec_adapter_role_is_explicit_in_slices_and_packets() -> None:

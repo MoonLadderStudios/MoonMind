@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
+from uuid import uuid4
 
 
 ISSUE = "MM-939"
@@ -92,7 +93,7 @@ class ImplementationPacket:
 
 
 def _string(value: Any) -> str:
-    return str(value or "").strip()
+    return str(value).strip() if value is not None else ""
 
 
 def _strings(value: Any) -> list[str]:
@@ -102,7 +103,20 @@ def _strings(value: Any) -> list[str]:
 
 
 def _digest_file(path: Path) -> str:
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _validate_doc_index_payload(doc_index: Mapping[str, Any]) -> None:
+    if _string(doc_index.get("tool")) != "index_moonspec_docs":
+        raise ValueError("Doc index JSON was not produced by index_moonspec_docs.")
+    if not isinstance(doc_index.get("documents"), list):
+        raise ValueError("Doc index JSON must include a documents list.")
+    if not isinstance(doc_index.get("claims"), list):
+        raise ValueError("Doc index JSON must include a claims list.")
 
 
 def _document_title(
@@ -152,6 +166,8 @@ def build_doc_slice_payload(
     packets_path: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Build derived doc slices and implementation packets from doc-index output."""
+
+    _validate_doc_index_payload(doc_index)
 
     documents = [
         dict(document)
@@ -232,9 +248,9 @@ def build_doc_slice_payload(
                 ),
                 acceptanceCriteria=[
                     "Each listed stable canonical claim is implemented or "
-                    "explicitly ruled out.",
+                    + "explicitly ruled out.",
                     "The downstream Source Packet preserves source document "
-                    "and claim references.",
+                    + "and claim references.",
                     TEMPORARY_SPEC_ADAPTER_ROLE,
                 ],
                 requirements=[
@@ -371,7 +387,7 @@ def write_doc_slice_artifacts(
 
 def _default_output_dir() -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return DEFAULT_OUTPUT_ROOT / f"doc-slices-{stamp}"
+    return DEFAULT_OUTPUT_ROOT / f"doc-slices-{stamp}-{uuid4().hex}"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -408,13 +424,20 @@ def main(argv: list[str] | None = None) -> int:
     except json.JSONDecodeError as exc:
         print(f"Doc index is not valid JSON: {exc}", file=sys.stderr)
         return 2
+    if not isinstance(doc_index, Mapping):
+        print("Doc index JSON must be an object.", file=sys.stderr)
+        return 2
 
     output_dir = args.output_dir or _default_output_dir()
-    summary = write_doc_slice_artifacts(
-        doc_index,
-        index_path=index_path,
-        output_dir=output_dir,
-    )
+    try:
+        summary = write_doc_slice_artifacts(
+            doc_index,
+            index_path=index_path,
+            output_dir=output_dir,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if args.format == "json":
         print(json.dumps(summary, indent=2, sort_keys=True))
