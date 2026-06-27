@@ -334,11 +334,15 @@ def test_legacy_manifest_submit_route_openapi_documents_redirect(
     assert "200" not in route["responses"]
     assert "application/json" not in route["responses"]["307"].get("content", {})
 
-def test_navigation_exposes_single_manifest_destination(client: TestClient) -> None:
+def test_navigation_hides_incomplete_manifest_and_index_health_pages(
+    client: TestClient,
+) -> None:
     response = client.get("/manifests")
 
     assert response.status_code == 200
-    assert 'href="/manifests"' in response.text
+    assert 'href="/manifests"' not in response.text
+    assert 'href="/index-health"' not in response.text
+    assert "Index Health" not in response.text
     assert "Manifest Submit" not in response.text
     assert 'href="/manifests/new"' not in response.text
 
