@@ -56,6 +56,7 @@ from moonmind.workflows.temporal.activity_runtime import (
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     ManagedSessionReapResult,
 )
+from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
@@ -5364,6 +5365,83 @@ async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeatin
     assert len(result["sessionIds"]) == 50
     assert result["orphanContainersReaped"] == 0
     assert result["truncated"] is True
+
+
+async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
+    cleanup_calls: list[dict[str, object]] = []
+    heartbeat_payloads: list[dict[str, Any]] = []
+
+    class _CleanupResult:
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "disabled": False,
+                "dryRun": True,
+                "eligibleRoots": 1,
+                "candidateSamples": [
+                    {
+                        "resource_class": "workspace_root",
+                        "safe_path": "store:workspaces/mm-workflow",
+                        "classification": "eligible",
+                        "reason": "all retained-state safety gates passed",
+                        "estimated_bytes": 42,
+                    }
+                ],
+                "metrics": {"resource.workspace_root.eligible": 1},
+            }
+
+    def _fake_cleanup_managed_runtime_files(
+        *,
+        run_store: ManagedRunStore,
+        session_store: ManagedSessionStore,
+    ) -> _CleanupResult:
+        cleanup_calls.append(
+            {
+                "run_store": run_store,
+                "session_store": session_store,
+            }
+        )
+        return _CleanupResult()
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: dict[str, Any],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
+
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "cleanup_managed_runtime_files",
+        _fake_cleanup_managed_runtime_files,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
+    )
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store,
+        session_store=session_store,
+    )
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files({})
+
+    assert cleanup_calls == [{"run_store": run_store, "session_store": session_store}]
+    assert heartbeat_payloads == [
+        {"activityType": "agent_runtime.cleanup_managed_runtime_files"}
+    ]
+    assert result["eligibleRoots"] == 1
+    assert result["candidateSamples"][0]["safe_path"] == "store:workspaces/mm-workflow"
+    assert result["metrics"] == {"resource.workspace_root.eligible": 1}
 
 async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
     monkeypatch: pytest.MonkeyPatch,
