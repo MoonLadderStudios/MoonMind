@@ -1,0 +1,563 @@
+{
+  "source": {
+    "title": "MM-968: Omnigent Docker Compose",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "imperative-override",
+    "jiraIssueKey": "MM-968",
+    "jiraSummary": "Omnigent Docker Compose",
+    "selectedInput": "trusted-jira-preset-brief",
+    "text": "MM-968: Omnigent Docker Compose\n\nAdd Omnigent to MoonMind Docker Compose using shared Postgres and non-conflicting ports\n\nSummary\n\nAdd Omnigent to MoonMind's Docker Compose deployment so MoonMind and Omnigent can run side-by-side in the same local/self-hosted stack.\n\nThe integration should:\n\n- Move the MoonMind API host port from 8000:8000 to 7000:8000, so MoonMind remains internally unchanged but is reachable from the host at http://localhost:7000.\n- Add an Omnigent server service reachable from the host at http://localhost:8000.\n- Reuse MoonMind's existing Postgres container rather than starting a second Postgres service for Omnigent.\n- Create a separate Omnigent Postgres database and user inside the existing Postgres instance.\n- Add an optional omnigent-host service, behind a Docker Compose profile, that can register with the Omnigent server.\n- Prefer using MoonMind's existing .env file for both MoonMind and Omnigent configuration, with Omnigent-specific variables prefixed to avoid collisions.\n- Add documentation and validation steps for bringing up the combined stack.\n\nBackground\n\nMoonMind currently publishes the api service as 8000:8000, while the service itself listens on container port 8000. The internal health check also targets localhost:8000, so only the host-side port mapping needs to change.\n\nMoonMind already uses a single Postgres container for multiple databases and services. The compose file mounts ./init_db_scripts into Postgres' /docker-entrypoint-initdb.d, and the existing init script creates additional Temporal and Keycloak databases/users.\n\nOmnigent's stock Docker deployment normally includes its own Postgres service and an Omnigent server service. The server is configured with DATABASE_URL, ARTIFACT_DIR, HOST=0.0.0.0, and PORT=8000. Omnigent's Docker entrypoint explicitly supports an externally supplied DATABASE_URL, runs migrations, and starts the server, which makes reusing MoonMind's Postgres container feasible.\n\nOmnigent's host image is a prebuilt runtime image, but its default command is inert (sleep infinity), so the compose integration must explicitly run omnigent host or otherwise configure the container to start the host process.\n\nGoals\n\n- MoonMind API is reachable on host port 7000.\n- Omnigent server is reachable on host port 8000.\n- MoonMind and Omnigent share the existing postgres service.\n- Omnigent uses a separate database and role, not MoonMind's primary database.\n- Omnigent server persists artifacts and account credentials in a dedicated Docker volume.\n- Omnigent host can be optionally enabled with a Compose profile.\n- The integration can be configured from the existing MoonMind .env.\n- The default stack remains backwards-compatible except for the intentional MoonMind host port change.\n\nNon-goals\n\n- Do not merge MoonMind and Omnigent schemas into the same database.\n- Do not remove MoonMind's existing Postgres, Temporal, Keycloak, MinIO, or worker setup.\n- Do not make Omnigent mandatory for all MoonMind deployments unless explicitly requested.\n- Do not configure Modal/Daytona/E2B/OpenShell managed cloud sandboxes in this issue, beyond leaving room for future Omnigent config.\n- Do not implement SSO/OIDC integration in this issue, beyond exposing the relevant env vars.\n\nImplementation Plan\n\n1. Change MoonMind API host port to 7000\n\nUpdate docker-compose.yaml:\n\nservices:\n  api:\n    ports:\n      - \"${MOONMIND_API_HOST_PORT:-7000}:8000\"\n\nCurrent state:\n\nports:\n  - \"8000:8000\"\n\nDo not change the API container's internal port, health check, or internal service URLs. MoonMind workers and services should continue using http://api:8000 internally.\n\nAdd to .env-template:\n\nMOONMIND_API_HOST_PORT=7000\n\nUpdate any local developer docs, onboarding docs, scripts, or README references that say MoonMind is available at http://localhost:8000; they should say http://localhost:7000.\n\n2. Add Omnigent-specific env vars to .env-template\n\nAdd a new section to .env-template:\n\n# Omnigent\nOMNIGENT_IMAGE=\"ghcr.io/omnigent-ai/omnigent-server\"\nOMNIGENT_IMAGE_TAG=\"latest\"\nOMNIGENT_PORT=8000\n\n# Reuse MoonMind's existing Postgres container, but isolate Omnigent.\nOMNIGENT_POSTGRES_DB=\"omnigent\"\nOMNIGENT_POSTGRES_USER=\"omnigent\"\nOMNIGENT_POSTGRES_PASSWORD=\"replace_with_strong_omnigent_db_password\"\n\n# Built-in accounts mode is the default local/self-hosted mode.\nOMNIGENT_AUTH_ENABLED=1\nOMNIGENT_AUTH_PROVIDER=\"\"\nOMNIGENT_ACCOUNTS_COOKIE_SECRET=\"replace_with_64_hex_chars\"\nOMNIGENT_ACCOUNTS_BASE_URL=\"http://localhost:8000\"\nOMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD=\"\"\nOMNIGENT_ACCOUNTS_AUTO_OPEN=0\n\n# Optional OIDC mode.\nOMNIGENT_DOMAIN=\"\"\nOMNIGENT_OIDC_ISSUER=\"\"\nOMNIGENT_OIDC_CLIENT_ID=\"\"\nOMNIGENT_OIDC_CLIENT_SECRET=\"\"\nOMNIGENT_OIDC_COOKIE_SECRET=\"\"\nOMNIGENT_OIDC_SCOPES=\"\"\nOMNIGENT_OIDC_ALLOWED_DOMAINS=\"\"\nOMNIGENT_OIDC_SESSION_TTL_HOURS=8\n\n# Optional Omnigent server config file path inside the container.\nOMNIGENT_CONFIG=\"/data/config.yaml\"\n\n# Optional Omnigent host image.\nOMNIGENT_HOST_IMAGE=\"ghcr.io/omnigent-ai/omnigent-host\"\nOMNIGENT_HOST_IMAGE_TAG=\"latest\"\n\nImportant: do not reuse generic POSTGRES_USER, POSTGRES_DB, or POSTGRES_PASSWORD for Omnigent. MoonMind already uses those names for the shared Postgres container, while Omnigent's stock compose also uses generic Postgres variable names. Prefixing with OMNIGENT_ avoids accidental reconfiguration of MoonMind's database.\n\nGenerate OMNIGENT_ACCOUNTS_COOKIE_SECRET with:\n\nopenssl rand -hex 32\n\nGenerate OMNIGENT_POSTGRES_PASSWORD with the project's preferred secret-generation process.\n\n3. Add an idempotent Omnigent database initialization service\n\nAdd a one-shot Compose service that creates the Omnigent database and role in MoonMind's existing Postgres container.\n\nDo this instead of relying only on /docker-entrypoint-initdb.d, because Postgres init scripts only run when the data directory is first initialized. Existing developers and deployments will already have a postgres-data volume.\n\nThe service should use postgres:${POSTGRES_VERSION:-17}, depend on postgres with condition service_healthy, load .env, connect to the existing postgres service as the MoonMind postgres admin user, create OMNIGENT_POSTGRES_USER if missing, create OMNIGENT_POSTGRES_DB if missing, grant privileges, attach to local-network, and use restart: \"no\".\n\nNotes:\n\n- This service is intentionally idempotent.\n- It can be run repeatedly without dropping Omnigent data.\n- It should depend on postgres being healthy.\n- The Omnigent server should depend on this service completing successfully.\n\n4. Add the Omnigent server service\n\nAdd an omnigent service using image ${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}. It should restart unless stopped, depend on postgres service_healthy and omnigent-db-init service_completed_successfully, use env_file: .env, build DATABASE_URL from OMNIGENT_POSTGRES_USER, OMNIGENT_POSTGRES_PASSWORD, postgres:5432, and OMNIGENT_POSTGRES_DB, set ARTIFACT_DIR=/data/artifacts, HOST=0.0.0.0, PORT=8000, OMNIGENT_ADMIN_CREDENTIALS_PATH=/data/admin-credentials, expose account/OIDC env vars, mount omnigent-data:/data, publish ${OMNIGENT_PORT:-8000}:8000, and join local-network.\n\nAdd volume:\n\nvolumes:\n  omnigent-data:\n\nThe Omnigent server should use the same local-network as MoonMind's Postgres service. The internal database hostname should be postgres.\n\n5. Add optional Omnigent host service behind a Compose profile\n\nAdd a config-driven omnigent-host service. The preferred pattern is to avoid hardcoding the server URL in the command and instead use Omnigent's config file support.\n\nCreate a new tracked file:\n\ndeploy/omnigent/host-config.yaml\n\nwith:\n\nserver: http://omnigent:8000\n\nAdd an omnigent-host service using image ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}, profiles: [\"omnigent-host\"], restart: unless-stopped, depends_on omnigent service_started, env_file: .env, OMNIGENT_CONFIG_HOME=/root/.omnigent, OMNIGENT_DATA_DIR=/root/.omnigent-state, optional provider API key environment variables, volumes for ./deploy/omnigent/host-config.yaml:/root/.omnigent/config.yaml:ro, omnigent-host-state:/root/.omnigent-state, and ./omnigent_workspaces:/workspaces, command [\"omnigent\", \"host\"], and local-network.\n\nAdd volume:\n\nvolumes:\n  omnigent-host-state:\n\nImplementation note: do not mount a named volume over /root/.omnigent if also bind-mounting /root/.omnigent/config.yaml, because the named volume can hide the bind-mounted config path depending on mount ordering and Docker behavior. Use separate config and state paths.\n\n6. Add optional Omnigent server config file support\n\nCreate directory deploy/omnigent/ and add deploy/omnigent/server-config.example.yaml with non-secret Omnigent server settings, empty admins and allowed_domains examples, and future managed sandbox support comments. Secrets stay in .env.\n\nConsider bind-mounting a real config file later, but do not require this for the first pass. Omnigent can run without a server config file when basic accounts mode is used.\n\n7. Update docs\n\nAdd or update documentation covering:\n\n- New ports: MoonMind API http://localhost:7000 and Omnigent server/UI http://localhost:8000.\n- Default startup using either docker compose up -d postgres, docker compose run --rm omnigent-db-init, docker compose up -d api omnigent, or simply docker compose up -d if the full stack includes Omnigent by default.\n- Optional host startup: docker compose --profile omnigent-host up -d omnigent-host.\n- Logs: docker compose logs -f omnigent and docker compose logs -f omnigent-host.\n- Health checks: curl -f http://localhost:7000/healthz and curl -f http://localhost:8000/health.\n- First admin password discovery through docker compose logs omnigent, noting that Omnigent stores admin credentials under /data/admin-credentials in the omnigent-data volume.\n\n8. Add tests\n\nAdd or update tests that parse docker-compose.yaml and .env-template.\n\nRecommended test coverage:\n\n- MoonMind API host port defaults to 7000.\n- Omnigent service exists.\n- Omnigent does not define its own postgres service and depends on the existing postgres service being healthy.\n- Omnigent uses a prefixed DB env contract through DATABASE_URL containing OMNIGENT_POSTGRES_USER and OMNIGENT_POSTGRES_DB.\n- omnigent-db-init exists and depends on postgres, with restart: \"no\".\n- omnigent-host is profile-gated.\n- .env-template contains MOONMIND_API_HOST_PORT=7000, OMNIGENT_POSTGRES_DB, and OMNIGENT_ACCOUNTS_COOKIE_SECRET.\n- Existing Temporal/Postgres topology tests continue to pass.\n\nManual Validation Plan\n\nFresh checkout / fresh volumes:\n\ncp .env-template .env\n# Fill POSTGRES_PASSWORD, OMNIGENT_POSTGRES_PASSWORD, OMNIGENT_ACCOUNTS_COOKIE_SECRET\n\ndocker compose config\ndocker compose up -d\ncurl -f http://localhost:7000/healthz\ncurl -f http://localhost:8000/health\ndocker compose logs omnigent\n\nExpected:\n\n- MoonMind API responds on localhost:7000.\n- Nothing is listening for MoonMind on localhost:8000.\n- Omnigent responds on localhost:8000.\n- Omnigent migrations complete successfully.\n- Omnigent admin bootstrap succeeds or prompts/logs credentials.\n\nExisting MoonMind volume:\n\ndocker compose up -d postgres\ndocker compose run --rm omnigent-db-init\ndocker compose up -d omnigent\ncurl -f http://localhost:8000/health\n\nExpected:\n\n- omnigent-db-init completes successfully.\n- Omnigent database and user are created without dropping existing data.\n- Existing MoonMind, Temporal, and Keycloak databases remain intact.\n\nOptional host profile:\n\ndocker compose --profile omnigent-host up -d omnigent-host\ndocker compose logs -f omnigent-host\n\nExpected:\n\n- omnigent-host starts omnigent host.\n- The host connects to http://omnigent:8000 using deploy/omnigent/host-config.yaml.\n- The Omnigent UI can see the host as available.\n\nRollback Plan\n\nRevert the MoonMind API port mapping to:\n\nports:\n  - \"8000:8000\"\n\nRemove or disable these services:\n\n- omnigent\n- omnigent-db-init\n- omnigent-host\n\nLeave the Omnigent database in Postgres unless a destructive cleanup is explicitly requested.\n\nOptional cleanup:\n\nDROP DATABASE omnigent;\nDROP ROLE omnigent;\n\nRemove unused volumes only if data loss is acceptable:\n\ndocker volume rm <project>_omnigent-data\ndocker volume rm <project>_omnigent-host-state\n\nRisks and Mitigations\n\n- Risk: Postgres env var collision. Use OMNIGENT_POSTGRES_* for all Omnigent-specific DB values and construct DATABASE_URL explicitly.\n- Risk: Existing Postgres volumes do not run new init scripts. Use the idempotent omnigent-db-init service rather than relying solely on init_db_scripts.\n- Risk: Omnigent host image does not auto-register. Override the command to [\"omnigent\", \"host\"] and provide the server URL through /root/.omnigent/config.yaml.\n- Risk: Omnigent server image pull may require GHCR auth. Document docker login ghcr.io guidance depending on package visibility and permissions.\n- Risk: Mount conflict for host config. Do not mount a named volume over the same directory that contains the bind-mounted host config file. Use separate config and state paths.\n- Risk: Auth confusion. Default to Omnigent built-in accounts mode. OIDC/header auth can be configured later through the exposed env vars.\n\nAcceptance Criteria\n\n- docker compose config succeeds.\n- MoonMind API is reachable at http://localhost:7000/healthz.\n- Omnigent server is reachable at http://localhost:8000/health.\n- Omnigent uses MoonMind's existing postgres service.\n- No second Postgres service is added for Omnigent.\n- Omnigent has its own Postgres database and user.\n- omnigent-db-init is idempotent and works with existing postgres-data volumes.\n- .env-template includes MoonMind API port config and Omnigent config.\n- omnigent service uses env_file: .env.\n- omnigent-data volume persists Omnigent artifacts and admin credentials.\n- Optional omnigent-host service is behind the omnigent-host profile.\n- omnigent-host can be configured via deploy/omnigent/host-config.yaml.\n- Tests validate the compose topology and env-template additions.\n- Docs explain startup, ports, logs, health checks, and host profile usage.\n\nSuggested PR Breakdown\n\nPR 1: Port and env scaffolding\n\n- Change MoonMind API host port to ${MOONMIND_API_HOST_PORT:-7000}:8000.\n- Add .env-template values.\n- Update tests for port change.\n- Update docs for new MoonMind API URL.\n\nPR 2: Omnigent server with shared Postgres\n\n- Add omnigent-db-init.\n- Add omnigent service.\n- Add omnigent-data volume.\n- Add compose topology tests.\n- Add docs for Omnigent server startup.\n\nPR 3: Optional Omnigent host\n\n- Add deploy/omnigent/host-config.yaml.\n- Add omnigent-host profile service.\n- Add omnigent-host-state volume.\n- Add tests for profile-gated host service.\n- Add docs for host startup and validation.\n\nPR 4: Polish and troubleshooting\n\n- Add troubleshooting for GHCR auth.\n- Add troubleshooting for existing volumes.\n- Add troubleshooting for port conflicts.\n- Add rollback notes.\n"
+  },
+  "sourceDocumentClass": "imperative-override",
+  "extractedAt": "2026-06-27T21:15:23Z",
+  "designSummary": "The design adds Omnigent to MoonMind's Docker Compose deployment while preserving MoonMind's internal service contract. MoonMind's API moves to host port 7000 so Omnigent can own host port 8000, and both services share the existing Postgres container with separate Omnigent database credentials. The integration also defines persistent Omnigent storage, optional host registration through a Compose profile, namespaced environment configuration, tests, documentation, validation, troubleshooting, and rollback guidance. Non-goals keep MoonMind's existing service topology intact, avoid schema merging, avoid mandatory Omnigent host/cloud sandbox setup, and defer SSO/OIDC implementation beyond exposed configuration.",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "MoonMind host API port moves to 7000",
+      "type": "requirement",
+      "source_section": "Implementation Plan / Change MoonMind API host port",
+      "explanation": "The api service must publish ${MOONMIND_API_HOST_PORT:-7000}:8000, preserving the container port and internal api:8000 URLs."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "MoonMind port is configurable from .env-template",
+      "type": "configuration",
+      "source_section": "Implementation Plan / Change MoonMind API host port",
+      "explanation": ".env-template must include MOONMIND_API_HOST_PORT=7000 and docs/scripts that describe localhost:8000 for MoonMind must move to localhost:7000."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Omnigent service owns host port 8000",
+      "type": "integration",
+      "source_section": "Summary / Goals / Omnigent server",
+      "explanation": "The omnigent server service must be reachable from the host at http://localhost:8000 while listening on container port 8000."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Omnigent configuration uses prefixed environment variables",
+      "type": "configuration",
+      "source_section": "Implementation Plan / Omnigent-specific env vars",
+      "explanation": "Omnigent settings must live in the existing .env flow with OMNIGENT_* names to avoid collisions with MoonMind's shared Postgres settings."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Omnigent reuses the existing postgres service",
+      "type": "integration",
+      "source_section": "Goals / Shared Postgres",
+      "explanation": "The Compose topology must not add a second Postgres service for Omnigent and must use the existing postgres hostname on local-network."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Omnigent database and role are separate",
+      "type": "state-model",
+      "source_section": "Goals / Separate database and role",
+      "explanation": "Omnigent must use its own database and login role rather than MoonMind's primary database/schema."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Database initialization is idempotent for existing volumes",
+      "type": "migration",
+      "source_section": "Implementation Plan / omnigent-db-init",
+      "explanation": "A one-shot omnigent-db-init service must create the Omnigent role/database only when missing, depend on a healthy Postgres service, and be safe to rerun."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Omnigent DATABASE_URL is explicit and prefixed",
+      "type": "security",
+      "source_section": "Implementation Plan / Omnigent server service",
+      "explanation": "The server must build DATABASE_URL from OMNIGENT_POSTGRES_* variables and fail through Compose interpolation when the Omnigent password is not supplied."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Omnigent server persists artifacts and admin credentials",
+      "type": "artifact",
+      "source_section": "Goals / Server persistence",
+      "explanation": "omnigent-data must mount at /data so artifacts and /data/admin-credentials survive container restarts."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Omnigent auth defaults to built-in accounts",
+      "type": "security",
+      "source_section": "Non-goals / Auth configuration",
+      "explanation": "Built-in accounts mode is the default, OIDC/header auth is only exposed through environment variables, and SSO/OIDC implementation is not part of this issue."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Optional server config example is non-secret",
+      "type": "artifact",
+      "source_section": "Implementation Plan / Optional server config",
+      "explanation": "deploy/omnigent/server-config.example.yaml should document non-secret server settings and future sandbox placeholders without requiring a config file for first pass startup."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Omnigent host is optional and profile-gated",
+      "type": "requirement",
+      "source_section": "Goals / Optional host",
+      "explanation": "The omnigent-host service must exist behind the omnigent-host Compose profile so default deployments do not require it."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Omnigent host starts the host process",
+      "type": "integration",
+      "source_section": "Background / Host image command",
+      "explanation": "Because the host image defaults to an inert command, Compose must override it with [\"omnigent\", \"host\"]."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Host server URL comes from config file",
+      "type": "configuration",
+      "source_section": "Implementation Plan / Host config",
+      "explanation": "deploy/omnigent/host-config.yaml must set server: http://omnigent:8000 and be mounted into OMNIGENT_CONFIG_HOME."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Host config and state mounts do not conflict",
+      "type": "constraint",
+      "source_section": "Implementation Plan / Host mount note",
+      "explanation": "The host config bind mount must not be hidden by a named volume over the same directory; state belongs under a separate path/volume."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Host supports local workspace and optional provider keys",
+      "type": "integration",
+      "source_section": "Implementation Plan / Host service env",
+      "explanation": "The host service should pass optional LLM provider keys from .env and mount ./omnigent_workspaces for runtime workspaces without configuring managed cloud sandboxes."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Compose topology and env-template have regression tests",
+      "type": "test",
+      "source_section": "Implementation Plan / Add tests",
+      "explanation": "Tests must parse docker-compose.yaml and .env-template to verify ports, services, dependencies, profiles, volumes, and prefixed Omnigent env vars."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Existing MoonMind topology stays intact",
+      "type": "constraint",
+      "source_section": "Non-goals",
+      "explanation": "The change must not remove MoonMind's existing Postgres, Temporal, Keycloak, MinIO, worker setup, or internal API assumptions."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Operator documentation covers startup and runtime checks",
+      "type": "observability",
+      "source_section": "Implementation Plan / Update docs",
+      "explanation": "Docs must cover ports, default startup, optional host profile startup, logs, health checks, and first admin credential discovery."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Manual validation covers fresh, existing, and host-profile deployments",
+      "type": "migration",
+      "source_section": "Manual Validation Plan",
+      "explanation": "Validation steps must prove fresh stacks, existing Postgres volumes, and profile-enabled host registration work as intended."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Rollback and cleanup avoid accidental data loss",
+      "type": "migration",
+      "source_section": "Rollback Plan",
+      "explanation": "Rollback must restore MoonMind's host port, remove/disable Omnigent services, and keep destructive DB/volume cleanup optional and explicit."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Troubleshooting covers expected operational risks",
+      "type": "observability",
+      "source_section": "Risks and Mitigations",
+      "explanation": "Docs or validation guidance must address GHCR auth, existing-volume init behavior, port conflicts, host config mount conflicts, and auth-mode confusion."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Move MoonMind API host port to 7000",
+      "shortName": "moonmind-port-scaffolding",
+      "description": "As a local MoonMind operator, I need MoonMind's API and dashboard host entrypoint to move from localhost:8000 to localhost:7000 without changing internal service communication, so Omnigent can use host port 8000 in the same Compose stack.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-968: Omnigent Docker Compose",
+        "sections": [
+          "Summary",
+          "Goals",
+          "Implementation Plan / Change MoonMind API host port"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Run docker compose config and the targeted compose/env unit tests, then start the API stack and verify curl -f http://localhost:7000/healthz succeeds while internal service references still use http://api:8000.",
+      "acceptanceCriteria": [
+        "docker-compose.yaml publishes the api service as ${MOONMIND_API_HOST_PORT:-7000}:8000.",
+        "The api container port, health check, and internal api:8000 service URLs are unchanged.",
+        ".env-template contains MOONMIND_API_HOST_PORT=7000.",
+        "Developer-facing docs, onboarding references, and tests that identify MoonMind's host URL use http://localhost:7000.",
+        "No existing Postgres, Temporal, Keycloak, MinIO, worker, or internal MoonMind service topology is removed or renamed."
+      ],
+      "requirements": [
+        "Expose MoonMind API on host port 7000 by default through a namespaced environment variable.",
+        "Preserve container-local port 8000 and service-to-service communication through http://api:8000.",
+        "Update env-template, documentation, and port regression tests in the same story."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-001",
+          "ownership": "Implements the required host-port remap while preserving the internal API contract."
+        },
+        {
+          "id": "DESIGN-REQ-002",
+          "ownership": "Adds the new .env-template variable and updates operator/developer references for the new host URL."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Guards against accidental changes to MoonMind's existing internal topology while moving only the host mapping."
+        }
+      ],
+      "dependencies": [],
+      "risks": [
+        "Port assumptions may be duplicated in docs or tests outside docker-compose.yaml."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Add Omnigent server using shared Postgres",
+      "shortName": "omnigent-shared-postgres",
+      "description": "As a local MoonMind operator, I need an Omnigent server service to run beside MoonMind on localhost:8000 while reusing MoonMind's existing Postgres container with a dedicated Omnigent database, role, and persistent data volume.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-968: Omnigent Docker Compose",
+        "sections": [
+          "Summary",
+          "Goals",
+          "Implementation Plan / Omnigent env vars",
+          "Implementation Plan / omnigent-db-init",
+          "Implementation Plan / Omnigent server service"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "With STORY-001 applied, run docker compose config, run omnigent-db-init repeatedly against an existing postgres-data volume, start omnigent, and verify curl -f http://localhost:8000/health plus compose topology tests for dependencies, env vars, and volumes.",
+      "acceptanceCriteria": [
+        "docker-compose.yaml defines omnigent-db-init as a one-shot service that depends on postgres service_healthy and uses restart: \"no\".",
+        "omnigent-db-init creates the OMNIGENT_POSTGRES_USER role and OMNIGENT_POSTGRES_DB database only when missing and grants privileges without dropping data.",
+        "docker-compose.yaml defines an omnigent service that depends on postgres service_healthy and omnigent-db-init service_completed_successfully.",
+        "omnigent uses env_file: .env and constructs DATABASE_URL from OMNIGENT_POSTGRES_USER, OMNIGENT_POSTGRES_PASSWORD, and OMNIGENT_POSTGRES_DB against postgres:5432.",
+        "No Omnigent-specific postgres service is added; the existing postgres service remains the only Postgres container in the stack.",
+        "omnigent publishes ${OMNIGENT_PORT:-8000}:8000 and mounts omnigent-data at /data for artifacts and admin credentials.",
+        ".env-template includes OMNIGENT_IMAGE, OMNIGENT_IMAGE_TAG, OMNIGENT_PORT, OMNIGENT_POSTGRES_*, built-in accounts variables, optional OIDC variables, OMNIGENT_CONFIG, and Omnigent host image variables.",
+        "deploy/omnigent/server-config.example.yaml exists with non-secret sample settings and future sandbox placeholders, but the server can start without requiring a real server config file.",
+        "Tests parse docker-compose.yaml and .env-template to validate the Omnigent server topology, prefixed database env contract, idempotent init service, and omnigent-data volume."
+      ],
+      "requirements": [
+        "Provide Omnigent server on host port 8000 after MoonMind vacates that port.",
+        "Share MoonMind's existing postgres service and local-network while isolating Omnigent into its own database and role.",
+        "Use OMNIGENT_* variables for all Omnigent-specific configuration and avoid generic POSTGRES_* reuse for Omnigent settings.",
+        "Persist Omnigent artifacts and admin credentials in a dedicated Docker volume.",
+        "Expose built-in accounts and OIDC configuration without implementing SSO/OIDC behavior in this issue."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-003",
+          "ownership": "Adds the host-facing Omnigent server on port 8000."
+        },
+        {
+          "id": "DESIGN-REQ-004",
+          "ownership": "Defines namespaced .env-template settings and uses env_file: .env."
+        },
+        {
+          "id": "DESIGN-REQ-005",
+          "ownership": "Requires Omnigent to depend on and connect to the existing postgres service only."
+        },
+        {
+          "id": "DESIGN-REQ-006",
+          "ownership": "Creates a separate Omnigent database and role."
+        },
+        {
+          "id": "DESIGN-REQ-007",
+          "ownership": "Implements the repeatable omnigent-db-init service for existing and fresh volumes."
+        },
+        {
+          "id": "DESIGN-REQ-008",
+          "ownership": "Builds the server DATABASE_URL from prefixed Omnigent variables."
+        },
+        {
+          "id": "DESIGN-REQ-009",
+          "ownership": "Mounts omnigent-data at /data for artifacts and credentials."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Defaults auth to built-in accounts and only exposes OIDC knobs."
+        },
+        {
+          "id": "DESIGN-REQ-011",
+          "ownership": "Adds the optional non-secret server config example."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Adds tests for compose topology and env-template server settings."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Preserves existing MoonMind infrastructure while adding Omnigent alongside it."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "risks": [
+        "GHCR image visibility may require docker login before local validation.",
+        "Compose interpolation for required Omnigent secrets must fail clearly without leaking values."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Add optional Omnigent host profile service",
+      "shortName": "omnigent-host-profile",
+      "description": "As a local MoonMind operator, I need an optional Omnigent host service that starts only when the omnigent-host Compose profile is enabled and registers with the Omnigent server through a mounted config file.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-968: Omnigent Docker Compose",
+        "sections": [
+          "Goals",
+          "Implementation Plan / Optional Omnigent host service",
+          "Risks and Mitigations / Mount conflict"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017"
+        ]
+      },
+      "independentTest": "After STORY-002, run docker compose --profile omnigent-host config and docker compose --profile omnigent-host up -d omnigent-host, then inspect logs for the host process connecting to http://omnigent:8000 and verify tests assert the profile and config mount contract.",
+      "acceptanceCriteria": [
+        "docker-compose.yaml defines omnigent-host with profiles: [\"omnigent-host\"].",
+        "omnigent-host depends on omnigent with condition service_started and joins local-network.",
+        "omnigent-host command is [\"omnigent\", \"host\"] rather than the image's inert default command.",
+        "deploy/omnigent/host-config.yaml exists and contains server: http://omnigent:8000.",
+        "The host config file is bind-mounted read-only into /root/.omnigent/config.yaml, while omnigent-host-state is mounted at a separate state path that does not hide the config file.",
+        "omnigent-host receives optional OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, and GOOGLE_API_KEY values from .env without making cloud sandbox providers mandatory.",
+        "./omnigent_workspaces is mounted at /workspaces for host workspaces.",
+        "Tests parse docker-compose.yaml to verify the omnigent-host profile, command, config mount, and state volume."
+      ],
+      "requirements": [
+        "Keep Omnigent host disabled by default and enabled only through the omnigent-host Compose profile.",
+        "Configure the host's server URL through Omnigent's config file support rather than hardcoding it in the command.",
+        "Keep config and state storage on separate mount paths to avoid Docker mount ordering issues.",
+        "Allow local workspace and optional model-provider credentials while deferring managed cloud sandbox configuration."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-012",
+          "ownership": "Defines the profile-gated optional host service."
+        },
+        {
+          "id": "DESIGN-REQ-013",
+          "ownership": "Overrides the host image default command with the active host process."
+        },
+        {
+          "id": "DESIGN-REQ-014",
+          "ownership": "Creates and mounts the host config file with the internal Omnigent URL."
+        },
+        {
+          "id": "DESIGN-REQ-015",
+          "ownership": "Separates config and state mounts to prevent the config file from being hidden."
+        },
+        {
+          "id": "DESIGN-REQ-016",
+          "ownership": "Passes optional provider keys and mounts local workspaces without configuring cloud sandbox providers."
+        },
+        {
+          "id": "DESIGN-REQ-017",
+          "ownership": "Adds tests for the host profile, command, mounts, and volume."
+        }
+      ],
+      "dependencies": [
+        "STORY-002"
+      ],
+      "risks": [
+        "The host image's runtime CLI behavior may differ from the expected omnigent host command and should be validated with logs."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Document combined stack validation and rollback",
+      "shortName": "omnigent-operator-docs",
+      "description": "As a local or self-hosted MoonMind operator, I need documentation and validation guidance for starting, checking, troubleshooting, and rolling back the combined MoonMind plus Omnigent Compose stack without losing existing MoonMind or Omnigent data unexpectedly.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-968: Omnigent Docker Compose",
+        "sections": [
+          "Implementation Plan / Update docs",
+          "Manual Validation Plan",
+          "Rollback Plan",
+          "Risks and Mitigations",
+          "Acceptance Criteria"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-018"
+        ]
+      },
+      "independentTest": "Review docs against a fresh .env-template copy and execute documented non-destructive validation commands: docker compose config, health checks for localhost:7000 and localhost:8000, logs commands, omnigent-db-init rerun guidance, and profile-enabled host startup guidance.",
+      "acceptanceCriteria": [
+        "Documentation states MoonMind API/dashboard host access at http://localhost:7000 and Omnigent server/UI at http://localhost:8000.",
+        "Documentation includes default startup guidance for the combined stack and the explicit postgres plus omnigent-db-init plus api/omnigent sequence for existing-volume validation.",
+        "Documentation includes docker compose logs commands for omnigent and omnigent-host.",
+        "Documentation includes health checks for http://localhost:7000/healthz and http://localhost:8000/health.",
+        "Documentation explains how to find Omnigent first admin credentials from docker compose logs omnigent and notes they persist under /data/admin-credentials in the omnigent-data volume.",
+        "Documentation includes docker compose --profile omnigent-host up -d omnigent-host and expected host registration behavior.",
+        "Documentation includes rollback steps that restore MoonMind's host port, remove/disable Omnigent services, and make database/volume cleanup explicitly optional and destructive.",
+        "Troubleshooting covers GHCR auth, existing Postgres volumes, port conflicts, host config mount conflicts, and built-in accounts versus OIDC auth confusion."
+      ],
+      "requirements": [
+        "Provide operator-facing startup, logs, health-check, credentials, host-profile, manual validation, rollback, and troubleshooting documentation.",
+        "Keep destructive cleanup clearly separate from normal rollback guidance.",
+        "Make built-in accounts mode the documented default while identifying OIDC as future/operator-provided configuration."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "id": "DESIGN-REQ-019",
+          "ownership": "Documents ports, startup, logs, health checks, admin credentials, and host profile usage."
+        },
+        {
+          "id": "DESIGN-REQ-020",
+          "ownership": "Captures fresh-volume, existing-volume, and optional-host validation flows."
+        },
+        {
+          "id": "DESIGN-REQ-021",
+          "ownership": "Documents rollback and data-preserving cleanup boundaries."
+        },
+        {
+          "id": "DESIGN-REQ-022",
+          "ownership": "Documents expected troubleshooting cases from the risk list."
+        },
+        {
+          "id": "DESIGN-REQ-010",
+          "ownership": "Explains built-in accounts as default and OIDC as exposed configuration only."
+        },
+        {
+          "id": "DESIGN-REQ-018",
+          "ownership": "Warns rollback and validation must preserve MoonMind's existing infrastructure unless explicitly removed by the operator."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-002",
+        "STORY-003"
+      ],
+      "risks": [
+        "Docs can drift from compose defaults unless topology tests and examples are updated in the same implementation sequence."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-004"
+    ]
+  },
+  "recommendedFirstStory": "STORY-001",
+  "storyOutputMode": "jira",
+  "outOfScope": [
+    "Merging MoonMind and Omnigent schemas into one database.",
+    "Removing MoonMind's existing Postgres, Temporal, Keycloak, MinIO, or worker setup.",
+    "Making Omnigent host or managed cloud sandboxes mandatory for all deployments.",
+    "Implementing SSO/OIDC behavior beyond exposing configuration variables.",
+    "Performing destructive database or volume cleanup during normal rollback."
+  ]
+}
