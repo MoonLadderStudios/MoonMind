@@ -17061,9 +17061,8 @@ describe("Task Create MM-937 step hover containment", () => {
 
   beforeAll(async () => {
     const { readFileSync } = await import("node:fs");
-    const { resolve } = await import("node:path");
     dashboardCss = readFileSync(
-      resolve(__dirname, "../styles/dashboard.css"),
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
       "utf8",
     );
   });
