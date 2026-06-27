@@ -76,14 +76,13 @@ describe('WorkflowRowActionsMenu responsive layout', () => {
 });
 
 describe('Workflow list table dropdown overflow', () => {
-  it('lets table filter and action popovers overflow the table edges instead of clipping them', () => {
+  it('lets row action popovers overflow the table edges instead of clipping them', () => {
     // `overflow-x: auto` on the wrapper is coerced to `overflow-y: auto` by the
     // browser, so the wrapper clips popovers. A highly restrictive filter leaves
-    // a short table that cut the filter popover off. While a popover is open the
-    // wrapper must switch to `overflow: visible` so the popover can escape.
+    // a short table that cut the row actions popover off. While a popover is open
+    // the wrapper must switch to `overflow: visible` so the popover can escape.
     const wrapperBlock = cssRuleBlock(
       `.workflow-list-data-slab .queue-table-wrapper:has(
-        .workflow-list-header-filter-popover,
         .td-workflow-actions-popover
       )`,
     );

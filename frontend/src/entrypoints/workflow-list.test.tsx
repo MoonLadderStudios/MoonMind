@@ -41,6 +41,11 @@ describe('Workflows Entrypoint', () => {
 
   const lastExecutionListUrl = () => executionListCalls().at(-1)?.[0];
 
+  // The advanced filter drawer is the single surface that exposes the full
+  // filter UI. These helpers open it and apply the staged draft.
+  const openFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+  const applyFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
+
   it('shows the loading state while the workflow list request is pending', () => {
     fetchSpy.mockReturnValue(new Promise(() => {}) as Promise<Response>);
 
@@ -65,6 +70,45 @@ describe('Workflows Entrypoint', () => {
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
     expect(screen.queryByLabelText('Live updates')).toBeNull();
+  });
+
+  it('moves advanced filters out of every desktop table header', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    // No per-column filter icon button remains in the table headers.
+    expect(document.querySelectorAll('.workflow-list-column-filter-button')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: /No filter applied\./i })).toBeNull();
+    // A single visible Filters control opens the full filter UI instead.
+    const filtersTrigger = screen.getByRole('button', { name: 'Filters' });
+    expect(filtersTrigger).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
+
+    fireEvent.click(filtersTrigger);
+    expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
+  });
+
+  it('opens and closes the advanced filter drawer and returns focus to the trigger', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const filtersTrigger = screen.getByRole('button', { name: 'Filters' });
+    fireEvent.click(filtersTrigger);
+
+    const drawer = screen.getByRole('dialog', { name: 'Advanced filters' });
+    expect(drawer).toBeTruthy();
+    // Opening moves focus into the drawer for keyboard users.
+    await waitFor(() => {
+      expect(drawer.contains(document.activeElement)).toBe(true);
+    });
+
+    fireEvent.keyDown(drawer, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
+    await waitFor(() => {
+      expect(document.activeElement).toBe(filtersTrigger);
+    });
   });
 
   it('keeps active filter chips visible on an empty first page with active filters', async () => {
@@ -97,11 +141,11 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(await screen.findByLabelText('Status filter value'), {
       target: { value: 'completed' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    applyFilterDrawer();
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
@@ -238,14 +282,14 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Needs operator input');
     expect(screen.getAllByText('Intervention requested').length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     const statusFilter = screen.getByLabelText('Status filter value') as HTMLSelectElement;
     expect(
       Array.from(statusFilter.options).some((option) => option.value === 'intervention_requested'),
     ).toBe(true);
   });
 
-  it('separates desktop header sorting from filter popovers', async () => {
+  it('keeps header sorting independent from the advanced filter drawer', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -253,14 +297,9 @@ describe('Workflows Entrypoint', () => {
     const scheduledHeaderButton = await screen.findByRole('button', {
       name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
     });
-    const repositoryFilterButton = screen.getByRole('button', {
-      name: /Filter Repository\. No filter applied\./i,
-    });
 
-    fireEvent.click(repositoryFilterButton);
-
-    expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
-    expect(repositoryFilterButton.closest('th')?.classList.contains('is-filter-open')).toBe(true);
+    openFilterDrawer();
+    expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
     expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
     fireEvent.click(scheduledHeaderButton);
@@ -268,45 +307,48 @@ describe('Workflows Entrypoint', () => {
     await waitFor(() => {
       expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
     });
-    expect(screen.queryByRole('dialog', { name: 'Scheduled filter' })).toBeNull();
+    // Sorting does not disturb the open drawer.
+    expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
   });
 
-  it('keeps workflow filters available outside the desktop-only table layout', async () => {
+  it('exposes every advanced filter field in one drawer and applies them together', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    expect(screen.getByLabelText('Mobile ID filter value')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Skill filter value')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Title filter value')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Scheduled from')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Created from')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Finished blank values')).toBeTruthy();
+    openFilterDrawer();
+    expect(screen.getByLabelText('ID filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Skill filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Title filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Scheduled from')).toBeTruthy();
+    expect(screen.getByLabelText('Created from')).toBeTruthy();
+    expect(screen.getByLabelText('Finished blank values')).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText('Mobile ID filter value'), {
+    fireEvent.change(screen.getByLabelText('ID filter value'), {
       target: { value: 'task-123' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Status filter value'), {
+    fireEvent.change(screen.getByLabelText('Status filter value'), {
       target: { value: 'completed' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Repository filter value'), {
+    fireEvent.change(screen.getByLabelText('Repository filter value'), {
       target: { value: 'owner/repo' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Runtime filter value'), {
+    fireEvent.change(screen.getByLabelText('Runtime filter value'), {
       target: { value: 'codex_cloud' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Title filter value'), {
+    fireEvent.change(screen.getByLabelText('Title filter value'), {
       target: { value: 'Example' },
     });
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
   });
 
-  it('applies runtime and skill exclude modes from value-list popovers', async () => {
+  it('applies runtime and skill exclude modes from the drawer', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -329,24 +371,24 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(screen.getByLabelText('Runtime filter mode'), { target: { value: 'exclude' } });
     fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Runtime filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('targetRuntimeNotIn=codex_cli');
+      expect(lastExecutionListUrl()).toContain('targetRuntimeNotIn=codex_cli');
     });
     expect(screen.getByRole('button', { name: 'Runtime filter: not Codex CLI' })).toBeTruthy();
     await screen.findAllByText('Example task');
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Skill\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(screen.getByLabelText('Skill filter mode'), { target: { value: 'exclude' } });
     fireEvent.change(screen.getByLabelText('Skill filter value'), { target: { value: 'pr-resolver' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Skill filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      const url = fetchSpy.mock.calls.at(-1)?.[0];
+      const url = lastExecutionListUrl();
       expect(url).toContain('targetRuntimeNotIn=codex_cli');
       expect(url).toContain('targetSkillNotIn=pr-resolver');
     });
@@ -357,7 +399,7 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+    openFilterDrawer();
 
     const runtimeFilter = screen.getByLabelText('Runtime filter value') as HTMLSelectElement;
     expect(runtimeFilter.multiple).toBe(false);
@@ -674,13 +716,13 @@ describe('Workflows Entrypoint', () => {
     expect((await screen.findAllByText('—')).length).toBeGreaterThan(0);
   });
 
-  it('reuses the trimmed repository column filter for both the request and the query key', async () => {
+  it('reuses the trimmed repository filter for both the request and the query key', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const baselineCalls = executionListCalls().length;
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    openFilterDrawer();
     expect(screen.getAllByPlaceholderText('repo starts with…')).not.toHaveLength(0);
     expect(screen.getByLabelText('Repository filter value').getAttribute('title')).toBe(
       'Prefix match: finds repository names that start with this text.',
@@ -690,7 +732,7 @@ describe('Workflows Entrypoint', () => {
     });
 
     expect(executionListCalls().length).toBe(baselineCalls);
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Repository filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
       expect(executionListCalls().length).toBe(baselineCalls + 1);
@@ -712,12 +754,12 @@ describe('Workflows Entrypoint', () => {
     expect(executionListCalls().length).toBe(baselineCalls + 1);
   }, 10_000);
 
-  it('labels the lifecycle column filter as status and exposes canonical status options', async () => {
+  it('labels the lifecycle filter as status and exposes canonical status options', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
     // Skip the leading placeholder option that prompts the user to add a value.
     const options = Array.from(statusFilter.options)
@@ -764,7 +806,7 @@ describe('Workflows Entrypoint', () => {
     const baselineCalls = executionListCalls().length;
     fireEvent.change(statusFilter, { target: { value: 'completed' } });
     expect(executionListCalls().length).toBe(baselineCalls);
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
       expect(executionListCalls().length).toBe(baselineCalls + 1);
@@ -779,7 +821,7 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
 
     fireEvent.change(statusFilter, { target: { value: 'completed' } });
@@ -793,10 +835,10 @@ describe('Workflows Entrypoint', () => {
     expect(pillList.textContent).not.toContain('completed');
     expect(pillList.textContent).toContain('failed');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50&stateIn=failed',
       );
     });
@@ -808,88 +850,68 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
     const baselineCalls = executionListCalls().length;
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'completed' } });
     expect(executionListCalls().length).toBe(baselineCalls);
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel Status filter' }));
-    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel filters' }));
+    expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
     expect(executionListCalls().length).toBe(baselineCalls);
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'failed' } });
-    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Status filter' }), { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Advanced filters' }), { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
     expect(executionListCalls().length).toBe(baselineCalls);
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'planning' } });
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole('dialog', { name: 'Status filter' })).toBeNull();
+    fireEvent.mouseDown(document.querySelector('.workflow-list-filter-drawer-overlay') as Element);
+    expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
     expect(executionListCalls().length).toBe(baselineCalls);
   }, 10000);
 
-  it('moves focus into column filter dialogs and applies staged text filters with Enter', async () => {
+  it('moves focus into the drawer and applies staged text filters with Enter', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    const titleFilterButton = screen.getByRole('button', {
-      name: /Filter Title\. No filter applied\./i,
-    });
 
-    fireEvent.click(titleFilterButton);
+    openFilterDrawer();
+
+    // The drawer focuses its first control so keyboard users land inside it.
+    const idInput = (await screen.findByLabelText('ID filter value')) as HTMLInputElement;
+    await waitFor(() => {
+      expect(document.activeElement).toBe(idInput);
+    });
 
     const titleInput = (await screen.findByLabelText('Title filter value')) as HTMLInputElement;
-    await waitFor(() => {
-      expect(document.activeElement).toBe(titleInput);
-    });
-
     fireEvent.change(titleInput, { target: { value: 'Example' } });
-    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Title filter' }), { key: 'Enter' });
+    fireEvent.keyDown(titleInput, { key: 'Enter' });
 
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50&titleContains=Example',
       );
-      expect(screen.queryByRole('dialog', { name: 'Title filter' })).toBeNull();
-      expect(
-        screen.getByRole('button', { name: /Filter Title\. Filter active: Example\./i }),
-      ).toBeTruthy();
+      expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Title filter: Example' })).toBeTruthy();
     });
   });
 
-  it('does not apply staged filters when Enter is pressed on popover action buttons', async () => {
+  it('does not apply staged filters when Enter is pressed on drawer action buttons', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
     const baselineCalls = executionListCalls().length;
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Title\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(await screen.findByLabelText('Title filter value'), { target: { value: 'Example' } });
-    const clearButton = screen.getByRole('button', { name: 'Clear' });
-    clearButton.focus();
+    const cancelButton = screen.getByRole('button', { name: 'Cancel filters' });
+    cancelButton.focus();
 
-    fireEvent.keyDown(clearButton, { key: 'Enter' });
+    fireEvent.keyDown(cancelButton, { key: 'Enter' });
 
     expect(executionListCalls().length).toBe(baselineCalls);
     expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50');
-    expect(screen.getByRole('dialog', { name: 'Title filter' })).toBeTruthy();
-  });
-
-  it('keeps mobile filter focus from jumping to a stale desktop trigger', async () => {
-    renderWithClient(<WorkflowListPage payload={mockPayload} />);
-
-    await screen.findAllByText('Example task');
-    const desktopStatusFilter = screen.getByRole('button', {
-      name: /Filter Status\. No filter applied\./i,
-    });
-    fireEvent.click(desktopStatusFilter);
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel Status filter' }));
-
-    const mobileStatusFilter = screen.getByLabelText('Mobile Status filter value') as HTMLSelectElement;
-    mobileStatusFilter.focus();
-    fireEvent.change(mobileStatusFilter, { target: { value: 'completed' } });
-
-    expect(document.activeElement).toBe(mobileStatusFilter);
+    expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
   });
 
   it('applies status exclude semantics and removes only the selected chip', async () => {
@@ -897,13 +919,13 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(screen.getByLabelText('Status filter mode'), { target: { value: 'exclude' } });
     fireEvent.change(screen.getByLabelText('Status filter value'), { target: { value: 'canceled' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50&stateNotIn=canceled',
       );
     });
@@ -913,7 +935,7 @@ describe('Workflows Entrypoint', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove Status filter' }));
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50',
       );
     });
@@ -923,15 +945,15 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
 
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
     fireEvent.change(statusFilter, { target: { value: 'completed' } });
     fireEvent.change(statusFilter, { target: { value: 'failed' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50&stateIn=completed%2Cfailed',
       );
     });
@@ -949,7 +971,7 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(await screen.findByLabelText('Status filter mode'), { target: { value: 'exclude' } });
 
     const statusFilter = (await screen.findByLabelText('Status filter value')) as HTMLSelectElement;
@@ -957,14 +979,35 @@ describe('Workflows Entrypoint', () => {
     fireEvent.change(statusFilter, { target: { value: 'failed' } });
     fireEvent.change(statusFilter, { target: { value: 'planning' } });
     fireEvent.change(statusFilter, { target: { value: 'canceled' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toBe(
+      expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50&stateNotIn=completed%2Cfailed%2Cplanning%2Ccanceled',
       );
     });
     expect(screen.getByRole('button', { name: 'Status filter: not (completed, failed, planning +1)' })).toBeTruthy();
+  });
+
+  it('resets every active filter from the drawer', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    openFilterDrawer();
+    fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'completed' } });
+    applyFilterDrawer();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Status filter: completed' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset filters' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Status filter: completed' })).toBeNull();
+      expect(lastExecutionListUrl()).toBe('/api/executions?source=temporal&pageSize=50');
+    });
   });
 
   it('clears stale cursor state when the page size changes', async () => {
@@ -1012,24 +1055,24 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Skill\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(screen.getByLabelText('Skill filter value'), {
       target: { value: 'moonspec-implement' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Skill filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('targetSkillIn=moonspec-implement');
+      expect(lastExecutionListUrl()).toContain('targetSkillIn=moonspec-implement');
     });
     expect(screen.getByRole('button', { name: 'Skill filter: moonspec-implement' })).toBeTruthy();
     await screen.findAllByText('Example task');
 
-    fireEvent.click(screen.getByRole('button', { name: /Filter Finished\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(screen.getByLabelText('Finished blank values'), { target: { value: 'include' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Finished filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
-      expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('finishedBlank=include');
+      expect(lastExecutionListUrl()).toContain('finishedBlank=include');
     });
     expect(screen.getByRole('button', { name: 'Finished filter: blank' })).toBeTruthy();
   });
@@ -1066,7 +1109,7 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    openFilterDrawer();
 
     expect(
       (await screen.findAllByText('Facet values unavailable. Showing current page values only.')).length,
@@ -1168,6 +1211,8 @@ describe('Workflows Entrypoint', () => {
 
     expect(controlDeck).toBeTruthy();
     expect(controlDeck?.querySelector('form.workflow-list-control-grid')).toBeNull();
+    // The advanced filter trigger lives in the control deck, not the headers.
+    expect(controlDeck?.querySelector('.workflow-list-filter-trigger')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
@@ -1185,7 +1230,7 @@ describe('Workflows Entrypoint', () => {
     expect(pageSizeLabel?.classList.contains('queue-page-size-selector')).toBe(true);
     expect(pageSizeLabel?.classList.contains('queue-inline-filter')).toBe(false);
     expect(tableWrapper).toBeTruthy();
-    // The slab intentionally allows overflow so the column filter popover
+    // The slab intentionally allows overflow so the row actions popover
     // can extend below the table without being clipped.
     expect(getComputedStyle(dataSlab as HTMLElement).overflow).toBe('visible');
     expect(getComputedStyle(tableWrapper as HTMLElement).overflowX).toBe('auto');
@@ -1233,7 +1278,7 @@ describe('Workflows Entrypoint', () => {
 
     const dataSlabStyles = getComputedStyle(dataSlab);
     expect(dataSlabStyles.gap).toBe('0px');
-    // The slab intentionally allows overflow so the column filter popover
+    // The slab intentionally allows overflow so the row actions popover
     // can extend below the table without being clipped by the data slab.
     expect(dataSlabStyles.overflow).toBe('visible');
     expect(dataSlabStyles.paddingTop).toBe('0px');
@@ -1246,21 +1291,21 @@ describe('Workflows Entrypoint', () => {
     expect(tableWrapperStyles.overflowY).toBe('visible');
   });
 
-  it('shows clickable active column filter chips and removes individual filters from the chip row', async () => {
+  it('shows clickable active filter chips and removes individual filters from the chip row', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(await screen.findByLabelText('Status filter value'), { target: { value: 'completed' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Status filter' }));
+    applyFilterDrawer();
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Repository\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(screen.getByLabelText('Repository filter value'), { target: { value: 'owner/repo' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Repository filter' }));
+    applyFilterDrawer();
     await screen.findAllByText('Example task');
-    fireEvent.click(screen.getByRole('button', { name: /Filter Runtime\. No filter applied\./i }));
+    openFilterDrawer();
     fireEvent.change(screen.getByLabelText('Runtime filter value'), { target: { value: 'codex_cli' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply Runtime filter' }));
+    applyFilterDrawer();
 
     await waitFor(() => {
       const activeFilterText = document.querySelector('.workflow-list-filter-chips')?.textContent || '';
@@ -1270,17 +1315,21 @@ describe('Workflows Entrypoint', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Repository filter: owner/repo' }));
-    expect(screen.getByRole('dialog', { name: 'Repository filter' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
     await waitFor(() => {
       expect(lastExecutionListUrl()).toBe(
         '/api/executions?source=temporal&pageSize=50&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cli',
       );
     });
+    // The drawer opens focused on the chip's field.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByLabelText('Repository filter value'));
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove Status filter' }));
 
     await waitFor(() => {
-      fireEvent.click(screen.getByRole('button', { name: /Filter Status\. No filter applied\./i }));
+      openFilterDrawer();
       expect((screen.getByLabelText('Status filter value') as HTMLSelectElement).value).toBe('');
     });
   }, 10000);
