@@ -16300,6 +16300,73 @@ describe("Task Create governed Tool authoring", () => {
     });
   });
 
+  it("does not derive Git after clearing the repository with a default configured", async () => {
+    toolDiscoveryResponse = {
+      ok: true,
+      json: async () => ({
+        tools: [
+          {
+            name: "jira.get_issue",
+            description: "Fetch a Jira issue.",
+            inputSchema: { type: "object" },
+            requiredCapabilities: ["jira"],
+          },
+        ],
+      }),
+    } as Response;
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    fireEvent.change(await screen.findByLabelText(/GitHub Repo/), {
+      target: { value: "" },
+    });
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    fireEvent.change(within(step).getByLabelText("Instructions"), {
+      target: { value: "Fetch the Jira issue without repository checkout." },
+    });
+    selectStepType(step, "Tool");
+    fireEvent.click(
+      await within(step).findByRole("button", { name: /jira.get_issue/ }),
+    );
+    fireEvent.change(within(step).getByLabelText("Tool Inputs (JSON object)"), {
+      target: { value: '{"issueKey":"MM-945"}' },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        repository?: string;
+        requiredCapabilities?: string[];
+        task: {
+          git?: Record<string, unknown>;
+          steps: Array<{ tool?: Record<string, unknown> }>;
+        };
+      };
+    };
+    expect(request.payload.repository).toBeUndefined();
+    expect(request.payload.requiredCapabilities).toEqual([
+      "codex_cli",
+      "gh",
+      "jira",
+    ]);
+    expect(request.payload.task.git).toBeUndefined();
+    expect(request.payload.task.steps[0]?.tool).toEqual({
+      type: "tool",
+      id: "jira.get_issue",
+      inputs: { issueKey: "MM-945" },
+      requiredCapabilities: ["jira"],
+    });
+  });
+
   it("submits an authored MM-577 Skill step with agentic controls", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 

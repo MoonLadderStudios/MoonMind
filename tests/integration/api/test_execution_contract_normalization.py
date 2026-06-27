@@ -223,6 +223,17 @@ def test_mm945_explicit_git_capability_remains_authoritative_without_repository(
     assert result["requiredCapabilities"] == ["git", "codex"]
 
 
+def test_mm945_malformed_workflow_node_raises_contract_error_not_attribute_error() -> None:
+    with pytest.raises(WorkflowContractError, match="task.instructions is required"):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload={
+                "workflow": "malformed",
+                "requiredCapabilities": ["jira"],
+            },
+        )
+
+
 def test_mm569_unresolved_preset_submission_rejected_with_field_path() -> None:
     with pytest.raises(WorkflowContractError) as excinfo:
         build_canonical_workflow_view(

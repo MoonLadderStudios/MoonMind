@@ -6976,8 +6976,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const branchLookupEndpoint = normalizeMoonMindApiPath(
     dashboardConfig.sources?.github?.branches,
   );
+  const submittedRepository = repository.trim();
   const selectedRepositoryForBranchLookup =
-    repository.trim() || defaultRepository;
+    submittedRepository || defaultRepository;
   const branchLookupRepository = canLookupRepositoryBranches(
     selectedRepositoryForBranchLookup,
   )
@@ -7007,7 +7008,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }, [branchOptionsQuery.data?.defaultBranch]);
   const effectiveBranch =
     branch.trim() ||
-    (!branchTouched && pageMode.mode === "create" ? defaultBranch : "");
+    (!branchTouched && pageMode.mode === "create" && submittedRepository
+      ? defaultBranch
+      : "");
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
       branchOptionsQuery.isSuccess &&
@@ -9588,7 +9591,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       toolRequiredCapabilities,
       explicitStepCapabilities,
       templateCapabilities,
-      repositoryBacked: Boolean(normalizedRepository || effectiveBranch),
+      repositoryBacked: Boolean(normalizedRepository),
     });
 
     const normalizedTaskTool = primaryStepTool;
@@ -9695,7 +9698,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             },
           }
         : {}),
-      ...(effectiveBranch
+      ...(normalizedRepository && effectiveBranch
         ? {
             git: {
               branch: effectiveBranch,
