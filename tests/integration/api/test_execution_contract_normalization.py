@@ -9,6 +9,7 @@ Acceptance scenarios covered:
   SC-002  recover_from_failed_step without resume block → WorkflowContractError
   SC-003  resume block with wrong recovery.kind → WorkflowContractError
   SC-006  workflow.git.targetBranch stripped as active authored branch input
+  MM-945  git capability derived only from repository-backed execution context
 """
 from __future__ import annotations
 
@@ -46,6 +47,12 @@ def _workflow_payload(workflow_overrides: dict) -> dict:
         **_BASE_PAYLOAD,
         "workflow": {**_BASE_PAYLOAD["workflow"], **workflow_overrides},
     }
+
+
+def _workflow_payload_without_repository(workflow_overrides: dict) -> dict:
+    payload = _workflow_payload(workflow_overrides)
+    payload.pop("repository", None)
+    return payload
 
 
 def _workflow_step_payload(*steps: dict) -> dict:
@@ -148,6 +155,83 @@ def test_mm641_task_git_branch_remains_the_active_authored_branch() -> None:
     assert result["workflow"]["git"]["branch"] == "feature/mm-641-create-page"
     assert result["workflow"]["publish"]["mode"] == "branch"
     assert "targetBranch" not in result["workflow"]["git"]
+
+
+def test_mm945_document_only_workflow_without_repository_does_not_derive_git() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload_without_repository(
+            {
+                "publish": {"mode": "none"},
+                "reportOutput": {"enabled": True},
+            }
+        ),
+    )
+
+    assert result["repository"] is None
+    assert "git" not in result["requiredCapabilities"]
+    assert result["requiredCapabilities"] == ["codex"]
+
+
+def test_mm945_jira_only_step_without_repository_does_not_derive_git() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload_without_repository(
+            {
+                "publish": {"mode": "none"},
+                "steps": [
+                    {
+                        "type": "tool",
+                        "instructions": "Fetch Jira issue context.",
+                        "tool": {
+                            "type": "tool",
+                            "id": "jira.get_issue",
+                            "inputs": {"issueKey": "MM-945"},
+                            "requiredCapabilities": ["jira"],
+                        },
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert result["repository"] is None
+    assert result["requiredCapabilities"] == ["codex", "jira"]
+
+
+def test_mm945_pr_publish_without_repository_derives_gh_not_git() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload=_workflow_payload_without_repository({"publish": {"mode": "pr"}}),
+    )
+
+    assert result["repository"] is None
+    assert "git" not in result["requiredCapabilities"]
+    assert result["requiredCapabilities"] == ["codex", "gh"]
+
+
+def test_mm945_explicit_git_capability_remains_authoritative_without_repository() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            **_workflow_payload_without_repository({"publish": {"mode": "none"}}),
+            "requiredCapabilities": ["git"],
+        },
+    )
+
+    assert result["repository"] is None
+    assert result["requiredCapabilities"] == ["git", "codex"]
+
+
+def test_mm945_malformed_workflow_node_raises_contract_error_not_attribute_error() -> None:
+    with pytest.raises(WorkflowContractError, match="task.instructions is required"):
+        build_canonical_workflow_view(
+            job_type="task",
+            payload={
+                "workflow": "malformed",
+                "requiredCapabilities": ["jira"],
+            },
+        )
 
 
 def test_mm569_unresolved_preset_submission_rejected_with_field_path() -> None:

@@ -2785,6 +2785,7 @@ function deriveRequiredCapabilities(args: {
   runtimeMode: string;
   stepRuntimeModes: string[];
   publishMode: string;
+  repositoryBacked: boolean;
   taskSkillRequiredCapabilities: string[];
   stepSkillRequiredCapabilities: string[];
   toolRequiredCapabilities: string[];
@@ -2796,7 +2797,7 @@ function deriveRequiredCapabilities(args: {
       [
         args.runtimeMode,
         ...args.stepRuntimeModes,
-        "git",
+        ...(args.repositoryBacked ? ["git"] : []),
         ...(args.publishMode === "pr" ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
         ...args.stepSkillRequiredCapabilities,
@@ -6975,8 +6976,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const branchLookupEndpoint = normalizeMoonMindApiPath(
     dashboardConfig.sources?.github?.branches,
   );
+  const submittedRepository = repository.trim();
   const selectedRepositoryForBranchLookup =
-    repository.trim() || defaultRepository;
+    submittedRepository || defaultRepository;
   const branchLookupRepository = canLookupRepositoryBranches(
     selectedRepositoryForBranchLookup,
   )
@@ -7006,7 +7008,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }, [branchOptionsQuery.data?.defaultBranch]);
   const effectiveBranch =
     branch.trim() ||
-    (!branchTouched && pageMode.mode === "create" ? defaultBranch : "");
+    (!branchTouched && pageMode.mode === "create" && submittedRepository
+      ? defaultBranch
+      : "");
   const selectedBranchIsStale = Boolean(
     branch.trim() &&
       branchOptionsQuery.isSuccess &&
@@ -8699,15 +8703,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       setIsSubmitting(false);
       releaseSubmitArrowExit();
     };
-    const normalizedRepository = repository.trim() || defaultRepository;
-    if (!normalizedRepository) {
-      setSubmitMessage(
-        "Repository is required because no system default repository is configured.",
-      );
-      clearSubmitBusy();
-      return;
-    }
-    if (!isValidRepositoryInput(normalizedRepository)) {
+    const normalizedRepository = repository.trim();
+    if (normalizedRepository && !isValidRepositoryInput(normalizedRepository)) {
       setSubmitMessage(
         "Repository must be owner/repo, https://<host>/<path>, or git@<host>:<path> (token-free).",
       );
@@ -9594,6 +9591,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       toolRequiredCapabilities,
       explicitStepCapabilities,
       templateCapabilities,
+      repositoryBacked: Boolean(normalizedRepository),
     });
 
     const normalizedTaskTool = primaryStepTool;
@@ -9700,7 +9698,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             },
           }
         : {}),
-      ...(effectiveBranch
+      ...(normalizedRepository && effectiveBranch
         ? {
             git: {
               branch: effectiveBranch,
@@ -9724,7 +9722,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       priority: effectivePriority,
       maxAttempts: effectiveMaxAttempts,
       payload: {
-        repository: normalizedRepository,
+        ...(normalizedRepository ? { repository: normalizedRepository } : {}),
         ...(mergedCapabilities.length > 0
           ? { requiredCapabilities: mergedCapabilities }
           : {}),

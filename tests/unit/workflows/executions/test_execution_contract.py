@@ -1112,6 +1112,83 @@ def test_mm569_tool_step_required_capabilities_aggregate_into_canonical_required
     assert "jira" in result["requiredCapabilities"]
 
 
+def test_required_capabilities_do_not_derive_git_without_repository_context() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Fetch the Jira issue only.",
+                "publish": {"mode": "none"},
+                "steps": [tool_step()],
+            },
+        },
+    )
+
+    assert result["repository"] is None
+    assert result["requiredCapabilities"] == ["codex_cli", "jira"]
+
+
+def test_pr_publish_derives_gh_without_implicit_git_for_non_repository_workflow() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Prepare a Jira-only report.",
+                "publish": {"mode": "pr"},
+            },
+        },
+    )
+
+    assert "gh" in result["requiredCapabilities"]
+    assert "git" not in result["requiredCapabilities"]
+
+
+def test_required_capabilities_derive_git_from_repository_or_git_context() -> None:
+    repository_result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Run repository-backed work.",
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+    git_context_result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Run branch-backed work.",
+                "git": {"branch": "feature/mm-945"},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+
+    assert "git" in repository_result["requiredCapabilities"]
+    assert "git" in git_context_result["requiredCapabilities"]
+
+
+def test_explicit_git_required_capability_is_preserved_without_repository_context() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "targetRuntime": "codex_cli",
+            "requiredCapabilities": ["git"],
+            "task": {
+                "instructions": "Run explicit Git-capability work.",
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+
+    assert result["requiredCapabilities"] == ["git", "codex_cli"]
+
+
 def test_skill_metadata_required_capabilities_aggregate_into_canonical_required() -> None:
     result = build_canonical_workflow_view(
         job_type="task",

@@ -11691,10 +11691,6 @@ class CodexWorker:
     ) -> str | None:
         """Fail-closed policy guard for repository + capability requirements."""
 
-        repository = str(canonical_payload.get("repository") or "").strip()
-        if not repository:
-            return "repository is required for task execution"
-
         required_raw = canonical_payload.get("requiredCapabilities")
         if not isinstance(required_raw, list):
             return "requiredCapabilities must be a non-empty list"
@@ -11703,6 +11699,9 @@ class CodexWorker:
         }
         if not required:
             return "requiredCapabilities must include at least one capability"
+        repository = str(canonical_payload.get("repository") or "").strip()
+        if "git" in required and not repository:
+            return "repository is required for git task execution"
 
         available = {
             str(item).strip().lower()

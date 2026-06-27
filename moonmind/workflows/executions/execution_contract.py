@@ -2203,8 +2203,8 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    repository: str = Field(
-        ...,
+    repository: str | None = Field(
+        None,
         alias="repository",
         validation_alias=AliasChoices("repository", "repo"),
     )
@@ -2520,12 +2520,17 @@ def build_canonical_workflow_view(
             },
         }
 
+    workflow_node = canonical.get("workflow")
+    if not isinstance(workflow_node, dict):
+        workflow_node = {}
+        canonical["workflow"] = workflow_node
+
     target_runtime = (
         _normalize_runtime_value(
             canonical.get("targetRuntime"), field_name="targetRuntime"
         )
         or _normalize_runtime_value(
-            ((canonical.get("workflow") or {}).get("runtime") or {}).get("mode"),
+            (workflow_node.get("runtime") or {}).get("mode"),
             field_name="workflow.runtime.mode",
         )
         or resolved_default_runtime
@@ -2533,10 +2538,10 @@ def build_canonical_workflow_view(
     if target_runtime == "universal":
         target_runtime = resolved_default_runtime
 
-    runtime_node = (canonical.get("workflow") or {}).get("runtime")
+    runtime_node = workflow_node.get("runtime")
     if not isinstance(runtime_node, dict):
         runtime_node = {}
-        canonical.setdefault("workflow", {})["runtime"] = runtime_node
+        workflow_node["runtime"] = runtime_node
     runtime_node["mode"] = target_runtime
     canonical["targetRuntime"] = target_runtime
 
@@ -2549,7 +2554,23 @@ def build_canonical_workflow_view(
         required.extend(canonical_existing)
 
     required.append(target_runtime)
-    required.append("git")
+    workflow_git_node = (
+        workflow_node.get("git") if isinstance(workflow_node, Mapping) else None
+    )
+    workflow_git = workflow_git_node if isinstance(workflow_git_node, Mapping) else {}
+    has_git_checkout_context = any(
+        _clean_optional_str(workflow_git.get(key))
+        for key in (
+            "repository",
+            "repo",
+            "branch",
+            "startingBranch",
+            "targetBranch",
+            "ref",
+        )
+    )
+    if _clean_optional_str(canonical.get("repository")) or has_git_checkout_context:
+        required.append("git")
 
     source_publish_mode = None
     if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
@@ -2564,12 +2585,8 @@ def build_canonical_workflow_view(
     publish_mode_candidate = (
         source_publish_mode
         if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE
-        else ((canonical.get("workflow") or {}).get("publish") or {}).get("mode")
+        else (workflow_node.get("publish") or {}).get("mode")
     )
-    workflow_node = canonical.get("workflow")
-    if not isinstance(workflow_node, dict):
-        workflow_node = {}
-        canonical["workflow"] = workflow_node
     workflow_payload = workflow_node
     publish_node = workflow_payload.get("publish")
     if not isinstance(publish_node, dict):

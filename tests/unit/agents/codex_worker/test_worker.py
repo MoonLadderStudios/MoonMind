@@ -5839,6 +5839,54 @@ async def test_run_once_rejects_when_required_capabilities_missing(
     assert "missing required capabilities" in queue.failed[0]
     assert handler.calls == []
 
+async def test_required_job_policy_allows_repository_less_non_git_work(
+    tmp_path: Path,
+) -> None:
+    worker = CodexWorker.__new__(CodexWorker)
+    worker._config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_capabilities=("codex", "gh", "jira"),
+    )
+
+    error = worker._validate_required_job_policy(
+        {
+            "repository": None,
+            "requiredCapabilities": ["codex", "gh", "jira"],
+        }
+    )
+
+    assert error is None
+
+
+async def test_required_job_policy_requires_repository_for_git_work(
+    tmp_path: Path,
+) -> None:
+    worker = CodexWorker.__new__(CodexWorker)
+    worker._config = CodexWorkerConfig(
+        moonmind_url="http://localhost:8000",
+        worker_id="worker-1",
+        worker_token=None,
+        poll_interval_ms=1500,
+        lease_seconds=120,
+        workdir=tmp_path,
+        worker_capabilities=("codex", "git"),
+    )
+
+    error = worker._validate_required_job_policy(
+        {
+            "repository": None,
+            "requiredCapabilities": ["codex", "git"],
+        }
+    )
+
+    assert error == "repository is required for git task execution"
+
+
 async def test_run_once_rejects_resolve_pr_publish_none_without_pr_resolver(
     tmp_path: Path,
 ) -> None:
