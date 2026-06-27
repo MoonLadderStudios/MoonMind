@@ -101,3 +101,19 @@ class ManagedSessionStore:
             if record.status not in TERMINAL_MANAGED_SESSION_STATUSES:
                 records.append(record)
         return records
+
+    def iter_all(self) -> list[CodexManagedSessionRecord]:
+        """Return every readable managed-session record in the store."""
+        self.store_root.mkdir(parents=True, exist_ok=True)
+        records: list[CodexManagedSessionRecord] = []
+        for path in self.store_root.glob("*.json"):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            records.append(CodexManagedSessionRecord(**data))
+        return records
+
+    def delete(self, session_id: str) -> None:
+        path = self._resolve_path(session_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
