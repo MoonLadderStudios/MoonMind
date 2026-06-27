@@ -306,6 +306,7 @@ def test_mm_949_cleanup_emits_progress_during_filesystem_walk(
     _touch_old(run_root)
     (run_root / "repo").mkdir()
     (run_root / "repo" / "README.md").write_text("done\n", encoding="utf-8")
+    os.utime(run_root, (OLD.timestamp(), OLD.timestamp()))
     run_store, session_store = _stores(root)
     run_store.save(_run("run-1", "completed", root=root))
     progress: list[dict[str, object]] = []

@@ -8464,11 +8464,15 @@ class TemporalAgentRuntimeActivities:
             docker_reference_provider=(
                 None if docker_state is None else lambda: docker_state
             ),
-            progress_callback=lambda progress: temporal_activity.heartbeat(
-                {
-                    "activityType": "agent_runtime.cleanup_managed_runtime_files",
-                    **dict(progress),
-                }
+            progress_callback=(
+                lambda progress: temporal_activity.heartbeat(
+                    {
+                        "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                        **dict(progress),
+                    }
+                )
+                if temporal_activity.in_activity()
+                else None
             ),
         )
         return result.to_dict()
