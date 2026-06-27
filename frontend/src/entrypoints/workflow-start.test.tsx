@@ -24,6 +24,7 @@ import {
   buildCapabilityChips,
   CAPABILITY_CATALOG,
   capabilityChipProvenanceLabel,
+  deriveRequiredCapabilities,
   LIQUID_GL_OPTIONS,
   preferredTemplate,
   resolveDefaultProviderProfileId,
@@ -17094,6 +17095,60 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
     const chip = requireChip(chips, "qdrant");
     expect(chip.label).toBe("qdrant");
     expect(chip.removable).toBe(true);
+  });
+});
+
+describe("MM-945 required capability derivation", () => {
+  const baseDerivation = {
+    runtimeMode: "codex_cli",
+    stepRuntimeModes: [],
+    publishMode: "none",
+    repositoryBackedExecution: false,
+    taskSkillRequiredCapabilities: [],
+    stepSkillRequiredCapabilities: [],
+    explicitStepCapabilities: [],
+    templateCapabilities: [],
+  };
+
+  it("does not derive git for document-only or Jira-only workflows", () => {
+    expect(deriveRequiredCapabilities(baseDerivation)).toEqual(["codex_cli"]);
+
+    expect(
+      deriveRequiredCapabilities({
+        ...baseDerivation,
+        taskSkillRequiredCapabilities: ["jira"],
+      }),
+    ).toEqual(["codex_cli", "jira"]);
+  });
+
+  it("derives git only for repository-backed execution while PR publish still derives gh", () => {
+    expect(
+      deriveRequiredCapabilities({
+        ...baseDerivation,
+        publishMode: "pr",
+        repositoryBackedExecution: true,
+      }),
+    ).toEqual(["codex_cli", "git", "gh"]);
+
+    expect(
+      deriveRequiredCapabilities({
+        ...baseDerivation,
+        repositoryBackedExecution: true,
+      }),
+    ).toEqual(["codex_cli", "git"]);
+  });
+
+  it("keeps explicit and generated capability sources additive", () => {
+    expect(
+      deriveRequiredCapabilities({
+        ...baseDerivation,
+        stepRuntimeModes: ["gemini_cli"],
+        taskSkillRequiredCapabilities: ["JIRA"],
+        stepSkillRequiredCapabilities: ["docker"],
+        explicitStepCapabilities: ["git"],
+        templateCapabilities: ["UNITY"],
+      }),
+    ).toEqual(["codex_cli", "gemini_cli", "JIRA", "docker", "git", "unity"]);
   });
 });
 

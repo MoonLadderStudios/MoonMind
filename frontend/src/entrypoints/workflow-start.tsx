@@ -2752,10 +2752,11 @@ function validateJiraImageAttachment(
   return null;
 }
 
-function deriveRequiredCapabilities(args: {
+export function deriveRequiredCapabilities(args: {
   runtimeMode: string;
   stepRuntimeModes: string[];
   publishMode: string;
+  repositoryBackedExecution: boolean;
   taskSkillRequiredCapabilities: string[];
   stepSkillRequiredCapabilities: string[];
   explicitStepCapabilities: string[];
@@ -2766,7 +2767,7 @@ function deriveRequiredCapabilities(args: {
       [
         args.runtimeMode,
         ...args.stepRuntimeModes,
-        "git",
+        ...(args.repositoryBackedExecution ? ["git"] : []),
         ...(args.publishMode === "pr" ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
         ...args.stepSkillRequiredCapabilities,
@@ -9254,6 +9255,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     const templateCapabilities = submissionAppliedTemplates.flatMap(
       (entry) => entry.capabilities || [],
     );
+    const repositoryBackedExecution =
+      effectivePublishMode === "pr" ||
+      effectivePublishMode === "branch" ||
+      Boolean(effectiveBranch);
     // MM-936: Explicit step capabilities authored via the chip selector bubble
     // into the task's normalized requiredCapabilities for every step type, not
     // only skill steps. Skill steps additionally carry them on the step payload.
@@ -9272,6 +9277,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         )
         .filter(Boolean),
       publishMode: effectivePublishMode,
+      repositoryBackedExecution,
       taskSkillRequiredCapabilities,
       stepSkillRequiredCapabilities,
       explicitStepCapabilities,

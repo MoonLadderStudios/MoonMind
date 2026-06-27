@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/migrations/env.py (score: 1.000, trust: canonical)\n    line 7: from logging.config import fileConfig\n2. api_service/test_ui_route.py (score: 1.000, trust: canonical)\n    line 1: from fastapi import APIRouter\n3. moonmind/utils/logging.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n4. moonmind/utils/env_bool.py (score: 1.000, trust: canonical)\n    line 2: from distutils.util import strtobool  # type: ignore\n5. docs/Steps/SkillGithubPrResolver.md (score: 1.000, trust: canonical)\n    line 9: The **PR Resolver** skill is invoked from the dashboard (via Temporal `AgentTaskWorkflow`) to:\n6. docs/Artifacts/ReportArtifacts.md (score: 1.000, trust: canonical)\n    line 21: - agent-authored technical writeups assembled from execution evidence\n7. docs/Security/PentestOperations.md (score: 1.000, trust: canonical)\n    line 57: ```json\n8. docs/tmp/DocumentationArchitectureMigrationPlan.md (score: 1.000, trust: canonical)\n    line 5: > **Status:** Superseded / closed by MM-928 (opened 2026-06-24; closed 2026-06-26). Time-bound; lives in `docs/tmp/` per Constitution **XV. Canonical Documentation Separates Desired State from Migration Backlog**.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/migrations/env.py",
+      "text": "line 7: from logging.config import fileConfig",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/test_ui_route.py",
+      "text": "line 1: from fastapi import APIRouter",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/logging.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/utils/env_bool.py",
+      "text": "line 2: from distutils.util import strtobool  # type: ignore",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 2,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Steps/SkillGithubPrResolver.md",
+      "text": "line 9: The **PR Resolver** skill is invoked from the dashboard (via Temporal `AgentTaskWorkflow`) to:",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 9,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ReportArtifacts.md",
+      "text": "line 21: - agent-authored technical writeups assembled from execution evidence",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Security/PentestOperations.md",
+      "text": "line 57: ```json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 57,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/tmp/DocumentationArchitectureMigrationPlan.md",
+      "text": "line 5: > **Status:** Superseded / closed by MM-928 (opened 2026-06-24; closed 2026-06-26). Time-bound; lives in `docs/tmp/` per Constitution **XV. Canonical Documentation Separates Desired State from Migration Backlog**.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-27T08:25:21Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}

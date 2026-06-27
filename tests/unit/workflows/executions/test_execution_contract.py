@@ -1148,6 +1148,75 @@ def test_step_skill_metadata_required_capabilities_aggregate_into_canonical_requ
     assert set(result["requiredCapabilities"]) >= {"git", "gh", "jira"}
 
 
+def test_mm945_document_only_workflow_does_not_derive_git_from_repository_field() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Summarize the provided document.",
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+
+    assert result["requiredCapabilities"] == ["codex_cli"]
+
+
+def test_mm945_jira_only_workflow_keeps_jira_without_automatic_git() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Update Jira only.",
+                "skill": {
+                    "id": "jira-issue-updater",
+                    "requiredCapabilities": ["jira"],
+                },
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+
+    assert result["requiredCapabilities"] == ["codex_cli", "jira"]
+
+
+def test_mm945_repository_backed_workflow_derives_git_and_pr_derives_gh() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Open a PR.",
+                "publish": {"mode": "pr"},
+            },
+        },
+    )
+
+    assert result["requiredCapabilities"] == ["codex_cli", "git", "gh"]
+
+
+def test_mm945_branch_selection_derives_git_without_gh() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "codex_cli",
+            "task": {
+                "instructions": "Inspect a branch without publishing.",
+                "git": {"branch": "main"},
+                "publish": {"mode": "none"},
+            },
+        },
+    )
+
+    assert result["requiredCapabilities"] == ["codex_cli", "git"]
+
+
 def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
     invalid = tool_step()
     invalid["tool"].pop("id")

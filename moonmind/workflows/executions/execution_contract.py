@@ -840,6 +840,26 @@ def resolve_publish_mode_for_skill(
     publish_mode = _normalize_publish_mode(requested_mode)
     return publish_mode
 
+
+def _workflow_requires_repository_backing(
+    workflow_payload: Mapping[str, object],
+    *,
+    publish_mode: str,
+) -> bool:
+    if publish_mode in {"pr", "branch"}:
+        return True
+
+    git_node = workflow_payload.get("git")
+    git = git_node if isinstance(git_node, Mapping) else {}
+    for key in ("branch", "startingBranch"):
+        if _clean_optional_str(git.get(key)):
+            return True
+    for key in ("branch", "startingBranch"):
+        if _clean_optional_str(workflow_payload.get(key)):
+            return True
+    return False
+
+
 def _is_resolve_pr_objective(value: object) -> bool:
     """Return True when task instructions target PR resolution behavior."""
 
@@ -2549,7 +2569,6 @@ def build_canonical_workflow_view(
         required.extend(canonical_existing)
 
     required.append(target_runtime)
-    required.append("git")
 
     source_publish_mode = None
     if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
@@ -2584,6 +2603,11 @@ def build_canonical_workflow_view(
         allow_repository_publish=allows_repository_publish_for_skill_context(workflow_payload),
     )
     publish_node["mode"] = publish_mode
+    if _workflow_requires_repository_backing(
+        workflow_payload,
+        publish_mode=publish_mode,
+    ):
+        required.append("git")
     if publish_mode == "pr":
         required.append("gh")
 

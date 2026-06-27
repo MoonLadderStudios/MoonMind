@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/config/test_atlassian_settings.py (score: 1.000, trust: canonical)\n    line 18: \"ATLASSIAN_JIRA_READ_TIMEOUT_SECONDS\",\n2. tests/e2e/test_confluence_e2e.py (score: 1.000, trust: canonical)\n    line 11: # from moonmind.models.documents_models import ConfluenceLoadRequest # If needed for payload construction outside TestClient json\n3. api_service/ui_assets.py (score: 1.000, trust: canonical)\n    line 1: import json\n4. moonmind/billing/costs.py (score: 1.000, trust: canonical)\n    line 5: import json\n5. moonmind/agents/codex_worker/metrics.py (score: 1.000, trust: canonical)\n    line 22: step_index: int,\n6. moonmind/agents/codex_worker/__init__.py (score: 1.000, trust: canonical)\n    line 24: StepIdleTimeoutExceeded,\n7. moonmind/schemas/step_execution_models.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Typed Step Execution manifest contracts.\"\"\"\n8. moonmind/schemas/manifest_ingest_models.py (score: 1.000, trust: canonical)\n    line 21: \"ready\",",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/config/test_atlassian_settings.py",
+      "text": "line 18: \"ATLASSIAN_JIRA_READ_TIMEOUT_SECONDS\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 18,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/e2e/test_confluence_e2e.py",
+      "text": "line 11: # from moonmind.models.documents_models import ConfluenceLoadRequest # If needed for payload construction outside TestClient json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 11,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "api_service/ui_assets.py",
+      "text": "line 1: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/billing/costs.py",
+      "text": "line 5: import json",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 5,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/agents/codex_worker/metrics.py",
+      "text": "line 22: step_index: int,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 22,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/agents/codex_worker/__init__.py",
+      "text": "line 24: StepIdleTimeoutExceeded,",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 24,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/schemas/step_execution_models.py",
+      "text": "line 1: \"\"\"Typed Step Execution manifest contracts.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/schemas/manifest_ingest_models.py",
+      "text": "line 21: \"ready\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 21,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-27T08:24:26Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
