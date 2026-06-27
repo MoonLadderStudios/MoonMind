@@ -102,14 +102,15 @@ class ManagedRunStore:
         return records
 
     def iter_all(self) -> Iterable[ManagedRunRecord]:
-        """Return all readable run records, including terminal records."""
+        """Return all run records, including terminal records.
+
+        Unlike active reconciliation, retained-state cleanup must fail closed
+        when any durable owner record is unreadable.
+        """
         self.store_root.mkdir(parents=True, exist_ok=True)
         for path in self.store_root.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                yield ManagedRunRecord(**data)
-            except (json.JSONDecodeError, ValueError):
-                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            yield ManagedRunRecord(**data)
 
     def delete(self, run_id: str) -> None:
         """Delete a run record file if it exists."""

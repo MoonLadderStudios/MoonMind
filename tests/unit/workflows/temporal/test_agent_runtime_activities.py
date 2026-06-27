@@ -5373,6 +5373,114 @@ async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
     assert result["decisions"][0]["classification"] == "eligible"
     assert result["decisions"][0]["reason"] == "dry-run would delete"
 
+
+async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_references(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "agent_jobs"
+    run_root = runtime_root / "run-mm-949"
+    run_root.mkdir(parents=True)
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    os.utime(run_root, (old.timestamp(), old.timestamp()))
+    run_store = ManagedRunStore(runtime_root / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="run-mm-949",
+            workflowId="mm:workflow-mm-949",
+            agentId="agent-1",
+            runtimeId="codex-cli",
+            status="completed",
+            startedAt=old - timedelta(hours=1),
+            finishedAt=old,
+            workspacePath=str(run_root / "repo"),
+        )
+    )
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+
+    class _Controller:
+        async def collect_managed_runtime_cleanup_docker_references(
+            self,
+        ) -> dict[str, object]:
+            return {"activeMountPaths": [str(run_root)]}
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store,
+        session_controller=_Controller(),
+    )
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": False,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 30,
+                "artifactRetentionDays": 30,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    assert result["decisions"][0]["classification"] == "protected_active"
+    assert result["decisions"][0]["reason"] == "live Docker reference"
+    assert run_root.exists()
+
+
+async def test_agent_runtime_cleanup_managed_runtime_files_fails_closed_without_docker_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "agent_jobs"
+    run_root = runtime_root / "run-mm-949"
+    run_root.mkdir(parents=True)
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    os.utime(run_root, (old.timestamp(), old.timestamp()))
+    run_store = ManagedRunStore(runtime_root / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="run-mm-949",
+            workflowId="mm:workflow-mm-949",
+            agentId="agent-1",
+            runtimeId="codex-cli",
+            status="completed",
+            startedAt=old - timedelta(hours=1),
+            finishedAt=old,
+            workspacePath=str(run_root / "repo"),
+        )
+    )
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": False,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 30,
+                "artifactRetentionDays": 30,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    assert result["decisions"][0]["classification"] == "protected_active"
+    assert result["decisions"][0]["reason"] == "docker reference scan unavailable"
+    assert result["errors"] == ["docker reference scan unavailable"]
+    assert run_root.exists()
+
+
 @pytest.mark.asyncio
 async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(
     monkeypatch: pytest.MonkeyPatch,

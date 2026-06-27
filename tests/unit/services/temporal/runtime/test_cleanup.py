@@ -186,6 +186,23 @@ def test_mm_949_filesystem_workspace_without_records_is_ambiguous(
     assert workspace_decision.reason == "no durable owner records reference candidate"
 
 
+def test_mm_949_corrupt_owner_record_fails_closed(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+    corrupt = root / "managed_runs" / "corrupt.json"
+    corrupt.write_text("{not json", encoding="utf-8")
+
+    result = _janitor(root, run_store, session_store, dry_run=False).run()
+
+    assert result.decisions == ()
+    assert result.errors
+    assert result.errors[0].startswith("unreadable_store:")
+    assert run_root.exists()
+
+
 def test_mm_949_recent_filesystem_timestamp_prevents_deletion(tmp_path: Path) -> None:
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"

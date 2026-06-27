@@ -239,11 +239,19 @@ class ManagedRuntimeWorkspaceJanitor:
     def run(self) -> ManagedRuntimeCleanupResult:
         config = self._config
         if not config.enabled:
+            try:
+                scanned_run_records = len(tuple(self._run_store.iter_all()))
+                scanned_session_records = len(tuple(self._session_store.iter_all()))
+                errors: tuple[str, ...] = ()
+            except (OSError, ValueError) as exc:
+                scanned_run_records = 0
+                scanned_session_records = 0
+                errors = (f"unreadable_store: {exc}",)
             return ManagedRuntimeCleanupResult(
                 disabled=True,
                 dry_run=config.dry_run,
-                scanned_run_records=len(tuple(self._run_store.iter_all())),
-                scanned_session_records=len(tuple(self._session_store.iter_all())),
+                scanned_run_records=scanned_run_records,
+                scanned_session_records=scanned_session_records,
                 scanned_workspace_roots=0,
                 scanned_artifact_dirs=0,
                 protected_roots=0,
@@ -256,7 +264,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 skipped_recent=0,
                 skipped_unsafe_path=0,
                 skipped_ambiguous_owner=0,
-                errors=(),
+                errors=errors,
             )
         with _JanitorLock(config.lock_path):
             return self._run_enabled_pass()
@@ -266,7 +274,7 @@ class ManagedRuntimeWorkspaceJanitor:
         try:
             run_records = tuple(self._run_store.iter_all())
             session_records = tuple(self._session_store.iter_all())
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return self._empty_enabled_error(f"unreadable_store: {exc}")
         docker_state = self._docker_reference_state()
         if docker_state.failed:
@@ -741,10 +749,13 @@ class ManagedRuntimeWorkspaceJanitor:
         )
 
     def _rescan_blocks_delete(self, candidate: ManagedRuntimeCleanupCandidate) -> bool:
-        current = self._build_candidates(
-            tuple(self._run_store.iter_all()),
-            tuple(self._session_store.iter_all()),
-        )
+        try:
+            current = self._build_candidates(
+                tuple(self._run_store.iter_all()),
+                tuple(self._session_store.iter_all()),
+            )
+        except (OSError, ValueError):
+            return True
         for fresh in current:
             if fresh.kind == candidate.kind and fresh.path == candidate.path:
                 return self._has_active_owner(fresh)

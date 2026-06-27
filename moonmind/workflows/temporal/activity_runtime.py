@@ -1007,6 +1007,9 @@ class ManagedSessionController(Protocol):
     async def reap_orphan_session_containers(self) -> Any:
         pass
 
+    async def collect_managed_runtime_cleanup_docker_references(self) -> Any:
+        pass
+
 def _managed_runtime_artifact_root() -> Path:
     return managed_runtime_artifact_root()
 
@@ -8377,6 +8380,7 @@ class TemporalAgentRuntimeActivities:
         /,
     ) -> dict[str, Any]:
         from moonmind.workflows.temporal.runtime.cleanup import (
+            DockerReferenceState,
             ManagedRuntimeCleanupConfig,
             cleanup_managed_runtime_files,
         )
@@ -8440,10 +8444,29 @@ class TemporalAgentRuntimeActivities:
                 artifact_root=Path(config_payload.get("artifactRoot", config.artifact_root)),
             )
         session_store = ManagedSessionStore(config.runtime_store_root / "managed_sessions")
+        docker_state: DockerReferenceState | Mapping[str, object] | None = None
+        if self._session_controller is not None and hasattr(
+            self._session_controller,
+            "collect_managed_runtime_cleanup_docker_references",
+        ):
+            docker_state = await _await_with_activity_heartbeats(
+                self._session_controller.collect_managed_runtime_cleanup_docker_references(),
+                heartbeat_payload={
+                    "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                },
+            )
+        elif not config.dry_run:
+            docker_state = DockerReferenceState(
+                failed=True,
+                reason="docker reference scan unavailable",
+            )
         result = cleanup_managed_runtime_files(
             run_store=self._run_store,
             session_store=session_store,
             config=config,
+            docker_reference_provider=(
+                None if docker_state is None else lambda: docker_state
+            ),
         )
         return result.to_dict()
 
