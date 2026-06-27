@@ -2586,8 +2586,8 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
     with pytest.raises(
         RuntimeError,
         match=(
-            "pr-resolver workflow requires workflow.tool.inputs.pr or "
-            "workflow.git.startingBranch"
+            "pr-resolver workflow requires workflow.tool.inputs.pr, "
+            "workflow.tool.inputs.branch, or workflow.git.startingBranch"
         ),
     ):
         planner(
@@ -3239,6 +3239,36 @@ def test_runtime_planner_mm669_pr_head_uses_workspace_metadata_before_generated_
     )
 
     assert plan["nodes"][-1]["inputs"]["targetBranch"] == "workspace-head"
+
+def test_runtime_planner_rejects_pr_resolver_with_only_jira_instructions_and_base_branch():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "pr-resolver workflow requires workflow.tool.inputs.pr, "
+            "workflow.tool.inputs.branch, or workflow.git.startingBranch"
+        ),
+    ):
+        planner(
+            inputs={
+                "task": {
+                    "instructions": "Verify MM-940 and move to DONE if it is a PASS",
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                    },
+                    "git": {"branch": "main"},
+                    "runtime": {"mode": "gemini_cli"},
+                }
+            },
+            parameters={},
+            snapshot=snapshot,
+        )
 
 def test_runtime_planner_mm669_pr_head_ignores_legacy_top_level_target_branch():
     planner = _build_runtime_planner()

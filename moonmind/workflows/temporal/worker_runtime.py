@@ -750,12 +750,46 @@ def _derive_pr_branch_prefix(
         return _slugify_branch_prefix(selected_skill_name)
     return ""
 
+
+_PR_RESOLVER_SELECTOR_ERROR = (
+    "pr-resolver workflow requires workflow.tool.inputs.pr, "
+    "workflow.tool.inputs.branch, or workflow.git.startingBranch"
+)
+
+
+def _pr_resolver_structured_selector(
+    *,
+    task_payload: Mapping[str, Any],
+    selected_skill_inputs: Mapping[str, Any],
+) -> str:
+    git_payload = _coerce_mapping(task_payload.get("git"))
+    selected_skill_payload = (
+        _coerce_mapping(task_payload.get("tool"))
+        or _coerce_mapping(task_payload.get("skill"))
+    )
+    selected_skill_payload_inputs = _coerce_mapping(
+        selected_skill_payload.get("inputs")
+        or selected_skill_payload.get("args")
+    )
+    return _first_non_empty_text(
+        selected_skill_inputs.get("pr"),
+        selected_skill_payload_inputs.get("pr"),
+        selected_skill_inputs.get("startingBranch"),
+        selected_skill_payload_inputs.get("startingBranch"),
+        git_payload.get("startingBranch"),
+        task_payload.get("startingBranch"),
+        selected_skill_inputs.get("branch"),
+        selected_skill_payload_inputs.get("branch"),
+    )
+
+
 def _derive_pr_resolver_title(
     task_payload: Mapping[str, Any],
     selected_skill_inputs: Mapping[str, Any],
 ) -> str:
-    selected_skill_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
-        task_payload.get("skill")
+    selected_skill_payload = (
+        _coerce_mapping(task_payload.get("tool"))
+        or _coerce_mapping(task_payload.get("skill"))
     )
     selected_skill_name = str(
         selected_skill_payload.get("name")
@@ -764,22 +798,10 @@ def _derive_pr_resolver_title(
     ).strip()
     if selected_skill_name.lower() != "pr-resolver":
         return ""
-    git_payload = _coerce_mapping(task_payload.get("git"))
-    selected_skill_payload_inputs = _coerce_mapping(
-        selected_skill_payload.get("inputs")
-        or selected_skill_payload.get("args")
+    return _pr_resolver_structured_selector(
+        task_payload=task_payload,
+        selected_skill_inputs=selected_skill_inputs,
     )
-    return str(
-        git_payload.get("startingBranch")
-        or task_payload.get("startingBranch")
-        or git_payload.get("branch")
-        or task_payload.get("branch")
-        or selected_skill_inputs.get("startingBranch")
-        or selected_skill_inputs.get("branch")
-        or selected_skill_payload_inputs.get("startingBranch")
-        or selected_skill_payload_inputs.get("branch")
-        or ""
-    ).strip()
 
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
@@ -1285,35 +1307,31 @@ def _build_runtime_planner():
                     "workflow.instructions, inputs.instructions, or parameters.instructions"
                 )
 
-        if (
-            not has_explicit_instructions
-            and selected_skill_name.lower() == "pr-resolver"
-        ):
+        if selected_skill_name.lower() == "pr-resolver":
             pr_selector = str(selected_skill_inputs.get("pr") or "").strip()
-            branch_selector = str(
-                git_payload.get("startingBranch")
-                or task_payload.get("startingBranch")
-                or git_payload.get("branch")
-                or task_payload.get("branch")
-                or selected_skill_inputs.get("startingBranch")
-                or selected_skill_inputs.get("branch")
-                or ""
-            ).strip()
-            if not pr_selector and not branch_selector:
-                raise RuntimeError(
-                    "pr-resolver workflow requires workflow.tool.inputs.pr or "
-                    "workflow.git.startingBranch when workflow.instructions is not explicitly provided"
-                )
+            pr_resolver_selector = _pr_resolver_structured_selector(
+                task_payload=task_payload,
+                selected_skill_inputs=selected_skill_inputs,
+            )
+            if not pr_resolver_selector:
+                raise RuntimeError(_PR_RESOLVER_SELECTOR_ERROR)
             # Ensure the auto-generated instruction includes the PR/branch
             # selector so the agent knows which PR to target.  The selector
             # may come from git_payload rather than selected_skill_inputs, so
             # the generic " with inputs:" block above can miss it.
-            effective_selector = pr_selector or branch_selector
-            if effective_selector and not pr_selector:
-                merged_inputs = dict(selected_skill_inputs) if selected_skill_inputs else {}
+            effective_selector = pr_selector or pr_resolver_selector
+            if (
+                not has_explicit_instructions
+                and effective_selector
+                and not pr_selector
+            ):
+                merged_inputs = (
+                    dict(selected_skill_inputs) if selected_skill_inputs else {}
+                )
                 merged_inputs["pr"] = effective_selector
-                instructions = f"Execute skill '{selected_skill_name}' with inputs:\n" + json.dumps(
-                    merged_inputs, indent=2, sort_keys=True,
+                instructions = (
+                    f"Execute skill '{selected_skill_name}' with inputs:\n"
+                    + json.dumps(merged_inputs, indent=2, sort_keys=True)
                 )
 
         # --- Resolve runtime mode ---

@@ -4793,7 +4793,7 @@ def test_create_task_shaped_execution_does_not_fabricate_manual_preset_metadata(
     assert "appliedStepTemplates" not in task
     assert "source" not in task["steps"][0]
 
-def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(
+def test_create_task_shaped_execution_rejects_pr_resolver_without_structured_selector(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -4804,11 +4804,13 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
             "type": "workflow",
             "payload": {
                 "workflow": {
+                    "instructions": "Verify MM-940 and move to DONE if it is a PASS",
                     "runtime": {"mode": "gemini_cli"},
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
                     },
+                    "git": {"branch": "main"},
                 }
             },
         },
@@ -4817,8 +4819,10 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
     assert response.status_code == 422
     assert (
         response.json()["detail"]["message"]
-        == "pr-resolver workflow requires payload.workflow.instructions, payload.workflow.inputs.pr, "
-        "or payload.workflow.git.startingBranch."
+        == "pr-resolver workflow requires a structured PR selector: "
+        "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
+        "payload.workflow.tool.inputs.pr/branch, or "
+        "payload.workflow.git.startingBranch."
     )
     service.create_execution.assert_not_awaited()
 
