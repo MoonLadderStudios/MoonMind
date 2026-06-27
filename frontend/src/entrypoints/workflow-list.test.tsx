@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
@@ -184,7 +184,7 @@ describe('Workflows Entrypoint', () => {
     );
 
     const scheduledHeaderButton = await screen.findByRole('button', {
-      name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
+      name: /Updated\. Sorted descending\. Activate to sort ascending\./i,
     });
     expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
@@ -203,7 +203,7 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
-  it('renders workflow table dates with two-digit years', async () => {
+  it('exposes the exact updated timestamp with a two-digit year on hover', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -227,25 +227,50 @@ describe('Workflows Entrypoint', () => {
 
     const row = await screen.findByRole('row', { name: /Example task/ });
     const dateCells = row.querySelectorAll('.queue-table-cell-date');
-    expect(dateCells).toHaveLength(3);
-    const expectedDates = [
-      '2026-06-21T12:00:00Z',
-      '2026-06-21T12:01:00Z',
-      '2026-06-21T12:02:00Z',
-    ].map((iso) =>
-      new Date(iso).toLocaleString(undefined, {
-        year: '2-digit',
-        month: 'numeric',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-        second: '2-digit',
-      }),
-    );
-    Array.from(dateCells).forEach((cell, index) => {
-      expect(cell.textContent).toBe(expectedDates[index]);
-      expect(cell.textContent).not.toContain('2026');
+    // The scan-first table consolidates raw timestamps into a single Updated column.
+    expect(dateCells).toHaveLength(1);
+    const expectedExact = new Date('2026-06-21T12:02:00Z').toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
     });
+    const updatedCell = dateCells[0] as HTMLElement;
+    // Visible text is the relative "Updated" signal; the exact timestamp is on hover.
+    expect(updatedCell.getAttribute('title')).toBe(expectedExact);
+    expect(updatedCell.getAttribute('title')).not.toContain('2026');
+  });
+
+  it('floors relative Updated values so units roll over at the exact threshold', async () => {
+    // 1h50m before now: Math.floor -> "1h ago"; Math.round would show "2h ago".
+    // Computed against the real clock so the assertion is deterministic.
+    const closedAt = new Date(Date.now() - (1 * 3600 + 50 * 60) * 1000).toISOString();
+    const createdAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-floor',
+            source: 'temporal',
+            title: 'Floor task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            createdAt,
+            closedAt,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Floor task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    expect(updatedCell.textContent).toBe('1h ago');
   });
 
   it('does not query or render operational metrics on the workflow overview', async () => {
@@ -316,18 +341,18 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
-    const scheduledHeaderButton = await screen.findByRole('button', {
-      name: /Scheduled\. Sorted descending\. Activate to sort ascending\./i,
+    const updatedHeaderButton = await screen.findByRole('button', {
+      name: /Updated\. Sorted descending\. Activate to sort ascending\./i,
     });
 
     openFilterDrawer();
     expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
-    expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
+    expect(updatedHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
-    fireEvent.click(scheduledHeaderButton);
+    fireEvent.click(updatedHeaderButton);
 
     await waitFor(() => {
-      expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+      expect(updatedHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
     });
     // Sorting does not disturb the open drawer.
     expect(screen.getByRole('dialog', { name: 'Advanced filters' })).toBeTruthy();
@@ -730,12 +755,58 @@ describe('Workflows Entrypoint', () => {
 
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
-    const earlyLink = await screen.findByRole('link', { name: 'Early scheduled task' });
-    const lateLink = await screen.findByRole('link', { name: 'Late scheduled task' });
+    const lateTitle = (await screen.findAllByText('Late scheduled task'))[0]!;
+    const table = lateTitle.closest('table') as HTMLTableElement;
+    const earlyLink = within(table).getByRole('link', { name: 'Early scheduled task' });
+    const lateLink = within(table).getByRole('link', { name: 'Late scheduled task' });
     expect(
       lateLink.compareDocumentPosition(earlyLink) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect((await screen.findAllByText('—')).length).toBeGreaterThan(0);
+  });
+
+  it('sorts the Updated column by the displayed updated timestamp, including closedAt', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-open',
+            source: 'temporal',
+            title: 'Open later task',
+            status: 'queued',
+            state: 'scheduled',
+            rawState: 'scheduled',
+            scheduledFor: '2026-04-15T10:00:00Z',
+            createdAt: '2026-04-15T05:00:00Z',
+          },
+          {
+            taskId: 'task-closed',
+            source: 'temporal',
+            title: 'Closed latest task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            scheduledFor: '2026-04-15T01:00:00Z',
+            createdAt: '2026-04-15T00:30:00Z',
+            closedAt: '2026-04-15T20:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const closedTitle = (await screen.findAllByText('Closed latest task'))[0]!;
+    const table = closedTitle.closest('table') as HTMLTableElement;
+    const closedLink = within(table).getByRole('link', { name: 'Closed latest task' });
+    const openLink = within(table).getByRole('link', { name: 'Open later task' });
+    // Default Updated sort is descending by rowUpdatedAt (closedAt || scheduledFor || createdAt),
+    // so the completed row whose closedAt is newest sorts first even though its
+    // scheduledFor is older than the open row's scheduledFor.
+    expect(
+      closedLink.compareDocumentPosition(openLink) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('reuses the trimmed repository filter for both the request and the query key', async () => {
@@ -1510,10 +1581,13 @@ describe('Workflows Entrypoint', () => {
     const table = titleMatches
       .map((element) => element.closest('table'))
       .find((candidate): candidate is HTMLTableElement => Boolean(candidate));
-    expect(table?.querySelectorAll('col.queue-table-column-id')).toHaveLength(1);
-    expect(table?.querySelectorAll('col.queue-table-column-date')).toHaveLength(3);
-    const idCell = table?.querySelector('td.queue-table-cell-id');
-    expect(idCell?.textContent).toBe(longWorkflowId);
+    // The scan-first table leads with the Workflow column and one Updated column.
+    expect(table?.querySelectorAll('col.queue-table-column-workflow')).toHaveLength(1);
+    expect(table?.querySelectorAll('col.queue-table-column-date')).toHaveLength(1);
+    // The compact workflow id stays visible but secondary inside the Workflow cell.
+    const workflowCell = table?.querySelector('td.queue-table-cell-workflow');
+    const compactId = workflowCell?.querySelector('code.workflow-list-row-id');
+    expect(compactId?.textContent).toBe(longWorkflowId);
   });
 
   it('does not render an Actions column when workflow actions are disabled', async () => {
@@ -1547,5 +1621,96 @@ describe('Workflows Entrypoint', () => {
       String(url).endsWith('/executions/task-123'),
     );
     expect(detailCallsBefore).toHaveLength(0);
+  });
+
+  // MM-952: scan-first desktop table information architecture.
+  it('leads the desktop table with a title-first Workflow column and secondary compact id', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'mm:run:scan-first-001',
+            source: 'temporal',
+            title: 'Scan first task',
+            status: 'running',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const titleMatches = await screen.findAllByText('Scan first task');
+    const table = titleMatches
+      .map((element) => element.closest('table'))
+      .find((candidate): candidate is HTMLTableElement => Boolean(candidate)) as HTMLTableElement;
+
+    const headerLabels = Array.from(table.querySelectorAll('thead th')).map((th) => {
+      const sortButton = th.querySelector('.table-sort-button');
+      if (sortButton) return ((sortButton.getAttribute('aria-label') || '').split('.')[0] || '').trim();
+      return th.querySelector('.workflow-list-static-header')?.textContent?.trim() || '';
+    });
+
+    // The first desktop column is Workflow, not ID, and no standalone ID column remains.
+    expect(headerLabels[0]).toBe('Workflow');
+    expect(headerLabels).not.toContain('ID');
+    // Status is visible before any timestamp column.
+    expect(headerLabels.indexOf('Status')).toBeLessThan(headerLabels.indexOf('Updated'));
+
+    const workflowCell = within(table).getAllByText('Scan first task')[0]!.closest(
+      'td.queue-table-cell-workflow',
+    ) as HTMLTableCellElement;
+    // The workflow title is the primary anchor linking to the detail view.
+    const titleLink = workflowCell.querySelector('a.workflow-list-row-title');
+    expect(titleLink?.textContent).toBe('Scan first task');
+    expect(titleLink?.getAttribute('href')).toBe(
+      '/workflows/mm%3Arun%3Ascan-first-001?source=temporal',
+    );
+    // The compact workflow id stays present but secondary.
+    const compactId = workflowCell.querySelector('code.workflow-list-row-id');
+    expect(compactId?.textContent).toBe('mm:run:scan-first-001');
+  });
+
+  it('surfaces dependency and intervention next-action signals in the status/next-action area', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-attention',
+            source: 'temporal',
+            title: 'Attention task',
+            status: 'intervention_requested',
+            state: 'intervention_requested',
+            rawState: 'intervention_requested',
+            attentionRequired: true,
+            dependsOn: ['mm:dep-1'],
+            blockedOnDependencies: true,
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Attention task');
+    const nextActionCell = document.querySelector('.queue-table-cell-next-action');
+    expect(nextActionCell?.textContent).toContain('Intervention requested');
+    expect(nextActionCell?.textContent).toContain('Blocked by 1 prerequisite');
+
+    // The signals are no longer buried under the workflow title cell.
+    const workflowCell = document.querySelector('.queue-table-cell-workflow');
+    expect(workflowCell?.textContent).not.toContain('Intervention requested');
+    expect(workflowCell?.textContent).not.toContain('Blocked by 1 prerequisite');
+
+    // Mobile cards mirror the scan-first hierarchy with a dedicated next-action block.
+    const cardNextAction = document.querySelector('.queue-card-next-action');
+    expect(cardNextAction?.textContent).toContain('Intervention requested');
+    expect(cardNextAction?.textContent).toContain('Blocked by 1 prerequisite');
   });
 });
