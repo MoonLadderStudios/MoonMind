@@ -21,7 +21,7 @@ import tempfile
 import time
 import tarfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
@@ -1306,6 +1306,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "agent_runtime.reconcile_managed_sessions": (
         "agent_runtime",
         "agent_runtime_reconcile_managed_sessions",
+    ),
+    "agent_runtime.cleanup_managed_runtime_files": (
+        "agent_runtime",
+        "agent_runtime_cleanup_managed_runtime_files",
     ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
@@ -8366,6 +8370,82 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+
+    async def agent_runtime_cleanup_managed_runtime_files(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.runtime.cleanup import (
+            ManagedRuntimeCleanupConfig,
+            cleanup_managed_runtime_files,
+        )
+        from moonmind.workflows.temporal.runtime.managed_session_store import (
+            ManagedSessionStore,
+        )
+
+        if self._run_store is None:
+            raise TemporalActivityRuntimeError(
+                "run_store is required for agent_runtime.cleanup_managed_runtime_files"
+            )
+        runtime_root = Path(
+            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
+        )
+        config = ManagedRuntimeCleanupConfig.from_env()
+        if isinstance(payload, Mapping) and isinstance(payload.get("config"), Mapping):
+            config_payload = payload["config"]
+            config = ManagedRuntimeCleanupConfig(
+                enabled=bool(config_payload.get("enabled", config.enabled)),
+                dry_run=bool(config_payload.get("dryRun", config.dry_run)),
+                workspace_retention=timedelta(
+                    days=int(
+                        config_payload.get(
+                            "workspaceRetentionDays",
+                            config.workspace_retention.days,
+                        )
+                    )
+                ),
+                artifact_retention=timedelta(
+                    days=int(
+                        config_payload.get(
+                            "artifactRetentionDays",
+                            config.artifact_retention.days,
+                        )
+                    )
+                ),
+                record_retention=(
+                    None
+                    if config_payload.get("recordRetentionDays") is None
+                    else timedelta(days=int(config_payload["recordRetentionDays"]))
+                ),
+                grace=timedelta(
+                    seconds=int(
+                        config_payload.get(
+                            "graceSeconds", config.grace.total_seconds()
+                        )
+                    )
+                ),
+                max_delete_paths=int(
+                    config_payload.get("maxDeletePaths", config.max_delete_paths)
+                ),
+                max_delete_bytes=(
+                    None
+                    if config_payload.get("maxDeleteBytes") is None
+                    else int(config_payload["maxDeleteBytes"])
+                ),
+                lock_path=Path(config_payload.get("lockPath", config.lock_path)),
+                runtime_store_root=Path(
+                    config_payload.get("runtimeStoreRoot", config.runtime_store_root)
+                ),
+                artifact_root=Path(config_payload.get("artifactRoot", config.artifact_root)),
+            )
+        session_store = ManagedSessionStore(config.runtime_store_root / "managed_sessions")
+        result = cleanup_managed_runtime_files(
+            run_store=self._run_store,
+            session_store=session_store,
+            config=config,
+        )
+        return result.to_dict()
 
     @staticmethod
     def _agent_runtime_request_identifiers(

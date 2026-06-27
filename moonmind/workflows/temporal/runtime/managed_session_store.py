@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -101,3 +102,21 @@ class ManagedSessionStore:
             if record.status not in TERMINAL_MANAGED_SESSION_STATUSES:
                 records.append(record)
         return records
+
+    def iter_all(self) -> Iterable[CodexManagedSessionRecord]:
+        """Return all readable session records, including terminal records."""
+        self.store_root.mkdir(parents=True, exist_ok=True)
+        for path in self.store_root.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                yield CodexManagedSessionRecord(**data)
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+    def delete(self, session_id: str) -> None:
+        """Delete a session record file if it exists."""
+        path = self._resolve_path(session_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
