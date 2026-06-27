@@ -124,6 +124,57 @@ PublishArtifactsFunc = Callable[
 ]
 
 _MAX_AGENT_RUN_RESULT_SUMMARY_CHARS = 4096
+_COMPACT_METADATA_TEXT_CHARS = 1024
+_SESSION_REF_FIELDS = (
+    "latestSummaryRef",
+    "latestCheckpointRef",
+    "latestControlEventRef",
+    "latestResetBoundaryRef",
+)
+_SESSION_STATE_FIELDS = (
+    "sessionId",
+    "sessionEpoch",
+    "containerId",
+    "threadId",
+    "activeTurnId",
+)
+_SESSION_ARTIFACT_METADATA_FIELDS = (
+    "status",
+    "stdoutArtifactRef",
+    "stderrArtifactRef",
+    "diagnosticsRef",
+    "observabilityEventsRef",
+)
+_TURN_METADATA_SCALAR_FIELDS = (
+    "failureCause",
+    "failureClass",
+    "retryRecommendedAction",
+    "selfHealExhausted",
+    "selfHealAction",
+    "selfHealAttempts",
+    "inputTokens",
+    "input_tokens",
+    "promptTokens",
+    "prompt_tokens",
+    "outputTokens",
+    "output_tokens",
+    "completionTokens",
+    "completion_tokens",
+    "totalTokens",
+    "total_tokens",
+    "costEstimateUsd",
+    "cost_estimate_usd",
+    "estimatedCostUsd",
+    "estimated_cost_usd",
+)
+_SESSION_INTERVENTION_FIELDS = (
+    "action",
+    "reason",
+    "fromThreadId",
+    "toThreadId",
+    "fromSessionEpoch",
+    "toSessionEpoch",
+)
 _JIRA_CREATED_ISSUE_KEYS_PATTERN = re.compile(
     r"\b(?:created\s+(?:jira\s+)?(?:issues?|stories?|tickets?)|"
     r"created\s+(?:issue\s+)?keys?|issue\s+keys?\s+created)\b"
@@ -143,6 +194,120 @@ def _result_ref_metadata(
         compact_temporal_ref_metadata("resolvedSkillsetRef", resolved_skillset_ref)
     )
     return metadata
+
+
+def _compact_metadata_scalar(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, bool | int | float):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) > _COMPACT_METADATA_TEXT_CHARS:
+        return f"{text[:_COMPACT_METADATA_TEXT_CHARS]}..."
+    return text
+
+
+def _compact_session_interventions(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list | tuple):
+        return []
+    interventions: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        compact: dict[str, Any] = {}
+        for key in _SESSION_INTERVENTION_FIELDS:
+            compact_value = _compact_metadata_scalar(item.get(key))
+            if compact_value is not None:
+                compact[key] = compact_value
+        if compact:
+            interventions.append(compact)
+    return interventions
+
+
+def _compact_turn_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        return {}
+    compact: dict[str, Any] = {}
+    for key in _TURN_METADATA_SCALAR_FIELDS:
+        compact_value = _compact_metadata_scalar(metadata.get(key))
+        if compact_value is not None:
+            compact[key] = compact_value
+    interventions = _compact_session_interventions(metadata.get("sessionInterventions"))
+    if interventions:
+        compact["sessionInterventions"] = interventions
+    return compact
+
+
+def _session_payload_mapping(value: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", by_alias=True)
+    return dict(value)
+
+
+def _compact_session_ref_payload(
+    value: BaseModel | Mapping[str, Any],
+    *,
+    include_published_refs: bool,
+) -> dict[str, Any]:
+    raw_payload = _session_payload_mapping(value)
+    compact: dict[str, Any] = {}
+
+    raw_state = raw_payload.get("sessionState")
+    if isinstance(raw_state, Mapping):
+        session_state: dict[str, Any] = {}
+        for key in _SESSION_STATE_FIELDS:
+            compact_value = _compact_metadata_scalar(raw_state.get(key))
+            if compact_value is not None:
+                session_state[key] = compact_value
+        if session_state:
+            compact["sessionState"] = session_state
+
+    for key in _SESSION_REF_FIELDS:
+        compact_value = _compact_metadata_scalar(raw_payload.get(key))
+        if compact_value is not None:
+            compact[key] = compact_value
+
+    if include_published_refs:
+        raw_refs = raw_payload.get("publishedArtifactRefs")
+        if isinstance(raw_refs, list | tuple):
+            refs = [
+                ref
+                for ref in (
+                    _compact_metadata_scalar(raw_ref) for raw_ref in raw_refs
+                )
+                if isinstance(ref, str)
+            ]
+            if refs:
+                compact["publishedArtifactRefs"] = refs
+
+    raw_metadata = raw_payload.get("metadata")
+    if isinstance(raw_metadata, Mapping):
+        metadata: dict[str, Any] = {}
+        for key in _SESSION_ARTIFACT_METADATA_FIELDS:
+            compact_value = _compact_metadata_scalar(raw_metadata.get(key))
+            if compact_value is not None:
+                metadata[key] = compact_value
+        if metadata:
+            compact["metadata"] = metadata
+
+    return compact
+
+
+def _compact_session_summary_metadata(
+    summary: CodexManagedSessionSummary,
+) -> dict[str, Any]:
+    return _compact_session_ref_payload(summary, include_published_refs=False)
+
+
+def _compact_session_artifacts_metadata(
+    session_artifacts: CodexManagedSessionArtifactsPublication | Mapping[str, Any],
+) -> dict[str, Any]:
+    return _compact_session_ref_payload(
+        session_artifacts,
+        include_published_refs=True,
+    )
 
 
 def _merge_durable_retrieval_metadata(
@@ -779,19 +944,19 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         instruction_ref=original_instruction_ref,
                         resolved_skillset_ref=original_skillset_ref,
                     ),
-                    "sessionSummary": summary.model_dump(mode="json", by_alias=True),
-                    "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
+                    "sessionSummary": _compact_session_summary_metadata(summary),
+                    "sessionArtifacts": _compact_session_artifacts_metadata(
+                        publication
+                    ),
                     "turnId": turn_id,
                 }
                 if disposition:
                     result_metadata["outcomeDisposition"] = disposition
                     if disposition_reason:
-                        result_metadata["outcomeReason"] = disposition_reason
-                success_turn_metadata = {
-                    key: value
-                    for key, value in dict(turn_response.metadata or {}).items()
-                    if key in {"sessionInterventions"}
-                }
+                        compact_reason = _compact_metadata_scalar(disposition_reason)
+                        if compact_reason is not None:
+                            result_metadata["outcomeReason"] = compact_reason
+                success_turn_metadata = _compact_turn_metadata(turn_response.metadata)
                 if success_turn_metadata:
                     result_metadata["turnMetadata"] = success_turn_metadata
                 result = AgentRunResult(
@@ -1838,9 +2003,13 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         if turn_status:
             metadata["turnStatus"] = turn_status
         if turn_metadata:
-            metadata["turnMetadata"] = dict(turn_metadata)
+            compact_turn_metadata = _compact_turn_metadata(turn_metadata)
+            if compact_turn_metadata:
+                metadata["turnMetadata"] = compact_turn_metadata
         if session_artifacts is not None:
-            metadata["sessionArtifacts"] = dict(session_artifacts)
+            metadata["sessionArtifacts"] = _compact_session_artifacts_metadata(
+                session_artifacts
+            )
         provider_failure_event = build_provider_failure_event(
             classification=classification,
         )

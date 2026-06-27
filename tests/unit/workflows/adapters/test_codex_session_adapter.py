@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -421,7 +422,10 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
         "artifact:session-checkpoint",
     ]
     assert result.metadata["instructionRef"] == "artifact:instructions"
-    assert result.metadata["sessionSummary"]["latestSummaryRef"] == "artifact:session-summary"
+    assert (
+        result.metadata["sessionSummary"]["latestSummaryRef"]
+        == "artifact:session-summary"
+    )
     assert result.metadata["sessionArtifacts"]["latestCheckpointRef"] == "artifact:session-checkpoint"
 
     assert attach_calls == [{"containerId": "container-1", "threadId": "thread-1"}]
@@ -433,6 +437,145 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
     assert control_calls[-1]["action"] == "send_turn"
     assert control_calls[-1]["containerId"] == "container-1"
     assert control_calls[-1]["threadId"] == "thread-1"
+
+async def test_start_compacts_session_result_metadata_for_workflow_payload(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    workspace_path = tmp_path / "agent_jobs" / binding.agent_run_id / "repo"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    large_summary_text = "s" * 7_800
+    large_publication_detail = "p" * 7_800
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        workspace_path.mkdir(parents=True)
+        (workspace_path / ".git").mkdir()
+        (workspace_path / ".launch-complete").write_text("ready\n", encoding="utf-8")
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _session_status(_locator: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _send_turn(_request: Any) -> CodexManagedSessionTurnResponse:
+        return _turn_response(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    async def _fetch_summary(_request: Any) -> CodexManagedSessionSummary:
+        return _summary(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+            last_assistant_text=large_summary_text,
+        )
+
+    async def _publish_artifacts(
+        _request: Any,
+    ) -> CodexManagedSessionArtifactsPublication:
+        return CodexManagedSessionArtifactsPublication(
+            sessionState={
+                "sessionId": binding.session_id,
+                "sessionEpoch": binding.session_epoch,
+                "containerId": "container-1",
+                "threadId": "thread-1",
+                "activeTurnId": None,
+            },
+            publishedArtifactRefs=(
+                "artifact:stdout",
+                "artifact:stderr",
+                "artifact:diagnostics",
+                "artifact:observability.events.jsonl",
+                "artifact:session-summary",
+                "artifact:session-checkpoint",
+            ),
+            latestSummaryRef="artifact:session-summary",
+            latestCheckpointRef="artifact:session-checkpoint",
+            metadata={
+                "status": "completed",
+                "stdoutArtifactRef": "artifact:stdout",
+                "stderrArtifactRef": "artifact:stderr",
+                "diagnosticsRef": "artifact:diagnostics",
+                "observabilityEventsRef": "artifact:observability.events.jsonl",
+                "verboseRuntimeDetail": large_publication_detail,
+            },
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=run_store,
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=_session_status,
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=_send_turn,
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=_fetch_summary,
+        publish_remote_artifacts=_publish_artifacts,
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    handle = await adapter.start(_request(binding, workspace_path=str(workspace_path)))
+    result = await adapter.fetch_result(handle.run_id)
+    persisted_record = run_store.load(binding.agent_run_id)
+
+    assert (
+        result.metadata["sessionSummary"]["latestSummaryRef"]
+        == "artifact:session-summary"
+    )
+    assert "metadata" not in result.metadata["sessionSummary"]
+    assert result.metadata["sessionArtifacts"]["publishedArtifactRefs"] == [
+        "artifact:stdout",
+        "artifact:stderr",
+        "artifact:diagnostics",
+        "artifact:observability.events.jsonl",
+        "artifact:session-summary",
+        "artifact:session-checkpoint",
+    ]
+    assert result.metadata["sessionArtifacts"]["metadata"] == {
+        "status": "completed",
+        "stdoutArtifactRef": "artifact:stdout",
+        "stderrArtifactRef": "artifact:stderr",
+        "diagnosticsRef": "artifact:diagnostics",
+        "observabilityEventsRef": "artifact:observability.events.jsonl",
+    }
+    assert "verboseRuntimeDetail" not in result.metadata["sessionArtifacts"]["metadata"]
+    assert len(json.dumps(result.metadata, sort_keys=True)) < 16_384
+    assert persisted_record is not None
+    assert persisted_record.stdout_artifact_ref == "artifact:stdout"
+    assert persisted_record.diagnostics_ref == "artifact:diagnostics"
+    assert (
+        persisted_record.observability_events_ref
+        == "artifact:observability.events.jsonl"
+    )
 
 async def test_start_prepares_turn_instructions_after_cold_session_launch(
     tmp_path: Path,
