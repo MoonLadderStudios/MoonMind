@@ -190,6 +190,25 @@ def test_delete_budgets_limit_paths(tmp_path) -> None:
     assert remaining == 1
 
 
+def test_dry_run_reports_eligible_workspace_bytes(tmp_path) -> None:
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
+    workspace = tmp_path / "run-1"
+    workspace.mkdir()
+    (workspace / "payload.txt").write_text("payload", encoding="utf-8")
+    _age_path(workspace / "payload.txt")
+    _age_path(workspace)
+    run_store.save(_run_record("run-1", workspace_path=str(workspace / "repo")))
+
+    result = _janitor(tmp_path, run_store, session_store, dry_run=True).run()
+
+    assert result.eligible_roots == 1
+    assert result.deleted_roots == 0
+    assert result.estimated_deleted_bytes == len("payload")
+    assert result.to_payload()["estimatedDeletedBytes"] == len("payload")
+    assert workspace.exists()
+
+
 def test_artifact_directory_is_skipped_while_referenced_by_retained_record(
     tmp_path,
 ) -> None:

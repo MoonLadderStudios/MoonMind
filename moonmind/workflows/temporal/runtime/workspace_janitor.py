@@ -304,7 +304,15 @@ class ManagedRuntimeWorkspaceJanitor:
         for candidate in (*workspace_candidates, *artifact_candidates):
             decision = self._classify_candidate(candidate, snapshot)
             result = self._record_decision(result, candidate, decision)
-            if decision.classification != "eligible" or self._config.dry_run:
+            if decision.classification != "eligible":
+                continue
+            if self._config.dry_run:
+                result = replace(
+                    result,
+                    estimated_deleted_bytes=(
+                        result.estimated_deleted_bytes + decision.estimated_bytes
+                    ),
+                )
                 continue
             if delete_paths >= self._config.max_delete_paths:
                 result = replace(result, skipped_total=result.skipped_total + 1)
