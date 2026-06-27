@@ -4423,6 +4423,8 @@ class MoonMindRunWorkflow:
             "jiraIssueKey",
             "jiraPresetBrief",
             "jiraStepInstructions",
+            "resolvedSourceDesignPath",
+            "sourceResolution",
             "jiraIssue",
             "summary",
         ):
@@ -4459,6 +4461,8 @@ class MoonMindRunWorkflow:
                 "trustedSource",
                 "jiraIssueKey",
                 "summary",
+                "resolvedSourceDesignPath",
+                "sourceResolution",
                 "jiraPresetBrief",
                 "jiraStepInstructions",
             )

@@ -449,6 +449,11 @@ def test_agent_request_includes_trusted_jira_previous_outputs_in_instruction_ref
                     "trustedSource": "moonmind.jira.get_issue",
                     "jiraIssueKey": "MM-657",
                     "jiraPresetBrief": "MM-657: Settings HTTP API surface",
+                    "resolvedSourceDesignPath": "docs/Designs/RuntimeTypes.md",
+                    "sourceResolution": {
+                        "status": "resolved",
+                        "selectedPath": "docs/Designs/RuntimeTypes.md",
+                    },
                     "jiraIssue": {"status": "In Progress"},
                 },
             },
@@ -462,6 +467,7 @@ def test_agent_request_includes_trusted_jira_previous_outputs_in_instruction_ref
     assert "MoonMind trusted previous step context:" in request.instruction_ref
     assert "moonmind.jira.get_issue" in request.instruction_ref
     assert "MM-657: Settings HTTP API surface" in request.instruction_ref
+    assert "docs/Designs/RuntimeTypes.md" in request.instruction_ref
     assert "Do not use provider-native Jira/Atlassian connectors" in request.instruction_ref
 
 
