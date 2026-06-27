@@ -8768,7 +8768,9 @@ class TemporalAgentRuntimeActivities:
                     meta["pull_request_url"] = pr_url
 
             if meta:
-                result = result.model_copy(update={"metadata": meta})
+                result_payload = result.model_dump(mode="python")
+                result_payload["metadata"] = meta
+                result = AgentRunResult.model_validate(result_payload)
 
             return result
         finally:

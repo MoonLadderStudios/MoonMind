@@ -16,6 +16,7 @@ from temporalio.exceptions import (
 
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRunResult,
     ManagedRunRecord,
 )
 from moonmind.schemas.managed_session_models import (
@@ -849,6 +850,99 @@ async def test_start_omits_large_inline_instruction_from_result_metadata(
     assert result.metadata["instructionRefLengthChars"] == len(large_instruction.strip())
     assert len(result.metadata["instructionRefSha256"]) == 64
     assert "instructionRef" not in result.metadata
+
+
+async def test_start_compacts_nested_session_summary_metadata(
+    tmp_path: Path,
+) -> None:
+    binding = _binding()
+    near_limit_summary_metadata = {
+        "firstCompactField": "x" * 7800,
+        "secondCompactField": "y" * 7800,
+    }
+
+    async def _load_snapshot(_workflow_id: str) -> CodexManagedSessionSnapshot:
+        return _snapshot(binding=binding)
+
+    async def _launch_session(_request: Any) -> CodexManagedSessionHandle:
+        return _session_handle(
+            session_id=binding.session_id,
+            session_epoch=binding.session_epoch,
+            container_id="container-1",
+            thread_id="thread-1",
+        )
+
+    adapter = CodexSessionAdapter(
+        profile_fetcher=_fake_profiles(
+            [{"profile_id": "codex-default", "credential_source": "oauth_volume"}]
+        ),
+        slot_requester=_async_noop,
+        slot_releaser=_async_noop,
+        cooldown_reporter=_async_noop,
+        workflow_id="wf-agent-run-1",
+        runtime_id="codex_cli",
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        load_session_snapshot=_load_snapshot,
+        launch_session=_launch_session,
+        session_status=AsyncMock(),
+        prepare_turn_instructions=_prepare_turn_instructions,
+        send_turn=AsyncMock(
+            return_value=_turn_response(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        interrupt_turn=_async_noop,
+        clear_remote_session=_async_noop,
+        terminate_remote_session=_async_noop,
+        fetch_remote_summary=AsyncMock(
+            return_value=CodexManagedSessionSummary(
+                sessionState={
+                    "sessionId": binding.session_id,
+                    "sessionEpoch": binding.session_epoch,
+                    "containerId": "container-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                latestSummaryRef="artifact:session-summary",
+                latestCheckpointRef="artifact:session-checkpoint",
+                latestControlEventRef=None,
+                latestResetBoundaryRef=None,
+                metadata=near_limit_summary_metadata,
+            )
+        ),
+        publish_remote_artifacts=AsyncMock(
+            return_value=_publication(
+                session_id=binding.session_id,
+                session_epoch=binding.session_epoch,
+                container_id="container-1",
+                thread_id="thread-1",
+            )
+        ),
+        attach_runtime_handles=_async_noop,
+        apply_session_control_action=_async_noop,
+        workspace_root=str(tmp_path / "agent_jobs"),
+        session_image_ref="ghcr.io/moonladderstudios/moonmind:latest",
+    )
+
+    handle = await adapter.start(
+        _request(binding, instruction_ref="artifact:instructions")
+    )
+    result = await adapter.fetch_result(handle.run_id)
+
+    assert result.failure_class is None
+    assert (
+        result.metadata["sessionSummary"]["latestSummaryRef"]
+        == "artifact:session-summary"
+    )
+    assert "metadata" not in result.metadata["sessionSummary"]
+    assert (
+        result.metadata["sessionArtifacts"]["latestCheckpointRef"]
+        == "artifact:session-checkpoint"
+    )
+    AgentRunResult.model_validate(result.model_dump(mode="python"))
 
 async def test_start_preserves_completed_codex_turn_with_usage_limit_summary(
     tmp_path: Path,

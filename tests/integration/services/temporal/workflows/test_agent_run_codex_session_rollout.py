@@ -362,9 +362,12 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
             summary="Recovered final answer without vendor turn id",
             metadata={
                 "sessionSummary": {
-                    "metadata": {
-                        "lastAssistantText": "Recovered final answer without vendor turn id",
-                    }
+                    "sessionState": {
+                        "sessionId": "sess-test-codex",
+                        "sessionEpoch": 1,
+                        "containerId": "ctr-test-codex",
+                        "threadId": "thread-test-codex",
+                    },
                 }
             },
         )
@@ -459,6 +462,8 @@ async def test_agent_run_managed_codex_session_recovers_terminal_rollout_without
                     assert result.failure_class is None
                     assert result.summary == "Recovered final answer without vendor turn id"
                     assert isinstance(result.metadata, dict)
-                    assert result.metadata["sessionSummary"]["metadata"][
-                        "lastAssistantText"
-                    ] == "Recovered final answer without vendor turn id"
+                    assert (
+                        result.metadata["sessionSummary"]["sessionState"]["threadId"]
+                        == "thread-test-codex"
+                    )
+                    assert "metadata" not in result.metadata["sessionSummary"]

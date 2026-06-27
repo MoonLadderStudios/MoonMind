@@ -144,6 +144,113 @@ def _result_ref_metadata(
     )
     return metadata
 
+def _validated_agent_run_result_copy(
+    result: AgentRunResult,
+    **updates: Any,
+) -> AgentRunResult:
+    payload = result.model_dump(mode="python")
+    payload.update(updates)
+    return AgentRunResult.model_validate(payload)
+
+
+def _compact_session_state_metadata(session_state: Any) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "sessionId": session_state.session_id,
+        "sessionEpoch": session_state.session_epoch,
+        "containerId": session_state.container_id,
+        "threadId": session_state.thread_id,
+    }
+    active_turn_id = getattr(session_state, "active_turn_id", None)
+    if active_turn_id:
+        metadata["activeTurnId"] = active_turn_id
+    return metadata
+
+
+def _compact_session_summary_metadata(
+    summary: CodexManagedSessionSummary,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "sessionState": _compact_session_state_metadata(summary.session_state)
+    }
+    ref_fields = (
+        ("latestSummaryRef", summary.latest_summary_ref),
+        ("latestCheckpointRef", summary.latest_checkpoint_ref),
+        ("latestControlEventRef", summary.latest_control_event_ref),
+        ("latestResetBoundaryRef", summary.latest_reset_boundary_ref),
+    )
+    for key, value in ref_fields:
+        if value:
+            metadata[key] = value
+    return metadata
+
+
+def _compact_session_artifacts_metadata(
+    publication: CodexManagedSessionArtifactsPublication | Mapping[str, Any],
+) -> dict[str, Any]:
+    if isinstance(publication, CodexManagedSessionArtifactsPublication):
+        metadata: dict[str, Any] = {
+            "sessionState": _compact_session_state_metadata(publication.session_state)
+        }
+        if publication.published_artifact_refs:
+            metadata["publishedArtifactRefs"] = list(
+                publication.published_artifact_refs
+            )
+        ref_fields = (
+            ("latestSummaryRef", publication.latest_summary_ref),
+            ("latestCheckpointRef", publication.latest_checkpoint_ref),
+            ("latestControlEventRef", publication.latest_control_event_ref),
+            ("latestResetBoundaryRef", publication.latest_reset_boundary_ref),
+        )
+        raw_artifact_metadata = publication.metadata
+    else:
+        session_state = publication.get("sessionState")
+        metadata = {}
+        if isinstance(session_state, Mapping):
+            compact_state = {
+                key: session_state[key]
+                for key in (
+                    "sessionId",
+                    "sessionEpoch",
+                    "containerId",
+                    "threadId",
+                    "activeTurnId",
+                )
+                if session_state.get(key)
+            }
+            if compact_state:
+                metadata["sessionState"] = compact_state
+        published_refs = publication.get("publishedArtifactRefs")
+        if isinstance(published_refs, (list, tuple)) and published_refs:
+            metadata["publishedArtifactRefs"] = [
+                str(ref).strip() for ref in published_refs if str(ref).strip()
+            ]
+        ref_fields = (
+            ("latestSummaryRef", publication.get("latestSummaryRef")),
+            ("latestCheckpointRef", publication.get("latestCheckpointRef")),
+            ("latestControlEventRef", publication.get("latestControlEventRef")),
+            ("latestResetBoundaryRef", publication.get("latestResetBoundaryRef")),
+        )
+        raw_artifact_metadata = publication.get("metadata")
+
+    for key, value in ref_fields:
+        if value:
+            metadata[key] = value
+
+    if isinstance(raw_artifact_metadata, Mapping):
+        artifact_refs = {
+            key: raw_artifact_metadata[key]
+            for key in (
+                "stdoutArtifactRef",
+                "stderrArtifactRef",
+                "diagnosticsRef",
+                "observabilityEventsRef",
+            )
+            if raw_artifact_metadata.get(key)
+        }
+        if artifact_refs:
+            metadata["metadata"] = artifact_refs
+    return metadata
+
 
 def _merge_durable_retrieval_metadata(
     request: AgentExecutionRequest,
@@ -779,8 +886,10 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         instruction_ref=original_instruction_ref,
                         resolved_skillset_ref=original_skillset_ref,
                     ),
-                    "sessionSummary": summary.model_dump(mode="json", by_alias=True),
-                    "sessionArtifacts": publication.model_dump(mode="json", by_alias=True),
+                    "sessionSummary": _compact_session_summary_metadata(summary),
+                    "sessionArtifacts": _compact_session_artifacts_metadata(
+                        publication
+                    ),
                     "turnId": turn_id,
                 }
                 if disposition:
@@ -967,12 +1076,11 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         ):
                             should_apply_derived = True
                         if should_apply_derived:
-                            result = result.model_copy(
-                                update={
-                                    "failure_class": derived_failure_class,
-                                    "summary": derived_summary or summary,
-                                    "metadata": metadata,
-                                }
+                            result = _validated_agent_run_result_copy(
+                                result,
+                                failure_class=derived_failure_class,
+                                summary=derived_summary or summary,
+                                metadata=metadata,
                             )
                             updated_result = True
                     elif (
@@ -981,18 +1089,20 @@ class CodexSessionAdapter(ManagedAgentAdapter):
                         and failure_class in {None, "execution_error"}
                         and _is_generic_process_exit_summary(summary)
                     ):
-                        result = result.model_copy(
-                            update={
-                                "failure_class": None,
-                                "summary": (
-                                    "pr-resolver requested merge automation re-entry."
-                                ),
-                                "metadata": metadata,
-                            }
+                        result = _validated_agent_run_result_copy(
+                            result,
+                            failure_class=None,
+                            summary=(
+                                "pr-resolver requested merge automation re-entry."
+                            ),
+                            metadata=metadata,
                         )
                         updated_result = True
                     if not updated_result and metadata != result.metadata:
-                        result = result.model_copy(update={"metadata": metadata})
+                        result = _validated_agent_run_result_copy(
+                            result,
+                            metadata=metadata,
+                        )
             return result
         return AgentRunResult(
             summary="Managed session result not found.",
@@ -1840,7 +1950,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
         if turn_metadata:
             metadata["turnMetadata"] = dict(turn_metadata)
         if session_artifacts is not None:
-            metadata["sessionArtifacts"] = dict(session_artifacts)
+            metadata["sessionArtifacts"] = _compact_session_artifacts_metadata(
+                session_artifacts
+            )
         provider_failure_event = build_provider_failure_event(
             classification=classification,
         )
