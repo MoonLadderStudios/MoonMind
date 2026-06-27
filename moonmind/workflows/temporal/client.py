@@ -49,14 +49,14 @@ _MOONMIND_TASK_QUEUES: tuple[str, ...] = (
     "mm.activity.agent_runtime",
 )
 MANAGED_SESSION_RECONCILE_SCHEDULE_ID = "mm-operational:managed-session-reconcile"
-MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE = (
-    "mm-operational:managed-session-reconcile:{{.ScheduleTime}}"
+MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE = (
+    "mm-operational:managed-session-reconcile"
 )
 MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID = (
     "mm-operational:managed-runtime-workspace-cleanup"
 )
-MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE = (
-    "mm-operational:managed-runtime-workspace-cleanup:{{.ScheduleTime}}"
+MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE = (
+    "mm-operational:managed-runtime-workspace-cleanup"
 )
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 
@@ -590,7 +590,7 @@ class TemporalClientAdapter:
             action=ScheduleActionStartWorkflow(
                 "MoonMind.ManagedSessionReconcile",
                 {},
-                id=MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE,
+                id=MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE,
                 task_queue=self._get_task_queue(),
                 typed_search_attributes=_build_typed_search_attributes(
                     {
@@ -677,7 +677,7 @@ class TemporalClientAdapter:
                 action=ScheduleActionStartWorkflow(
                     "MoonMind.ManagedRuntimeWorkspaceCleanup",
                     {},
-                    id=MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE,
+                    id=MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE,
                     task_queue=self._get_task_queue(),
                     typed_search_attributes=_build_typed_search_attributes(
                         {
@@ -789,7 +789,7 @@ class TemporalClientAdapter:
             build_schedule_spec,
             build_schedule_state,
             make_schedule_id,
-            make_workflow_id_template,
+            make_scheduled_workflow_id_base,
         )
 
         client = await self.get_client()
@@ -812,7 +812,7 @@ class TemporalClientAdapter:
                     action=ScheduleActionStartWorkflow(
                         workflow_type,
                         *args,
-                        id=make_workflow_id_template(definition_uuid),
+                        id=make_scheduled_workflow_id_base(definition_uuid),
                         task_queue=task_queue,
                         memo=memo,
                         **(
@@ -923,7 +923,7 @@ class TemporalClientAdapter:
             build_schedule_policy,
             build_schedule_spec,
             build_schedule_state,
-            make_workflow_id_template,
+            make_scheduled_workflow_id_base,
         )
 
         definition_uuid = _UUID(str(definition_id))
@@ -992,7 +992,7 @@ class TemporalClientAdapter:
                 schedule.action = ScheduleActionStartWorkflow(
                     workflow_type,
                     args=args,
-                    id=make_workflow_id_template(definition_uuid),
+                    id=make_scheduled_workflow_id_base(definition_uuid),
                     task_queue=task_queue,
                     memo=memo,
                     **(

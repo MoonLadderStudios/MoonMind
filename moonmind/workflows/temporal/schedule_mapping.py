@@ -108,20 +108,20 @@ def make_schedule_id(definition_id: UUID) -> str:
     """Return the Temporal Schedule ID for a recurring task definition."""
     return f"mm-schedule:{definition_id}"
 
-def make_workflow_id_template(definition_id: UUID) -> str:
-    """Return a deterministic workflow-ID template for schedule-spawned runs.
+def make_scheduled_workflow_id_base(definition_id: UUID) -> str:
+    """Return the workflow-ID base for schedule-spawned runs.
 
-    Temporal evaluates ``{{.ScheduleTime}}`` server-side when the
-    schedule fires, producing a unique workflow ID per time slot.
+    Temporal appends the scheduled timestamp to this action ID when a Schedule
+    starts a workflow, producing a unique workflow ID per time slot.
     """
-    return f"mm:{definition_id}:{{{{.ScheduleTime}}}}"
+    return f"mm:{definition_id}"
 
 __all__ = [
     "build_schedule_policy",
     "build_schedule_spec",
     "build_schedule_state",
+    "make_scheduled_workflow_id_base",
     "make_schedule_id",
-    "make_workflow_id_template",
     "map_catchup_window",
     "map_overlap_policy",
 ]

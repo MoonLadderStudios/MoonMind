@@ -26,6 +26,9 @@ from moonmind.workflows.recurring.cron import (
     parse_cron_expression,
     validate_timezone_name,
 )
+from moonmind.workflows.temporal.schedule_mapping import (
+    make_scheduled_workflow_id_base,
+)
 from moonmind.workflows.temporal.client import (
     ScheduleTriggerResult,
     TemporalClientAdapter,
@@ -520,10 +523,12 @@ class RecurringWorkflowsService:
         self,
         *,
         action: object | None,
+        definition_id: UUID,
         workflow_type: str,
         workflow_input: Mapping[str, Any],
     ) -> bool:
         temporal_workflow_type = _object_value(action, "workflow")
+        temporal_workflow_id_base = _object_value(action, "id")
         temporal_args = _object_value(action, "args") or []
         try:
             temporal_args_list = list(temporal_args)
@@ -532,8 +537,10 @@ class RecurringWorkflowsService:
         temporal_input = temporal_args_list[0] if temporal_args_list else None
         temporal_task_queue = _object_value(action, "task_queue", "taskQueue")
         expected_task_queue = self._expected_task_queue(workflow_type)
+        expected_workflow_id_base = make_scheduled_workflow_id_base(definition_id)
         return (
             temporal_workflow_type != workflow_type
+            or temporal_workflow_id_base != expected_workflow_id_base
             or temporal_input != workflow_input
             or (
                 expected_task_queue is not None
@@ -567,6 +574,7 @@ class RecurringWorkflowsService:
         action = _object_value(schedule, "action")
         if not self._schedule_action_mismatch(
             action=action,
+            definition_id=definition.id,
             workflow_type=workflow_type,
             workflow_input=workflow_input,
         ):
@@ -984,6 +992,7 @@ class RecurringWorkflowsService:
                 action = getattr(sched, "action", None)
                 action_mismatch = self._schedule_action_mismatch(
                     action=action,
+                    definition_id=dfn.id,
                     workflow_type=workflow_type,
                     workflow_input=workflow_input,
                 )

@@ -6,6 +6,7 @@ import json
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote
 from uuid import uuid4
 
 import pytest
@@ -108,6 +109,11 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         ("/workflows", "workflow-list"),
         ("/workflows/new", "workflow-start"),
         ("/workflows/mm:workflow-123", "workflow-detail"),
+        (
+            "/workflows/mm%3A5cd204e5-4f32-484a-a2ed-2222b214961c%3A"
+            "%7B%7B.ScheduleTime%7D%7D-2026-06-27T13%3A00%3A00Z",
+            "workflow-detail",
+        ),
         ("/workflows/mm:workflow-123/steps", "workflow-detail"),
         ("/workflows/mm:workflow-123/artifacts", "workflow-detail"),
         ("/workflows/mm:workflow-123/runs", "workflow-detail"),
@@ -126,7 +132,9 @@ async def test_supported_workflow_routes_render_console_shell(
 
     boot_payload = _extract_boot_payload(response.text)
     assert boot_payload["page"] == expected_page
-    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == path
+    assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == unquote(
+        path
+    )
 
 
 @pytest.mark.parametrize(

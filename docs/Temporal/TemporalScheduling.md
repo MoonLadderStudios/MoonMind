@@ -120,7 +120,7 @@ await client.create_schedule(
  action=ScheduleActionStartWorkflow(
  "MoonMind.UserWorkflow",
  args=[workflow_input],
- id=f"mm:{{{{.ScheduleTime}}}}-{definition_id}",
+ id=f"mm:{definition_id}",
  task_queue="mm.workflow",
  memo={"title": schedule_name},
  search_attributes=TypedSearchAttributes([
@@ -231,13 +231,23 @@ schedule contract.
 mm-schedule:{definition_uuid}
 ```
 
-Workflow IDs spawned by the schedule use a deterministic format that includes the schedule time:
+Workflow IDs spawned by the schedule use a deterministic base ID:
 
 ```
-mm:{definition_uuid}:{schedule_time_epoch}
+mm:{definition_uuid}
 ```
 
-This ensures idempotency — if the schedule fires twice for the same time slot, Temporal prevents a duplicate start.
+Temporal appends the scheduled timestamp to the action ID for each fired
+workflow, producing concrete IDs such as:
+
+```
+mm:{definition_uuid}-{scheduled_time_iso8601}
+```
+
+This ensures idempotency — if the schedule fires twice for the same time slot,
+Temporal prevents a duplicate start. Do not include schedule-time template
+tokens in the action ID; Temporal treats them as literal ID text before adding
+its own scheduled-time suffix.
 
 ### 5.9 API Contract
 
