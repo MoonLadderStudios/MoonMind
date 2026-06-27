@@ -368,7 +368,7 @@ app = FastAPI(
     title="MoonMind API",
     description="API for MoonMind - LLM-powered documentation search and chat interface",
     version="0.1.0",
-    docs_url="/docs",
+    docs_url="/openapi",
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
@@ -417,8 +417,8 @@ async def health_check():
 
 @app.get("/", include_in_schema=False)
 async def docs_redirect() -> RedirectResponse:
-    """Redirect root path to Swagger UI."""
-    return RedirectResponse(url=app.docs_url)
+    """Redirect root path to the dashboard."""
+    return RedirectResponse(url="/workflows")
 
 app.include_router(health_router, tags=["health"])
 
