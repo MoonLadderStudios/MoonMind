@@ -2367,13 +2367,15 @@ function manualToolPayload(
   if (!toolId) {
     return null;
   }
+  const caps = mergeCapabilities(
+    requiredCapabilities,
+    step.explicitRequiredCapabilities,
+  );
   return {
     type: "tool",
     id: toolId,
     inputs,
-    ...(requiredCapabilities.length > 0
-      ? { requiredCapabilities }
-      : {}),
+    ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
   };
 }
 
