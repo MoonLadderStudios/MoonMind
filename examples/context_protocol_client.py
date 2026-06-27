@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Example client for the Model Context Protocol implementation in MoonMind.
-This demonstrates how an agent like OpenHands could interact with the MoonMind API.
+This demonstrates how an agent could interact with the MoonMind API.
 """
 
 import os

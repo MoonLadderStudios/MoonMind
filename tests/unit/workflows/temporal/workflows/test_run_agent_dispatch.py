@@ -3,8 +3,8 @@
 Pure unit tests — no Temporal test server needed.
 """
 
-import unittest
 import inspect
+import unittest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -22,12 +22,12 @@ from moonmind.schemas.agent_skill_models import (
     ResolvedSkillEntry,
     ResolvedSkillSet,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
 from moonmind.workflows.temporal.workflows.run import (
     RUN_JSON_ARTIFACT_WRITE_COMPLETE_PATCH,
+    RUN_SLOT_CONTINUITY_PATCH,
+    RUN_STEP_EXECUTION_NAMING_PATCH,
+    MoonMindRunWorkflow,
 )
-from moonmind.workflows.temporal.workflows.run import RUN_STEP_EXECUTION_NAMING_PATCH
-from moonmind.workflows.temporal.workflows.run import RUN_SLOT_CONTINUITY_PATCH
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
@@ -47,7 +47,7 @@ class TestAgentKindForId(unittest.TestCase):
 
     def test_external_agent_ids(self) -> None:
         wf = MoonMindRunWorkflow()
-        for agent_id in ("jules", "openhands", "custom_agent"):
+        for agent_id in ("jules", "custom_agent"):
             self.assertEqual(wf._agent_kind_for_id(agent_id), "external", f"{agent_id} should be external")
 
     def test_case_insensitive(self) -> None:
@@ -779,14 +779,14 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
 
     def test_build_agent_execution_request_propagates_steps(self) -> None:
         from unittest.mock import patch
-        
+
         wf = MoonMindRunWorkflow()
-        
+
         # We must mock workflow.info() because it's called inside _build_agent_execution_request
         class MockInfo:
             workflow_id = "test-wf-id"
             run_id = "test-run-id"
-            
+
         with patch("moonmind.workflows.temporal.workflows.run.workflow.info", return_value=MockInfo()):
             request = wf._build_agent_execution_request(
                 node_inputs={
@@ -800,7 +800,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 node_id="node-xyz",
                 tool_name="test_tool"
             )
-        
+
         self.assertEqual(request.agent_id, "codex")
         self.assertEqual(request.parameters.get("model"), "gpt-4o")
         self.assertEqual(request.parameters.get("steps"), [
@@ -1757,8 +1757,9 @@ class TestFetchProfileSnapshots(unittest.TestCase):
         be stored in _profile_snapshots keyed by profile_id."""
         import asyncio
         from datetime import timedelta
-        from temporalio.common import RetryPolicy
         from unittest.mock import patch
+
+        from temporalio.common import RetryPolicy
 
         wf = MoonMindRunWorkflow()
 
@@ -1823,8 +1824,9 @@ class TestFetchProfileSnapshots(unittest.TestCase):
         should not raise and should continue with whatever profiles it got."""
         import asyncio
         from datetime import timedelta
-        from temporalio.common import RetryPolicy
         from unittest.mock import patch
+
+        from temporalio.common import RetryPolicy
 
         wf = MoonMindRunWorkflow()
 
@@ -1875,8 +1877,9 @@ class TestFetchProfileSnapshots(unittest.TestCase):
         should NOT be set, so validation is skipped (best-effort behavior)."""
         import asyncio
         from datetime import timedelta
-        from temporalio.common import RetryPolicy
         from unittest.mock import patch
+
+        from temporalio.common import RetryPolicy
 
         wf = MoonMindRunWorkflow()
 

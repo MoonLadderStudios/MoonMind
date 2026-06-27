@@ -254,7 +254,7 @@ python examples/context_protocol_client.py
 python examples/context_protocol_client.py gemini-pro
 ```
 
-## OpenHands and other agents
+## From Other Agents
 
 From another container on the compose network, the context URL is typically:
 

@@ -1,7 +1,6 @@
 services:
-
   keycloak:
-    profiles: [ "keycloak" ]
+    profiles: ["keycloak"]
     image: quay.io/keycloak/keycloak:24.0
     command: >
       start-dev --proxy-headers=xforwarded --hostname-url=http://keycloak:8080
@@ -13,11 +12,11 @@ services:
       KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PW:-admin}
     volumes:
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
-    ports: [ "8085:8080" ] # host→container
+    ports: ["8085:8080"] # host→container
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [ local-network ]
+    networks: [local-network]
     restart: unless-stopped
 
   api:
@@ -77,13 +76,12 @@ services:
       - local-network
       - docker-proxy-network
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8000/healthz')",
+          urllib.request.urlopen('http://localhost:8000/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -214,7 +212,7 @@ services:
 
   temporal-visibility-rehearsal:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
-    profiles: [ "temporal-tools" ]
+    profiles: ["temporal-tools"]
     environment:
       - TEMPORAL_POSTGRES_HOST=postgres
       - TEMPORAL_POSTGRES_PORT=5432
@@ -240,7 +238,7 @@ services:
 
   temporal-admin-tools:
     image: temporalio/admin-tools:${TEMPORAL_ADMINTOOLS_VERSION:-1.29.1-tctl-1.18.4-cli-1.5.0}
-    profiles: [ "temporal-tools" ]
+    profiles: ["temporal-tools"]
     environment:
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
     command: sh -lc "sleep infinity"
@@ -255,7 +253,7 @@ services:
 
   temporal-ui:
     image: temporalio/ui:${TEMPORAL_UI_VERSION:-2.34.0}
-    profiles: [ "temporal-ui" ]
+    profiles: ["temporal-ui"]
     environment:
       - TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-temporal-internal:7233}
     ports:
@@ -304,13 +302,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -361,13 +358,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -415,13 +411,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -475,13 +470,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -559,13 +553,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -670,13 +663,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -748,13 +740,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -808,13 +799,12 @@ services:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
     healthcheck:
-      test:
-        [
+      test: [
           "CMD",
           "python",
           "-c",
           "import urllib.request;
-            urllib.request.urlopen('http://localhost:8080/healthz')",
+          urllib.request.urlopen('http://localhost:8080/healthz')",
         ]
       interval: 30s
       timeout: 10s
@@ -937,30 +927,6 @@ services:
       - local-network
       - sandbox-egress-network
     restart: unless-stopped
-
-  openhands:
-    profiles: [ "openhands" ]
-    image: docker.all-hands.dev/all-hands-ai/openhands:0.39
-    container_name: openhands-app
-    pull_policy: always
-    tty: true
-    stdin_open: true
-    ports:
-      - "3000:3000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./.openhands-state-data:/.openhands-state
-      - ./config.toml:/app/openhands/config.toml:ro
-      - .:/workspace
-    environment:
-      - SANDBOX_RUNTIME_CONTAINER_IMAGE=docker.all-hands.dev/all-hands-ai/runtime:0.39-nikolaik
-      - LOG_ALL_EVENTS=true
-    extra_hosts:
-      - host.docker.internal:host-gateway
-    networks:
-      - local-network
-    env_file:
-      - .env
 
 volumes:
   qdrant-storage:

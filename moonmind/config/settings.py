@@ -6,13 +6,17 @@ from urllib.parse import urlsplit
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-from moonmind.claude.runtime import CLAUDE_RUNTIME_DISABLED_MESSAGE
+from moonmind.claude.runtime import (
+    CLAUDE_RUNTIME_DISABLED_MESSAGE,
+)
 from moonmind.claude.runtime import (
     build_runtime_gate_state as build_claude_runtime_gate_state,
 )
 from moonmind.config.jules_settings import JulesSettings
 from moonmind.config.paths import ENV_FILE
-from moonmind.jules.runtime import JULES_RUNTIME_DISABLED_MESSAGE
+from moonmind.jules.runtime import (
+    JULES_RUNTIME_DISABLED_MESSAGE,
+)
 from moonmind.jules.runtime import (
     build_runtime_gate_state as build_jules_runtime_gate_state,
 )
@@ -2839,22 +2843,6 @@ class AppSettings(BaseSettings):
     langchain_project: str = Field("MoonMind", alias="LANGCHAIN_PROJECT")
 
     model_directory: str = Field("/app/model_data", alias="MODEL_DIRECTORY")
-
-    # OpenHands settings
-    openhands_llm_api_key: Optional[str] = Field(None, alias="OPENHANDS__LLM__API_KEY")
-    openhands_llm_model: str = Field(
-        "gemini/gemini-2.5-pro-exp-03-25", alias="OPENHANDS__LLM__MODEL"
-    )
-    openhands_llm_custom_llm_provider: str = Field(
-        "gemini_cli", alias="OPENHANDS__LLM__CUSTOM_LLM_PROVIDER"
-    )
-    openhands_llm_timeout: int = Field(600, alias="OPENHANDS__LLM__TIMEOUT")
-    openhands_llm_embedding_model: str = Field(
-        "models/text-embedding-004", alias="OPENHANDS__LLM__EMBEDDING_MODEL"
-    )
-    openhands_core_workspace_base: str = Field(
-        "/workspace", alias="OPENHANDS__CORE__WORKSPACE_BASE"
-    )
 
     postgres_version: int = Field(14, alias="POSTGRES_VERSION")
     rabbitmq_user: Optional[str] = Field(None, alias="RABBITMQ_USER")

@@ -445,7 +445,6 @@ Used when MoonMind delegates execution to a system it does not run.
 Examples:
 
 * `jules`
-* `openhands`
 * future BYOA integrations
 
 Responsibilities:
