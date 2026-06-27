@@ -16950,7 +16950,7 @@ describe("Task Create runtime switch layout stability", () => {
   });
 });
 
-describe("MM-936 capability registry and chip computation", () => {
+describe("MM-936/MM-941 capability registry and chip computation", () => {
   function requireChip(
     chips: ReturnType<typeof buildCapabilityChips>,
     token: string,
@@ -16992,6 +16992,12 @@ describe("MM-936 capability registry and chip computation", () => {
       },
     ]);
     expect(capabilityChipProvenanceLabel(chip)).toBeNull();
+    expect(chip.readiness).toMatchObject({
+      state: "requested",
+      label: "Requested capability",
+      sourceLabels: ["added to this step"],
+      grantsAccess: false,
+    });
   });
 
   it("keeps derived capabilities non-removable with provenance", () => {
@@ -17024,6 +17030,30 @@ describe("MM-936 capability registry and chip computation", () => {
     );
   });
 
+  it("represents derived capability readiness without granting access", () => {
+    const chips = buildCapabilityChips({
+      skill: ["git"],
+      generatedTool: ["git"],
+      publish: ["gh"],
+    });
+    const gitChip = requireChip(chips, "git");
+    expect(gitChip.readiness).toEqual({
+      state: "required_before_launch",
+      label: "Required before launch",
+      description:
+        "This derived capability is required by step configuration before launch. The chip records the requirement; it does not grant access by itself.",
+      sourceLabels: ["from skill", "from tool"],
+      grantsAccess: false,
+    });
+
+    const ghChip = requireChip(chips, "gh");
+    expect(ghChip.readiness).toMatchObject({
+      state: "required_before_launch",
+      sourceLabels: ["from publish mode"],
+      grantsAccess: false,
+    });
+  });
+
   it("treats a capability with both explicit and derived sources as non-removable", () => {
     const chips = buildCapabilityChips({ explicit: ["git"], skill: ["git"] });
     expect(chips).toHaveLength(1);
@@ -17036,6 +17066,11 @@ describe("MM-936 capability registry and chip computation", () => {
     // The UI must not silently drop a backend-required capability even when the
     // user also added it explicitly.
     expect(capabilityChipProvenanceLabel(chip)).toBe("from skill");
+    expect(chip.readiness).toMatchObject({
+      state: "required_before_launch",
+      sourceLabels: ["from skill"],
+      grantsAccess: false,
+    });
   });
 
   it("normalizes and de-duplicates tokens while preserving first-seen order", () => {
