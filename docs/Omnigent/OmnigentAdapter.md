@@ -15,6 +15,7 @@ Last updated: 2026-06-27
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/ErrorTaxonomy.md`
 - `docs/MoonMindArchitecture.md`
+- `docs/Omnigent/MoonMindVsOmnigent.md`
 - Omnigent upstream API reference: `omnigent/server/API.md` in `omnigent-ai/omnigent`
 
 ---
@@ -29,9 +30,9 @@ In the target topology, MoonMind does not launch Claude Code, Codex CLI, or othe
 MoonMind Temporal Workflow / AgentRun
   -> MoonMind Omnigent adapter
       -> Omnigent server API
-          -> Omnigent managed session
+          -> Omnigent session
               -> omnigent-host container / sandbox / runner
-                  -> Claude Code, Codex, or another Omnigent harness
+                  -> Claude Code, Codex, Polly, or another Omnigent harness/agent
 ```
 
 The adapter must preserve MoonMind's core architecture:
@@ -91,7 +92,7 @@ integration.omnigent.harvest_session    # optional extension
 
 Omnigent's files panel and session resources are observable surfaces, not the authoritative MoonMind artifact system.
 
-The adapter must copy observable Omnigent inputs, outputs, streams, snapshots, diffs, and resource files into MoonMind artifacts and return compact refs in `AgentRunResult`.
+The adapter must copy observable Omnigent inputs, outputs, streams, snapshots, changed-file manifests, current file contents, and session file resources into MoonMind artifacts and return compact refs in `AgentRunResult`.
 
 ### 2.4 Durability boundary in v1
 
@@ -99,7 +100,7 @@ The streaming-gateway model runs the entire Omnigent session inside a single `in
 
 The honest v1 guarantee is therefore:
 
-- **omnigent-host owns live-execution durability.** The Omnigent session and its workspace survive MoonMind worker death because they live on the Omnigent side, not in the activity attempt.
+- **Omnigent owns live-execution durability.** The Omnigent session and its runner-side workspace survive MoonMind worker death when the Omnigent server/host keeps them alive.
 - **Temporal durably records delegation and result.** Temporal durably remembers that the run was delegated to Omnigent and what the final canonical result was, and re-attaches on retry (§9.5, §10, §12.5).
 - **Retry re-attaches, it does not recreate.** A retry reconnects to the existing Omnigent session rather than provisioning a second host or reposting the first message.
 
@@ -115,9 +116,9 @@ Out of scope for v1: durable checkpointing of intra-run progress, and Omnigent s
 | `MoonMind.AgentRun` | Omnigent session execution | One AgentRun may own one Omnigent session. |
 | Workflow step | Session message/turn or whole session | v1 maps one step to one execute activity. |
 | Managed runtime profile | Omnigent server/agent/session target | Use endpoint/agent selectors, not raw credentials. |
-| ArtifactRef | Omnigent snapshot/resource/file/diff copied into MoonMind | Never return Omnigent raw resources as top-level result. |
+| ArtifactRef | Omnigent snapshot/resource/file data copied into MoonMind | Never return Omnigent raw resources as top-level result. |
 | Cancel workflow/step | `interrupt`, then `stop_session` | Do not delete before harvesting artifacts. |
-| Result | Final snapshot + transcript + workspace harvest | Return `AgentRunResult` with artifact refs. |
+| Result | Final snapshot + transcript + resource harvest | Return `AgentRunResult` with artifact refs. |
 
 ---
 
@@ -132,7 +133,8 @@ The v1 adapter does not attempt to:
 - automatically capture native runtime private state not exposed by Omnigent APIs;
 - guarantee perfect replay of transient Omnigent SSE events after the stream is disconnected;
 - implement multi-step, long-lived Omnigent session reuse across MoonMind steps in v1;
-- introduce provider-specific top-level MoonMind agent-id aliases such as `omnigent_session`, `omnigent_claude`, or `omnigent_codex`.
+- introduce provider-specific top-level MoonMind agent-id aliases such as `omnigent_session`, `omnigent_claude`, or `omnigent_codex`;
+- assume Omnigent exposes a stable public diff endpoint when the upstream OpenAPI does not advertise one.
 
 ---
 
@@ -219,7 +221,7 @@ ProviderCapabilityDescriptor(
     supportsCancel=False,
     supportsResultFetch=False,
     defaultPollHintSeconds=15,
-    execution_style="streaming_gateway",
+    executionStyle="streaming_gateway",
 )
 ```
 
@@ -236,8 +238,9 @@ Cancellation for v1 is handled by cancellation of the execute activity, which th
 
 These capability values match the only existing streaming-gateway provider, OpenClaw:
 
-- `supportsCancel=False` — in streaming mode, cancellation is delivered by Temporal activity cancellation, not a `do_cancel` hook (the hook raises `RuntimeError`). Advertising `supportsCancel=True` while the hook raises would be internally contradictory.
+- `supportsCancel=False` — in streaming mode, cancellation is delivered by Temporal activity cancellation, not a `do_cancel` hook.
 - `defaultPollHintSeconds=15` — unused in streaming mode, but kept equal to the other providers rather than introducing a bespoke value.
+- `executionStyle` uses the canonical serialized alias used by other external-provider snippets.
 
 ### 6.2 Why not `ManagedAgentAdapter`
 
@@ -247,7 +250,7 @@ The Omnigent topology delegates those responsibilities to Omnigent server and `o
 
 A future v2 may add an `OmnigentManagedBridgeAdapter` only if MoonMind directly provisions Omnigent hosts and controls their lifecycle as MoonMind managed workloads.
 
-Host packaging — whether `omnigent-host` runs containers via docker-in-docker, and whether MoonMind co-locates the Omnigent server/host in its own compose — is a Phase-1 compose/host-image concern tracked in `OmnigentIntegrationArchitecture.md`, not part of this adapter contract. If MoonMind ends up provisioning and controlling the host lifecycle, the ownership boundary shifts toward "managed," which is exactly the trigger for the reserved `OmnigentManagedBridgeAdapter`.
+Host packaging — whether `omnigent-host` runs containers via docker-in-docker, and whether MoonMind co-locates the Omnigent server/host in its own compose — is a compose/host-image concern tracked outside this adapter contract. If MoonMind ends up provisioning and controlling the host lifecycle, the ownership boundary shifts toward "managed," which is exactly the trigger for the reserved `OmnigentManagedBridgeAdapter`.
 
 ---
 
@@ -290,13 +293,19 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
       },
       "session": {
         "hostType": "managed",
-        "workspace": "https://github.com/org/repo#main",
+        "hostId": null,
+        "workspacePath": null,
         "title": "Implement auth fix",
         "labels": {},
         "modelOverride": null,
         "reasoningEffort": "high",
         "terminalLaunchArgs": [],
         "collaborationMode": null
+      },
+      "workspaceContext": {
+        "repository": "https://github.com/org/repo",
+        "branch": "main",
+        "includeInPrompt": true
       },
       "prompt": {
         "mode": "message",
@@ -309,11 +318,10 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
         "stream": true,
         "snapshots": true,
         "changedFiles": true,
-        "fileDiffs": true,
         "workspaceFiles": true,
         "sessionFiles": true,
-        "childSessions": true,
         "githubPr": true,
+        "patchSource": "github_pr_or_host_helper",
         "deleteOmnigentSessionAfterHarvest": false
       }
     }
@@ -331,14 +339,28 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
 | `agent.bundleRef` | MoonMind artifact ref for an Omnigent agent bundle | Uploaded via `/api/agents` if no `agentId`. |
 | `agent.harnessOverride` | Omnigent session harness override | Optional; only for compatible Omnigent agents. |
 | `session.hostType` | `managed` or `external` | `managed` means Omnigent provisions host/sandbox. |
-| `session.workspace` | Repo URL for managed sessions or path for external sessions | For managed sessions, prefer repo URL with optional `#branch`. |
+| `session.hostId` | Omnigent external host id | Must be absent/null for `managed`; required for external-host launch flows that need a host-bound runner. |
+| `session.workspacePath` | Absolute path on an external Omnigent host | Must be absent/null for `managed`; required when `hostId` is set. |
+| `workspaceContext` | Repository/branch context for prompts and artifact metadata | Not sent as Omnigent `workspace` when `hostType=managed`. |
 | `session.terminalLaunchArgs` | Native Claude/Codex launch flags | Must be bounded and non-secret. |
 | `prompt.text` | Inline prompt | Prefer artifact-backed prompt for large inputs. |
 | `prompt.instructionRef` | MoonMind artifact ref with prompt/instructions | Activity reads artifact and posts text. |
 | `prompt.includeIdempotencyMarker` | Whether to include a compact non-secret retry marker in the first message | Defaults to true for retry reconciliation. |
+| `capture.patchSource` | Where patch artifacts may come from | `github_pr_or_host_helper` in v1; do not call an undocumented Omnigent diff route. |
 | `capture.*` | Artifact capture policy | Controls MoonMind harvesting, not Omnigent storage. |
 
-### 7.4 Target resolution order
+### 7.4 Managed vs external session validation
+
+The adapter must validate the session target before calling Omnigent.
+
+Rules:
+
+- For `hostType="managed"`, omit `host_id` and `workspace` in the Omnigent `POST /v1/sessions` payload. Omnigent server chooses both, and upstream rejects caller-provided `host_id` / `workspace` for managed session creates.
+- For `hostType="managed"`, `session.hostId` and `session.workspacePath` must be null or absent. Repository hints belong in `workspaceContext` or top-level `workspaceSpec`, and may be included in the first prompt, but they are not sent as Omnigent `workspace`.
+- For `hostType="external"`, `hostId` and `workspacePath` are allowed and may be translated to Omnigent `host_id` and `workspace`.
+- A repository URL in `workspaceSpec.repository` or `workspaceContext.repository` is prompt/artifact context unless a future Omnigent API explicitly accepts repository URLs for managed session creation.
+
+### 7.5 Target resolution order
 
 The activity resolves the Omnigent agent target in this order:
 
@@ -374,12 +396,13 @@ Required operations:
 | `resolve_elicitation` | `POST /v1/sessions/{id}/elicitations/{eid}/resolve` |
 | `list_changed_files` | `GET /v1/sessions/{id}/resources/environments/default/changes` |
 | `get_workspace_file` | `GET /v1/sessions/{id}/resources/environments/default/filesystem/{path}` |
-| `get_workspace_diff` | `GET /v1/sessions/{id}/resources/environments/default/diff/{path}` |
 | `list_session_files` | `GET /v1/sessions/{id}/resources/files` |
 | `get_session_file_content` | `GET /v1/sessions/{id}/resources/files/{file_id}/content` |
 | `interrupt` | `POST /v1/sessions/{id}/events` with `type=interrupt` |
 | `stop_session` | `POST /v1/sessions/{id}/events` with `type=stop_session` |
 | `delete_session` | `DELETE /v1/sessions/{id}` |
+
+There is intentionally no required `get_workspace_diff` method in v1. The upstream OpenAPI-confirmed resource surface is changes plus filesystem file content; patch artifacts must come from GitHub PR harvesting, a host-side helper, or a future Omnigent capability probe.
 
 Transport rules:
 
@@ -436,7 +459,7 @@ AgentRunResult
 
 The activity creates an Omnigent session using JSON session creation.
 
-Representative payload:
+Representative managed-session payload:
 
 ```json
 {
@@ -449,14 +472,34 @@ Representative payload:
     "moonmind.idempotency_key": "..."
   },
   "host_type": "managed",
-  "workspace": "https://github.com/org/repo#main",
   "model_override": null,
   "reasoning_effort": "high",
   "terminal_launch_args": []
 }
 ```
 
-For `hostType=managed`, Omnigent server chooses/provisions the host and workspace. For `hostType=external`, the caller must provide an Omnigent host/workspace model that is already valid for that server.
+For `hostType=managed`, Omnigent server chooses/provisions the host and workspace. The adapter must not send `host_id` or `workspace` for managed session creation.
+
+Representative external-host payload:
+
+```json
+{
+  "agent_id": "ag_abc123",
+  "title": "Implement auth fix",
+  "labels": {
+    "moonmind.workflow_id": "wf_...",
+    "moonmind.agent_run_id": "ar_...",
+    "moonmind.correlation_id": "...",
+    "moonmind.idempotency_key": "..."
+  },
+  "host_type": "external",
+  "host_id": "host_abc123",
+  "workspace": "/workspace/repo",
+  "model_override": null,
+  "reasoning_effort": "high",
+  "terminal_launch_args": []
+}
+```
 
 ### 9.4 First message construction
 
@@ -466,7 +509,7 @@ The message text is assembled from:
 2. `parameters.omnigent.prompt.instructionRef`, if present.
 3. `AgentExecutionRequest.instructionRef`, if present.
 4. `parameters.description`, if present.
-5. a generated prompt from title, workspace spec, and input refs.
+5. a generated prompt from title, workspace spec, workspace context, and input refs.
 
 Large prompt bodies should be artifact-backed and read at the activity boundary.
 
@@ -509,7 +552,7 @@ Rules:
 6. If a retry finds `posting`, it must reconcile before deciding whether to repost.
 7. Reconciliation checks Omnigent snapshot `items`, native `pending_inputs`, and any captured `session.input.consumed` events for the stored digest or idempotency marker.
 8. If reconciliation finds the first message, mark it `posted` and skip posting.
-9. If reconciliation cannot prove absence, do not blindly repost. Wait within the configured reconciliation grace period or surface `intervention_requested` / `integration_error` rather than duplicating work.
+9. If reconciliation cannot prove absence, do not blindly repost. Wait within the configured reconciliation grace period or surface a non-terminal `intervention_requested` status; if the activity must terminalize, use `failureClass=integration_error`.
 10. If the same `idempotencyKey` is reused with a different first-message digest, fail fast and require an explicit operator reset.
 
 Representative event:
@@ -532,18 +575,7 @@ Representative event:
 
 The adapter must persist an idempotency mapping outside the Activity attempt.
 
-### 10.1 Why a durable table (Simplicity Gate)
-
-Existing external adapters keep idempotency in `BaseExternalAgentAdapter._starts_by_idempotency`, an in-memory dict scoped to a single Activity attempt. That is sufficient for stateless streaming providers like OpenClaw, where a retry simply re-runs a chat-style completion. It is **not** sufficient for Omnigent: a retry that cannot see the prior attempt's state would create a second Omnigent session — meaning duplicate host provisioning and possibly a duplicate PR.
-
-Per the CLAUDE.md Simplicity Gate, the decision and what it replaces:
-
-- **v1 uses a dedicated `omnigent_external_runs` durable store**, because the in-memory per-attempt dict cannot survive worker death or span Temporal retries — the exact failure mode that produces duplicate sessions.
-- MoonMind does **not** introduce a shared `externalSession` table for Jules / Codex Cloud / OpenClaw / Omnigent in v1. No such table exists today; adding one now would be speculative cross-provider scaffolding outside this task's scope. Promotion to a shared table is deferred until a second provider actually needs durable session mapping (resolves open question #6).
-
-### 10.2 Run-mapping store
-
-The durable store holds:
+Suggested table or durable store:
 
 ```text
 omnigent_external_runs
@@ -583,6 +615,14 @@ Rules:
 - Never post a second first message for the same idempotency key and digest unless reconciliation has positively proved the prior POST did not reach Omnigent.
 - Store only non-secret endpoint refs, not raw tokens or headers.
 
+### 10.1 Shared external-session table decision
+
+Do not introduce a generic `externalSession` table in v1.
+
+Omnigent has session-specific concerns — first-message state, pending ids, SSE artifact refs, session resource harvest state, and possible child sessions — that do not yet generalize cleanly across Jules, Codex Cloud, and OpenClaw. Keep the v1 durable mapping provider-specific as `omnigent_external_runs`.
+
+Promotion to a shared table becomes appropriate when at least one additional provider needs durable re-attach/session mapping with comparable fields.
+
 ---
 
 ## 11. State normalization
@@ -597,14 +637,13 @@ Map Omnigent observations into canonical MoonMind states.
 | `session.status = waiting` and active elicitation exists | `awaiting_approval` |
 | `session.status = waiting` without known elicitation | `intervention_requested` |
 | `response.elicitation_request` | `awaiting_approval` |
-| Terminal response received; adapter harvesting snapshot/workspace/session artifacts | `collecting_results` |
-| `response.completed`, session idle, and harvest complete | `completed` |
+| `response.completed` and session returns idle | `completed` |
 | `response.failed` | `failed` |
 | `session.status = failed` | `failed` |
 | Activity timeout | `timed_out` |
 | Activity cancellation after interrupt/stop | `canceled` |
 
-Unsupported or unknown provider states must be treated as canonical contract failures and surfaced with the `UnsupportedStatus` `ApplicationError.type` from `ErrorTaxonomy.md` (§5.3), not a bespoke error. Do not pass raw Omnigent statuses into workflow code as canonical states.
+Unsupported or unknown provider states must be treated as adapter contract errors. Do not pass raw Omnigent statuses into workflow code as canonical states.
 
 ---
 
@@ -663,11 +702,11 @@ Optional periodic snapshots may be captured for long runs.
 
 ### 12.5 Heartbeating, worker death, and re-attach
 
-Because the whole session runs inside one activity, MoonMind worker death is only detected through Temporal's activity heartbeat — the same mechanism the OpenClaw streaming activity relies on ("heartbeats carry stream progress").
+Because the whole session runs inside one activity, MoonMind worker death is only detected through Temporal's activity heartbeat — the same mechanism the OpenClaw streaming activity relies on.
 
-- **Heartbeat on progress.** The activity heartbeats on each captured SSE frame (or at least each snapshot / periodic interval), carrying a compact progress token (last event id / snapshot marker), never raw payloads.
-- **`heartbeat_timeout` ≪ `start_to_close_timeout`.** A long session needs a large start-to-close timeout; without a much smaller heartbeat timeout, worker death surfaces only at start-to-close, delaying recovery. Size the heartbeat timeout from `OMNIGENT_STREAM_HEARTBEAT_TIMEOUT_SECONDS` (§5.1) and mark the activity heartbeat-required in the activity catalog (`ActivityCatalogAndWorkerTopology.md`).
-- **Retry re-attaches, it never recreates.** On retry the activity: (1) looks up `omnigent_session_id` by `idempotencyKey` in `omnigent_external_runs` (§10); (2) reconnects the SSE stream to that session; (3) fetches a fresh snapshot (§12.4) to reconcile the gap missed while disconnected; (4) applies first-message idempotency (§9.5) before any POST; (5) resumes waiting for terminal state. A successful re-attach must never trigger a second session or a duplicate first message.
+- **Heartbeat on progress.** The activity heartbeats on each captured SSE frame, or at least on each snapshot / periodic interval, carrying a compact progress token rather than raw payloads.
+- **`heartbeat_timeout` must be much smaller than `start_to_close_timeout`.** A long session needs a large start-to-close timeout; without a much smaller heartbeat timeout, worker death surfaces only at start-to-close. Size the heartbeat timeout from `OMNIGENT_STREAM_HEARTBEAT_TIMEOUT_SECONDS` and mark the activity heartbeat-required in the activity catalog.
+- **Retry re-attaches, it never recreates.** On retry the activity looks up `omnigent_session_id`, reconnects the SSE stream to that session, fetches a fresh snapshot, applies first-message idempotency, and resumes waiting for terminal state.
 
 ---
 
@@ -679,11 +718,10 @@ MoonMind must copy Omnigent-observable resources into MoonMind artifacts. Omnige
 
 ### 13.2 Workspace files
 
-At terminal state, harvest:
+At terminal state, harvest the upstream-confirmed resource surfaces:
 
 ```text
 GET /v1/sessions/{id}/resources/environments/default/changes
-GET /v1/sessions/{id}/resources/environments/default/diff/{path}
 GET /v1/sessions/{id}/resources/environments/default/filesystem/{path}
 ```
 
@@ -691,11 +729,20 @@ Store:
 
 ```text
 output.workspace.changed_files.index.json
-output.workspace.diff.full.patch
-output.workspace.files/<path>.before
-output.workspace.files/<path>.after
 output.workspace.files/<path>.current
 output.workspace.manifest.json
+```
+
+The adapter must not assume a public Omnigent diff endpoint exists. If a patch artifact is required, produce it from one of these sources:
+
+1. GitHub PR diff after PR creation;
+2. host-side helper output, such as `git diff` captured inside the Omnigent host;
+3. a future Omnigent diff capability discovered explicitly at runtime.
+
+When none of those sources is available, store a diagnostic artifact instead of failing the whole run solely because `capture.patchSource` could not produce a patch:
+
+```text
+output.workspace.patch_unavailable.json
 ```
 
 ### 13.3 Session file resources
@@ -756,31 +803,12 @@ Suggested contents:
   "capture": {
     "changedFiles": 4,
     "sessionFiles": 0,
-    "childSessions": 0
+    "childSessions": 0,
+    "patchSource": "github_pr_or_host_helper",
+    "patchProduced": false
   }
 }
 ```
-
-### 13.6 Canonical `link_type` bindings
-
-Harvested artifacts must be persisted under the stable `artifact_links.link_type` taxonomy from `WorkflowArtifactSystemDesign.md` so existing MoonMind observability surfaces pick them up. The readable filenames in §12.2 and §13 are labels; the `link_type` is the machine-stable binding.
-
-| Harvested artifact | Canonical `link_type` |
-|---|---|
-| `input.omnigent.session_create.request/response.json` | `input.manifest` |
-| `input.omnigent.first_message.request/response.json` | `input.instructions` |
-| `runtime.omnigent.sse.raw.jsonl` | `runtime.merged_logs` |
-| `runtime.omnigent.sse.normalized.jsonl` | `output.logs` |
-| `runtime.omnigent.snapshot.initial.json` | `output.provider_snapshot` |
-| `output.omnigent.snapshot.final.json` | `output.provider_snapshot` |
-| `output.omnigent.transcript.jsonl` | `runtime.merged_logs` |
-| `output.omnigent.final_response.md` | `output.primary` |
-| `output.workspace.diff.full.patch` | `output.patch` |
-| `output.github.pr.diff.patch` | `output.patch` |
-| diagnostics artifact (§13.5) | `runtime.diagnostics` |
-| capture manifest / changed-files index | `output.agent_result` |
-
-Multiple artifacts may share a `link_type` (e.g. both snapshots, both patches); disambiguate with `label` and metadata per `WorkflowArtifactSystemDesign.md`.
 
 ---
 
@@ -857,12 +885,13 @@ Rules:
 1. Omnigent server URL may be stored as an endpoint ref in workflow payloads.
 2. Omnigent API tokens must be activity-side secrets only.
 3. MoonMind must redact auth headers, cookies, tokens, and secret-looking fields before artifact storage.
-4. Omnigent session labels must not include secrets.
-5. `parameters.omnigent` must not include raw credentials.
-6. Runtime credentials for Claude/Codex remain Omnigent server/host configuration concerns in this topology.
-7. Artifact capture must prefer redacted raw event records plus normalized views.
-8. Host-side capture helpers, if added later, must authenticate to MoonMind artifact APIs using scoped, short-lived credentials.
-9. First-message idempotency markers may include correlation ids and digests, but must not include raw prompts from private artifacts beyond the actual prompt body that is already being sent to Omnigent.
+4. Use the existing MoonMind redaction helpers, including `SecretRedactor` and `redact_sensitive_text`, rather than inventing a separate Omnigent-only redactor.
+5. Omnigent session labels must not include secrets.
+6. `parameters.omnigent` must not include raw credentials.
+7. Runtime credentials for Claude/Codex remain Omnigent server/host configuration concerns in this topology.
+8. Artifact capture must prefer redacted raw event records plus normalized views.
+9. Host-side capture helpers, if added later, must authenticate to MoonMind artifact APIs using scoped, short-lived credentials.
+10. First-message idempotency markers may include correlation ids and digests, but must not include raw prompts from private artifacts beyond the actual prompt body that is already being sent to Omnigent.
 
 ---
 
@@ -871,9 +900,10 @@ Rules:
 | Failure | MoonMind failure class | Notes |
 |---|---|---|
 | Omnigent server unreachable before session create | `integration_error` | Retryable if transport policy allows. |
-| Omnigent server returns `429` / rate limited | `integration_error` (retryable-with-policy) | Classify as `RATE_LIMITED` per `ErrorTaxonomy.md` §8; honor `Retry-After` and use bounded retry, not immediate retry. |
+| Omnigent server returns `429` / rate limited | `integration_error` | Classify as rate-limited; honor `Retry-After` and use bounded retry, not immediate retry. |
 | Authentication failure to Omnigent | `integration_error` | Non-retryable until config fixed. |
 | Unknown Omnigent agent name | `user_error` | Bad request/target selection. |
+| Invalid managed-session create fields | `user_error` | Example: `hostType=managed` with `host_id` / `workspace`. |
 | Session create 4xx | `user_error` or `integration_error` | Depends on validation vs auth/config. |
 | Managed host provisioning failure | `system_error` or `integration_error` | Preserve Omnigent error body in diagnostics. |
 | Runtime/harness not configured | `integration_error` | Omnigent host/provider config issue. |
@@ -882,7 +912,7 @@ Rules:
 | Artifact harvest partial failure | completed with diagnostics or `system_error` | Policy-controlled. |
 | Unknown Omnigent stream event schema | `integration_error` | Contract drift. |
 | Idempotency key reused with different first-message digest | `user_error` | Caller attempted conflicting replay. |
-| Retry cannot prove whether first message was accepted | `intervention_requested` or `integration_error` | Do not blindly duplicate the first message. |
+| Retry cannot prove whether first message was accepted | `integration_error` | While waiting, expose `status=intervention_requested`; if terminalized, use this valid `FailureClass`. |
 
 ---
 
@@ -897,8 +927,7 @@ Example:
   "outputRefs": [
     "art_transcript",
     "art_final_snapshot",
-    "art_workspace_manifest",
-    "art_full_patch"
+    "art_workspace_manifest"
   ],
   "summary": "Implemented login redirect fix and opened PR ...",
   "diagnosticsRef": "art_diagnostics",
@@ -910,9 +939,9 @@ Example:
     "omnigentAgentId": "ag_abc123",
     "omnigentAgentName": "codex-native-ui",
     "hostType": "managed",
-    "workspace": "https://github.com/org/repo#main",
     "githubPrUrl": "https://github.com/org/repo/pull/123",
-    "captureManifestRef": "art_capture_manifest"
+    "captureManifestRef": "art_capture_manifest",
+    "patchRef": "art_github_pr_diff"
   }
 }
 ```
@@ -955,7 +984,7 @@ _OMNIGENT_CAPABILITY = ProviderCapabilityDescriptor(
     supportsCancel=False,
     supportsResultFetch=False,
     defaultPollHintSeconds=15,
-    execution_style="streaming_gateway",
+    executionStyle="streaming_gateway",
 )
 
 class OmnigentExternalAdapter(BaseExternalAgentAdapter):
@@ -1027,7 +1056,8 @@ Additional requirements:
 - session epoch tracking for clear/reset semantics;
 - stricter ownership and cleanup policies;
 - child-session mapping in MoonMind run ledger;
-- per-message idempotency records, not only first-message records.
+- per-message idempotency records, not only first-message records;
+- re-evaluate whether external sessions may carry `host_id` / `workspace` while managed sessions still omit both.
 
 ---
 
@@ -1061,6 +1091,8 @@ This helper must write to MoonMind's artifact API or artifact worker surface, no
 ### 23.1 Unit tests
 
 - target block validation;
+- managed-session rejection of caller-provided host/workspace fields;
+- external-session translation of `hostId` / `workspacePath` to Omnigent `host_id` / `workspace`;
 - endpoint config resolution;
 - single canonical `agentId=omnigent` registration;
 - rejection of provider-specific top-level aliases;
@@ -1073,7 +1105,8 @@ This helper must write to MoonMind's artifact API or artifact worker surface, no
 - first-message digest computation;
 - first-message skip-on-reuse behavior;
 - `posting` state reconciliation behavior;
-- digest mismatch fail-fast behavior.
+- digest mismatch fail-fast behavior;
+- no required `get_workspace_diff` transport call in v1.
 
 ### 23.2 Adapter contract tests
 
@@ -1094,28 +1127,32 @@ The fake server should support:
 - `/v1/sessions/{id}` snapshot;
 - `/v1/sessions/{id}/events`;
 - `/v1/sessions/{id}/stream` SSE;
-- resource endpoints for changes/files/diffs.
+- resource endpoints for changes, filesystem content, and session files.
 
 Scenarios:
 
 1. successful run with text output;
 2. failed run;
 3. managed host launch delay;
-4. stream disconnect and snapshot reconciliation;
-5. elicitation request and approval;
-6. changed files and diff harvest;
-7. child session event capture;
-8. cancellation before completion;
-9. idempotent retry after session create but before first message;
-10. idempotent retry after first message response but before terminal result;
-11. crash-window retry with `posting` state and snapshot reconciliation;
-12. conflicting first-message digest under the same idempotency key.
+4. managed session create omits `host_id` and `workspace`;
+5. external session create may include `host_id` and `workspace`;
+6. stream disconnect and snapshot reconciliation;
+7. elicitation request and approval;
+8. changed files and current-file harvest without a diff endpoint;
+9. patch unavailable diagnostic when no GitHub PR/host helper/future diff capability exists;
+10. child session event capture;
+11. cancellation before completion;
+12. idempotent retry after session create but before first message;
+13. idempotent retry after first message response but before terminal result;
+14. crash-window retry with `posting` state and snapshot reconciliation;
+15. conflicting first-message digest under the same idempotency key.
 
 ### 23.4 Live smoke tests
 
 Run against a real Omnigent server with a disposable repository and a sandbox host. Validate:
 
 - session creation;
+- managed session creation does not include caller-provided workspace;
 - host provisioning;
 - Claude or Codex launch selected through `parameters.omnigent`;
 - stream capture;
@@ -1126,49 +1163,17 @@ Run against a real Omnigent server with a disposable repository and a sandbox ho
 
 ---
 
-## 24. Rollout phases
+## 24. Implementation sequencing
 
-### Phase 0: design and fake-client tests
+This canonical doc describes desired state. Detailed rollout tasks and temporary execution checklists should live under `docs/tmp/` or local-only handoff artifacts.
 
-- Add this design doc.
-- Add settings gate.
-- Add typed target/capture models.
-- Add fake Omnigent client tests.
+The stable implementation milestones are:
 
-### Phase 1: streaming execute provider
-
-- Add `OmnigentExternalAdapter` registration.
-- Add `integration.omnigent.execute` activity.
-- Register `integration.omnigent.execute` in the activity catalog under the integration family/fleet, marked heartbeat-required (`ActivityCatalogAndWorkerTopology.md`).
-- Expose the activity through the integration worker handler / task-queue binding so it is discoverable via catalog-driven routing.
-- Capture requests, stream, snapshots, and final result.
-- Return canonical `AgentRunResult` with artifact refs.
-- Enforce one canonical top-level `agentId=omnigent`.
-- Enforce first-message durable idempotency.
-
-### Phase 2: resource harvesting
-
-- Harvest changed files, diffs, file contents, and session files.
-- Add capture manifest.
-- Add partial-harvest diagnostics policy.
-
-### Phase 3: PR post-processing
-
-- Detect PR URL/branch.
-- Fetch GitHub PR metadata/diff/checks/comments.
-- Link PR artifacts to AgentRun result.
-
-### Phase 4: interactive session reuse
-
-- Add polling/session activity family.
-- Support continuation across workflow steps.
-- Add durable stream mirror or session event polling.
-- Add idempotency records for each follow-up message.
-
-### Phase 5: host-side capture helper
-
-- Add optional helper to Omnigent host image.
-- Capture native logs, full terminal scrollback, runtime diagnostics, and workspace tarballs.
+1. Runtime gate, typed target models, fake Omnigent client, and adapter registration.
+2. `integration.omnigent.execute` with stream/snapshot capture and first-message idempotency.
+3. Resource harvesting for changed-file manifests, current file contents, and session files.
+4. GitHub PR post-processing for durable patch artifacts when PRs are produced.
+5. Optional polling/session reuse and host-side capture helper.
 
 ---
 
@@ -1180,7 +1185,8 @@ Run against a real Omnigent server with a disposable repository and a sandbox ho
 4. Should MoonMind patch Omnigent to emit webhooks or artifact callbacks instead of relying on SSE capture?
 5. How should clear/context-reset semantics map onto MoonMind step epochs in v2?
 6. *(Resolved — see §10.1.)* A shared `externalSession` table is not introduced in v1; `omnigent_external_runs` stays dedicated, and promotion to a shared table is deferred until a second provider needs durable session mapping.
-7. *(Resolved — fail closed.)* Ambiguous `posting` retries surface `intervention_requested` rather than reposting (§9.5 rule 9); a CI-only opt-in for repost-after-positive-absence is possible later but out of scope for v1.
+7. *(Resolved — fail closed.)* Ambiguous `posting` retries surface a non-terminal `intervention_requested` status while waiting for operator input; if the activity must terminalize, it returns `failureClass=integration_error` rather than an invalid failure class.
+8. Should MoonMind require a host-side helper for first-class patch artifacts, or is GitHub PR post-processing sufficient for v1?
 
 ---
 
