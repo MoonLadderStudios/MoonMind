@@ -1837,6 +1837,8 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
                         "jiraIssueKey": {"type": "string"},
                         "jiraPresetBrief": {"type": "string"},
                         "jiraStepInstructions": {"type": "string"},
+                        "resolvedSourceDesignPath": {"type": "string"},
+                        "sourceResolution": {"type": "object"},
                         "jiraIssue": {"type": "object"},
                         "summary": {"type": "string"},
                     },

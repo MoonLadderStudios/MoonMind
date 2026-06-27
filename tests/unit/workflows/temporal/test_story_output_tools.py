@@ -375,6 +375,105 @@ async def test_load_jira_preset_brief_ignores_criteria_only_custom_fields():
 
 
 @pytest.mark.asyncio
+async def test_load_jira_preset_brief_resolves_existing_source_design_path(tmp_path):
+    source_path = "docs/ManagedAgents/ManagedRuntimeCleanup.md"
+    source_file = tmp_path / source_path
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("# Managed Runtime Cleanup\n", encoding="utf-8")
+    service = _FakeJiraService()
+    service.issue_responses["MM-940"] = {
+        "key": "MM-940",
+        "fields": {
+            "summary": f"Implement {source_path}",
+            "description": "Break the canonical cleanup design into work.",
+        },
+    }
+
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-940", "repositoryRoot": str(tmp_path)},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.status == "COMPLETED"
+    assert result.outputs["resolvedSourceDesignPath"] == source_path
+    resolution = result.outputs["sourceResolution"]
+    assert resolution["status"] == "resolved"
+    assert resolution["selectedPath"] == source_path
+    assert resolution["candidatePaths"] == [
+        {
+            "path": source_path,
+            "sourceField": "jira.summary",
+            "sourceFields": ["jira.summary", "jira.presetBrief"],
+            "exists": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_load_jira_preset_brief_resolves_single_path_without_worker_cwd_validation():
+    service = _FakeJiraService()
+    source_path = "docs/ExternalProject/DesiredState.md"
+    service.issue_responses["MM-941"] = {
+        "key": "MM-941",
+        "fields": {
+            "summary": f"Implement {source_path}",
+            "description": "Break the external repository design into work.",
+        },
+    }
+
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-941"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["resolvedSourceDesignPath"] == source_path
+    resolution = result.outputs["sourceResolution"]
+    assert resolution["status"] == "resolved"
+    assert resolution["selectedPath"] == source_path
+    assert resolution["candidatePaths"] == [
+        {
+            "path": source_path,
+            "sourceField": "jira.summary",
+            "sourceFields": ["jira.summary", "jira.presetBrief"],
+            "exists": None,
+        }
+    ]
+    assert "repository-root validation not run" in resolution["reason"]
+
+
+@pytest.mark.asyncio
+async def test_load_jira_preset_brief_reports_ambiguous_source_paths(tmp_path):
+    first_path = "docs/ManagedAgents/ManagedRuntimeCleanup.md"
+    second_path = "docs/ManagedAgents/ManagedAgentArchitecture.md"
+    for source_path in (first_path, second_path):
+        source_file = tmp_path / source_path
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_text("# Source\n", encoding="utf-8")
+    service = _FakeJiraService()
+    service.issue_responses["MM-940"] = {
+        "key": "MM-940",
+        "fields": {
+            "summary": "Managed runtime cleanup",
+            "description": f"Use {first_path} and compare {second_path}.",
+        },
+    }
+
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-940", "repositoryRoot": str(tmp_path)},
+        jira_service_factory=lambda: service,
+    )
+
+    assert "resolvedSourceDesignPath" not in result.outputs
+    resolution = result.outputs["sourceResolution"]
+    assert resolution["status"] == "ambiguous"
+    assert resolution["selectedPath"] == ""
+    assert [item["path"] for item in resolution["candidatePaths"]] == [
+        first_path,
+        second_path,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_resolves_issue_type_name_from_story_breakdown_source():
     service = _FakeJiraService()
     breakdown = {
@@ -675,6 +774,55 @@ async def test_create_jira_issues_noops_for_empty_previous_story_artifact():
     assert artifact_reads == ["art_empty_story_breakdown"]
     assert fetch_calls == []
     assert service.requests == []
+
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_fails_for_failed_empty_story_artifact():
+    service = _FakeJiraService()
+    breakdown = {
+        "error": {
+            "code": "moonspec-breakdown.imperative-input",
+            "message": (
+                "Imperative input: provide the underlying declarative design or "
+                "explicitly confirm imperative input"
+            ),
+        },
+        "stories": [],
+    }
+
+    async def artifact_reader(ref: str) -> bytes:
+        assert ref == "art_failed_story_breakdown"
+        return json.dumps(breakdown).encode("utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="moonspec-breakdown\\.imperative-input",
+    ):
+        await create_jira_issues_from_stories(
+            {
+                "storyOutput": {
+                    "mode": "jira",
+                    "handoff": "artifact",
+                    "requiresStoryBreakdownArtifactRef": True,
+                    "fallback": "fail",
+                    "jira": {
+                        "projectKey": "MM",
+                        "issueTypeName": "Story",
+                    },
+                },
+            },
+            {
+                "previousOutputs": {
+                    "storyOutput": {
+                        "storyBreakdownArtifactRef": "art_failed_story_breakdown",
+                    }
+                }
+            },
+            jira_service_factory=lambda: service,
+            artifact_reader=artifact_reader,
+        )
+    assert service.requests == []
+
 
 @pytest.mark.parametrize(
     ("payload", "expected"),

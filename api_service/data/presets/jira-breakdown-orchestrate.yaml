@@ -81,8 +81,11 @@ steps:
       Run moonspec-breakdown using this input preference chain:
 
       1. If Source declarative document path is non-empty, read that repo path and use it as the source design.
-      2. Otherwise, if trusted Jira previous output from the prior step is available, use its jiraPresetBrief as the source design.
-      3. Otherwise, use Workflow instructions as the source design.
+      2. Otherwise, if trusted Jira previous output from the prior step includes sourceResolution.status = "resolved" and resolvedSourceDesignPath is non-empty, read resolvedSourceDesignPath as the source design.
+      3. Otherwise, if trusted Jira previous output from the prior step is available, use its jiraPresetBrief as the source design.
+      4. Otherwise, use Workflow instructions as the source design.
+
+      If trusted Jira sourceResolution.status is "ambiguous", "invalid_candidates", or "invalid_explicit_path", fail fast with an actionable source-resolution error instead of decomposing the Jira brief as inline text.
 
       Source declarative document path:
       {{ inputs.source_design_path }}
@@ -94,6 +97,7 @@ steps:
       {{ inputs.feature_request }}
 
       If the input is a readable repo path, use that file as the original declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
+      If the selected input is trusted Jira resolvedSourceDesignPath, treat it as a readable repo path selected through deterministic source resolution and preserve that path the same way.
       If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
