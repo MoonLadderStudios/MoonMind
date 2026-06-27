@@ -16417,6 +16417,11 @@ describe("Task Create governed Tool authoring", () => {
     expect(
       (within(step).getByLabelText("transitionId") as HTMLInputElement).value,
     ).toBe("51");
+    const addToStep = within(step).getByRole("button", {
+      name: "Add to Step 1",
+    });
+    fireEvent.click(addToStep);
+    fireEvent.click(within(step).getByRole("menuitem", { name: /^Jira/ }));
 
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 
@@ -16439,6 +16444,7 @@ describe("Task Create governed Tool authoring", () => {
           issueKey: "MM-576",
           transitionId: "51",
         },
+        requiredCapabilities: ["jira"],
       },
     });
     expect(request.payload.task.steps[0]?.["skill"]).toBeUndefined();

@@ -2341,10 +2341,12 @@ function manualToolPayload(
   if (!toolId) {
     return null;
   }
+  const caps = step.explicitRequiredCapabilities;
   return {
     type: "tool",
     id: toolId,
     inputs,
+    ...(caps.length > 0 ? { requiredCapabilities: caps } : {}),
   };
 }
 
