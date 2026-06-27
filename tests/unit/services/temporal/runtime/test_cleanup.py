@@ -168,6 +168,9 @@ def test_mm_949_terminal_old_per_run_workspace_is_eligible_in_dry_run(
     assert len(workspace_decisions) == 1
     assert workspace_decisions[0].classification == "eligible"
     assert workspace_decisions[0].reason == "dry-run would delete"
+    assert result.metrics["resource.workspace.eligible"] == 1
+    assert result.candidate_samples[0].kind == "workspace"
+    assert result.candidate_samples[0].classification == "eligible"
     assert run_root.exists()
 
 def test_mm_949_filesystem_workspace_without_records_is_ambiguous(
@@ -349,9 +352,47 @@ def test_mm_949_enabled_delete_uses_rescan_and_deletes_records_after_retention(
     assert classifications[("workspace", "run-1")] == "deleted"
     assert classifications[("run_record", "run-1.json")] == "deleted"
     assert classifications[("session_record", "sess-1.json")] == "deleted"
+    assert result.scanned_record_files == 2
+    assert result.deleted_samples
+    assert result.deleted_samples[0].classification == "deleted"
     assert not run_root.exists()
     assert run_store.load("run-1") is None
     assert session_store.load("sess-1") is None
+
+
+def test_mm_951_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+    config = _config(root, dry_run=False)
+    config = ManagedRuntimeCleanupConfig(
+        enabled=config.enabled,
+        dry_run=config.dry_run,
+        workspace_retention=config.workspace_retention,
+        artifact_retention=config.artifact_retention,
+        record_retention=config.record_retention,
+        grace=config.grace,
+        max_delete_paths=0,
+        max_delete_bytes=config.max_delete_bytes,
+        lock_path=config.lock_path,
+        runtime_store_root=config.runtime_store_root,
+        artifact_root=config.artifact_root,
+    )
+
+    result = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=config,
+        now=lambda: NOW,
+    ).run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "budget_exhausted"
+    assert result.delete_budget_exhausted == 1
+    assert result.metrics["resource.workspace.budget_exhausted"] == 1
+    assert run_root.exists()
 
 
 def test_mm_949_config_from_env_normalizes_artifact_root_and_caps() -> None:

@@ -38,6 +38,7 @@ ManagedRuntimeCleanupClassification = Literal[
     "protected_shared",
     "eligible",
     "deleted",
+    "budget_exhausted",
     "skipped_unsafe_path",
     "skipped_ambiguous_owner",
     "error",
@@ -142,6 +143,24 @@ class ManagedRuntimeCleanupDecision:
 
 
 @dataclass(frozen=True)
+class ManagedRuntimeCleanupSample:
+    kind: ManagedRuntimeCandidateKind
+    path: str
+    classification: ManagedRuntimeCleanupClassification
+    reason: str
+    estimated_bytes: int = 0
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "kind": self.kind,
+            "path": self.path,
+            "classification": self.classification,
+            "reason": self.reason,
+            "estimatedBytes": self.estimated_bytes,
+        }
+
+
+@dataclass(frozen=True)
 class ManagedRuntimeCleanupResult:
     disabled: bool
     dry_run: bool
@@ -149,6 +168,7 @@ class ManagedRuntimeCleanupResult:
     scanned_session_records: int
     scanned_workspace_roots: int
     scanned_artifact_dirs: int
+    scanned_record_files: int
     protected_roots: int
     eligible_roots: int
     deleted_roots: int
@@ -159,7 +179,11 @@ class ManagedRuntimeCleanupResult:
     skipped_recent: int
     skipped_unsafe_path: int
     skipped_ambiguous_owner: int
+    delete_budget_exhausted: int
     errors: tuple[str, ...]
+    metrics: dict[str, int] = field(default_factory=dict)
+    candidate_samples: tuple[ManagedRuntimeCleanupSample, ...] = ()
+    deleted_samples: tuple[ManagedRuntimeCleanupSample, ...] = ()
     decisions: tuple[ManagedRuntimeCleanupDecision, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
@@ -170,6 +194,7 @@ class ManagedRuntimeCleanupResult:
             "scannedSessionRecords": self.scanned_session_records,
             "scannedWorkspaceRoots": self.scanned_workspace_roots,
             "scannedArtifactDirs": self.scanned_artifact_dirs,
+            "scannedRecordFiles": self.scanned_record_files,
             "protectedRoots": self.protected_roots,
             "eligibleRoots": self.eligible_roots,
             "deletedRoots": self.deleted_roots,
@@ -180,7 +205,13 @@ class ManagedRuntimeCleanupResult:
             "skippedRecent": self.skipped_recent,
             "skippedUnsafePath": self.skipped_unsafe_path,
             "skippedAmbiguousOwner": self.skipped_ambiguous_owner,
+            "deleteBudgetExhausted": self.delete_budget_exhausted,
             "errors": list(self.errors),
+            "metrics": dict(self.metrics),
+            "candidateSamples": [
+                sample.to_dict() for sample in self.candidate_samples
+            ],
+            "deletedSamples": [sample.to_dict() for sample in self.deleted_samples],
             "decisions": [
                 {
                     "kind": decision.kind,
@@ -266,6 +297,8 @@ class ManagedRuntimeWorkspaceJanitor:
                 skipped_recent=0,
                 skipped_unsafe_path=0,
                 skipped_ambiguous_owner=0,
+                scanned_record_files=0,
+                delete_budget_exhausted=0,
                 errors=errors,
             )
         with _JanitorLock(config.lock_path):
@@ -318,6 +351,8 @@ class ManagedRuntimeWorkspaceJanitor:
             skipped_recent=0,
             skipped_unsafe_path=0,
             skipped_ambiguous_owner=0,
+            scanned_record_files=0,
+            delete_budget_exhausted=0,
             errors=(error,),
         )
 
@@ -579,7 +614,7 @@ class ManagedRuntimeWorkspaceJanitor:
             if budget.deleted_paths >= self._config.max_delete_paths:
                 return self._decision(
                     candidate,
-                    "protected_recent",
+                    "budget_exhausted",
                     "delete path cap reached",
                     newest,
                     estimated_bytes,
@@ -588,7 +623,7 @@ class ManagedRuntimeWorkspaceJanitor:
             if max_bytes is not None and budget.deleted_bytes + estimated_bytes > max_bytes:
                 return self._decision(
                     candidate,
-                    "protected_recent",
+                    "budget_exhausted",
                     "delete byte cap reached",
                     newest,
                     estimated_bytes,
@@ -826,6 +861,31 @@ class ManagedRuntimeWorkspaceJanitor:
             for decision in decisions
             if decision.classification == "error"
         )
+        metrics: dict[str, int] = {}
+        for decision in decisions:
+            key = f"resource.{decision.kind}.{decision.classification}"
+            metrics[key] = metrics.get(key, 0) + 1
+        candidate_samples = tuple(
+            ManagedRuntimeCleanupSample(
+                kind=decision.kind,
+                path=decision.path,
+                classification=decision.classification,
+                reason=decision.reason,
+                estimated_bytes=decision.estimated_bytes,
+            )
+            for decision in decisions[:20]
+        )
+        deleted_samples = tuple(
+            ManagedRuntimeCleanupSample(
+                kind=decision.kind,
+                path=decision.path,
+                classification=decision.classification,
+                reason=decision.reason,
+                estimated_bytes=decision.estimated_bytes,
+            )
+            for decision in decisions
+            if decision.classification == "deleted"
+        )[:20]
         return ManagedRuntimeCleanupResult(
             disabled=False,
             dry_run=self._config.dry_run,
@@ -833,6 +893,9 @@ class ManagedRuntimeWorkspaceJanitor:
             scanned_session_records=scanned_session_records,
             scanned_workspace_roots=sum(1 for d in decisions if d.kind == "workspace"),
             scanned_artifact_dirs=sum(1 for d in decisions if d.kind == "artifact"),
+            scanned_record_files=sum(
+                1 for d in decisions if d.kind in {"run_record", "session_record"}
+            ),
             protected_roots=sum(
                 1
                 for d in decisions
@@ -874,7 +937,13 @@ class ManagedRuntimeWorkspaceJanitor:
             skipped_ambiguous_owner=sum(
                 1 for d in decisions if d.classification == "skipped_ambiguous_owner"
             ),
+            delete_budget_exhausted=sum(
+                1 for d in decisions if d.classification == "budget_exhausted"
+            ),
             errors=tuple(all_errors),
+            metrics=metrics,
+            candidate_samples=candidate_samples,
+            deleted_samples=deleted_samples,
             decisions=tuple(decisions),
         )
 

@@ -57,6 +57,7 @@ from moonmind.workflows.temporal.activity_runtime import (
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     ManagedSessionReapResult,
 )
+from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 pytestmark = [pytest.mark.asyncio]
@@ -5526,6 +5527,88 @@ async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeatin
     assert len(result["sessionIds"]) == 50
     assert result["orphanContainersReaped"] == 0
     assert result["truncated"] is True
+
+
+async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from moonmind.workflows.temporal.runtime import cleanup as cleanup_module
+
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    cleanup_calls: list[dict[str, object]] = []
+
+    class _CleanupResult:
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "disabled": False,
+                "dryRun": True,
+                "eligibleRoots": 1,
+                "candidateSamples": [
+                    {
+                        "resource_class": "workspace_root",
+                        "safe_path": "store:workspaces/mm-workflow",
+                        "classification": "eligible",
+                        "reason": "all retained-state safety gates passed",
+                        "estimated_bytes": 42,
+                    }
+                ],
+                "metrics": {"resource.workspace_root.eligible": 1},
+            }
+
+    def _fake_cleanup_managed_runtime_files(
+        *,
+        run_store: ManagedRunStore,
+        session_store: ManagedSessionStore,
+        config: Any,
+        docker_reference_provider: Any,
+        progress_callback: Any,
+    ) -> _CleanupResult:
+        cleanup_calls.append(
+            {
+                "run_store": run_store,
+                "session_store_root": session_store.store_root,
+                "runtime_store_root": config.runtime_store_root,
+                "docker_reference_provider": docker_reference_provider,
+                "progress_callback": callable(progress_callback),
+            }
+        )
+        return _CleanupResult()
+
+    monkeypatch.setattr(
+        cleanup_module,
+        "cleanup_managed_runtime_files",
+        _fake_cleanup_managed_runtime_files,
+    )
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store,
+    )
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": True,
+                "runtimeStoreRoot": str(tmp_path),
+                "artifactRoot": str(tmp_path / "artifacts"),
+                "lockPath": str(tmp_path / ".janitor.lock"),
+            }
+        }
+    )
+
+    assert cleanup_calls == [
+        {
+            "run_store": run_store,
+            "session_store_root": tmp_path / "managed_sessions",
+            "runtime_store_root": tmp_path,
+            "docker_reference_provider": None,
+            "progress_callback": True,
+        }
+    ]
+    assert result["eligibleRoots"] == 1
+    assert result["candidateSamples"][0]["safe_path"] == "store:workspaces/mm-workflow"
+    assert result["metrics"] == {"resource.workspace_root.eligible": 1}
 
 async def test_agent_runtime_session_request_logs_bounded_telemetry_context(
     monkeypatch: pytest.MonkeyPatch,
