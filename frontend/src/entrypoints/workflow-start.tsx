@@ -593,6 +593,8 @@ interface PresetDetail extends PresetSummary {
   inputSchema?: Record<string, unknown>;
   uiSchema?: Record<string, unknown>;
   defaults?: Record<string, unknown>;
+  requiredCapabilities?: string[];
+  capabilities?: string[];
 }
 
 interface SkillCapabilityDetail {
@@ -668,6 +670,7 @@ interface TrustedToolDefinition {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
+  requiredCapabilities?: string[];
 }
 
 interface ToolDiscoveryResponse {
@@ -1907,7 +1910,7 @@ function activeAppliedTemplatesForSteps(
 ): AppliedTemplateState[] {
   const activeStepIds = new Set(
     steps
-      .map((step) => step.id.trim())
+      .map((step) => (step.id || "").trim())
       .filter(Boolean),
   );
   return appliedTemplates.filter((template) => {
@@ -1921,6 +1924,26 @@ function activeAppliedTemplatesForSteps(
       stepIds.some((stepId) => activeStepIds.has(stepId))
     );
   });
+}
+
+function templateCapabilitiesForStep(
+  appliedTemplates: AppliedTemplateState[],
+  step: StepState,
+): string[] {
+  const stepId = (step.id || "").trim();
+  return activeAppliedTemplatesForSteps(appliedTemplates, [step]).flatMap(
+    (template) => {
+      const stepIds = Array.isArray(template.stepIds)
+        ? template.stepIds
+            .map((candidate) => String(candidate || "").trim())
+            .filter(Boolean)
+        : [];
+      if (stepIds.length > 0 && (!stepId || !stepIds.includes(stepId))) {
+        return [];
+      }
+      return template.capabilities || [];
+    },
+  );
 }
 
 function authoredPresetsFromAppliedTemplates(
@@ -2098,6 +2121,7 @@ export interface StepCapabilityChip {
 interface BuildCapabilityChipsArgs {
   explicit?: string[] | null | undefined;
   skill?: string[] | null | undefined;
+  tool?: string[] | null | undefined;
   generatedSkill?: string[] | null | undefined;
   generatedTool?: string[] | null | undefined;
   preset?: string[] | null | undefined;
@@ -2121,6 +2145,7 @@ export function buildCapabilityChips(
   }> = [
     { tokens: args.explicit, sourceKind: "explicit" },
     { tokens: args.skill, sourceKind: "skill" },
+    { tokens: args.tool, sourceKind: "tool" },
     { tokens: args.generatedSkill, sourceKind: "skill" },
     { tokens: args.generatedTool, sourceKind: "tool" },
     { tokens: args.preset, sourceKind: "preset" },
@@ -2333,6 +2358,7 @@ function executableGeneratedSkillPayload(
 function manualToolPayload(
   step: StepState | null | undefined,
   inputs: Record<string, unknown>,
+  requiredCapabilities: string[] = [],
 ): PresetStepSkill | null {
   if (step?.stepType !== "tool") {
     return null;
@@ -2341,7 +2367,10 @@ function manualToolPayload(
   if (!toolId) {
     return null;
   }
-  const caps = step.explicitRequiredCapabilities;
+  const caps = mergeCapabilities(
+    requiredCapabilities,
+    step.explicitRequiredCapabilities,
+  );
   return {
     type: "tool",
     id: toolId,
@@ -2758,6 +2787,7 @@ function deriveRequiredCapabilities(args: {
   publishMode: string;
   taskSkillRequiredCapabilities: string[];
   stepSkillRequiredCapabilities: string[];
+  toolRequiredCapabilities: string[];
   explicitStepCapabilities: string[];
   templateCapabilities: string[];
 }): string[] {
@@ -2770,6 +2800,7 @@ function deriveRequiredCapabilities(args: {
         ...(args.publishMode === "pr" ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
         ...args.stepSkillRequiredCapabilities,
+        ...args.toolRequiredCapabilities,
         ...args.explicitStepCapabilities,
         ...args.templateCapabilities
           .map((item) => item.trim().toLowerCase())
@@ -3364,7 +3395,10 @@ function schemaToolInputs(
 
 function detailFromTrustedTool(
   tool: TrustedToolDefinition | null | undefined,
-): Pick<PresetDetail, "inputSchema" | "uiSchema" | "defaults"> | null {
+): Pick<
+  PresetDetail,
+  "inputSchema" | "uiSchema" | "defaults" | "requiredCapabilities"
+> | null {
   if (!tool?.inputSchema) {
     return null;
   }
@@ -3372,6 +3406,9 @@ function detailFromTrustedTool(
     inputSchema: tool.inputSchema,
     defaults: {},
     uiSchema: {},
+    ...(tool.requiredCapabilities
+      ? { requiredCapabilities: tool.requiredCapabilities }
+      : {}),
   };
 }
 
@@ -4822,6 +4859,182 @@ function StepContextMenu({
   );
 }
 
+interface CapabilityChipProps {
+  chip: StepCapabilityChip;
+  stepNumber: number;
+  onRemove: (token: string) => void;
+}
+
+function derivedCapabilityExplanation(chip: StepCapabilityChip): string {
+  const provenance = capabilityChipProvenanceLabel(chip);
+  if (!provenance) {
+    return "This capability is required by this step. Change the step configuration to remove it.";
+  }
+  const source = provenance.replace(/^from /, "");
+  return `This capability is required ${provenance}. Change the selected ${source} source or generated step to remove it.`;
+}
+
+function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
+  const [showExplanation, setShowExplanation] = useState(false);
+  const provenance = capabilityChipProvenanceLabel(chip);
+  const detailText = chip.removable ? chip.token : provenance || chip.token;
+  const explanation = chip.removable ? chip.description : derivedCapabilityExplanation(chip);
+  return (
+    <li
+      className={`queue-step-capability-chip${chip.removable ? "" : " is-derived"}`}
+      onClick={
+        chip.removable
+          ? undefined
+          : () => setShowExplanation((value) => !value)
+      }
+    >
+      <span className="queue-step-capability-chip-icon" aria-hidden="true">
+        {chip.icon}
+      </span>
+      <span className="queue-step-capability-chip-label">{chip.label}</span>
+      <span className="queue-step-capability-chip-detail">{`· ${detailText}`}</span>
+      {chip.removable ? (
+        <button
+          type="button"
+          className="queue-step-icon-button destructive queue-step-capability-chip-remove"
+          aria-label={`Remove ${chip.label} capability from Step ${stepNumber}`}
+          title={`Remove ${chip.label} capability from Step ${stepNumber}`}
+          onClick={() => onRemove(chip.token)}
+        >
+          <CloseIcon />
+          <span className="sr-only">{`Remove ${chip.label} capability from Step ${stepNumber}`}</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="queue-step-capability-chip-lock"
+          aria-label={`${chip.label} capability provenance`}
+          title={explanation}
+          aria-expanded={showExplanation}
+          onFocus={() => setShowExplanation(true)}
+          onBlur={() => setShowExplanation(false)}
+          onClick={(event) => {
+            event.stopPropagation();
+            setShowExplanation((value) => !value);
+          }}
+        >
+          <span aria-hidden="true">🔒</span>
+          <span className="sr-only">Show capability provenance</span>
+        </button>
+      )}
+      {!chip.removable && showExplanation ? (
+        <span className="queue-step-capability-chip-popover" role="tooltip">
+          {explanation}
+        </span>
+      ) : null}
+    </li>
+  );
+}
+
+interface StepContextAttachmentItem {
+  key: string;
+  filename: string;
+  detail: string;
+  targetLabel: string;
+  href?: string;
+  download?: string;
+  removeLabel: string;
+  retryLabel?: string;
+  onRemove: () => void;
+  onRetry?: () => void;
+}
+
+interface StepContextBarProps {
+  stepNumber: number;
+  attachments: StepContextAttachmentItem[];
+  capabilityChips: StepCapabilityChip[];
+  onRemoveCapability: (token: string) => void;
+}
+
+function StepContextBar({
+  stepNumber,
+  attachments,
+  capabilityChips,
+  onRemoveCapability,
+}: StepContextBarProps) {
+  if (attachments.length === 0 && capabilityChips.length === 0) {
+    return null;
+  }
+  return (
+    <div className="queue-step-context-bar">
+      {attachments.length > 0 ? (
+        <ul
+          className="queue-step-context-chip-list"
+          aria-label={`Step ${stepNumber} image attachments`}
+        >
+          {attachments.map((attachment) => (
+            <li key={attachment.key} className="queue-step-attachment-chip">
+              <span className="queue-step-attachment-chip-icon" aria-hidden="true">
+                🖼
+              </span>
+              <span className="queue-step-attachment-chip-label">
+                {attachment.filename}
+              </span>
+              <span className="queue-step-attachment-chip-detail">
+                {attachment.targetLabel}
+              </span>
+              <span className="queue-step-attachment-chip-detail">
+                {attachment.detail}
+              </span>
+              {attachment.href ? (
+                <a
+                  className="queue-step-context-chip-action"
+                  href={attachment.href}
+                  download={attachment.download}
+                  title={`Download ${attachment.targetLabel} attachment ${attachment.filename}`}
+                >
+                  Download
+                </a>
+              ) : null}
+              {attachment.onRetry && attachment.retryLabel ? (
+                <button
+                  type="button"
+                  className="queue-step-context-chip-action"
+                  aria-label={attachment.retryLabel}
+                  title={attachment.retryLabel}
+                  onClick={attachment.onRetry}
+                >
+                  Retry
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="queue-step-icon-button destructive queue-step-attachment-chip-remove"
+                aria-label={attachment.removeLabel}
+                title={attachment.removeLabel}
+                onClick={attachment.onRemove}
+              >
+                <CloseIcon />
+                <span className="sr-only">{attachment.removeLabel}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {capabilityChips.length > 0 ? (
+        <ul
+          className="queue-step-capability-chips"
+          aria-label={`Step ${stepNumber} capabilities`}
+        >
+          {capabilityChips.map((chip) => (
+            <CapabilityChip
+              key={chip.token}
+              chip={chip}
+              stepNumber={stepNumber}
+              onRemove={onRemoveCapability}
+            />
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   useLiquidGL({ options: LIQUID_GL_OPTIONS });
   const dashboardConfig = readDashboardConfig(payload);
@@ -5558,6 +5771,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             name: String(tool.name || "").trim(),
             description: String(tool.description || "").trim(),
             ...(inputSchema ? { inputSchema } : {}),
+            ...(Array.isArray(tool.requiredCapabilities)
+              ? {
+                  requiredCapabilities: mergeCapabilities(
+                    tool.requiredCapabilities,
+                  ),
+                }
+              : {}),
           };
         })
         .filter((tool) => Boolean(tool.name));
@@ -8526,6 +8746,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     );
 
     const primaryStepIsSkill = primaryStep?.stepType === "skill";
+    const primaryStepIsTool = primaryStep?.stepType === "tool";
     const primarySkillId = primaryStepIsSkill
       ? primaryValidation.value.skillId.trim() || "auto"
       : "auto";
@@ -8597,18 +8818,24 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       primarySkillArgs,
       primarySchemaInputs.values,
     );
+    const primaryToolDefinition =
+      primaryStepIsTool
+        ? (trustedToolsQuery.data || []).find(
+            (tool) => toolDefinitionId(tool) === primaryStep.toolId.trim(),
+          ) || null
+        : null;
+    const primaryToolDetail = detailFromTrustedTool(primaryToolDefinition);
+    const primaryToolRequiredCapabilities =
+      primaryStepIsTool && !executableGeneratedToolPayload(primaryStep)
+        ? mergeCapabilities(primaryToolDetail?.requiredCapabilities)
+        : [];
     let primaryToolInputs: Record<string, unknown> = {};
-    if (primaryStep?.stepType === "tool" && !executableGeneratedToolPayload(primaryStep)) {
+    if (primaryStepIsTool && !executableGeneratedToolPayload(primaryStep)) {
       if (!primaryStep.toolId.trim()) {
         setSubmitMessage("Select a Tool before submitting a Tool step.");
         clearSubmitBusy();
         return;
       }
-      const primaryToolDefinition =
-        (trustedToolsQuery.data || []).find(
-          (tool) => toolDefinitionId(tool) === primaryStep.toolId.trim(),
-        ) || null;
-      const primaryToolDetail = detailFromTrustedTool(primaryToolDefinition);
       if (primaryToolDetail && schemaContractHasFields(primaryToolDetail)) {
         const structuredInputs = schemaToolInputs(
           primaryToolDetail,
@@ -8666,6 +8893,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       skillArgsRaw: string;
       skillArgs: Record<string, unknown>;
       skillCaps: string[];
+      toolCaps: string[];
       toolInputs: Record<string, unknown>;
       hasStepContent: boolean;
     }> = [];
@@ -8703,6 +8931,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             ) || null
           : null;
       const stepToolDetail = detailFromTrustedTool(stepToolDefinition);
+      const stepToolCaps =
+        stepIsTool && !generatedToolPayload
+          ? mergeCapabilities(stepToolDetail?.requiredCapabilities)
+          : [];
       const stepSchemaInputs = schemaSkillInputs(
         stepSkillDetail,
         step.presetInputValues,
@@ -8735,6 +8967,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         Boolean(stepSkillArgsRaw) ||
         Object.keys(stepSchemaInputs.values).length > 0 ||
         stepSkillCaps.length > 0 ||
+        stepToolCaps.length > 0 ||
         Boolean(generatedToolPayload) ||
         Boolean(generatedSkillPayload) ||
         hasRuntimePayload;
@@ -8801,6 +9034,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         skillArgsRaw: stepSkillArgsRaw,
         skillArgs: stepSkillArgs,
         skillCaps: stepSkillCaps,
+        toolCaps: stepToolCaps,
         toolInputs: stepToolInputs,
         hasStepContent,
       });
@@ -9034,6 +9268,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       skillArgsRaw: stepSkillArgsRaw,
       skillArgs: stepSkillArgs,
       skillCaps: stepSkillCaps,
+      toolCaps: stepToolCaps,
       toolInputs: stepToolInputs,
       hasStepContent: hasPreUploadStepContent,
     } of parsedAdditionalStepInputs) {
@@ -9071,7 +9306,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       } else if (generatedSkillPayload) {
         stepPayload.skill = generatedSkillPayload;
       } else if (step.stepType === "tool") {
-        const toolPayload = manualToolPayload(step, stepToolInputs);
+        const toolPayload = manualToolPayload(step, stepToolInputs, stepToolCaps);
         if (toolPayload) {
           stepPayload.tool = toolPayload;
         }
@@ -9103,11 +9338,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       ? stepRuntimePayload(primaryStep)
       : null;
     const hasTemplateBoundStep = submissionSteps.some((step) =>
-      Boolean(step.id.trim()),
+      Boolean((step.id || "").trim()),
     );
     const primaryGeneratedToolPayload =
       executableGeneratedToolPayload(primaryStep) ||
-      manualToolPayload(primaryStep, primaryToolInputs);
+      manualToolPayload(
+        primaryStep,
+        primaryToolInputs,
+        primaryToolRequiredCapabilities,
+      );
     const includeExplicitSteps =
       additionalSteps.length > 0 ||
       includePrimaryStepForObjectiveOverride ||
@@ -9191,7 +9430,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           );
           const hasSubmittedStepShape =
             hasPayloadContent ||
-            Boolean(sourceStep.id.trim()) ||
+            Boolean((sourceStep.id || "").trim()) ||
             Boolean(sourceStep.title.trim()) ||
             Boolean(sourceStep.storyOutput) ||
             Boolean(
@@ -9206,8 +9445,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             Boolean(submittedPayload?.tool) ||
             Boolean(submittedPayload?.skill);
           const submittedStep = {
-            ...(shouldPreserveStepId && sourceStep.id.trim()
-              ? { id: sourceStep.id.trim() }
+            ...(shouldPreserveStepId && (sourceStep.id || "").trim()
+              ? { id: (sourceStep.id || "").trim() }
               : {}),
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
@@ -9262,6 +9501,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         step ? step.explicitRequiredCapabilities : [],
       ),
     );
+    const toolRequiredCapabilities = mergeCapabilities(
+      primaryToolRequiredCapabilities,
+      ...parsedAdditionalStepInputs.map((entry) => entry.toolCaps),
+    );
     const mergedCapabilities = deriveRequiredCapabilities({
       runtimeMode: normalizedRuntime,
       stepRuntimeModes: normalizedSteps
@@ -9274,6 +9517,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       publishMode: effectivePublishMode,
       taskSkillRequiredCapabilities,
       stepSkillRequiredCapabilities,
+      toolRequiredCapabilities,
       explicitStepCapabilities,
       templateCapabilities,
     });
@@ -10114,21 +10358,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               )
                 ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
                 : [];
-              // MM-936: derive the capability chip row for this step. Explicit
-              // chips are removable; skill/tool/runtime/publish-derived chips are
-              // non-removable and carry provenance.
-              const stepCapabilityChips = buildCapabilityChips({
-                explicit: step.explicitRequiredCapabilities,
-                skill: selectedSkillDetail?.requiredCapabilities,
-                generatedSkill: step.generatedSkill?.requiredCapabilities,
-                generatedTool: step.generatedTool?.requiredCapabilities,
-                runtime: step.runtimeMode ? [step.runtimeMode] : [],
-                publish:
-                  isPrimaryStep && stepPublishModeRequiresGh ? ["gh"] : [],
-              });
-              const stepCapabilityTokens = stepCapabilityChips.map(
-                (chip) => chip.token,
-              );
               const toolSearchText = toolSearchTextByStep[step.localId] || "";
               const trustedToolDefinitions = trustedToolsQuery.data || [];
               const toolChoiceGroups = groupedToolChoices(
@@ -10152,6 +10381,36 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
               );
               const optionalToolSchemaFields = visibleToolSchemaFields.filter(
                 ([name]) => !selectedToolRequired.has(name),
+              );
+              const selectedPresetDetail =
+                step.stepType === "preset" ? step.presetDetail : null;
+              const selectedPresetCapabilities = selectedPresetDetail
+                ? mergeCapabilities(
+                    selectedPresetDetail.requiredCapabilities,
+                    selectedPresetDetail.capabilities,
+                  )
+                : [];
+              const stepTemplateCapabilities = templateCapabilitiesForStep(
+                appliedTemplates,
+                step,
+              );
+              // MM-936: derive the capability chip row for this step. Explicit
+              // chips are removable; preset/skill/tool/runtime/publish/template
+              // derived chips are non-removable and carry provenance.
+              const stepCapabilityChips = buildCapabilityChips({
+                explicit: step.explicitRequiredCapabilities,
+                skill: selectedSkillDetail?.requiredCapabilities,
+                generatedSkill: step.generatedSkill?.requiredCapabilities,
+                tool: selectedToolDetail?.requiredCapabilities,
+                generatedTool: step.generatedTool?.requiredCapabilities,
+                preset: selectedPresetCapabilities,
+                template: stepTemplateCapabilities,
+                runtime: step.runtimeMode ? [step.runtimeMode] : [],
+                publish:
+                  isPrimaryStep && stepPublishModeRequiresGh ? ["gh"] : [],
+              });
+              const stepCapabilityTokens = stepCapabilityChips.map(
+                (chip) => chip.token,
               );
               const isPentestTool = step.toolId.trim() === PENTEST_TOOL_ID;
               const pentestScopeValues = isPentestTool
@@ -10183,6 +10442,64 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 config: dashboardConfig.system?.runtimeCommandPreview,
                 storedRuntimeCommand: step.runtimeCommand,
               });
+              const stepAttachmentTargetError =
+                attachmentTargetErrors[attachmentTargetKey(step.localId)];
+              const stepContextAttachments: StepContextAttachmentItem[] = [
+                ...(isPrimaryStep
+                  ? persistedObjectiveAttachments.map((attachment) => ({
+                      key: `objective-${attachment.artifactId}`,
+                      filename: attachment.filename,
+                      detail: formatAttachmentBytes(attachment.sizeBytes),
+                      targetLabel: "Objective",
+                      href: configuredArtifactDownloadUrl(
+                        artifactDownloadEndpoint,
+                        attachment.artifactId,
+                      ),
+                      download: attachment.filename,
+                      removeLabel: `Remove objective attachment ${attachment.filename}`,
+                      onRemove: () =>
+                        removePersistedObjectiveAttachment(
+                          attachment.artifactId,
+                        ),
+                    }))
+                  : []),
+                ...step.inputAttachments.map((attachment) => ({
+                  key: `step-${step.localId}-${attachment.artifactId}`,
+                  filename: attachment.filename,
+                  detail: formatAttachmentBytes(attachment.sizeBytes),
+                  targetLabel: `Step ${index + 1}`,
+                  href: configuredArtifactDownloadUrl(
+                    artifactDownloadEndpoint,
+                    attachment.artifactId,
+                  ),
+                  download: attachment.filename,
+                  removeLabel: `Remove Step ${index + 1} attachment ${attachment.filename}`,
+                  onRemove: () =>
+                    removePersistedStepAttachment(
+                      step.localId,
+                      attachment.artifactId,
+                    ),
+                })),
+                ...(selectedStepAttachmentFiles[step.localId] || []).map(
+                  (file) => ({
+                    key: `pending-${step.localId}-${file.name}-${file.size}-${file.lastModified}`,
+                    filename: file.name || "attachment",
+                    detail: `${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`,
+                    targetLabel: `Step ${index + 1}`,
+                    removeLabel: `Remove Step ${index + 1} attachment ${file.name}`,
+                    onRemove: () => removeStepAttachment(step.localId, file),
+                    ...(stepAttachmentTargetError
+                      ? {
+                          retryLabel: `Retry upload for Step ${index + 1} attachment ${file.name}`,
+                          onRetry: () =>
+                            clearAttachmentTargetError(
+                              attachmentTargetKey(step.localId),
+                            ),
+                        }
+                      : {}),
+                  }),
+                ),
+              ];
               return (
                 <section
                   key={step.localId}
@@ -11011,70 +11328,14 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           promptForCustomStepCapability(step.localId)
                         }
                       />
-                      {stepCapabilityChips.length > 0 ? (
-                        <ul
-                          className="queue-step-capability-chips"
-                          aria-label={`Step ${index + 1} capabilities`}
-                        >
-                          {stepCapabilityChips.map((chip) => {
-                            const provenance =
-                              capabilityChipProvenanceLabel(chip);
-                            const detailText = chip.removable
-                              ? chip.token
-                              : provenance || chip.token;
-                            return (
-                              <li
-                                key={chip.token}
-                                className={`queue-step-capability-chip${
-                                  chip.removable ? "" : " is-derived"
-                                }`}
-                              >
-                                <span
-                                  className="queue-step-capability-chip-icon"
-                                  aria-hidden="true"
-                                >
-                                  {chip.icon}
-                                </span>
-                                <span className="queue-step-capability-chip-label">
-                                  {chip.label}
-                                </span>
-                                <span className="queue-step-capability-chip-detail">
-                                  {`· ${detailText}`}
-                                </span>
-                                {chip.removable ? (
-                                  <button
-                                    type="button"
-                                    className="queue-step-icon-button destructive queue-step-capability-chip-remove"
-                                    aria-label={`Remove ${chip.label} capability from Step ${index + 1}`}
-                                    title={`Remove ${chip.label} capability from Step ${index + 1}`}
-                                    onClick={() =>
-                                      removeStepCapability(
-                                        step.localId,
-                                        chip.token,
-                                      )
-                                    }
-                                  >
-                                    <CloseIcon />
-                                    <span className="sr-only">{`Remove ${chip.label} capability from Step ${index + 1}`}</span>
-                                  </button>
-                                ) : (
-                                  <span
-                                    className="queue-step-capability-chip-lock"
-                                    aria-label={`${chip.label} capability is required ${
-                                      provenance || "by this step"
-                                    } and cannot be removed here. Change the preset or generated step to remove it.`}
-                                    title={`This capability is required ${
-                                      provenance || "by this step"
-                                    }. Change the preset or generated step to remove it.`}
-                                  >
-                                    🔒
-                                  </span>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      ) : null}
+                      <StepContextBar
+                        stepNumber={index + 1}
+                        attachments={stepContextAttachments}
+                        capabilityChips={stepCapabilityChips}
+                        onRemoveCapability={(token) =>
+                          removeStepCapability(step.localId, token)
+                        }
+                      />
                     </div>
                     {attachmentPolicy.enabled ? (
                       <div className="queue-step-attachments">
@@ -11098,132 +11359,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                             event.currentTarget.value = "";
                           }}
                         />
-                        {attachmentTargetErrors[
-                          attachmentTargetKey(step.localId)
-                        ] ? (
+                        {stepAttachmentTargetError ? (
                           <p className="notice error">
-                            {
-                              attachmentTargetErrors[
-                                attachmentTargetKey(step.localId)
-                              ]
-                            }
+                            {stepAttachmentTargetError}
                           </p>
-                        ) : null}
-                        {isPrimaryStep && persistedObjectiveAttachments.length > 0 ? (
-                          <ul className="list queue-step-attachments-list">
-                            {persistedObjectiveAttachments.map((attachment) => (
-                              <li key={`objective-${attachment.artifactId}`}>
-                                <span>
-                                  {`${attachment.filename} (${formatAttachmentBytes(attachment.sizeBytes)})`}
-                                </span>
-                                <a
-                                  className="button secondary"
-                                  href={configuredArtifactDownloadUrl(
-                                    artifactDownloadEndpoint,
-                                    attachment.artifactId,
-                                  )}
-                                  download={attachment.filename}
-                                  title={`Download objective attachment ${attachment.filename}`}
-                                >
-                                  Download
-                                </a>
-                                <button
-                                  type="button"
-                                  className="queue-step-icon-button destructive"
-                                  aria-label={`Remove objective attachment ${attachment.filename}`}
-                                  title={`Remove objective attachment ${attachment.filename}`}
-                                  onClick={() =>
-                                    removePersistedObjectiveAttachment(
-                                      attachment.artifactId,
-                                    )
-                                  }
-                                >
-                                  <CloseIcon />
-                                  <span className="sr-only">{`Remove objective attachment ${attachment.filename}`}</span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        {step.inputAttachments.length > 0 ? (
-                          <ul className="list queue-step-attachments-list">
-                            {step.inputAttachments.map((attachment) => (
-                              <li key={`step-${step.localId}-${attachment.artifactId}`}>
-                                <span>
-                                  {`${attachment.filename} (${formatAttachmentBytes(attachment.sizeBytes)})`}
-                                </span>
-                                <a
-                                  className="button secondary"
-                                  href={configuredArtifactDownloadUrl(
-                                    artifactDownloadEndpoint,
-                                    attachment.artifactId,
-                                  )}
-                                  download={attachment.filename}
-                                  title={`Download Step ${index + 1} attachment ${attachment.filename}`}
-                                >
-                                  Download
-                                </a>
-                                <button
-                                  type="button"
-                                  className="queue-step-icon-button destructive"
-                                  aria-label={`Remove Step ${index + 1} attachment ${attachment.filename}`}
-                                  title={`Remove Step ${index + 1} attachment ${attachment.filename}`}
-                                  onClick={() =>
-                                    removePersistedStepAttachment(
-                                      step.localId,
-                                      attachment.artifactId,
-                                    )
-                                  }
-                                >
-                                  <CloseIcon />
-                                  <span className="sr-only">{`Remove Step ${index + 1} attachment ${attachment.filename}`}</span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
-                        ) : null}
-                        {(selectedStepAttachmentFiles[step.localId] || []).length > 0 ? (
-                          <ul className="list queue-step-attachments-list">
-                            {(selectedStepAttachmentFiles[step.localId] || []).map((file) => (
-                              <li key={`${file.name}-${file.size}-${file.lastModified}`}>
-                                <span>
-                                  <strong>{file.name}</strong>{" "}
-                                  <span className="small">
-                                    {`${file.type || "application/octet-stream"}, ${formatAttachmentBytes(file.size)}`}
-                                  </span>
-                                </span>
-                                {attachmentTargetErrors[
-                                  attachmentTargetKey(step.localId)
-                                ] ? (
-                                  <button
-                                    type="button"
-                                    className="secondary"
-                                    aria-label={`Retry upload for Step ${index + 1} attachment ${file.name}`}
-                                    title={`Retry upload for Step ${index + 1} attachment ${file.name}`}
-                                    onClick={() =>
-                                      clearAttachmentTargetError(
-                                        attachmentTargetKey(step.localId),
-                                      )
-                                    }
-                                  >
-                                    Retry
-                                  </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className="queue-step-icon-button destructive"
-                                  aria-label={`Remove Step ${index + 1} attachment ${file.name}`}
-                                  title={`Remove Step ${index + 1} attachment ${file.name}`}
-                                  onClick={() =>
-                                    removeStepAttachment(step.localId, file)
-                                  }
-                                >
-                                  <CloseIcon />
-                                  <span className="sr-only">{`Remove Step ${index + 1} attachment ${file.name}`}</span>
-                                </button>
-                              </li>
-                            ))}
-                          </ul>
                         ) : null}
                       </div>
                     ) : null}

@@ -2619,6 +2619,7 @@ def test_build_agent_runtime_deps_uses_artifacts_env_without_double_nesting(
         _session_controller,
         workload_registry,
         workload_launcher,
+        _session_store,
     ) = _build_agent_runtime_deps()
 
     assert store.store_root == tmp_path / "managed_runs"
@@ -2647,6 +2648,7 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
         session_controller,
         _workload_registry,
         _workload_launcher,
+        _session_store,
     ) = _build_agent_runtime_deps()
 
     assert session_controller._network_name == "shared-moonmind-network"
@@ -3557,6 +3559,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
     )
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
+    session_store = MagicMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
@@ -3564,6 +3567,7 @@ async def test_build_runtime_activities_injects_concrete_handlers(
         session_controller,
         workload_registry,
         workload_launcher,
+        session_store,
     )
     @asynccontextmanager
     async def _fake_session_context():
@@ -3703,6 +3707,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
     )
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
+    session_store = MagicMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
@@ -3710,6 +3715,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         session_controller,
         workload_registry,
         workload_launcher,
+        session_store,
     )
 
     @asynccontextmanager
@@ -3756,6 +3762,7 @@ async def test_build_runtime_activities_reconciles_managed_sessions_only_on_agen
         run_supervisor=run_supervisor,
         run_launcher=run_launcher,
         session_controller=session_controller,
+        session_store=session_store,
         workload_registry=workload_registry,
         workload_launcher=workload_launcher,
         workflow_docker_mode="profiles",
@@ -3880,6 +3887,7 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
     session_controller.reconcile = AsyncMock(return_value=[])
     workload_registry = MagicMock()
     workload_launcher = MagicMock()
+    session_store = MagicMock()
     mock_build_deps.return_value = (
         run_store,
         run_supervisor,
@@ -3887,6 +3895,7 @@ async def test_build_runtime_activities_registers_unrestricted_mode(
         session_controller,
         workload_registry,
         workload_launcher,
+        session_store,
     )
     mock_settings.workflow.workflow_docker_mode = "unrestricted"
 

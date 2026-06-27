@@ -4022,6 +4022,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.5rem;
 }
 
+.queue-step-context-bar {
+  display: flex;
+  flex: 1 1 24rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
 .queue-step-context-menu {
   position: relative;
   display: inline-flex;
@@ -4116,6 +4125,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-capability-chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -4138,8 +4148,38 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-capability-chip-lock {
+  display: inline-grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
   font-size: 0.72rem;
   cursor: help;
+}
+
+.queue-step-capability-chip-lock:hover,
+.queue-step-capability-chip-lock:focus-visible {
+  background: rgb(var(--mm-accent) / 0.14);
+  outline: none;
+}
+
+.queue-step-capability-chip-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  z-index: 15;
+  width: min(18rem, 80vw);
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-text));
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.16);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .queue-step-capability-chip-remove {
@@ -4182,6 +4222,69 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
 .queue-step-attachments-list {
   margin-top: 0;
+}
+
+.queue-step-context-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queue-step-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: min(100%, 32rem);
+  padding: 0.14rem 0.45rem;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 8px;
+  background: rgb(var(--mm-panel));
+  font-size: 0.82rem;
+}
+
+.queue-step-attachment-chip-label {
+  min-width: 0;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-step-attachment-chip-detail {
+  color: rgb(var(--mm-muted));
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.queue-step-context-chip-action {
+  border: none;
+  background: transparent;
+  color: rgb(var(--mm-accent));
+  font-size: 0.76rem;
+  font-weight: 650;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.queue-step-context-chip-action:hover,
+.queue-step-context-chip-action:focus-visible {
+  text-decoration: underline;
+}
+
+.queue-step-attachment-chip-remove {
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.queue-step-attachment-chip-remove svg {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 :is(.queue-step-attachments-list, #queue-dependency-list) li {
