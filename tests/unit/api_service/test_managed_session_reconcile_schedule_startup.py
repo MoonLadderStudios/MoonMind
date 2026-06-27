@@ -58,21 +58,20 @@ async def test_mm870_api_startup_schedule_failure_is_best_effort(
 
 
 @pytest.mark.asyncio
-async def test_mm951_api_startup_ensures_retained_state_cleanup_schedule(
+async def test_mm948_api_startup_preserves_workspace_cleanup_schedule_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[bool] = []
+    calls: list[bool | None] = []
 
     class _Adapter:
         async def ensure_managed_runtime_workspace_cleanup_schedule(
             self,
             *,
-            enabled: bool,
+            enabled: bool | None,
         ) -> str:
             calls.append(enabled)
             return "mm-operational:managed-runtime-workspace-cleanup"
 
-    monkeypatch.setenv("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", "1")
     monkeypatch.setattr(
         "moonmind.workflows.temporal.client.TemporalClientAdapter",
         _Adapter,
@@ -80,37 +79,11 @@ async def test_mm951_api_startup_ensures_retained_state_cleanup_schedule(
 
     await api_main.ensure_managed_runtime_workspace_cleanup_schedule_started()
 
-    assert calls == [True]
+    assert calls == [None]
 
 
 @pytest.mark.asyncio
-async def test_mm951_retained_state_cleanup_schedule_independent_disable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[bool] = []
-
-    class _Adapter:
-        async def ensure_managed_runtime_workspace_cleanup_schedule(
-            self,
-            *,
-            enabled: bool,
-        ) -> str:
-            calls.append(enabled)
-            return "mm-operational:managed-runtime-workspace-cleanup"
-
-    monkeypatch.delenv("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", raising=False)
-    monkeypatch.setattr(
-        "moonmind.workflows.temporal.client.TemporalClientAdapter",
-        _Adapter,
-    )
-
-    await api_main.ensure_managed_runtime_workspace_cleanup_schedule_started()
-
-    assert calls == [False]
-
-
-@pytest.mark.asyncio
-async def test_mm951_retained_state_cleanup_schedule_failure_is_best_effort(
+async def test_mm948_api_startup_cleanup_schedule_failure_is_best_effort(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:

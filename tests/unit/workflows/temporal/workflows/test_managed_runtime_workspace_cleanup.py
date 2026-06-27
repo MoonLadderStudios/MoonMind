@@ -13,7 +13,7 @@ from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup imp
 
 
 @pytest.mark.asyncio
-async def test_managed_runtime_workspace_cleanup_updates_operator_visibility(
+async def test_managed_runtime_workspace_cleanup_invokes_cleanup_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     details: list[str] = []
@@ -24,25 +24,17 @@ async def test_managed_runtime_workspace_cleanup_updates_operator_visibility(
         payload: dict[str, Any],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        del payload, kwargs
         assert activity_name == "agent_runtime.cleanup_managed_runtime_files"
+        assert payload == {}
+        assert kwargs["task_queue"]
         return {
             "disabled": False,
             "dry_run": True,
-            "scannedRunRecords": 2,
-            "scannedSessionRecords": 1,
-            "scannedWorkspaceRoots": 1,
-            "eligibleRoots": 1,
-            "estimatedDeletedBytes": 42,
-            "candidateSamples": [
-                {
-                    "resource_class": "workspace_root",
-                    "safe_path": "store:workspaces/mm-workflow",
-                    "classification": "eligible",
-                    "reason": "all retained-state safety gates passed",
-                    "estimated_bytes": 42,
-                }
-            ],
+            "scanned_run_records": 2,
+            "scanned_session_records": 1,
+            "eligible_roots": 1,
+            "deleted_roots": 0,
+            "errors": (),
         }
 
     monkeypatch.setattr(
@@ -63,15 +55,15 @@ async def test_managed_runtime_workspace_cleanup_updates_operator_visibility(
 
     result = await MoonMindManagedRuntimeWorkspaceCleanupWorkflow().run()
 
-    assert result["eligibleRoots"] == 1
-    assert result["candidateSamples"][0]["safe_path"] == "store:workspaces/mm-workflow"
+    assert result["dry_run"] is True
+    assert result["eligible_roots"] == 1
     assert details == [
-        "Cleaning retained managed runtime state",
-        "Managed runtime retained-state cleanup complete",
+        "Cleaning retained managed runtime files",
+        "Managed runtime file cleanup complete",
     ]
     assert search_attributes == [
         {
-            "SessionStatus": ["cleaning_retained_state"],
+            "SessionStatus": ["cleanup"],
             "IsDegraded": [False],
         },
         {
@@ -93,7 +85,11 @@ async def test_managed_runtime_workspace_cleanup_marks_errors_degraded(
         **kwargs: Any,
     ) -> dict[str, Any]:
         del activity_name, payload, kwargs
-        return {"disabled": False, "dry_run": True, "errors": ["store:x: ValueError"]}
+        return {
+            "disabled": False,
+            "dry_run": True,
+            "errors": ("store_read_failed:RuntimeError",),
+        }
 
     monkeypatch.setattr(
         cleanup_module.workflow, "set_current_details", lambda value: None
@@ -109,8 +105,9 @@ async def test_managed_runtime_workspace_cleanup_marks_errors_degraded(
         _execute_activity,
     )
 
-    await MoonMindManagedRuntimeWorkspaceCleanupWorkflow().run()
+    result = await MoonMindManagedRuntimeWorkspaceCleanupWorkflow().run()
 
+    assert result["errors"] == ("store_read_failed:RuntimeError",)
     assert search_attributes[-1] == {
         "SessionStatus": ["completed"],
         "IsDegraded": [True],

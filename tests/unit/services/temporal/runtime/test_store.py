@@ -72,6 +72,29 @@ def test_list_active(tmp_path):
     active_ids = {r.run_id for r in active}
     assert active_ids == {"run-1", "run-3"}
 
+def test_iter_all_and_delete_are_explicit_retained_state_apis(tmp_path):
+    store = ManagedRunStore(tmp_path)
+    store.save(_make_record("run-1", "running"))
+    store.save(_make_record("run-2", "completed"))
+
+    assert {record.run_id for record in store.iter_all()} == {"run-1", "run-2"}
+
+    store.delete("run-2")
+
+    assert store.load("run-2") is None
+    assert {record.run_id for record in store.iter_all()} == {"run-1"}
+
+
+def test_iter_all_raises_for_corrupt_records(tmp_path):
+    store = ManagedRunStore(tmp_path)
+    store.save(_make_record("run-1", "running"))
+    (tmp_path / "corrupt.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        tuple(store.iter_all())
+
+    assert {record.run_id for record in store.list_active()} == {"run-1"}
+
 def test_find_latest_for_workflow_prefers_newest_active_run(tmp_path):
     store = ManagedRunStore(tmp_path)
     started_at = datetime.now(tz=UTC)

@@ -1241,30 +1241,24 @@ async def ensure_managed_session_reconcile_schedule_started() -> None:
     )
 
 async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
-    """Best-effort startup install for the retained-state cleanup schedule."""
+    """Best-effort startup install for the retained-state janitor schedule."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
-    enabled = str(
-        os.environ.get("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", "")
-    ).strip().lower() in {"1", "true", "yes", "on"}
     try:
-        schedule_id = await (
-            TemporalClientAdapter().ensure_managed_runtime_workspace_cleanup_schedule(
-                enabled=enabled
+        schedule_id = (
+            await TemporalClientAdapter().ensure_managed_runtime_workspace_cleanup_schedule(
+                enabled=None
             )
         )
     except Exception:
         logger.warning(
-            "Failed to ensure managed runtime workspace cleanup schedule "
-            "during API startup",
+            "Failed to ensure managed runtime workspace cleanup schedule during API startup",
             exc_info=True,
         )
         return
     logger.info(
-        "Ensured managed runtime workspace cleanup schedule during API startup: "
-        "%s enabled=%s",
+        "Ensured managed runtime workspace cleanup schedule during API startup: %s",
         schedule_id,
-        enabled,
     )
 
 async def ensure_recurring_workflow_schedules_reconciled() -> None:

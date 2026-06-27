@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import UTC, datetime
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -5320,6 +5321,167 @@ async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> N
     assert result["orphanVolumesScanned"] == 0
     assert result["orphanVolumesReaped"] == 0
 
+async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "agent_jobs"
+    run_root = runtime_root / "run-mm-949"
+    run_root.mkdir(parents=True)
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    os_epoch = old.timestamp()
+    run_root.joinpath("repo").mkdir()
+    run_root.joinpath("repo", "README.md").write_text("done\n", encoding="utf-8")
+    run_root.touch()
+    os.utime(run_root, (os_epoch, os_epoch))
+    run_store = ManagedRunStore(runtime_root / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="run-mm-949",
+            workflowId="mm:workflow-mm-949",
+            agentId="agent-1",
+            runtimeId="codex-cli",
+            status="completed",
+            startedAt=old - timedelta(hours=1),
+            finishedAt=old,
+            workspacePath=str(run_root / "repo"),
+        )
+    )
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": True,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 30,
+                "artifactRetentionDays": 30,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    assert result["disabled"] is False
+    assert result["dryRun"] is True
+    assert result["scannedRunRecords"] == 1
+    assert result["decisions"][0]["classification"] == "eligible"
+    assert result["decisions"][0]["reason"] == "dry-run would delete"
+
+
+async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_references(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "agent_jobs"
+    run_root = runtime_root / "run-mm-949"
+    run_root.mkdir(parents=True)
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    os.utime(run_root, (old.timestamp(), old.timestamp()))
+    run_store = ManagedRunStore(runtime_root / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="run-mm-949",
+            workflowId="mm:workflow-mm-949",
+            agentId="agent-1",
+            runtimeId="codex-cli",
+            status="completed",
+            startedAt=old - timedelta(hours=1),
+            finishedAt=old,
+            workspacePath=str(run_root / "repo"),
+        )
+    )
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+
+    class _Controller:
+        async def collect_managed_runtime_cleanup_docker_references(
+            self,
+        ) -> dict[str, object]:
+            return {"activeMountPaths": [str(run_root)]}
+
+    activities = TemporalAgentRuntimeActivities(
+        run_store=run_store,
+        session_controller=_Controller(),
+    )
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": False,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 30,
+                "artifactRetentionDays": 30,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    assert result["decisions"][0]["classification"] == "protected_active"
+    assert result["decisions"][0]["reason"] == "live Docker reference"
+    assert run_root.exists()
+
+
+async def test_agent_runtime_cleanup_managed_runtime_files_fails_closed_without_docker_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "agent_jobs"
+    run_root = runtime_root / "run-mm-949"
+    run_root.mkdir(parents=True)
+    old = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+    os.utime(run_root, (old.timestamp(), old.timestamp()))
+    run_store = ManagedRunStore(runtime_root / "managed_runs")
+    run_store.save(
+        ManagedRunRecord(
+            runId="run-mm-949",
+            workflowId="mm:workflow-mm-949",
+            agentId="agent-1",
+            runtimeId="codex-cli",
+            status="completed",
+            startedAt=old - timedelta(hours=1),
+            finishedAt=old,
+            workspacePath=str(run_root / "repo"),
+        )
+    )
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(runtime_root))
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": False,
+                "runtimeStoreRoot": str(runtime_root),
+                "artifactRoot": str(runtime_root / "artifacts"),
+                "lockPath": str(runtime_root / ".janitor.lock"),
+                "workspaceRetentionDays": 30,
+                "artifactRetentionDays": 30,
+                "recordRetentionDays": None,
+                "graceSeconds": 3600,
+                "maxDeletePaths": 25,
+                "maxDeleteBytes": None,
+            }
+        }
+    )
+
+    assert result["decisions"][0]["classification"] == "protected_active"
+    assert result["decisions"][0]["reason"] == "docker reference scan unavailable"
+    assert result["errors"] == ["docker reference scan unavailable"]
+    assert run_root.exists()
+
+
 @pytest.mark.asyncio
 async def test_agent_runtime_reconcile_managed_sessions_uses_bounded_heartbeating(
     monkeypatch: pytest.MonkeyPatch,
@@ -5371,10 +5533,10 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    from moonmind.workflows.temporal.runtime import cleanup as cleanup_module
+
     run_store = ManagedRunStore(tmp_path / "managed_runs")
-    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
     cleanup_calls: list[dict[str, object]] = []
-    heartbeat_payloads: list[dict[str, Any]] = []
 
     class _CleanupResult:
         def to_dict(self) -> dict[str, Any]:
@@ -5398,46 +5560,51 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
         *,
         run_store: ManagedRunStore,
         session_store: ManagedSessionStore,
+        config: Any,
+        docker_reference_provider: Any,
+        progress_callback: Any,
     ) -> _CleanupResult:
         cleanup_calls.append(
             {
                 "run_store": run_store,
-                "session_store": session_store,
+                "session_store_root": session_store.store_root,
+                "runtime_store_root": config.runtime_store_root,
+                "docker_reference_provider": docker_reference_provider,
+                "progress_callback": callable(progress_callback),
             }
         )
         return _CleanupResult()
 
-    async def _fake_await_with_activity_heartbeats(
-        awaitable: Any,
-        *,
-        heartbeat_payload: dict[str, Any],
-        interval_seconds: float | None = None,
-    ) -> Any:
-        del interval_seconds
-        heartbeat_payloads.append(dict(heartbeat_payload))
-        return await awaitable
-
     monkeypatch.setattr(
-        activity_runtime_module,
+        cleanup_module,
         "cleanup_managed_runtime_files",
         _fake_cleanup_managed_runtime_files,
-    )
-    monkeypatch.setattr(
-        activity_runtime_module,
-        "_await_with_activity_heartbeats",
-        _fake_await_with_activity_heartbeats,
     )
 
     activities = TemporalAgentRuntimeActivities(
         run_store=run_store,
-        session_store=session_store,
     )
 
-    result = await activities.agent_runtime_cleanup_managed_runtime_files({})
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "enabled": True,
+                "dryRun": True,
+                "runtimeStoreRoot": str(tmp_path),
+                "artifactRoot": str(tmp_path / "artifacts"),
+                "lockPath": str(tmp_path / ".janitor.lock"),
+            }
+        }
+    )
 
-    assert cleanup_calls == [{"run_store": run_store, "session_store": session_store}]
-    assert heartbeat_payloads == [
-        {"activityType": "agent_runtime.cleanup_managed_runtime_files"}
+    assert cleanup_calls == [
+        {
+            "run_store": run_store,
+            "session_store_root": tmp_path / "managed_sessions",
+            "runtime_store_root": tmp_path,
+            "docker_reference_provider": None,
+            "progress_callback": True,
+        }
     ]
     assert result["eligibleRoots"] == 1
     assert result["candidateSamples"][0]["safe_path"] == "store:workspaces/mm-workflow"

@@ -1,287 +1,179 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import os
-from pathlib import Path
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from moonmind.schemas.agent_runtime_models import ManagedRunRecord
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.managed_runtime_cleanup import (
-    cleanup_managed_runtime_files,
+    ManagedRuntimeCleanupConfig,
+    ManagedRuntimeWorkspaceJanitor,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import ManagedSessionStore
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 
 
-def _env(root: Path, *, enabled: str = "1", dry_run: str = "1") -> dict[str, str]:
-    return {
-        "MOONMIND_AGENT_RUNTIME_STORE": str(root),
-        "MOONMIND_AGENT_RUNTIME_ARTIFACTS": str(root / "artifacts"),
-        "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": enabled,
-        "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": dry_run,
-        "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS": "30",
-        "MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS": "30",
-        "MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS": "0",
-    }
+def _old_time() -> datetime:
+    return datetime.now(tz=UTC) - timedelta(days=120)
 
 
-def _run_record(
-    *,
-    run_id: str,
-    workspace_path: Path,
-    status: str = "completed",
-    started_at: datetime,
-    finished_at: datetime | None = None,
-    stdout_ref: str | None = None,
-) -> ManagedRunRecord:
+def _run_record(run_id: str, workspace_path: str, status: str = "completed") -> ManagedRunRecord:
     return ManagedRunRecord(
         runId=run_id,
-        workflowId=f"workflow-{run_id}",
-        agentId="codex",
-        runtimeId="codex",
+        workflowId="mm:wf-1",
+        agentId="agent-1",
+        runtimeId="codex-cli",
         status=status,
-        startedAt=started_at,
-        finishedAt=finished_at or started_at,
-        workspacePath=str(workspace_path),
-        stdoutArtifactRef=stdout_ref,
+        startedAt=_old_time(),
+        finishedAt=_old_time(),
+        workspacePath=workspace_path,
     )
 
 
 def _session_record(
-    *,
     session_id: str,
-    agent_run_id: str,
-    workspace_path: Path,
+    workspace_path: str,
+    session_workspace_path: str,
+    artifact_spool_path: str,
     status: str = "terminated",
-    started_at: datetime,
 ) -> CodexManagedSessionRecord:
     return CodexManagedSessionRecord(
         sessionId=session_id,
         sessionEpoch=1,
-        agentRunId=agent_run_id,
-        containerId=f"container-{session_id}",
+        agentRunId="run-1",
+        containerId=f"ctr-{session_id}",
         threadId=f"thread-{session_id}",
-        runtimeId="codex",
-        imageRef="codex:latest",
-        controlUrl="http://control",
+        runtimeId="codex_cli",
+        imageRef="ghcr.io/moonladderstudios/moonmind:latest",
+        controlUrl=f"docker-exec://{session_id}",
         status=status,
-        workspacePath=str(workspace_path),
-        sessionWorkspacePath=str(workspace_path / "session"),
-        artifactSpoolPath=str(workspace_path / "artifacts"),
-        startedAt=started_at,
-        updatedAt=started_at,
+        workspacePath=workspace_path,
+        sessionWorkspacePath=session_workspace_path,
+        artifactSpoolPath=artifact_spool_path,
+        startedAt=_old_time(),
+        updatedAt=_old_time(),
     )
 
 
-def _age_path(path: Path, when: datetime) -> None:
-    timestamp = when.timestamp()
-    if path.is_dir():
-        for child in path.rglob("*"):
-            os.utime(child, (timestamp, timestamp), follow_symlinks=False)
-    os.utime(path, (timestamp, timestamp), follow_symlinks=False)
+def _config(tmp_path, *, enabled: bool = True, dry_run: bool = True) -> ManagedRuntimeCleanupConfig:
+    return ManagedRuntimeCleanupConfig(
+        enabled=enabled,
+        dry_run=dry_run,
+        workspace_retention=timedelta(days=30),
+        artifact_retention=timedelta(days=90),
+        record_retention=None,
+        grace=timedelta(seconds=0),
+        max_delete_paths=25,
+        store_root=tmp_path,
+        artifact_root=tmp_path / "artifacts",
+    )
 
 
-def test_cleanup_dry_run_reports_candidates_without_deleting(
-    tmp_path: Path,
-) -> None:
-    now = datetime(2026, 6, 27, tzinfo=UTC)
-    old = now - timedelta(days=45)
-    workspace = tmp_path / "workspaces" / "mm-workflow"
-    workspace.mkdir(parents=True)
-    (workspace / "repo.txt").write_text("delete candidate", encoding="utf-8")
-    artifact_dir = tmp_path / "artifacts" / "job-1"
-    artifact_dir.mkdir(parents=True)
-    (artifact_dir / "stdout.log").write_text("logs", encoding="utf-8")
+def test_mm948_janitor_defaults_to_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN", raising=False)
+
+    config = ManagedRuntimeCleanupConfig.from_env()
+
+    assert config.enabled is False
+    assert config.dry_run is True
+
+
+def test_mm948_dry_run_reports_old_terminal_workspace_without_deleting(tmp_path) -> None:
+    workspace_root = tmp_path / "workspaces" / "mm:wf-1"
+    repo = workspace_root / "repo"
+    repo.mkdir(parents=True)
+    (repo / "README.md").write_text("old checkout", encoding="utf-8")
+    old_ts = (_old_time()).timestamp()
+    os.utime(workspace_root, (old_ts, old_ts))
+
     run_store = ManagedRunStore(tmp_path / "managed_runs")
-    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
-    run_store.save(
-        _run_record(
-            run_id="run-1",
-            workspace_path=workspace / "repo",
-            started_at=old,
-            stdout_ref="job-1/stdout.log",
-        )
-    )
-    _age_path(workspace, old)
-    _age_path(artifact_dir, old)
-    _age_path(tmp_path / "managed_runs" / "run-1.json", old)
+    run_store.save(_run_record("run-1", str(repo)))
 
-    result = cleanup_managed_runtime_files(
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        _config(tmp_path, enabled=True, dry_run=True),
         run_store=run_store,
-        session_store=session_store,
-        env=_env(tmp_path),
-        now=now,
+        session_store=ManagedSessionStore(tmp_path / "managed_sessions"),
     )
+
+    result = janitor.run()
 
     assert result.disabled is False
     assert result.dry_run is True
-    assert result.eligible_roots == 2
-    assert result.deleted_roots == 0
-    assert result.deleted_artifact_dirs == 0
-    assert result.estimated_deleted_bytes > 0
-    assert workspace.exists()
-    assert artifact_dir.exists()
-    assert {
-        (sample.resource_class, sample.classification)
-        for sample in result.candidate_samples
-    } >= {("workspace_root", "eligible"), ("artifact_dir", "eligible")}
-    assert result.metrics["resource.workspace_root.eligible"] == 1
-    assert result.metrics["resource.artifact_dir.eligible"] == 1
-
-
-def test_cleanup_preserves_per_candidate_skip_reasons(tmp_path: Path) -> None:
-    now = datetime(2026, 6, 27, tzinfo=UTC)
-    old = now - timedelta(days=45)
-    recent = now - timedelta(days=2)
-    active_workspace = tmp_path / "workspaces" / "active"
-    recent_workspace = tmp_path / "workspaces" / "recent"
-    active_workspace.mkdir(parents=True)
-    recent_workspace.mkdir(parents=True)
-    run_store = ManagedRunStore(tmp_path / "managed_runs")
-    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
-    run_store.save(
-        _run_record(
-            run_id="active-run",
-            workspace_path=active_workspace / "repo",
-            status="running",
-            started_at=old,
-        )
-    )
-    run_store.save(
-        _run_record(
-            run_id="recent-run",
-            workspace_path=recent_workspace / "repo",
-            started_at=recent,
-        )
-    )
-    _age_path(active_workspace, old)
-    _age_path(recent_workspace, recent)
-
-    result = cleanup_managed_runtime_files(
-        run_store=run_store,
-        session_store=session_store,
-        env=_env(tmp_path),
-        now=now,
-    )
-
-    samples = {sample.safe_path: sample for sample in result.candidate_samples}
-    assert result.skipped_active == 1
-    assert result.skipped_recent >= 1
-    assert samples["store:workspaces/active"].classification == "protected_active"
-    assert "activeTurnId" in samples["store:workspaces/active"].reason
-    assert samples["store:workspaces/recent"].classification == "protected_recent"
-    assert "retention" in samples["store:workspaces/recent"].reason
-
-
-def test_cleanup_record_errors_are_visible_with_safe_path(
-    tmp_path: Path,
-) -> None:
-    now = datetime(2026, 6, 27, tzinfo=UTC)
-    old = now - timedelta(days=45)
-    workspace = tmp_path / "workspaces" / "eligible"
-    workspace.mkdir(parents=True)
-    (workspace / "data.txt").write_text("payload", encoding="utf-8")
-    run_store = ManagedRunStore(tmp_path / "managed_runs")
-    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
-    run_store.save(
-        _run_record(
-            run_id="run-1",
-            workspace_path=workspace / "repo",
-            started_at=old,
-        )
-    )
-    _age_path(workspace, old)
-    _age_path(tmp_path / "managed_runs" / "run-1.json", old)
-    bad_record = tmp_path / "managed_sessions" / "bad.json"
-    bad_record.parent.mkdir(parents=True, exist_ok=True)
-    bad_record.write_text("{not json", encoding="utf-8")
-
-    result = cleanup_managed_runtime_files(
-        run_store=run_store,
-        session_store=session_store,
-        env=_env(tmp_path, dry_run="0"),
-        now=now,
-    )
-
-    assert workspace.exists()
-    assert result.delete_budget_exhausted == 0
-    assert result.errors
-    assert result.errors[0].startswith("store:managed_sessions")
-
-
-def test_cleanup_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
-    now = datetime(2026, 6, 27, tzinfo=UTC)
-    old = now - timedelta(days=45)
-    workspace = tmp_path / "workspaces" / "eligible"
-    workspace.mkdir(parents=True)
-    (workspace / "data.txt").write_text("payload", encoding="utf-8")
-    run_store = ManagedRunStore(tmp_path / "managed_runs")
-    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
-    run_store.save(
-        _run_record(
-            run_id="run-1",
-            workspace_path=workspace / "repo",
-            started_at=old,
-        )
-    )
-    _age_path(workspace, old)
-    _age_path(tmp_path / "managed_runs" / "run-1.json", old)
-    env = _env(tmp_path, dry_run="0")
-    env["MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS"] = "0"
-
-    result = cleanup_managed_runtime_files(
-        run_store=run_store,
-        session_store=session_store,
-        env=env,
-        now=now,
-    )
-
-    assert workspace.exists()
+    assert result.scanned_run_records == 1
+    assert result.scanned_workspace_roots == 1
     assert result.eligible_roots == 1
-    assert result.delete_budget_exhausted == 1
-    assert result.metrics["resource.workspace_root.budget_exhausted"] == 1
+    assert result.deleted_roots == 0
+    assert workspace_root.exists()
 
 
-def test_cleanup_deletes_when_enabled_and_dry_run_disabled(tmp_path: Path) -> None:
-    now = datetime(2026, 6, 27, tzinfo=UTC)
-    old = now - timedelta(days=45)
-    workspace = tmp_path / "workspaces" / "eligible"
-    workspace.mkdir(parents=True)
-    (workspace / "data.txt").write_text("payload", encoding="utf-8")
+def test_mm948_delete_requires_enabled_and_non_dry_run_terminal_owners(tmp_path) -> None:
+    run_root = tmp_path / "run-1"
+    repo = run_root / "repo"
+    repo.mkdir(parents=True)
+    (repo / "README.md").write_text("old checkout", encoding="utf-8")
+    old_ts = (_old_time()).timestamp()
+    os.utime(run_root, (old_ts, old_ts))
+
     run_store = ManagedRunStore(tmp_path / "managed_runs")
-    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
-    run_store.save(
-        _run_record(
-            run_id="run-1",
-            workspace_path=workspace / "repo",
-            started_at=old,
-        )
-    )
-    session_store.save(
-        _session_record(
-            session_id="sess-1",
-            agent_run_id="run-1",
-            workspace_path=workspace,
-            started_at=old,
-        )
-    )
-    _age_path(workspace, old)
-    _age_path(tmp_path / "managed_runs" / "run-1.json", old)
-    _age_path(tmp_path / "managed_sessions" / "sess-1.json", old)
-    env = _env(tmp_path, dry_run="0")
-    env["MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS"] = "30"
+    run_store.save(_run_record("run-1", str(repo)))
 
-    result = cleanup_managed_runtime_files(
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        _config(tmp_path, enabled=True, dry_run=False),
         run_store=run_store,
-        session_store=session_store,
-        env=env,
-        now=now,
+        session_store=ManagedSessionStore(tmp_path / "managed_sessions"),
     )
 
+    result = janitor.run()
+
+    assert result.eligible_roots == 1
     assert result.deleted_roots == 1
-    assert result.deleted_record_files == 2
-    assert not workspace.exists()
-    assert run_store.load("run-1") is None
-    assert session_store.load("sess-1") is None
+    assert not run_root.exists()
+
+
+def test_mm948_active_owner_protects_workspace(tmp_path) -> None:
+    run_root = tmp_path / "run-1"
+    repo = run_root / "repo"
+    repo.mkdir(parents=True)
+
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    run_store.save(_run_record("run-1", str(repo), status="running"))
+
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        _config(tmp_path, enabled=True, dry_run=False),
+        run_store=run_store,
+        session_store=ManagedSessionStore(tmp_path / "managed_sessions"),
+    )
+
+    result = janitor.run()
+
+    assert result.skipped_active == 1
+    assert result.deleted_roots == 0
+    assert run_root.exists()
+
+
+def test_mm948_artifact_scan_uses_normalized_artifacts_child_not_agent_jobs_glob(
+    tmp_path,
+) -> None:
+    artifact_dir = tmp_path / "artifacts" / "artifact-job"
+    artifact_dir.mkdir(parents=True)
+    unsafe_sibling = tmp_path / "artifact-job"
+    unsafe_sibling.mkdir()
+    old_ts = (_old_time()).timestamp()
+    os.utime(artifact_dir, (old_ts, old_ts))
+    os.utime(unsafe_sibling, (old_ts, old_ts))
+
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        _config(tmp_path, enabled=True, dry_run=True),
+        run_store=ManagedRunStore(tmp_path / "managed_runs"),
+        session_store=ManagedSessionStore(tmp_path / "managed_sessions"),
+    )
+
+    result = janitor.run()
+
+    assert result.scanned_artifact_dirs == 1
+    assert result.eligible_roots == 1
+    assert result.scanned_workspace_roots == 1
+    assert result.skipped_ambiguous_owner == 1
+    assert artifact_dir.exists()
+    assert unsafe_sibling.exists()

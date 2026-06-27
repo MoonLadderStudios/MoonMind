@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -102,16 +103,19 @@ class ManagedSessionStore:
                 records.append(record)
         return records
 
-    def iter_all(self) -> list[CodexManagedSessionRecord]:
-        """Return every readable managed-session record in the store."""
+    def iter_all(self) -> Iterable[CodexManagedSessionRecord]:
+        """Return all session records, including terminal records.
+
+        Unlike active reconciliation, retained-state cleanup must fail closed
+        when any durable owner record is unreadable.
+        """
         self.store_root.mkdir(parents=True, exist_ok=True)
-        records: list[CodexManagedSessionRecord] = []
         for path in self.store_root.glob("*.json"):
             data = json.loads(path.read_text(encoding="utf-8"))
-            records.append(CodexManagedSessionRecord(**data))
-        return records
+            yield CodexManagedSessionRecord(**data)
 
     def delete(self, session_id: str) -> None:
+        """Delete one session record by explicit session id."""
         path = self._resolve_path(session_id)
         try:
             path.unlink()

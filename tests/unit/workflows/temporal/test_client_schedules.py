@@ -17,6 +17,8 @@ from temporalio.client import ScheduleOverlapPolicy, ScheduleUpdate
 from temporalio.common import SearchAttributeKey
 
 from moonmind.workflows.temporal.client import (
+    MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID,
+    MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE,
     MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
     MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE,
     ScheduleTriggerResult,
@@ -236,6 +238,86 @@ class TestManagedSessionReconcileSchedule:
         update = await updater(MagicMock())
         assert isinstance(update, ScheduleUpdate)
         assert update.schedule.action.workflow == "MoonMind.ManagedSessionReconcile"
+
+
+class TestManagedRuntimeWorkspaceCleanupSchedule:
+    @pytest.mark.asyncio
+    async def test_mm948_creates_disabled_cleanup_schedule_by_default(self) -> None:
+        mock_created_handle = MagicMock()
+        mock_created_handle.id = MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+        mock_existing_handle = _mock_schedule_handle(
+            describe_side_effect=Exception("not found")
+        )
+        mock_existing_handle.update = AsyncMock(side_effect=Exception("not found"))
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock(return_value=mock_created_handle)
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.ensure_managed_runtime_workspace_cleanup_schedule()
+
+        assert result == MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+        schedule_id, schedule = mock_client.create_schedule.call_args[0]
+        assert schedule_id == MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+        assert schedule.action.workflow == "MoonMind.ManagedRuntimeWorkspaceCleanup"
+        assert schedule.action.id == (
+            MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE
+        )
+        assert schedule.action.task_queue == "mm.workflow"
+        assert schedule.action.static_summary == "Managed runtime workspace cleanup"
+        assert schedule.spec.cron_expressions == ["0 3 * * *"]
+        assert schedule.policy.overlap == ScheduleOverlapPolicy.SKIP
+        assert schedule.state.paused is True
+
+    @pytest.mark.asyncio
+    async def test_mm948_updates_existing_cleanup_schedule(self) -> None:
+        mock_existing_handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock()
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.ensure_managed_runtime_workspace_cleanup_schedule(
+            enabled=True
+        )
+
+        assert result == MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+        mock_existing_handle.update.assert_awaited_once()
+        mock_client.create_schedule.assert_not_awaited()
+        updater = mock_existing_handle.update.call_args[0][0]
+        update = await updater(MagicMock())
+        assert isinstance(update, ScheduleUpdate)
+        assert update.schedule.action.workflow == "MoonMind.ManagedRuntimeWorkspaceCleanup"
+        assert update.schedule.state.paused is False
+
+    @pytest.mark.asyncio
+    async def test_mm948_preserves_existing_cleanup_schedule_enabled_state(
+        self,
+    ) -> None:
+        mock_existing_handle = _mock_schedule_handle()
+        mock_client = MagicMock()
+        mock_client.get_schedule_handle.return_value = mock_existing_handle
+        mock_client.create_schedule = AsyncMock()
+        existing_schedule = MagicMock()
+        existing_schedule.state.paused = False
+
+        adapter = _make_adapter(mock_client)
+        result = await adapter.ensure_managed_runtime_workspace_cleanup_schedule(
+            enabled=None
+        )
+
+        assert result == MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+        mock_existing_handle.update.assert_awaited_once()
+        mock_client.create_schedule.assert_not_awaited()
+        updater = mock_existing_handle.update.call_args[0][0]
+        update = await updater(
+            SimpleNamespace(
+                description=SimpleNamespace(schedule=existing_schedule),
+            )
+        )
+        assert isinstance(update, ScheduleUpdate)
+        assert update.schedule.action.workflow == "MoonMind.ManagedRuntimeWorkspaceCleanup"
+        assert update.schedule.state.paused is False
 
     @pytest.mark.asyncio
     async def test_jitter_passed_through(self) -> None:

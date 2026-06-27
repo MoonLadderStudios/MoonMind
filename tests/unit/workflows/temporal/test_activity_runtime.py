@@ -1015,6 +1015,26 @@ async def test_curated_pentest_activity_binding_is_registered_on_agent_runtime_f
         "security.pentest.execute"
     )
 
+async def test_managed_runtime_cleanup_binding_is_registered_on_agent_runtime_fleet():
+    bindings = build_activity_bindings(
+        build_default_activity_catalog(),
+        agent_runtime_activities=TemporalAgentRuntimeActivities(),
+        agent_skills_activities=AgentSkillsActivities(),
+        fleets=[AGENT_RUNTIME_FLEET],
+    )
+
+    binding = next(
+        item
+        for item in bindings
+        if item.activity_type == "agent_runtime.cleanup_managed_runtime_files"
+    )
+
+    assert binding.fleet == AGENT_RUNTIME_FLEET
+    assert binding.task_queue == "mm.activity.agent_runtime"
+    assert binding.handler.__temporal_activity_definition.name == (
+        "agent_runtime.cleanup_managed_runtime_files"
+    )
+
 def _approved_pentest_scope() -> dict[str, object]:
     now = datetime.now(timezone.utc)
     return {
@@ -4741,6 +4761,7 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_runtime.terminate_session" in bound_types
             assert "agent_runtime.fetch_session_summary" in bound_types
             assert "agent_runtime.publish_session_artifacts" in bound_types
+            assert "agent_runtime.cleanup_managed_runtime_files" in bound_types
             assert "agent_runtime.status" in bound_types
             assert "agent_runtime.fetch_result" in bound_types
             assert "agent_runtime.cancel" in bound_types

@@ -2109,6 +2109,12 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "jiraPresetBrief" in expanded_with_source_issue["steps"][1][
                 "instructions"
             ]
+            assert "resolvedSourceDesignPath" in expanded_with_source_issue["steps"][
+                1
+            ]["instructions"]
+            assert "source-resolution error" in expanded_with_source_issue["steps"][
+                1
+            ]["instructions"]
 
             expanded_with_null_optional_sources = await service.expand_template(
                 slug="jira-breakdown",

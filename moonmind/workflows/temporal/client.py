@@ -650,9 +650,13 @@ class TemporalClientAdapter:
         *,
         cron_expression: str = "0 3 * * *",
         timezone: str = "UTC",
-        enabled: bool = False,
+        enabled: bool | None = False,
     ) -> str:
-        """Create or replace the retained-state managed-runtime cleanup Schedule."""
+        """Create or replace the retained managed-runtime cleanup Schedule.
+
+        Pass ``enabled=None`` to preserve an existing schedule's paused state
+        while still creating a missing schedule as disabled.
+        """
 
         from temporalio.client import (
             Schedule,
@@ -668,37 +672,41 @@ class TemporalClientAdapter:
         )
 
         client = await self.get_client()
-        schedule = Schedule(
-            action=ScheduleActionStartWorkflow(
-                "MoonMind.ManagedRuntimeWorkspaceCleanup",
-                {},
-                id=MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE,
-                task_queue=self._get_task_queue(),
-                typed_search_attributes=_build_typed_search_attributes(
-                    {
-                        "mm_entry": ["operational"],
-                        "mm_state": ["scheduled"],
-                    }
+        def _build_schedule(*, schedule_enabled: bool) -> Schedule:
+            return Schedule(
+                action=ScheduleActionStartWorkflow(
+                    "MoonMind.ManagedRuntimeWorkspaceCleanup",
+                    {},
+                    id=MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE,
+                    task_queue=self._get_task_queue(),
+                    typed_search_attributes=_build_typed_search_attributes(
+                        {
+                            "mm_entry": ["operational"],
+                            "mm_state": ["scheduled"],
+                        }
+                    ),
+                    static_summary="Managed runtime workspace cleanup",
+                    static_details=(
+                        "Recurring dry-run retained-state janitor for managed runtime files"
+                    ),
                 ),
-                static_summary="Managed runtime retained-state cleanup",
-                static_details=(
-                    "Recurring operational janitor for retained managed runtime "
-                    "workspaces, artifacts, and records"
+                spec=build_schedule_spec(
+                    cron=cron_expression,
+                    timezone=timezone,
+                    jitter_seconds=0,
                 ),
-            ),
-            spec=build_schedule_spec(
-                cron=cron_expression,
-                timezone=timezone,
-                jitter_seconds=0,
-            ),
-            policy=build_schedule_policy(
-                overlap_mode="skip",
-                catchup_mode="last",
-            ),
-            state=build_schedule_state(
-                enabled=enabled,
-                note="Managed runtime retained-state janitor",
-            ),
+                policy=build_schedule_policy(
+                    overlap_mode="skip",
+                    catchup_mode="last",
+                ),
+                state=build_schedule_state(
+                    enabled=schedule_enabled,
+                    note="Managed runtime retained-state workspace cleanup",
+                ),
+            )
+
+        schedule = _build_schedule(
+            schedule_enabled=False if enabled is None else enabled
         )
         try:
             handle = client.get_schedule_handle(
@@ -706,8 +714,18 @@ class TemporalClientAdapter:
             )
 
             async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
-                del input
-                return ScheduleUpdate(schedule=schedule)
+                schedule_enabled = enabled
+                if schedule_enabled is None:
+                    existing_schedule = input.description.schedule
+                    existing_paused = (
+                        existing_schedule.state.paused
+                        if existing_schedule.state
+                        else True
+                    )
+                    schedule_enabled = not existing_paused
+                return ScheduleUpdate(
+                    schedule=_build_schedule(schedule_enabled=schedule_enabled)
+                )
 
             await handle.update(_replace_schedule)
             return MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID

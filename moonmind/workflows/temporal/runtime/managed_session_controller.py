@@ -3911,6 +3911,77 @@ class DockerCodexManagedSessionController:
             raise RuntimeError(f"failed to inspect active docker containers: {details}")
         return {line.strip() for line in inspect_out.splitlines() if line.strip()}
 
+    async def collect_managed_runtime_cleanup_docker_references(self):
+        """Return live Docker references that must protect retained state."""
+        from moonmind.workflows.temporal.runtime.cleanup import DockerReferenceState
+
+        returncode, stdout, stderr = await self._command_runner(
+            (self._docker_binary, "ps", "-q"),
+            env=self._docker_env(),
+        )
+        if returncode != 0:
+            details = stderr.strip() or stdout.strip() or f"exit code {returncode}"
+            return DockerReferenceState(
+                failed=True,
+                reason=f"docker reference scan failed: {details}",
+            )
+        container_ids = [line.strip() for line in stdout.splitlines() if line.strip()]
+        if not container_ids:
+            return DockerReferenceState()
+        inspect_rc, inspect_out, inspect_err = await self._command_runner(
+            (self._docker_binary, "inspect", *container_ids),
+            env=self._docker_env(),
+        )
+        if inspect_rc != 0:
+            details = (
+                inspect_err.strip()
+                or inspect_out.strip()
+                or f"exit code {inspect_rc}"
+            )
+            return DockerReferenceState(
+                failed=True,
+                reason=f"docker reference scan failed: {details}",
+            )
+        try:
+            items = json.loads(inspect_out) if inspect_out.strip() else []
+        except json.JSONDecodeError as exc:
+            return DockerReferenceState(
+                failed=True,
+                reason=f"docker reference scan failed: {exc}",
+            )
+        active_container_refs: set[str] = set()
+        active_mount_paths: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for value in (item.get("Id"), item.get("Name")):
+                if value:
+                    active_container_refs.add(str(value).strip().lstrip("/"))
+            config = item.get("Config") or {}
+            labels = config.get("Labels") if isinstance(config, dict) else {}
+            if isinstance(labels, dict):
+                for key in (
+                    "moonmind.session_id",
+                    "moonmind.agent_run_id",
+                    "moonmind.run_id",
+                ):
+                    value = labels.get(key)
+                    if value:
+                        active_container_refs.add(str(value))
+            mounts = item.get("Mounts") or []
+            if isinstance(mounts, list):
+                for mount in mounts:
+                    if not isinstance(mount, dict):
+                        continue
+                    for key in ("Source", "Destination", "Name"):
+                        value = mount.get(key)
+                        if value:
+                            active_mount_paths.add(str(value))
+        return DockerReferenceState(
+            active_container_refs=frozenset(active_container_refs),
+            active_mount_paths=frozenset(active_mount_paths),
+        )
+
     def _active_sidecar_volume_names(self, active_session_ids: set[str]) -> set[str]:
         names: set[str] = set()
         for session_id in active_session_ids:

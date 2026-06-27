@@ -38,6 +38,25 @@ def test_store_round_trips_phase6_session_record(tmp_path) -> None:
     assert loaded.agent_run_id == "task-1"
     assert loaded.container_id == "ctr-1"
 
+def test_iter_all_returns_terminal_and_active_session_records(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+    store.save(
+        _record().model_copy(update={"session_id": "sess-2", "status": "terminated"})
+    )
+
+    all_ids = {record.session_id for record in store.iter_all()}
+
+    assert all_ids == {"sess-1", "sess-2"}
+
+def test_delete_removes_session_record_file(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+
+    store.delete("sess-1")
+
+    assert store.load("sess-1") is None
+
 @pytest.mark.asyncio
 async def test_store_update_status_persists_artifact_refs_and_offsets(tmp_path) -> None:
     store = ManagedSessionStore(tmp_path)
@@ -76,3 +95,35 @@ async def test_store_update_revalidates_and_normalizes_mutations(tmp_path) -> No
     assert updated.runtime_id == "codex_cli"
     assert updated.error_message == "temporary failure"
     assert updated.updated_at == datetime(2026, 4, 6, 12, 6, tzinfo=UTC)
+
+def test_iter_all_and_delete_are_explicit_retained_state_apis(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+    store.save(
+        _record().model_copy(
+            update={
+                "session_id": "sess-2",
+                "agent_run_id": "task-2",
+                "status": "terminated",
+            }
+        )
+    )
+
+    assert {record.session_id for record in store.iter_all()} == {"sess-1", "sess-2"}
+    assert {record.session_id for record in store.list_active()} == {"sess-1"}
+
+    store.delete("sess-2")
+
+    assert store.load("sess-2") is None
+    assert {record.session_id for record in store.iter_all()} == {"sess-1"}
+
+
+def test_iter_all_raises_for_corrupt_records(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+    (tmp_path / "corrupt.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        tuple(store.iter_all())
+
+    assert {record.session_id for record in store.list_active()} == {"sess-1"}

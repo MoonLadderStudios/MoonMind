@@ -21,7 +21,7 @@ import tempfile
 import time
 import tarfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Mapping, Protocol, Sequence, TypeVar, get_type_hints
@@ -207,9 +207,6 @@ from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
     resolve_managed_api_key_reference,
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
-from moonmind.workflows.temporal.runtime.managed_runtime_cleanup import (
-    cleanup_managed_runtime_files,
-)
 from moonmind.workflows.temporal.runtime.strategies.codex_cli import (
     append_managed_codex_runtime_note,
 )
@@ -1008,6 +1005,9 @@ class ManagedSessionController(Protocol):
         pass
 
     async def reap_orphan_session_containers(self) -> Any:
+        pass
+
+    async def collect_managed_runtime_cleanup_docker_references(self) -> Any:
         pass
 
 def _managed_runtime_artifact_root() -> Path:
@@ -1837,6 +1837,8 @@ def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
                         "jiraIssueKey": {"type": "string"},
                         "jiraPresetBrief": {"type": "string"},
                         "jiraStepInstructions": {"type": "string"},
+                        "resolvedSourceDesignPath": {"type": "string"},
+                        "sourceResolution": {"type": "object"},
                         "jiraIssue": {"type": "object"},
                         "summary": {"type": "string"},
                     },
@@ -8381,28 +8383,101 @@ class TemporalAgentRuntimeActivities:
         payload: Mapping[str, Any] | None = None,
         /,
     ) -> dict[str, Any]:
-        del payload
+        from moonmind.workflows.temporal.runtime.cleanup import (
+            DockerReferenceState,
+            ManagedRuntimeCleanupConfig,
+            cleanup_managed_runtime_files,
+        )
+        from moonmind.workflows.temporal.runtime.managed_session_store import (
+            ManagedSessionStore,
+        )
+
         if self._run_store is None:
-            raise RuntimeError(
+            raise TemporalActivityRuntimeError(
                 "run_store is required for agent_runtime.cleanup_managed_runtime_files"
             )
-        session_store = self._session_store
-        if session_store is None and self._session_controller is not None:
-            session_store = getattr(self._session_controller, "_session_store", None)
-        if session_store is None:
-            raise RuntimeError(
-                "session_store is required for "
-                "agent_runtime.cleanup_managed_runtime_files"
+        config = ManagedRuntimeCleanupConfig.from_env()
+        if isinstance(payload, Mapping) and isinstance(payload.get("config"), Mapping):
+            config_payload = payload["config"]
+            config = ManagedRuntimeCleanupConfig(
+                enabled=bool(config_payload.get("enabled", config.enabled)),
+                dry_run=bool(config_payload.get("dryRun", config.dry_run)),
+                workspace_retention=timedelta(
+                    days=int(
+                        config_payload.get(
+                            "workspaceRetentionDays",
+                            config.workspace_retention.days,
+                        )
+                    )
+                ),
+                artifact_retention=timedelta(
+                    days=int(
+                        config_payload.get(
+                            "artifactRetentionDays",
+                            config.artifact_retention.days,
+                        )
+                    )
+                ),
+                record_retention=(
+                    None
+                    if config_payload.get("recordRetentionDays") is None
+                    else timedelta(days=int(config_payload["recordRetentionDays"]))
+                ),
+                grace=timedelta(
+                    seconds=int(
+                        config_payload.get(
+                            "graceSeconds", config.grace.total_seconds()
+                        )
+                    )
+                ),
+                max_delete_paths=int(
+                    config_payload.get("maxDeletePaths", config.max_delete_paths)
+                ),
+                max_delete_bytes=(
+                    None
+                    if config_payload.get("maxDeleteBytes") is None
+                    else int(config_payload["maxDeleteBytes"])
+                ),
+                lock_path=Path(config_payload.get("lockPath", config.lock_path)),
+                runtime_store_root=Path(
+                    config_payload.get("runtimeStoreRoot", config.runtime_store_root)
+                ),
+                artifact_root=Path(config_payload.get("artifactRoot", config.artifact_root)),
             )
-        result = await _await_with_activity_heartbeats(
-            asyncio.to_thread(
-                cleanup_managed_runtime_files,
-                run_store=self._run_store,
-                session_store=session_store,
+        session_store = ManagedSessionStore(config.runtime_store_root / "managed_sessions")
+        docker_state: DockerReferenceState | Mapping[str, object] | None = None
+        if self._session_controller is not None and hasattr(
+            self._session_controller,
+            "collect_managed_runtime_cleanup_docker_references",
+        ):
+            docker_state = await _await_with_activity_heartbeats(
+                self._session_controller.collect_managed_runtime_cleanup_docker_references(),
+                heartbeat_payload={
+                    "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                },
+            )
+        elif not config.dry_run:
+            docker_state = DockerReferenceState(
+                failed=True,
+                reason="docker reference scan unavailable",
+            )
+        result = cleanup_managed_runtime_files(
+            run_store=self._run_store,
+            session_store=session_store,
+            config=config,
+            docker_reference_provider=(
+                None if docker_state is None else lambda: docker_state
             ),
-            heartbeat_payload={
-                "activityType": "agent_runtime.cleanup_managed_runtime_files",
-            },
+            progress_callback=(
+                lambda progress: temporal_activity.heartbeat(
+                    {
+                        "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                        **dict(progress),
+                    }
+                )
+                if temporal_activity.in_activity()
+                else None
+            ),
         )
         return result.to_dict()
 

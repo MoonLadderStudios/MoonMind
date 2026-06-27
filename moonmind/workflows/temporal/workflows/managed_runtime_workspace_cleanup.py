@@ -19,10 +19,10 @@ class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         del payload
-        workflow.set_current_details("Cleaning retained managed runtime state")
+        workflow.set_current_details("Cleaning retained managed runtime files")
         workflow.upsert_search_attributes(
             {
-                "SessionStatus": ["cleaning_retained_state"],
+                "SessionStatus": ["cleanup"],
                 "IsDegraded": [False],
             }
         )
@@ -46,16 +46,18 @@ class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
                 retry_policy=RetryPolicy(
                     initial_interval=timedelta(seconds=5),
                     backoff_coefficient=2.0,
-                    maximum_interval=timedelta(seconds=route.retries.max_interval_seconds),
+                    maximum_interval=timedelta(
+                        seconds=route.retries.max_interval_seconds
+                    ),
                     maximum_attempts=route.retries.max_attempts,
                     non_retryable_error_types=list(
                         route.retries.non_retryable_error_codes
                     ),
                 ),
-                summary="Clean retained managed runtime state",
+                summary="Clean retained managed runtime files",
             )
         except Exception:
-            workflow.set_current_details("Managed runtime retained-state cleanup failed")
+            workflow.set_current_details("Managed runtime file cleanup failed")
             workflow.upsert_search_attributes(
                 {
                     "SessionStatus": ["failed"],
@@ -64,12 +66,11 @@ class MoonMindManagedRuntimeWorkspaceCleanupWorkflow:
             )
             raise
         normalized = result or {}
-        is_degraded = bool(normalized.get("errors"))
-        workflow.set_current_details("Managed runtime retained-state cleanup complete")
+        workflow.set_current_details("Managed runtime file cleanup complete")
         workflow.upsert_search_attributes(
             {
                 "SessionStatus": ["completed"],
-                "IsDegraded": [is_degraded],
+                "IsDegraded": [bool(normalized.get("errors"))],
             }
         )
         return normalized

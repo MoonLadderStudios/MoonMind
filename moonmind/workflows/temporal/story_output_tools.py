@@ -7,7 +7,7 @@ import hashlib
 import inspect
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlparse
 
@@ -40,6 +40,10 @@ JIRA_STORY_TOOL_NAMES = frozenset(
         JIRA_ORCHESTRATE_TASKS_TOOL_NAME,
         JIRA_IMPLEMENT_TASKS_TOOL_NAME,
     }
+)
+_SOURCE_DOCUMENT_PATH_RE = re.compile(
+    r"(?P<path>(?:docs/(?:[A-Za-z0-9_.@+=-]+/)*[A-Za-z0-9_.@+=-]+|"
+    r"\.specify/memory/constitution)\.md)"
 )
 _DOWNSTREAM_PRESET_ORCHESTRATE = "orchestrate"
 _DOWNSTREAM_PRESET_IMPLEMENT = "implement"
@@ -529,6 +533,22 @@ def _has_explicit_empty_story_list(value: Any) -> bool:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return len(value) == 0
     return False
+
+
+def _story_breakdown_failure_reason(value: Any) -> str:
+    if isinstance(value, str) and value.strip():
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return ""
+    if not isinstance(value, Mapping):
+        return ""
+    error = _mapping(value.get("error"))
+    if not error:
+        return ""
+    code = _string(error.get("code")) or "story_breakdown_failed"
+    message = _string(error.get("message")) or "Story breakdown failed."
+    return f"Story breakdown failed before Jira creation: {code}: {message}"
 
 def _story_summary(story: Mapping[str, Any], *, index: int) -> str:
     for key in ("summary", "title", "name", "userStory", "user_story"):
@@ -2009,6 +2029,7 @@ async def create_jira_issues_from_stories(
     stories = _coerce_story_payload(raw_story_payload)
     artifact_ref_was_read = False
     artifact_payload_had_explicit_empty_stories = False
+    artifact_payload_failure_reason = ""
     artifact_ref = ""
     if not stories:
         artifact_ref = _string(
@@ -2042,6 +2063,9 @@ async def create_jira_issues_from_stories(
                     except json.JSONDecodeError:
                         parsed_payload = artifact_payload
                 breakdown_source_path = _breakdown_source_path(parsed_payload)
+                artifact_payload_failure_reason = _story_breakdown_failure_reason(
+                    parsed_payload
+                )
                 stories = _coerce_story_payload(parsed_payload)
                 artifact_ref_was_read = True
                 artifact_payload_had_explicit_empty_stories = (
@@ -2058,6 +2082,18 @@ async def create_jira_issues_from_stories(
                         dependency_mode=dependency_mode,
                     )
                 raise
+    if (
+        not stories
+        and artifact_ref_was_read
+        and artifact_payload_failure_reason
+    ):
+        if fallback_for_missing_stories:
+            return _fallback_result(
+                reason=artifact_payload_failure_reason,
+                inputs=inputs,
+                dependency_mode=dependency_mode,
+            )
+        raise ValueError(artifact_payload_failure_reason)
     if (
         not stories
         and artifact_ref_was_read
@@ -2597,6 +2633,188 @@ def _load_preset_brief_issue_key(inputs: Mapping[str, Any]) -> str:
         or nested.get("key")
     ).upper()
 
+
+def _source_resolution_root(
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+) -> Path | None:
+    context_mapping = _mapping(context)
+    root = _string(
+        inputs.get("repositoryRoot")
+        or inputs.get("repository_root")
+        or inputs.get("repoRoot")
+        or inputs.get("repo_root")
+        or context_mapping.get("repositoryRoot")
+        or context_mapping.get("repository_root")
+        or context_mapping.get("repoRoot")
+        or context_mapping.get("repo_root")
+        or context_mapping.get("workspacePath")
+        or context_mapping.get("workspace_path")
+    )
+    return Path(root) if root else None
+
+
+def _normalize_source_document_path(value: object) -> str:
+    candidate = _string(value).strip()
+    if not candidate:
+        return ""
+    candidate = candidate.replace("\\", "/")
+    candidate = candidate.strip("`'\"<>()[]{}")
+    candidate = candidate.rstrip(".,;:!?")
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+
+    path = PurePosixPath(candidate)
+    if path.is_absolute() or not path.parts:
+        return ""
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return ""
+    normalized = path.as_posix()
+    if normalized == ".specify/memory/constitution.md":
+        return normalized
+    if normalized.startswith("docs/") and normalized.endswith(".md"):
+        return normalized
+    return ""
+
+
+def _source_document_path_exists(
+    repo_root: Path | None,
+    source_path: str,
+) -> bool | None:
+    if repo_root is None:
+        return None
+    if not source_path:
+        return False
+    try:
+        path = repo_root.joinpath(*PurePosixPath(source_path).parts)
+        return path.is_file()
+    except (OSError, ValueError):
+        return False
+
+
+def _source_path_candidates(
+    *,
+    texts: Sequence[tuple[str, str]],
+    repo_root: Path | None,
+) -> list[dict[str, Any]]:
+    candidates: dict[str, dict[str, Any]] = {}
+    for source_field, text in texts:
+        if not text:
+            continue
+        for match in _SOURCE_DOCUMENT_PATH_RE.finditer(text):
+            source_path = _normalize_source_document_path(match.group("path"))
+            if not source_path:
+                continue
+            candidate = candidates.setdefault(
+                source_path,
+                {
+                    "path": source_path,
+                    "sourceField": source_field,
+                    "sourceFields": [],
+                    "exists": _source_document_path_exists(repo_root, source_path),
+                },
+            )
+            source_fields = candidate["sourceFields"]
+            if source_field not in source_fields:
+                source_fields.append(source_field)
+    return list(candidates.values())
+
+
+def _resolve_source_design_path_from_issue(
+    *,
+    inputs: Mapping[str, Any],
+    context: Mapping[str, Any] | None,
+    summary: str,
+    description_text: str,
+    acceptance_text: str,
+    preset_brief: str,
+) -> dict[str, Any]:
+    repo_root = _source_resolution_root(inputs, context)
+    explicit_path = _normalize_source_document_path(
+        inputs.get("sourceDesignPath")
+        or inputs.get("source_design_path")
+        or inputs.get("declarativeDocumentPath")
+        or inputs.get("declarative_document_path")
+    )
+    if explicit_path:
+        exists = _source_document_path_exists(repo_root, explicit_path)
+        resolved = exists is not False
+        return {
+            "status": "resolved" if resolved else "invalid_explicit_path",
+            "selectedPath": explicit_path if resolved else "",
+            "candidatePaths": [
+                {
+                    "path": explicit_path,
+                    "sourceField": "input.source_design_path",
+                    "sourceFields": ["input.source_design_path"],
+                    "exists": exists,
+                }
+            ],
+            "reason": (
+                "explicit source_design_path exists in the repository checkout"
+                if exists is True
+                else (
+                    "explicit source_design_path selected without repository-root "
+                    "validation"
+                    if exists is None
+                    else "explicit source_design_path was not found in the repository checkout"
+                )
+            ),
+        }
+
+    candidate_paths = _source_path_candidates(
+        texts=(
+            ("jira.summary", summary),
+            ("jira.description", description_text),
+            ("jira.acceptanceCriteria", acceptance_text),
+            ("jira.presetBrief", preset_brief),
+        ),
+        repo_root=repo_root,
+    )
+    existing_paths = [item for item in candidate_paths if item["exists"] is True]
+    if len(existing_paths) == 1 or (
+        repo_root is None and len(candidate_paths) == 1
+    ):
+        selected = existing_paths[0] if existing_paths else candidate_paths[0]
+        return {
+            "status": "resolved",
+            "selectedPath": selected["path"],
+            "candidatePaths": candidate_paths,
+            "reason": (
+                f"found one existing canonical document path in "
+                f"{selected['sourceField']}"
+                if selected["exists"] is True
+                else (
+                    f"found one canonical document path in "
+                    f"{selected['sourceField']}; repository-root validation not run"
+                )
+            ),
+        }
+    if len(existing_paths) > 1:
+        return {
+            "status": "ambiguous",
+            "selectedPath": "",
+            "candidatePaths": candidate_paths,
+            "reason": "multiple existing canonical document paths were found",
+        }
+    if candidate_paths:
+        return {
+            "status": "invalid_candidates",
+            "selectedPath": "",
+            "candidatePaths": candidate_paths,
+            "reason": (
+                "canonical document path candidates were mentioned, but none "
+                "exist in the repository checkout"
+            ),
+        }
+    return {
+        "status": "not_found",
+        "selectedPath": "",
+        "candidatePaths": [],
+        "reason": "no canonical document path was found in the trusted Jira issue",
+    }
+
+
 async def load_jira_preset_brief(
     inputs: Mapping[str, Any],
     _context: Mapping[str, Any] | None = None,
@@ -2652,27 +2870,44 @@ async def load_jira_preset_brief(
     if acceptance_text:
         step_parts.append(f"Acceptance criteria\n{acceptance_text}")
     step_instructions = "\n\n".join(part for part in step_parts if part)
-
-    return ToolResult(
-        status="COMPLETED",
-        outputs={
-            "trustedSource": "moonmind.jira.get_issue",
-            "jiraIssueKey": resolved_key,
-            "jiraPresetBrief": preset_brief,
-            "jiraStepInstructions": step_instructions,
-            "jiraIssue": {
-                "key": resolved_key,
-                "summary": summary,
-                "descriptionText": description_text,
-                "acceptanceCriteriaText": acceptance_text,
-                "status": _string(status.get("name")),
-                "issueType": _string(issue_type.get("name")),
-                "assignee": _string(assignee.get("displayName")),
-                "url": _issue_url(issue),
-            },
-            "summary": f"Loaded Jira preset brief for {resolved_key} from trusted Jira data.",
-        },
+    source_resolution = _resolve_source_design_path_from_issue(
+        inputs=inputs,
+        context=_context,
+        summary=summary,
+        description_text=description_text,
+        acceptance_text=acceptance_text,
+        preset_brief=preset_brief,
     )
+    resolved_source_path = _string(source_resolution.get("selectedPath"))
+
+    summary_text = f"Loaded Jira preset brief for {resolved_key} from trusted Jira data."
+    if resolved_source_path:
+        summary_text = (
+            f"{summary_text} Resolved source design path {resolved_source_path}."
+        )
+
+    outputs: dict[str, Any] = {
+        "trustedSource": "moonmind.jira.get_issue",
+        "jiraIssueKey": resolved_key,
+        "jiraPresetBrief": preset_brief,
+        "jiraStepInstructions": step_instructions,
+        "sourceResolution": source_resolution,
+        "jiraIssue": {
+            "key": resolved_key,
+            "summary": summary,
+            "descriptionText": description_text,
+            "acceptanceCriteriaText": acceptance_text,
+            "status": _string(status.get("name")),
+            "issueType": _string(issue_type.get("name")),
+            "assignee": _string(assignee.get("displayName")),
+            "url": _issue_url(issue),
+        },
+        "summary": summary_text,
+    }
+    if resolved_source_path:
+        outputs["resolvedSourceDesignPath"] = resolved_source_path
+
+    return ToolResult(status="COMPLETED", outputs=outputs)
 
 
 def _github_issue_inputs(inputs: Mapping[str, Any]) -> tuple[str, int]:
