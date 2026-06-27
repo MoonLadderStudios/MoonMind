@@ -4845,7 +4845,7 @@ function StepAddMenu({
             </>
           ) : null}
           <p className="queue-step-context-menu-group-label">Capabilities</p>
-          {CAPABILITY_MENU_TOKENS.map((token, tokenIndex) => {
+          {CAPABILITY_MENU_TOKENS.map((token) => {
             const entry = capabilityCatalogEntry(token);
             const alreadyPresent = presentCapabilityTokens.includes(token);
             return (
