@@ -4717,7 +4717,7 @@ export const LIQUID_GL_OPTIONS = {
 const DEFAULT_PRIORITY = 0;
 const DEFAULT_MAX_ATTEMPTS = 3;
 
-interface StepContextMenuProps {
+interface StepAddMenuProps {
   stepNumber: number;
   attachmentPolicy: AttachmentPolicy;
   presentCapabilityTokens: string[];
@@ -4726,19 +4726,48 @@ interface StepContextMenuProps {
   onAddCustomCapability: () => void;
 }
 
-// MM-936: The single "Add to step" affordance rendered beneath each step's
-// instruction box. It unifies image attachments and required capabilities into
-// one elegant menu without merging the underlying backend concepts.
-function StepContextMenu({
+// MM-943: The single "Add to step" affordance rendered beneath each step's
+// instruction box. It unifies image attachments and capabilities without
+// merging the underlying backend concepts.
+function StepAddMenu({
   stepNumber,
   attachmentPolicy,
   presentCapabilityTokens,
   onAddImage,
   onAddCapability,
   onAddCustomCapability,
-}: StepContextMenuProps) {
+}: StepAddMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  const focusMenuItem = useCallback((startIndex: number, direction: 1 | -1) => {
+    const items = Array.from(
+      containerRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      ) || [],
+    );
+    const itemCount = items.length;
+    if (itemCount === 0) {
+      return;
+    }
+    for (let offset = 0; offset < itemCount; offset += 1) {
+      const nextIndex =
+        (startIndex + offset * direction + itemCount) % itemCount;
+      const item = items[nextIndex];
+      if (item && !item.disabled) {
+        item.focus();
+        return;
+      }
+    }
+  }, []);
+
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) {
+      window.setTimeout(() => triggerRef.current?.focus(), 0);
+    }
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -4749,12 +4778,46 @@ function StepContextMenu({
         containerRef.current &&
         !containerRef.current.contains(event.target as Node)
       ) {
-        setOpen(false);
+        closeMenu();
       }
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setOpen(false);
+        closeMenu(true);
+        return;
+      }
+      const items = Array.from(
+        containerRef.current?.querySelectorAll<HTMLButtonElement>(
+          '[role="menuitem"]',
+        ) || [],
+      );
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        const currentIndex = items.indexOf(
+          document.activeElement as HTMLButtonElement,
+        );
+        focusMenuItem(currentIndex < 0 ? 0 : currentIndex + 1, 1);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        const currentIndex = items.indexOf(
+          document.activeElement as HTMLButtonElement,
+        );
+        focusMenuItem(
+          currentIndex < 0 ? items.length - 1 : currentIndex - 1,
+          -1,
+        );
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        focusMenuItem(0, 1);
+        return;
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        focusMenuItem(items.length - 1, -1);
       }
     }
     document.addEventListener("mousedown", handlePointerDown);
@@ -4763,12 +4826,19 @@ function StepContextMenu({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open]);
+  }, [closeMenu, focusMenuItem, open]);
 
   const menuLabel = `Add to Step ${stepNumber}`;
+  const menuTitleId = `queue-step-add-menu-title-${stepNumber}`;
   const imageItemLabel = isImageOnlyPolicy(attachmentPolicy)
     ? "Image…"
     : "Attachment…";
+
+  useEffect(() => {
+    if (open) {
+      window.setTimeout(() => focusMenuItem(0, 1), 0);
+    }
+  }, [focusMenuItem, open]);
 
   return (
     <div className="queue-step-context-menu" ref={containerRef}>
@@ -4779,6 +4849,7 @@ function StepContextMenu({
         aria-expanded={open}
         aria-label={menuLabel}
         title={menuLabel}
+        ref={triggerRef}
         onClick={() => setOpen((value) => !value)}
       >
         <span aria-hidden="true">+</span>
@@ -4788,8 +4859,11 @@ function StepContextMenu({
         <div
           className="queue-step-context-menu-popover"
           role="menu"
-          aria-label={menuLabel}
+          aria-labelledby={menuTitleId}
         >
+          <p id={menuTitleId} className="queue-step-context-menu-title">
+            Add to step
+          </p>
           {attachmentPolicy.enabled ? (
             <>
               <button
@@ -4797,7 +4871,7 @@ function StepContextMenu({
                 role="menuitem"
                 className="queue-step-context-menu-item"
                 onClick={() => {
-                  setOpen(false);
+                  closeMenu(true);
                   onAddImage();
                 }}
               >
@@ -4823,7 +4897,7 @@ function StepContextMenu({
                 aria-disabled={alreadyPresent}
                 title={entry.description}
                 onClick={() => {
-                  setOpen(false);
+                  closeMenu(true);
                   onAddCapability(token);
                 }}
               >
@@ -4847,7 +4921,7 @@ function StepContextMenu({
             role="menuitem"
             className="queue-step-context-menu-item"
             onClick={() => {
-              setOpen(false);
+              closeMenu(true);
               onAddCustomCapability();
             }}
           >
@@ -11310,7 +11384,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                       className="queue-step-context"
                       aria-label={`Add to Step ${index + 1}`}
                     >
-                      <StepContextMenu
+                      <StepAddMenu
                         stepNumber={index + 1}
                         attachmentPolicy={attachmentPolicy}
                         presentCapabilityTokens={stepCapabilityTokens}
