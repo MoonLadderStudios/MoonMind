@@ -16285,6 +16285,11 @@ describe("Task Create governed Tool authoring", () => {
 
     expect(clickSpy).toHaveBeenCalledTimes(1);
     expect(clickSpy.mock.instances[0]).toBe(picker);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        within(step).getByRole("button", { name: "Add to Step 1" }),
+      );
+    });
     clickSpy.mockRestore();
   });
 
@@ -16348,6 +16353,9 @@ describe("Task Create governed Tool authoring", () => {
     await waitFor(() => {
       expect(within(step).queryByRole("menu", { name: "Add to step" }))
         .toBeNull();
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(addToStep);
     });
   });
 

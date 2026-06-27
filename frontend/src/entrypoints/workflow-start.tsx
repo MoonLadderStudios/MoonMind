@@ -4700,17 +4700,22 @@ function StepAddMenu({
 }: StepAddMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   const focusMenuItem = useCallback((startIndex: number, direction: 1 | -1) => {
-    const itemCount = menuItemRefs.current.length;
+    const items = Array.from(
+      containerRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[role="menuitem"]',
+      ) || [],
+    );
+    const itemCount = items.length;
     if (itemCount === 0) {
       return;
     }
     for (let offset = 0; offset < itemCount; offset += 1) {
       const nextIndex =
         (startIndex + offset * direction + itemCount) % itemCount;
-      const item = menuItemRefs.current[nextIndex];
+      const item = items[nextIndex];
       if (item && !item.disabled) {
         item.focus();
         return;
@@ -4718,12 +4723,12 @@ function StepAddMenu({
     }
   }, []);
 
-  const registerMenuItem = useCallback(
-    (index: number) => (element: HTMLButtonElement | null) => {
-      menuItemRefs.current[index] = element;
-    },
-    [],
-  );
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) {
+      window.setTimeout(() => triggerRef.current?.focus(), 0);
+    }
+  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -4734,29 +4739,34 @@ function StepAddMenu({
         containerRef.current &&
         !containerRef.current.contains(event.target as Node)
       ) {
-        setOpen(false);
+        closeMenu();
       }
     }
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setOpen(false);
+        closeMenu(true);
         return;
       }
+      const items = Array.from(
+        containerRef.current?.querySelectorAll<HTMLButtonElement>(
+          '[role="menuitem"]',
+        ) || [],
+      );
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        const currentIndex = menuItemRefs.current.findIndex(
-          (item) => item === document.activeElement,
+        const currentIndex = items.indexOf(
+          document.activeElement as HTMLButtonElement,
         );
         focusMenuItem(currentIndex < 0 ? 0 : currentIndex + 1, 1);
         return;
       }
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        const currentIndex = menuItemRefs.current.findIndex(
-          (item) => item === document.activeElement,
+        const currentIndex = items.indexOf(
+          document.activeElement as HTMLButtonElement,
         );
         focusMenuItem(
-          currentIndex < 0 ? menuItemRefs.current.length - 1 : currentIndex - 1,
+          currentIndex < 0 ? items.length - 1 : currentIndex - 1,
           -1,
         );
         return;
@@ -4768,7 +4778,7 @@ function StepAddMenu({
       }
       if (event.key === "End") {
         event.preventDefault();
-        focusMenuItem(menuItemRefs.current.length - 1, -1);
+        focusMenuItem(items.length - 1, -1);
       }
     }
     document.addEventListener("mousedown", handlePointerDown);
@@ -4777,16 +4787,13 @@ function StepAddMenu({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [focusMenuItem, open]);
+  }, [closeMenu, focusMenuItem, open]);
 
   const menuLabel = `Add to Step ${stepNumber}`;
   const menuTitleId = `queue-step-add-menu-title-${stepNumber}`;
   const imageItemLabel = isImageOnlyPolicy(attachmentPolicy)
     ? "Image…"
     : "Attachment…";
-  const capabilityStartIndex = attachmentPolicy.enabled ? 1 : 0;
-  const customCapabilityIndex =
-    capabilityStartIndex + CAPABILITY_MENU_TOKENS.length;
 
   useEffect(() => {
     if (open) {
@@ -4803,6 +4810,7 @@ function StepAddMenu({
         aria-expanded={open}
         aria-label={menuLabel}
         title={menuLabel}
+        ref={triggerRef}
         onClick={() => setOpen((value) => !value)}
       >
         <span aria-hidden="true">+</span>
@@ -4823,9 +4831,8 @@ function StepAddMenu({
                 type="button"
                 role="menuitem"
                 className="queue-step-context-menu-item"
-                ref={registerMenuItem(0)}
                 onClick={() => {
-                  setOpen(false);
+                  closeMenu(true);
                   onAddImage();
                 }}
               >
@@ -4847,12 +4854,11 @@ function StepAddMenu({
                 type="button"
                 role="menuitem"
                 className="queue-step-context-menu-item queue-step-context-menu-capability"
-                ref={registerMenuItem(capabilityStartIndex + tokenIndex)}
                 disabled={alreadyPresent}
                 aria-disabled={alreadyPresent}
                 title={entry.description}
                 onClick={() => {
-                  setOpen(false);
+                  closeMenu(true);
                   onAddCapability(token);
                 }}
               >
@@ -4875,9 +4881,8 @@ function StepAddMenu({
             type="button"
             role="menuitem"
             className="queue-step-context-menu-item"
-            ref={registerMenuItem(customCapabilityIndex)}
             onClick={() => {
-              setOpen(false);
+              closeMenu(true);
               onAddCustomCapability();
             }}
           >
