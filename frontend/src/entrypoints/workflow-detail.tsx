@@ -4907,7 +4907,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return null;
     }
   });
-  const [liveUpdates, setLiveUpdates] = useState(true);
   const [expandedSteps, setExpandedSteps] = useState<Record<string, boolean>>({});
   const [instructionsExpanded, setInstructionsExpanded] = useState(false);
   const [remediationMode, setRemediationMode] = useState(DEFAULT_REMEDIATION_MODE);
@@ -4930,7 +4929,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     },
     enabled: Boolean(encodedTaskId),
     refetchInterval: (query) => (
-      liveUpdates && !isExecutionTerminal(query.state.data)
+      !isExecutionTerminal(query.state.data)
         ? detailPoll
         : false
     ),
@@ -4980,7 +4979,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     queryKey: ['workflow-detail-steps', workflowId, execution?.stepsHref],
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
     enabled: Boolean(execution?.stepsHref),
-    refetchInterval: liveUpdates && execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
+    refetchInterval: execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
   const selectedRecoveryOptions = useMemo(() => {
@@ -5054,7 +5053,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         selectedRecoveryStep?.logicalStepId &&
         selectedRecoveryStep.executionOrdinal > 0,
     ),
-    refetchInterval: liveUpdates && !isTerminalExecution ? detailPoll : false,
+    refetchInterval: !isTerminalExecution ? detailPoll : false,
   });
   const recoveryEligibility =
     execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
@@ -5072,7 +5071,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     enabled:
       Boolean(namespace && workflowId && latestRunId)
       && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
-    refetchInterval: liveUpdates && namespace && workflowId && latestRunId && !isTerminalExecution
+    refetchInterval: namespace && workflowId && latestRunId && !isTerminalExecution
       ? detailPoll
       : false,
   });
@@ -5090,7 +5089,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     enabled:
       Boolean(namespace && workflowId && latestRunId)
       && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
-    refetchInterval: liveUpdates && namespace && workflowId && latestRunId && !isTerminalExecution
+    refetchInterval: namespace && workflowId && latestRunId && !isTerminalExecution
       ? detailPoll
       : false,
   });
@@ -5099,7 +5098,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     queryKey: ['workflow-detail-run-summary', summaryArtifactRef],
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
     enabled: Boolean(summaryArtifactRef),
-    refetchInterval: liveUpdates && summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
+    refetchInterval: summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
   });
   const inboundRemediationsQuery = useQuery({
     queryKey: ['workflow-detail-remediations', workflowId, 'inbound'],
@@ -5618,18 +5617,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         <div className="toolbar-controls">
-          <label className="queue-inline-toggle toolbar-live-toggle">
-            <input
-              type="checkbox"
-              checked={liveUpdates}
-              onChange={(event) => setLiveUpdates(event.target.checked)}
-            />
-            Live updates
-          </label>
           <span className="small">
-            {liveUpdates
-              ? `Polling every ${Math.round(detailPoll / 1000)}s`
-              : 'Updates paused to keep selections stable.'}
+            Live updates enabled. Polling every ${Math.round(detailPoll / 1000)}s
           </span>
         </div>
       </div>
@@ -6047,7 +6036,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                         workflowId={workflowId}
                         runId={latestRunId}
                         sourceTemporal={sourceTemporal}
-                        historyPollInterval={liveUpdates && !isTerminalExecution ? detailPoll : false}
+                        historyPollInterval={!isTerminalExecution ? detailPoll : false}
                         expanded={Boolean(expandedSteps[row.logicalStepId])}
                         onToggle={() => toggleStep(row.logicalStepId)}
                         isLast={idx === stepsQuery.data.steps.length - 1}

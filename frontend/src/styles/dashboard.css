@@ -577,13 +577,6 @@ h1 {
   margin-left: auto;
 }
 
-.toolbar-live-toggle {
-  margin: 0;
-}
-
-.toolbar-live-toggle input {
-  margin: 0;
-}
 
 .table-sort-button {
   display: inline-flex;
@@ -1753,9 +1746,6 @@ tbody tr:hover {
   justify-content: flex-start;
 }
 
-.workflow-list-footer-live-toggle {
-  flex: 0 0 auto;
-}
 
 .workflow-list-footer-page-summary {
   justify-content: flex-end;
