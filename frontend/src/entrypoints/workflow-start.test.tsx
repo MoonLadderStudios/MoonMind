@@ -17055,3 +17055,33 @@ describe("MM-936 capability registry and chip computation", () => {
     expect(chip.removable).toBe(true);
   });
 });
+
+describe("Task Create MM-937 step hover containment", () => {
+  let dashboardCss: string;
+
+  beforeAll(async () => {
+    const { readFileSync } = await import("node:fs");
+    dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
+      "utf8",
+    );
+  });
+
+  it("anchors step header control hover scaling to the trailing edge so a step does not spill past the steps container", () => {
+    // The step header controls are right-aligned (margin-left: auto), so the
+    // trailing control sits flush against the steps container edge.
+    expect(dashboardCss).toMatch(
+      /\.queue-step-controls\s*\{[^}]*margin-left:\s*auto;/s,
+    );
+    // The hover scale that would otherwise push that control outward.
+    expect(dashboardCss).toMatch(
+      /\.queue-step-icon-button:hover\s*\{[^}]*transform:\s*scale\(var\(--mm-control-hover-scale\)\);/s,
+    );
+    // The containment fix: scale only the trailing control from its right edge
+    // so it grows inward instead of spilling past the container boundary when
+    // hovered, while the leading controls keep their natural center scaling.
+    expect(dashboardCss).toMatch(
+      /\.queue-step-controls\s+\.queue-step-icon-button:last-child\s*\{[^}]*transform-origin:\s*right center;/s,
+    );
+  });
+});

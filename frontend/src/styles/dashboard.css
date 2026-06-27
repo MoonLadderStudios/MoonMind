@@ -5349,6 +5349,20 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-left: auto;
 }
 
+/*
+ * MM-937: The step header controls are right-aligned (margin-left: auto), so the
+ * trailing control sits flush against the steps container's edge. Their hover and
+ * press scale (var(--mm-control-hover-scale) / var(--mm-control-press-scale))
+ * scales from the center by default, which grows the trailing control outward and
+ * lets a step spill past the edge of its container when hovered. Anchor only the
+ * trailing control's scale to its right edge so it grows inward and stays
+ * contained, without clipping overflow (the step context-menu popover relies on
+ * visible overflow). The leading controls keep their natural center scaling.
+ */
+.queue-step-controls .queue-step-icon-button:last-child {
+  transform-origin: right center;
+}
+
 .queue-step-icon-button {
   width: 2.35rem;
   height: 2.35rem;
