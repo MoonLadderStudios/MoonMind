@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
-import { formatRuntimeLabel, formatStatusLabel, formatTaskSkills } from '../utils/formatters';
+import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
@@ -55,18 +55,6 @@ const TASK_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
-const TABLE_COLUMNS = [
-  ['workflowId', 'ID'],
-  ['targetRuntime', 'Runtime'],
-  ['targetSkill', 'Skill'],
-  ['repository', 'Repository'],
-  ['status', 'Status'],
-  ['title', 'Title'],
-  ['scheduledFor', 'Scheduled'],
-  ['createdAt', 'Created'],
-  ['closedAt', 'Finished'],
-] as const;
-type TableColumn = (typeof TABLE_COLUMNS)[number];
 type FilterField =
   | 'workflowId'
   | 'status'
@@ -77,7 +65,43 @@ type FilterField =
   | 'scheduledFor'
   | 'createdAt'
   | 'closedAt';
-const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
+
+// Scan-first desktop columns, ordered left-to-right. `field` is the sort/identity
+// key, `filterField` ties an inline header filter button to the preserved column
+// filter data model (null = no inline header filter). Workflow title leads as the
+// primary anchor; raw/debug identifiers move out of the default table.
+type TableColumnDef = {
+  field: string;
+  label: string;
+  sortable: boolean;
+  filterField: FilterField | null;
+  colClassName: string;
+};
+const TABLE_COLUMNS: TableColumnDef[] = [
+  { field: 'title', label: 'Workflow', sortable: true, filterField: 'title', colClassName: 'queue-table-column-workflow' },
+  { field: 'status', label: 'Status', sortable: true, filterField: 'status', colClassName: 'queue-table-column-status' },
+  { field: 'nextAction', label: 'Next action', sortable: false, filterField: null, colClassName: 'queue-table-column-next-action' },
+  { field: 'repository', label: 'Repository', sortable: true, filterField: 'repository', colClassName: 'queue-table-column-repository' },
+  { field: 'targetRuntime', label: 'Runtime', sortable: true, filterField: 'targetRuntime', colClassName: 'queue-table-column-runtime' },
+  { field: 'scheduledFor', label: 'Updated', sortable: true, filterField: null, colClassName: 'queue-table-column-date' },
+];
+
+// All filterable columns. This is the durable filter data model and stays complete
+// even when a column no longer has a dedicated desktop header filter button; those
+// filters remain reachable through the secondary filter panel and active chips.
+const FILTER_FIELDS = [
+  ['workflowId', 'ID'],
+  ['title', 'Title'],
+  ['status', 'Status'],
+  ['repository', 'Repository'],
+  ['targetRuntime', 'Runtime'],
+  ['targetSkill', 'Skill'],
+  ['scheduledFor', 'Scheduled'],
+  ['createdAt', 'Created'],
+  ['closedAt', 'Finished'],
+] as const;
+type FilterColumn = (typeof FILTER_FIELDS)[number];
+const VALID_TABLE_SORT_FIELDS = new Set<string>([...FILTER_FIELDS.map((column) => column[0]), 'integration']);
 const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'workflowId',
   'status',
@@ -189,11 +213,6 @@ function formatWhen(iso: string | null | undefined): string {
   });
 }
 
-function summarizeRuntime(runtime: string | null | undefined): string {
-  const label = formatRuntimeLabel(runtime);
-  return label === '—' ? '' : label;
-}
-
 function hasUnsupportedWorkflowScopeState(params: URLSearchParams): boolean {
   const scope = (params.get('scope') || '').trim().toLowerCase();
   const workflowType = (params.get('workflowType') || '').trim();
@@ -222,6 +241,53 @@ function interventionListSummary(row: ExecutionRow): string {
     return 'Intervention requested';
   }
   return '';
+}
+
+// Next-action signals for the scan-first status area. Reuses the dependency and
+// intervention summaries and falls back to a terminal/waiting reason so operators
+// can see what needs attention without opening the workflow.
+function nextActionItems(row: ExecutionRow): string[] {
+  const items: string[] = [];
+  const intervention = interventionListSummary(row);
+  if (intervention) items.push(intervention);
+  const deps = dependencyListSummary(row);
+  if (deps) items.push(deps);
+  if (items.length === 0) {
+    const state = String(row.rawState || row.state || row.status || '').toLowerCase();
+    if (state === 'failed') items.push('Failed — needs review');
+    else if (state === 'awaiting_external') items.push('Waiting on external response');
+  }
+  return items;
+}
+
+function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
+  return row.closedAt || row.scheduledFor || row.createdAt;
+}
+
+const RELATIVE_TIME_UNITS: Array<[string, number]> = [
+  ['y', 31536000],
+  ['mo', 2592000],
+  ['w', 604800],
+  ['d', 86400],
+  ['h', 3600],
+  ['m', 60],
+];
+
+function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  const ms = date.getTime();
+  if (Number.isNaN(ms)) return iso;
+  const diffSeconds = Math.round((Date.now() - ms) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 45) return 'just now';
+  const suffix = diffSeconds >= 0 ? 'ago' : 'from now';
+  for (const [label, unitSeconds] of RELATIVE_TIME_UNITS) {
+    if (absSeconds >= unitSeconds) {
+      return `${Math.round(absSeconds / unitSeconds)}${label} ${suffix}`;
+    }
+  }
+  return `${absSeconds}s ${suffix}`;
 }
 
 function displayTemporalCount(count: number | null | undefined, countMode: string | undefined): string {
@@ -888,12 +954,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   );
   const activeFilters = useMemo(
     () =>
-      TABLE_COLUMNS.map(([field, label]) => {
+      FILTER_FIELDS.map(([field, label]) => {
         if (!isFilterField(field)) return null;
         const value = filterSummary(field, filters);
         return value ? { field, label, value } : null;
       }).filter(
-        (filter): filter is { field: FilterField; label: TableColumn[1]; value: string } => Boolean(filter),
+        (filter): filter is { field: FilterField; label: FilterColumn[1]; value: string } => Boolean(filter),
       ),
     [filters],
   );
@@ -1439,7 +1505,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             className={`workflow-list-mobile-filter-controls${mobileFiltersOpen ? ' is-open' : ''}`}
             aria-label="Mobile workflow filters"
           >
-            {TABLE_COLUMNS.map(([field]) =>
+            {FILTER_FIELDS.map(([field]) =>
               isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
             )}
           </div>
@@ -1474,70 +1540,67 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <div className="queue-table-wrapper" data-layout="table">
                 <table>
                   <colgroup>
-                    <col className="queue-table-column-id" />
-                    <col className="queue-table-column-runtime" />
-                    <col className="queue-table-column-skill" />
-                    <col className="queue-table-column-repository" />
-                    <col className="queue-table-column-status" />
-                    <col className="queue-table-column-title" />
-                    <col className="queue-table-column-date" />
-                    <col className="queue-table-column-date" />
-                    <col className="queue-table-column-date" />
+                    {TABLE_COLUMNS.map((column) => (
+                      <col key={column.field} className={column.colClassName} />
+                    ))}
                     {actionsEnabled ? <col className="queue-table-column-actions" /> : null}
                   </colgroup>
                   <thead>
                     <tr>
-                      {TABLE_COLUMNS.map(([field, label]) => {
+                      {TABLE_COLUMNS.map(({ field, label, sortable, filterField }) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
-                        const filterField = isFilterField(field) ? field : null;
                         return (
                           <th
                             key={field}
-                            aria-sort={ariaSort}
+                            aria-sort={sortable ? ariaSort : undefined}
                             className={`workflow-list-compound-header-cell${filterField && openFilter === filterField ? " is-filter-open" : ""}`}
                           >
                             <div className="workflow-list-compound-header">
-                              <button
-                                type="button"
-                                className="table-sort-button"
-                                onClick={() => onHeaderClick(field)}
-                                aria-label={ariaLabel}
-                              >
-                                {label}
-                                {sortIndicator(field)}
-                                <span className="sr-only">{sortHint}</span>
-                              </button>
-                              <button
-                                type="button"
-                                className={`workflow-list-column-filter-button${
-                                  filterValueForField(field) ? ' is-active' : ''
-                                }`}
-                                data-filter-field={field}
-                                ref={
-                                  filterField && pendingFocusField === filterField
-                                    ? (node) => node?.focus()
-                                    : undefined
-                                }
-                                onMouseDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  if (filterField) {
+                              {sortable ? (
+                                <button
+                                  type="button"
+                                  className="table-sort-button"
+                                  onClick={() => onHeaderClick(field)}
+                                  aria-label={ariaLabel}
+                                >
+                                  {label}
+                                  {sortIndicator(field)}
+                                  <span className="sr-only">{sortHint}</span>
+                                </button>
+                              ) : (
+                                <span className="workflow-list-static-header">{label}</span>
+                              )}
+                              {filterField ? (
+                                <button
+                                  type="button"
+                                  className={`workflow-list-column-filter-button${
+                                    filterValueForField(field) ? ' is-active' : ''
+                                  }`}
+                                  data-filter-field={field}
+                                  ref={
+                                    pendingFocusField === filterField
+                                      ? (node) => node?.focus()
+                                      : undefined
+                                  }
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
                                     filterTriggerRef.current = event.currentTarget;
                                     toggleFilter(filterField);
-                                  }
-                                }}
-                                aria-label={filterAccessibilityLabel(field, label)}
-                                aria-expanded={filterField ? openFilter === filterField : false}
-                              >
-                                <svg
-                                  aria-hidden="true"
-                                  className="workflow-list-column-filter-icon"
-                                  viewBox="0 0 16 16"
-                                  focusable="false"
+                                  }}
+                                  aria-label={filterAccessibilityLabel(field, label)}
+                                  aria-expanded={openFilter === filterField}
                                 >
-                                  <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
-                                </svg>
-                              </button>
+                                  <svg
+                                    aria-hidden="true"
+                                    className="workflow-list-column-filter-icon"
+                                    viewBox="0 0 16 16"
+                                    focusable="false"
+                                  >
+                                    <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                                  </svg>
+                                </button>
+                              ) : null}
                             </div>
                             {filterField ? renderFilterPopover(filterField, label) : null}
                           </th>
@@ -1552,35 +1615,38 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   </thead>
                   <tbody>
                     {sortedItems.map((row) => {
-                      const depsSummary = dependencyListSummary(row);
-                      const interventionSummary = interventionListSummary(row);
+                      const actionItems = nextActionItems(row);
+                      const updatedAt = rowUpdatedAt(row);
                       return (
                         <tr key={rowWorkflowId(row)}>
-                          <td className="queue-table-cell-id">
-                            <a href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}>
-                              <code>{rowWorkflowId(row)}</code>
+                          <td className="queue-table-cell-workflow">
+                            <a
+                              href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                              className="workflow-list-row-title"
+                            >
+                              {row.title}
                             </a>
+                            <code className="workflow-list-row-id">{rowWorkflowId(row)}</code>
                           </td>
-                          <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
-                          <td className="queue-table-cell-compact">
-                            {formatTaskSkills(row.taskSkills, row.targetSkill)}
-                          </td>
-                          <td className="queue-table-cell-compact">{row.repository || '—'}</td>
                           <td className="queue-table-cell-status">
                             <ExecutionStatusPill status={row.rawState || row.state || row.status} />
                           </td>
-                          <td className="queue-table-cell-title">
-                            <div>{row.title}</div>
-                            {interventionSummary ? (
-                              <div className="small">{interventionSummary}</div>
-                            ) : null}
-                            {depsSummary ? (
-                              <div className="small">{depsSummary}</div>
-                            ) : null}
+                          <td className="queue-table-cell-next-action">
+                            {actionItems.length > 0 ? (
+                              actionItems.map((item) => (
+                                <div key={item} className="workflow-list-next-action-item small">
+                                  {item}
+                                </div>
+                              ))
+                            ) : (
+                              <span className="workflow-list-next-action-empty">—</span>
+                            )}
                           </td>
-                          <td className="queue-table-cell-date">{formatWhen(row.scheduledFor)}</td>
-                          <td className="queue-table-cell-date">{formatWhen(row.createdAt)}</td>
-                          <td className="queue-table-cell-date">{formatWhen(row.closedAt)}</td>
+                          <td className="queue-table-cell-compact">{row.repository || '—'}</td>
+                          <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
+                          <td className="queue-table-cell-date" title={formatWhen(updatedAt)}>
+                            {formatRelative(updatedAt)}
+                          </td>
                           {actionsEnabled ? (
                             <td className="queue-table-cell-actions">
                               <WorkflowRowActionsMenu
@@ -1599,8 +1665,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
-                      const depsSummary = dependencyListSummary(row);
-                      const interventionSummary = interventionListSummary(row);
+                      const actionItems = nextActionItems(row);
+                      const updatedAt = rowUpdatedAt(row);
                       return (
                   <li key={rowWorkflowId(row)} className="queue-card">
                     <div className="queue-card-header">
@@ -1611,19 +1677,21 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         >
                           {row.title}
                         </a>
-                        <p className="queue-card-meta">
-                          <code>{rowWorkflowId(row)}</code>
-                          {` · ${
-                            [summarizeRuntime(row.targetRuntime), row.targetSkill, row.workflowType]
-                              .filter(Boolean)
-                              .join(' · ') || 'Temporal workflow'
-                          }`}
-                        </p>
                       </div>
                       <div className="queue-card-status">
                         <ExecutionStatusPill status={row.rawState || row.state || row.status} />
                       </div>
                     </div>
+                    {actionItems.length > 0 ? (
+                      <div className="queue-card-next-action">
+                        <span className="queue-card-next-action-label small">Next action</span>
+                        {actionItems.map((item) => (
+                          <p key={item} className="queue-card-next-action-item">
+                            {item}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
                     <dl className="queue-card-fields">
                       <div>
                         <dt>ID</dt>
@@ -1636,37 +1704,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <dd>{formatRuntimeLabel(row.targetRuntime)}</dd>
                       </div>
                       <div>
-                        <dt>Skill</dt>
-                        <dd>{formatTaskSkills(row.taskSkills, row.targetSkill)}</dd>
-                      </div>
-                      <div>
                         <dt>Repository</dt>
                         <dd>{row.repository || '—'}</dd>
                       </div>
                       <div>
-                        <dt>Scheduled</dt>
-                        <dd>{formatWhen(row.scheduledFor)}</dd>
+                        <dt>Updated</dt>
+                        <dd title={formatWhen(updatedAt)}>{formatRelative(updatedAt)}</dd>
                       </div>
-                      <div>
-                        <dt>Created</dt>
-                        <dd>{formatWhen(row.createdAt)}</dd>
-                      </div>
-                      <div>
-                        <dt>Finished</dt>
-                        <dd>{formatWhen(row.closedAt)}</dd>
-                      </div>
-                      {depsSummary ? (
-                        <div>
-                          <dt>Dependencies</dt>
-                          <dd>{depsSummary}</dd>
-                        </div>
-                      ) : null}
-                      {interventionSummary ? (
-                        <div>
-                          <dt>Intervention</dt>
-                          <dd>{interventionSummary}</dd>
-                        </div>
-                      ) : null}
                     </dl>
                     <div className="queue-card-actions">
                       <a

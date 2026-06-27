@@ -1852,37 +1852,33 @@ tbody tr:hover {
   word-break: break-word;
 }
 
-.queue-table-column-id {
-  width: 13%;
+.queue-table-column-workflow {
+  width: 30%;
 }
 
-.queue-table-column-runtime {
-  width: 8%;
-}
-
-.queue-table-column-skill {
-  width: 9%;
-}
-
-.queue-table-column-repository {
-  width: 10%;
-}
-
-.queue-table-column-status {
-  width: 10%;
-}
-
-.queue-table-column-title {
+.queue-table-column-next-action {
   width: 18%;
 }
 
-.queue-table-column-date {
-  width: 8%;
+.queue-table-column-runtime {
+  width: 10%;
 }
 
-.queue-table-cell-id,
+.queue-table-column-repository {
+  width: 14%;
+}
+
+.queue-table-column-status {
+  width: 12%;
+}
+
+.queue-table-column-date {
+  width: 10%;
+}
+
 .queue-table-cell-compact,
-.queue-table-cell-date {
+.queue-table-cell-date,
+.queue-table-cell-next-action {
   font-size: 0.82rem;
 }
 
@@ -1891,8 +1887,38 @@ tbody tr:hover {
   white-space: normal;
 }
 
-.queue-table-cell-title {
+.queue-table-cell-workflow {
   font-weight: 500;
+}
+
+.workflow-list-row-title {
+  display: block;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.workflow-list-row-title:hover {
+  text-decoration: underline;
+}
+
+.workflow-list-row-id {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.76rem;
+  font-weight: 400;
+  color: rgb(var(--mm-muted));
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.workflow-list-next-action-empty {
+  color: rgb(var(--mm-muted));
+}
+
+.workflow-list-next-action-item + .workflow-list-next-action-item {
+  margin-top: 0.15rem;
 }
 
 .data-table-slab {
@@ -2128,6 +2154,23 @@ tr[data-proposal-id].proposal-consuming td {
 .queue-card-header > .queue-card-status {
   flex-shrink: 0;
   max-width: 100%;
+}
+
+.queue-card-next-action {
+  margin: 0.4rem 0 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.queue-card-next-action-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(var(--mm-muted));
+}
+
+.queue-card-next-action-item {
+  margin: 0;
+  font-weight: 500;
 }
 
 .queue-card-title {
