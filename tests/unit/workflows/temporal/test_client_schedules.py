@@ -18,9 +18,9 @@ from temporalio.common import SearchAttributeKey
 
 from moonmind.workflows.temporal.client import (
     MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID,
-    MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE,
+    MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE,
     MANAGED_SESSION_RECONCILE_SCHEDULE_ID,
-    MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE,
+    MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE,
     ScheduleTriggerResult,
     TemporalClientAdapter,
 )
@@ -87,7 +87,7 @@ class TestCreateSchedule:
         assert call_args[0][0] == _SCHEDULE_ID  # first positional arg
         
         schedule_arg = call_args[0][1]
-        assert schedule_arg.action.id == f"mm:{_TEST_UUID}:{{{{.ScheduleTime}}}}"
+        assert schedule_arg.action.id == f"mm:{_TEST_UUID}"
         assert schedule_arg.action.task_queue == "mm.workflow.user.v2"
 
     @pytest.mark.asyncio
@@ -187,7 +187,7 @@ class TestManagedSessionReconcileSchedule:
         schedule_id, schedule = mock_client.create_schedule.call_args[0]
         assert schedule_id == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
         assert schedule.action.workflow == "MoonMind.ManagedSessionReconcile"
-        assert schedule.action.id == MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE
+        assert schedule.action.id == MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE
         assert schedule.action.task_queue == "mm.workflow"
         assert schedule.action.static_summary == "Managed session reconcile"
         assert schedule.spec.cron_expressions == ["*/5 * * * *"]
@@ -215,7 +215,7 @@ class TestManagedSessionReconcileSchedule:
         assert result == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
         schedule_id, schedule = mock_client.create_schedule.call_args[0]
         assert schedule_id == MANAGED_SESSION_RECONCILE_SCHEDULE_ID
-        assert schedule.action.id == MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE
+        assert schedule.action.id == MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE
         assert schedule.spec.cron_expressions == ["*/10 * * * *"]
         assert schedule.spec.time_zone_name == "UTC"
         assert schedule.state.paused is True
@@ -261,7 +261,7 @@ class TestManagedRuntimeWorkspaceCleanupSchedule:
         assert schedule_id == MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
         assert schedule.action.workflow == "MoonMind.ManagedRuntimeWorkspaceCleanup"
         assert schedule.action.id == (
-            MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE
+            MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE
         )
         assert schedule.action.task_queue == "mm.workflow"
         assert schedule.action.static_summary == "Managed runtime workspace cleanup"
@@ -520,7 +520,7 @@ class TestUpdateSchedule:
 
         assert updated_schedule.action.workflow == "MoonMind.UserWorkflow"
         assert updated_schedule.action.args == [workflow_input]
-        assert updated_schedule.action.id == f"mm:{_TEST_UUID}:{{{{.ScheduleTime}}}}"
+        assert updated_schedule.action.id == f"mm:{_TEST_UUID}"
         assert updated_schedule.action.task_queue == "mm.workflow.user.v2"
         assert updated_schedule.action.memo == {"definitionId": str(_TEST_UUID)}
         typed_search_attributes = updated_schedule.action.typed_search_attributes

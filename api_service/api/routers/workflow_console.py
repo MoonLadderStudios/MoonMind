@@ -64,6 +64,7 @@ TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_SAFE_WORKFLOW_ID_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$")
 _WORKFLOW_DETAIL_TABS = {"steps", "artifacts", "runs"}
 _RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
     "manifests",
@@ -175,6 +176,14 @@ def _is_safe_detail_segment(segment: str) -> bool:
         return False
     return _SAFE_DETAIL_SEGMENT.fullmatch(text) is not None
 
+def _is_safe_workflow_id_segment(segment: str) -> bool:
+    text = segment.strip()
+    if not text:
+        return False
+    if text in {".", ".."}:
+        return False
+    return _SAFE_WORKFLOW_ID_SEGMENT.fullmatch(text) is not None
+
 def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
     normalized = workflow_path.strip("/")
     if not normalized:
@@ -184,13 +193,13 @@ def _normalize_workflow_detail_path(workflow_path: str) -> str | None:
     parts = normalized.split("/")
     if (
         len(parts) == 1
-        and _is_safe_detail_segment(parts[0])
+        and _is_safe_workflow_id_segment(parts[0])
         and parts[0].lower() not in _RESERVED_WORKFLOW_ROUTE_SEGMENTS
     ):
         return parts[0]
     if (
         len(parts) == 2
-        and _is_safe_detail_segment(parts[0])
+        and _is_safe_workflow_id_segment(parts[0])
         and parts[0].lower() not in _RESERVED_WORKFLOW_ROUTE_SEGMENTS
         and parts[1] in _WORKFLOW_DETAIL_TABS
     ):

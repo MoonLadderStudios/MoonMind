@@ -163,6 +163,10 @@ def test_allowed_path_helper_accepts_known_routes() -> None:
     assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/steps")
     assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/artifacts")
     assert _is_allowed_path("mm:01JNX7SYH6A3K1V8Q2D7E9F4AB/runs")
+    assert _is_allowed_path(
+        "mm:5cd204e5-4f32-484a-a2ed-2222b214961c:"
+        "{{.ScheduleTime}}-2026-06-27T13:00:00Z"
+    )
     assert not _is_allowed_path("new")
     assert not _is_allowed_path("new/steps")
     assert not _is_allowed_path("manifests")

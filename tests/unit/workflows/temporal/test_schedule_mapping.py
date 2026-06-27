@@ -12,8 +12,8 @@ from moonmind.workflows.temporal.schedule_mapping import (
     build_schedule_policy,
     build_schedule_spec,
     build_schedule_state,
+    make_scheduled_workflow_id_base,
     make_schedule_id,
-    make_workflow_id_template,
     map_catchup_window,
     map_overlap_policy,
 )
@@ -143,10 +143,10 @@ class TestIdConventions:
     def test_make_schedule_id(self) -> None:
         assert make_schedule_id(_TEST_UUID) == "mm-schedule:a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
-    def test_make_workflow_id_template(self) -> None:
-        template = make_workflow_id_template(_TEST_UUID)
-        assert template.startswith("mm:a1b2c3d4-e5f6-7890-abcd-ef1234567890:")
-        assert "{{.ScheduleTime}}" in template
+    def test_make_scheduled_workflow_id_base(self) -> None:
+        workflow_id_base = make_scheduled_workflow_id_base(_TEST_UUID)
+        assert workflow_id_base == "mm:a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        assert "{{.ScheduleTime}}" not in workflow_id_base
 
 class TestDSTBoundarySemantics:
     """DOC-REQ-006: DST Boundary tests for schedule spec semantics (5.1: US/Eastern, Europe/London, UTC)."""

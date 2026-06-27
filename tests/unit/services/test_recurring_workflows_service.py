@@ -26,6 +26,7 @@ from api_service.services.recurring_workflows_service import (
     RecurringWorkflowValidationError,
 )
 from moonmind.workflows.temporal.client import ScheduleTriggerResult
+from moonmind.workflows.temporal.schedule_mapping import make_scheduled_workflow_id_base
 from moonmind.workflows.temporal.schedule_errors import ScheduleNotFoundError
 
 pytestmark = [pytest.mark.asyncio]
@@ -374,6 +375,7 @@ async def test_create_manual_run_triggers_temporal_schedule(
                 schedule=SimpleNamespace(
                     action=SimpleNamespace(
                         workflow=workflow_type,
+                        id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
                         task_queue="mm.workflow.user.v2",
                     )
@@ -694,6 +696,7 @@ async def test_reconcile_skips_update_when_metadata_and_action_match(
                     state=SimpleNamespace(paused=False, note="Daily Demo"),
                     action=SimpleNamespace(
                         workflow="MoonMind.UserWorkflow",
+                        id=make_scheduled_workflow_id_base(definition.id),
                         args=[workflow_input],
                         task_queue="mm.workflow.user.v2",
                     ),
@@ -754,6 +757,69 @@ async def test_reconcile_repairs_schedule_action_task_queue(
                         workflow="MoonMind.UserWorkflow",
                         args=[workflow_input],
                         task_queue="mm.workflow",
+                    ),
+                )
+            )
+
+            reconciled = await service.reconcile_schedules()
+
+            assert reconciled == 1
+            mock_temporal_adapter.update_schedule.assert_called_once()
+            call_kwargs = mock_temporal_adapter.update_schedule.call_args.kwargs
+            assert call_kwargs["definition_id"] == definition.id
+            assert call_kwargs["workflow_type"] == "MoonMind.UserWorkflow"
+            assert call_kwargs["workflow_input"] == workflow_input
+
+async def test_reconcile_repairs_literal_schedule_time_action_id(
+    tmp_path: Path, mock_temporal_adapter
+) -> None:
+    async with recurring_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = RecurringWorkflowsService(
+                session, temporal_client_adapter=mock_temporal_adapter
+            )
+            definition = await service.create_definition(
+                name="Daily Demo",
+                description="Nightly schedule",
+                enabled=True,
+                schedule_type="cron",
+                cron="0 6 * * *",
+                timezone="UTC",
+                scope_type="personal",
+                scope_ref=None,
+                owner_user_id=uuid4(),
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "task": {
+                            "instructions": "Queue job",
+                        },
+                    },
+                },
+                policy={},
+            )
+            _workflow_type, workflow_input = service._workflow_bundle_for_definition(
+                definition
+            )
+            mock_temporal_adapter.create_schedule.reset_mock()
+            mock_temporal_adapter.update_schedule.reset_mock()
+            mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+                schedule=SimpleNamespace(
+                    spec=SimpleNamespace(
+                        cron_expressions=["0 6 * * *"],
+                        time_zone_name="UTC",
+                        jitter=timedelta(seconds=0),
+                    ),
+                    policy=SimpleNamespace(
+                        overlap=SimpleNamespace(name="SKIP"),
+                        catchup_window=timedelta(minutes=15),
+                    ),
+                    state=SimpleNamespace(paused=False, note="Daily Demo"),
+                    action=SimpleNamespace(
+                        workflow="MoonMind.UserWorkflow",
+                        id=f"mm:{definition.id}:{{{{.ScheduleTime}}}}",
+                        args=[workflow_input],
+                        task_queue="mm.workflow.user.v2",
                     ),
                 )
             )
