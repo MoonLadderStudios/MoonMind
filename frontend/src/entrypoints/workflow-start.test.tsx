@@ -480,6 +480,40 @@ describe("WorkflowStart schedule mode entry", () => {
             }),
           } as Response);
         }
+        if (url.startsWith("/api/presets?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              items: [
+                {
+                  slug: "speckit-demo",
+                  scope: "global",
+                  title: "Spec Kit Demo",
+                  description: "Seed a two-step planning flow.",
+                },
+              ],
+            }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets?scope=personal")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ items: [] }),
+          } as Response);
+        }
+        if (url.startsWith("/api/presets/speckit-demo?scope=global")) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              slug: "speckit-demo",
+              scope: "global",
+              title: "Spec Kit Demo",
+              description: "Seed a two-step planning flow.",
+              requiredCapabilities: ["jira"],
+              inputs: [],
+            }),
+          } as Response);
+        }
         if (url.startsWith("/api/presets")) {
           return Promise.resolve({
             ok: true,
@@ -722,6 +756,7 @@ describe.skip("Task Create Entrypoint", () => {
               description: "Seed a two-step planning flow.",
               latestVersion: "1.2.3",
               version: "1.2.3",
+              requiredCapabilities: ["jira"],
               inputs: [
                 {
                   name: "feature_name",
@@ -16277,6 +16312,16 @@ describe("Task Create governed Tool authoring", () => {
       await within(step).findByText("GitHub CLI / PRs")
     ).closest("li") as HTMLElement;
     expect(within(derivedChip).getByText("· from publish mode")).toBeTruthy();
+    fireEvent.focus(
+      within(derivedChip).getByRole("button", {
+        name: "GitHub CLI / PRs capability provenance",
+      }),
+    );
+    expect(
+      await within(derivedChip).findByText(
+        /This capability is required from publish mode/,
+      ),
+    ).toBeTruthy();
     expect(
       within(derivedChip).queryByRole("button", {
         name: /Remove GitHub CLI \/ PRs capability/,
@@ -16303,6 +16348,76 @@ describe("Task Create governed Tool authoring", () => {
     await waitFor(() => {
       expect(within(step).queryByText("Jira")).toBeNull();
     });
+  });
+
+  it("renders selected images and capability chips in one compact step context bar", async () => {
+    renderWithClient(
+      <WorkflowStartPage payload={withImageOnlyAttachmentPolicy()} />,
+    );
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    const file = new File(["wireframe"], "wireframe.png", {
+      type: "image/png",
+      lastModified: 7,
+    });
+    fireEvent.change(within(step).getByLabelText("Step 1 image file picker"), {
+      target: { files: [file] },
+    });
+    fireEvent.click(within(step).getByRole("button", { name: "Add to Step 1" }));
+    fireEvent.click(within(step).getByRole("menuitem", { name: /^Docker/ }));
+
+    const imageChip = await within(step).findByText("wireframe.png");
+    const capabilityChip = await within(step).findByText("Docker");
+    const contextBar = imageChip.closest(".queue-step-context-bar");
+    expect(contextBar).toBeTruthy();
+    expect(capabilityChip.closest(".queue-step-context-bar")).toBe(contextBar);
+    expect(within(contextBar as HTMLElement).getByText("Step 1")).toBeTruthy();
+    expect(
+      within(contextBar as HTMLElement).getByRole("button", {
+        name: "Remove Step 1 attachment wireframe.png",
+      }),
+    ).toBeTruthy();
+    expect(
+      within(contextBar as HTMLElement).getByRole("button", {
+        name: "Remove Docker capability from Step 1",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("renders selected preset capabilities as derived non-removable chips", async () => {
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = await within(step).findByLabelText("Preset Template");
+    await waitFor(() => {
+      expect((presetSelect as HTMLSelectElement).options.length).toBeGreaterThan(1);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::speckit-demo" },
+    });
+
+    const chip = (await within(step).findByText("Jira")).closest(
+      "li",
+    ) as HTMLElement;
+    expect(within(chip).getByText("· from preset")).toBeTruthy();
+    expect(
+      within(chip).queryByRole("button", {
+        name: "Remove Jira capability from Step 1",
+      }),
+    ).toBeNull();
+    fireEvent.click(
+      within(chip).getByRole("button", {
+        name: "Jira capability provenance",
+      }),
+    );
+    expect(
+      await within(chip).findByText(/Change the selected preset source/),
+    ).toBeTruthy();
   });
 
   it("adds a custom capability token through the prompt", async () => {
@@ -17003,6 +17118,7 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
   it("keeps derived capabilities non-removable with provenance", () => {
     const chips = buildCapabilityChips({
       skill: ["git"],
+      tool: ["gh"],
       generatedTool: ["docker"],
       preset: ["jira"],
       runtime: ["codex_cli"],
@@ -17013,6 +17129,9 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
     expect(capabilityChipProvenanceLabel(requireChip(chips, "git"))).toBe(
       "from skill",
     );
+    expect(capabilityChipProvenanceLabel(requireChip(chips, "gh"))).toBe(
+      "from tool",
+    );
     expect(capabilityChipProvenanceLabel(requireChip(chips, "docker"))).toBe(
       "from tool",
     );
@@ -17022,9 +17141,10 @@ describe("MM-936/MM-941 capability registry and chip computation", () => {
     expect(capabilityChipProvenanceLabel(requireChip(chips, "codex_cli"))).toBe(
       "from runtime",
     );
-    expect(capabilityChipProvenanceLabel(requireChip(chips, "gh"))).toBe(
+    expect(requireChip(chips, "gh").readiness.sourceLabels).toEqual([
+      "from tool",
       "from publish mode",
-    );
+    ]);
     expect(capabilityChipProvenanceLabel(requireChip(chips, "unity"))).toBe(
       "from template",
     );
