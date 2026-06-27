@@ -19,7 +19,7 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - Optional for breakdown-driven creation: `storyBreakdownPath`, `stories`, or `storyOutput` from `moonspec-breakdown`.
 - Optional for ordered Jira story exports: dependency mode `none` or `linear_blocker_chain`.
 - Optional: description, acceptance criteria, priority, labels, assignee, reporter, parent issue key, sprint, component, due date, linked issues, attachments.
-- Required when creating Jira issues from `moonspec-breakdown` output: an original source document reference path. Read it from each story's `sourceReference.path` or from the breakdown-level `source.referencePath` / `source.path`.
+- Required when creating Jira issues from canonical `moonspec-breakdown` output: original source document traceability. Read the path from each story's `sourceReference.path` or from the breakdown-level `source.referencePath` / `source.path`. For trusted Jira, inline, or `imperative-input` breakdowns without a document path, preserve the source title/key and `coverageIds` instead of blocking solely because no canonical document path exists.
 
 ## Workflow
 
@@ -34,7 +34,7 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - For bugs, include sections for observed behavior, expected behavior, reproduction steps, impact, and environment when the information is available.
 - For stories, include sections for user story, acceptance criteria, notes, and out-of-scope items when the information is available.
 - For tasks, include sections for objective, requirements, implementation notes, and verification when the information is available.
-- When creating from `moonspec-breakdown` output, every Jira issue description must include a `Source Document` section that names the original declarative document path and any story-specific source sections or coverage IDs available.
+- When creating from `moonspec-breakdown` output, every Jira issue description must include source traceability. Use a `Source Document` section when an original declarative document path exists; otherwise name the selected source title/key and any story-specific source sections or coverage IDs available.
 - Do not invent business requirements, acceptance criteria, assignees, priorities, or deadlines.
 
 3. Validate before creating.
@@ -52,7 +52,7 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 - For dependency mode `linear_blocker_chain`, after all target Jira issues are created or reused, create trusted Jira dependency links so each later story is blocked by the immediately preceding story.
 - Create dependency links only through MoonMind's trusted Jira tool surface, such as `jira.create_issue_link` when available. Do not call Jira directly from the shell and do not rely on issue descriptions or prompt text as the dependency mechanism.
 - Return created/reused issue keys plus created/reused/failed dependency-link results. If issue creation succeeds but a dependency link fails, report partial success and do not claim the dependency chain is complete.
-- Before creating any issue from `stories.json`, verify every story has an original source document path available through `story.sourceReference.path`, `source.referencePath`, or `source.path`. If the original document path is missing for any story, do not create Jira issues; report the missing source-reference blocker and the breakdown path that must be regenerated or repaired.
+- Before creating any issue from `stories.json`, verify every story has source traceability. Canonical declarative breakdowns require an original source document path through `story.sourceReference.path`, `source.referencePath`, or `source.path`. Trusted Jira, inline, and `imperative-input` breakdowns without a document path must preserve source title/key and `coverageIds`; do not block solely because those sources lack a canonical path.
 - Otherwise call Jira REST `POST /rest/api/3/issue` for Jira Cloud or the deployment's documented equivalent.
 - Send only the fields needed for the requested issue.
 - Treat retries carefully: before retrying after an uncertain network failure, use `jira.search_issues` to search by a stable summary/project/reporter marker to avoid duplicate tickets.
@@ -62,10 +62,10 @@ Create a Jira task, story, bug, or subtask from the user's request. Prefer an av
 When invoked after `moonspec-breakdown` or when the request references story breakdown output:
 
 - Read story candidates from the provided JSON breakdown, not from `spec.md`.
-- Require source traceability before Jira creation. Each Jira issue must include `Source Document: <path>` in its description, using the story-level `sourceReference.path` when present and otherwise the breakdown-level `source.referencePath` or `source.path`.
-- Include story-specific `sourceReference.sections` and `sourceReference.coverageIds` when present so the Jira issue points to the relevant part of the original declarative document.
+- Require source traceability before Jira creation. Each Jira issue must include `Source Document: <path>` in its description when a source path exists, using the story-level `sourceReference.path` when present and otherwise the breakdown-level `source.referencePath` or `source.path`. If no source path exists, include the selected source title/key instead.
+- Include story-specific `sourceReference.sections` and `sourceReference.coverageIds` when present so the Jira issue points to the relevant part of the selected source.
 - Preserve story order, stable story IDs, and dependency IDs so ordered Jira issue chains can be created after issue creation succeeds.
-- Treat missing source document references as a hard blocker, not as an optional warning.
+- Treat missing canonical source document references as a hard blocker only for canonical declarative breakdowns. Do not block trusted Jira, inline, or `imperative-input` breakdowns that preserve source title/key and coverage IDs.
 - Do not create or rename `spec.md`.
 - If Jira issue creation succeeds, return Jira keys/URLs and do not request another output format.
 - If Jira is not configured, required Jira fields are missing, or issue creation fails, report the exact blocker and the existing `artifacts/story-breakdowns/...` output instead of fabricating Jira success.

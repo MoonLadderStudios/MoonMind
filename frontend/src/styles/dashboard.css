@@ -615,72 +615,85 @@ h1 {
   box-shadow: var(--mm-control-focus-ring);
 }
 
-.workflow-list-compound-header-cell {
+.workflow-list-header-cell {
   position: relative;
 }
 
-.workflow-list-compound-header {
+/*
+ * The advanced filter drawer is the single surface that exposes the full filter
+ * UI. The control deck only carries the trigger and active chips, so the table
+ * headers stay calm (sort buttons only).
+ */
+.workflow-list-filter-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(var(--mm-ink) / 0.42);
+}
+
+.workflow-list-filter-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(28rem, 100vw);
+  max-width: 100%;
+  height: 100%;
+  background: rgb(var(--mm-panel) / 0.99);
+  border-left: 1px solid rgb(var(--mm-border) / 0.84);
+  box-shadow: -24px 0 56px -32px rgb(var(--mm-ink) / 0.7);
+}
+
+.workflow-list-filter-drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.35rem;
-  min-width: 0;
+  gap: 0.6rem;
+  padding: 0.9rem 1rem;
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.5);
 }
 
-.workflow-list-column-filter-button {
-  flex: 0 0 auto;
+.workflow-list-filter-drawer-title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.workflow-list-filter-drawer-close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.75rem;
-  min-height: 1.65rem;
-  padding: 0.12rem 0.32rem;
-  border: 1px solid transparent;
-  border-radius: 0.35rem;
-  background: transparent;
-  color: rgb(var(--mm-muted));
-  font-size: 0.68rem;
-  font-weight: 600;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  font-size: 1.1rem;
   line-height: 1;
-  box-shadow: none;
 }
 
-.workflow-list-column-filter-button:hover,
-.workflow-list-column-filter-button:focus-visible,
-.workflow-list-column-filter-button.is-active {
-  border-color: var(--mm-control-border);
-  background: var(--mm-control-shell);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
+.workflow-list-filter-drawer-body {
+  flex: 1 1 auto;
+  display: grid;
+  gap: 0.85rem;
+  overflow-y: auto;
+  padding: 1rem;
 }
 
-.workflow-list-column-filter-icon {
-  display: block;
-  width: 0.85rem;
-  height: 0.85rem;
-  fill: currentColor;
+.workflow-list-filter-section {
+  display: grid;
+  gap: 0.5rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid rgb(var(--mm-border) / 0.3);
 }
 
-.workflow-list-header-filter-popover {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  left: 0;
-  z-index: 80;
-  width: min(22rem, calc(100vw - 2rem));
-  padding: 0.85rem;
-  border: 1px solid rgb(var(--mm-border) / 0.84);
-  border-radius: 0.5rem;
-  background: rgb(var(--mm-panel) / 0.98);
-  box-shadow: 0 18px 42px -28px rgb(var(--mm-ink) / 0.7);
+.workflow-list-filter-section:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
-.workflow-list-header-filter-control {
+.workflow-list-filter-control {
   width: 100%;
 }
 
-.workflow-list-header-filter-popover .workflow-list-header-filter-control {
+.workflow-list-filter-section .workflow-list-filter-control {
   display: grid;
   gap: 0.75rem;
   align-items: stretch;
@@ -692,23 +705,38 @@ h1 {
   transform: none;
 }
 
-.workflow-list-header-filter-popover .workflow-list-header-filter-control:hover,
-.workflow-list-header-filter-popover .workflow-list-header-filter-control:focus-within {
+.workflow-list-filter-section .workflow-list-filter-control:hover,
+.workflow-list-filter-section .workflow-list-filter-control:focus-within {
   border: 0;
   background: transparent;
   box-shadow: none;
   transform: none;
 }
 
-.workflow-list-header-filter-popover .workflow-list-header-filter-control label {
+.workflow-list-filter-section .workflow-list-filter-control label {
   gap: 0.55rem;
   font-size: 0.82rem;
   line-height: 1.35;
 }
 
-.workflow-list-header-filter-control select,
-.workflow-list-header-filter-control input {
+.workflow-list-filter-control select,
+.workflow-list-filter-control input {
   width: 100%;
+}
+
+/* The drawer footer reuses .workflow-list-filter-actions for flex layout and the
+ * divider; it only needs horizontal padding to align with the drawer body. */
+.workflow-list-filter-drawer-actions {
+  padding-left: 1rem;
+  padding-right: 1rem;
+  padding-bottom: 0.85rem;
+}
+
+@media (max-width: 767px) {
+  .workflow-list-filter-drawer {
+    width: 100vw;
+    border-left: 0;
+  }
 }
 
 .workflow-list-filter-checkbox {
@@ -927,14 +955,6 @@ h1 {
   display: grid;
   gap: 0.85rem;
   padding: 0;
-}
-
-.workflow-list-control-grid {
-  display: grid;
-  width: 100%;
-  max-width: none;
-  grid-template-columns: repeat(4, minmax(12rem, 1fr));
-  gap: 0.8rem;
 }
 
 .manifests-page > .panel {
@@ -1494,16 +1514,66 @@ h1 {
   grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
 }
 
-.workflow-list-utility-cluster {
-  justify-content: flex-end;
-}
-
-.workflow-list-filter-row {
+.workflow-list-filter-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.6rem;
   flex-wrap: wrap;
+  min-width: 0;
+}
+
+.workflow-list-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--mm-control-border);
+  border-radius: 0.85rem;
+  background: var(--mm-control-shell);
+  color: rgb(var(--mm-ink));
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 var(--mm-glass-edge);
+}
+
+.workflow-list-filter-trigger:hover,
+.workflow-list-filter-trigger:focus-visible,
+.workflow-list-filter-trigger[aria-expanded="true"],
+.workflow-list-filter-trigger.is-active {
+  background: var(--mm-control-shell-hover);
+  background-image: none;
+  border-color: rgb(var(--mm-accent) / 0.7);
+  color: rgb(var(--mm-ink));
+  box-shadow: var(--mm-control-focus-ring);
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-filter-trigger-icon {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+  fill: currentColor;
+}
+
+.workflow-list-filter-trigger-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-accent) / 0.22);
+  color: rgb(var(--mm-accent));
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.workflow-list-filter-empty {
+  color: rgb(var(--mm-muted));
 }
 
 .workflow-list-filter-chips {
@@ -1573,61 +1643,6 @@ h1 {
   min-width: 0;
   overflow-wrap: anywhere;
   font-weight: 600;
-}
-
-.workflow-list-clear-filters {
-  flex: 0 0 auto;
-}
-
-.workflow-list-secondary-filter-disclosure {
-  display: flex;
-  flex-direction: column;
-  gap: 0.7rem;
-}
-
-.workflow-list-secondary-filter-toggle {
-  align-self: stretch;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  padding: 0.55rem 0.9rem;
-  border: 1px solid var(--mm-control-border);
-  border-radius: 0.85rem;
-  background: var(--mm-control-shell);
-  color: rgb(var(--mm-ink));
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: inset 0 1px 0 var(--mm-glass-edge);
-}
-
-.workflow-list-secondary-filter-toggle:hover,
-.workflow-list-secondary-filter-toggle:focus-visible,
-.workflow-list-secondary-filter-toggle:active,
-.workflow-list-secondary-filter-toggle[aria-expanded="true"] {
-  background: var(--mm-control-shell-hover);
-  background-image: none;
-  border-color: rgb(var(--mm-accent) / 0.7);
-  color: rgb(var(--mm-ink));
-  box-shadow: var(--mm-control-focus-ring);
-  transform: none;
-  filter: none;
-}
-
-.workflow-list-secondary-filter-controls {
-  display: none;
-  gap: 0.7rem;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.workflow-list-secondary-filter-controls.is-open {
-  display: grid;
-}
-
-.workflow-list-secondary-filter-controls .queue-inline-filter {
-  border-radius: 0.6rem;
-  padding: 0.28rem 0.6rem;
 }
 
 table {
@@ -1797,17 +1812,16 @@ tbody tr:hover {
 }
 
 /*
- * While a column filter or row actions popover is open, let the table wrapper
- * overflow visibly so the popover can extend past the table edges. The wrapper
- * is normally `overflow-x: auto`, which browsers coerce to `overflow-y: auto`
- * as well — that turns the wrapper into a clipping box. When a highly
- * restrictive filter leaves only a few rows, the short table clipped the
- * popover and made it unreadable. Dropping to `overflow: visible` only while a
- * popover is present lets it escape into the page (which scrolls) instead of
- * being cut off, and the fixed-layout table never needs horizontal scrolling.
+ * While a row actions popover is open, let the table wrapper overflow visibly so
+ * the popover can extend past the table edges. The wrapper is normally
+ * `overflow-x: auto`, which browsers coerce to `overflow-y: auto` as well — that
+ * turns the wrapper into a clipping box. When a highly restrictive filter leaves
+ * only a few rows, the short table clipped the popover and made it unreadable.
+ * Dropping to `overflow: visible` only while a popover is present lets it escape
+ * into the page (which scrolls) instead of being cut off, and the fixed-layout
+ * table never needs horizontal scrolling.
  */
 .workflow-list-data-slab .queue-table-wrapper:has(
-  .workflow-list-header-filter-popover,
   .td-workflow-actions-popover
 ) {
   overflow: visible;
@@ -1837,10 +1851,6 @@ tbody tr:hover {
   background: rgb(var(--mm-panel) / 0.98);
   border-bottom: 0;
   box-shadow: 0 1px 0 rgb(var(--mm-border) / 0.72);
-}
-
-.queue-table-wrapper .workflow-list-compound-header-cell.is-filter-open {
-  z-index: 12;
 }
 
 .queue-table-wrapper th,
@@ -2260,24 +2270,14 @@ tr[data-proposal-id].proposal-consuming td {
   }
 }
 
-@media (min-width: 768px) and (max-width: 1080px) {
-  .workflow-list-control-grid {
-    grid-template-columns: repeat(2, minmax(14rem, 1fr));
-  }
-}
-
 @media (max-width: 767px) {
-  .workflow-list-control-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .workflow-list-utility-cluster,
-  .workflow-list-filter-row {
+  .workflow-list-filter-bar {
     align-items: stretch;
     width: 100%;
   }
 
-  .workflow-list-clear-filters {
+  .workflow-list-filter-trigger {
+    justify-content: center;
     width: 100%;
   }
 
@@ -3188,27 +3188,10 @@ button.secondary:hover {
   transform: scale(var(--mm-control-hover-scale));
 }
 
-button.workflow-list-column-filter-button,
 button.workflow-list-filter-chip-open,
 button.workflow-list-filter-chip-remove {
   transform: none;
   filter: none;
-}
-
-button.workflow-list-column-filter-button {
-  border-color: transparent;
-  background: transparent;
-  color: rgb(var(--mm-muted));
-  box-shadow: none;
-}
-
-button.workflow-list-column-filter-button:hover,
-button.workflow-list-column-filter-button:focus-visible,
-button.workflow-list-column-filter-button.is-active {
-  border-color: var(--mm-control-border);
-  background: var(--mm-control-shell);
-  color: rgb(var(--mm-accent));
-  box-shadow: var(--mm-control-focus-ring);
 }
 
 .button {

@@ -688,7 +688,7 @@ def _validate_jira_breakdown_source_inputs(
             {
                 "path": "preset.inputs",
                 "message": (
-                    "Provide a Declarative Document Path, Source Jira Issue Key, "
+                    "Provide a Source Document Path, Source Jira Issue Key, "
                     "or Workflow Instructions."
                 ),
                 "code": "required",

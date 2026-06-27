@@ -53,8 +53,8 @@ All edits per Constitution XIII: replace language outright, no compatibility phr
 
 ### 2.1 `moonspec-breakdown`
 
-- **Input classification**: before extracting coverage points, classify the source as declarative or imperative per `MoonSpecDocumentModel.md`. If the input is primarily an imperative checklist/migration/status document, **fail fast** with a clear error directing the user to either supply the underlying declarative doc or explicitly confirm imperative input (constitution prefers fail-fast over hidden fallback).
-- **Canonical anchoring**: when the input is a path under `docs/`, record it as the canonical source of truth; add `sourceDocumentClass` (`canonical-declarative` | `declarative-text` | `imperative-override`) to `stories.json` `source`.
+- **Input classification**: before extracting coverage points, classify the source as declarative or imperative per `MoonSpecDocumentModel.md`. Prefer declarative sources, but when no declarative design is available, use imperative input as a resilience fallback and decompose the underlying desired system behavior instead of requiring explicit confirmation.
+- **Canonical anchoring**: when the input is a path under `docs/` outside `docs/tmp/`, record it as the canonical source of truth; add `sourceDocumentClass` (`canonical-declarative` | `declarative-text` | `imperative-input`) to `stories.json` `source`.
 - **Key rules**: add "Breakdown output is a temporary derived view of the canonical document. The canonical document remains the source of truth for desired state."
 
 ### 2.2 `moonspec-specify`
@@ -126,7 +126,7 @@ Implementation note (deviation from the original draft): preset `version` labels
 
 ### 4.3 `jira-breakdown-orchestrate.yaml` (primary target)
 
-- **Step 1 (Break down declarative design)**: add input-classification language — resolve the path, confirm the document is declarative per `MoonSpecDocumentModel.md`, fail fast on imperative inputs, record the canonical doc as primary source of truth and breakdown output as temporary.
+- **Step 1 (Break down preferred source input)**: add input-classification language — resolve the path, prefer declarative sources per `MoonSpecDocumentModel.md`, use imperative input as a fallback when no declarative design is available, and record the canonical doc as primary source of truth when present while keeping breakdown output temporary.
 - **Step 4 (Create dependent Jira Orchestrate tasks)**: require each downstream task to carry the story's `sourceReference.path` as the Jira Orchestrate `source_design_path` so the doc-reconcile step knows its canonical doc.
 - Apply the same step-1 language to `jira-breakdown.yaml` and `jira-breakdown-implement.yaml` for consistency.
 

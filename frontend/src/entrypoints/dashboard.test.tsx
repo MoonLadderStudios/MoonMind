@@ -874,19 +874,19 @@ describe('Dashboard shared entry', () => {
     const filterChipBlock = cssRuleBlock(dashboardCss, '.workflow-list-filter-chip {');
     expect(filterChipBlock).toContain('background: var(--mm-control-shell)');
     expect(filterChipBlock).toContain('border: 1px solid var(--mm-control-border)');
-    const popoverFilterBlock = cssRuleBlock(
+    const drawerFilterBlock = cssRuleBlock(
       dashboardCss,
-      '.workflow-list-header-filter-popover .workflow-list-header-filter-control',
+      '.workflow-list-filter-section .workflow-list-filter-control',
     );
-    expect(popoverFilterBlock).toContain('display: grid');
-    expect(popoverFilterBlock).toContain('gap: 0.75rem');
-    expect(popoverFilterBlock).toContain('border: 0');
-    expect(popoverFilterBlock).toContain('background: transparent');
-    expect(popoverFilterBlock).toContain('box-shadow: none');
+    expect(drawerFilterBlock).toContain('display: grid');
+    expect(drawerFilterBlock).toContain('gap: 0.75rem');
+    expect(drawerFilterBlock).toContain('border: 0');
+    expect(drawerFilterBlock).toContain('background: transparent');
+    expect(drawerFilterBlock).toContain('box-shadow: none');
     expect(
       cssRuleBlock(
         dashboardCss,
-        '.workflow-list-header-filter-popover .workflow-list-header-filter-control label',
+        '.workflow-list-filter-section .workflow-list-filter-control label',
       ),
     ).toContain('gap: 0.55rem');
     expect(cssRuleBlock(dashboardCss, '.workflow-list-filter-actions')).toContain(

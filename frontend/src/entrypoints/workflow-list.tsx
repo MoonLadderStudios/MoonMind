@@ -72,28 +72,27 @@ type FilterField =
   | 'closedAt';
 
 // Scan-first desktop columns, ordered left-to-right. `field` is the sort/identity
-// key, `filterField` ties an inline header filter button to the preserved column
-// filter data model (null = no inline header filter). Workflow title leads as the
-// primary anchor; raw/debug identifiers move out of the default table.
+// key and `sortable` controls whether the header renders a sort button or a static
+// label. Filtering no longer lives in the headers; it is driven entirely by the
+// advanced filter drawer. Workflow title leads as the primary anchor; raw/debug
+// identifiers move out of the default table.
 type TableColumnDef = {
   field: string;
   label: string;
   sortable: boolean;
-  filterField: FilterField | null;
   colClassName: string;
 };
 const TABLE_COLUMNS: TableColumnDef[] = [
-  { field: 'title', label: 'Workflow', sortable: true, filterField: 'title', colClassName: 'queue-table-column-workflow' },
-  { field: 'status', label: 'Status', sortable: true, filterField: 'status', colClassName: 'queue-table-column-status' },
-  { field: 'nextAction', label: 'Next action', sortable: false, filterField: null, colClassName: 'queue-table-column-next-action' },
-  { field: 'repository', label: 'Repository', sortable: true, filterField: 'repository', colClassName: 'queue-table-column-repository' },
-  { field: 'targetRuntime', label: 'Runtime', sortable: true, filterField: 'targetRuntime', colClassName: 'queue-table-column-runtime' },
-  { field: 'updatedAt', label: 'Updated', sortable: true, filterField: null, colClassName: 'queue-table-column-date' },
+  { field: 'title', label: 'Workflow', sortable: true, colClassName: 'queue-table-column-workflow' },
+  { field: 'status', label: 'Status', sortable: true, colClassName: 'queue-table-column-status' },
+  { field: 'nextAction', label: 'Next action', sortable: false, colClassName: 'queue-table-column-next-action' },
+  { field: 'repository', label: 'Repository', sortable: true, colClassName: 'queue-table-column-repository' },
+  { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
+  { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
 ];
 
-// All filterable columns. This is the durable filter data model and stays complete
-// even when a column no longer has a dedicated desktop header filter button; those
-// filters remain reachable through the secondary filter panel and active chips.
+// All filterable columns. This is the durable filter data model and feeds the
+// advanced filter drawer sections and the active filter chips.
 const FILTER_FIELDS = [
   ['workflowId', 'ID'],
   ['title', 'Title'],
@@ -117,6 +116,21 @@ const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'createdAt',
   'closedAt',
 ]);
+// Advanced filter drawer field order. The drawer groups the precise
+// include/exclude/date/blank filters that previously lived in every desktop
+// table header. Labels match the column labels so chips, sections, and the
+// underlying filter state share one vocabulary.
+const DRAWER_FILTER_FIELDS: Array<[FilterField, string]> = [
+  ['workflowId', 'ID'],
+  ['title', 'Title'],
+  ['status', 'Status'],
+  ['repository', 'Repository'],
+  ['targetRuntime', 'Runtime'],
+  ['targetSkill', 'Skill'],
+  ['scheduledFor', 'Scheduled'],
+  ['createdAt', 'Created'],
+  ['closedAt', 'Finished'],
+];
 function isFilterField(field: string): field is FilterField {
   return ACTIVE_FILTER_FIELDS.has(field as FilterField);
 }
@@ -543,7 +557,12 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
   appendDateParams(params, filters.closedAt, 'finishedFrom', 'finishedTo', 'finishedBlank');
 }
 
-function facetForFilterField(field: FilterField | null): ExecutionFacetResponse['facet'] | null {
+// The four value fields that resolve to a server-side facet. `integration` is a
+// valid response facet but is not a workflow-list filter field, so it is not
+// part of this map.
+type FacetField = 'status' | 'targetRuntime' | 'targetSkill' | 'repository';
+
+function facetForFilterField(field: FilterField | null): FacetField | null {
   if (field === 'status') return 'status';
   if (field === 'targetRuntime') return 'targetRuntime';
   if (field === 'targetSkill') return 'targetSkill';
@@ -668,6 +687,15 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
   return parts.join(', ');
 }
 
+function clearFilterField(filters: ColumnFilters, field: FilterField): ColumnFilters {
+  const next = { ...filters };
+  if (field === 'workflowId' || field === 'title') next[field] = {};
+  else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
+  else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
+  else next[field] = emptyValueFilter();
+  return next;
+}
+
 export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const dashboardCfg = useMemo(() => readListDashboardConfig(payload), [payload.initialData]);
   const listPollMs = useMemo(() => {
@@ -688,11 +716,16 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const [filters, setFilters] = useState(() => parseInitialFilters(initial));
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [hasEditedFilters, setHasEditedFilters] = useState(false);
-  const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
-  const [secondaryFiltersOpen, setSecondaryFiltersOpen] = useState(false);
-  const [pendingFocusField, setPendingFocusField] = useState<FilterField | null>(null);
-  const popoverRef = useRef<HTMLDivElement | null>(null);
-  const filterTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // The advanced filter drawer is the single surface that exposes the full
+  // filter UI. `drawerOpen` controls visibility.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const drawerRef = useRef<HTMLDivElement | null>(null);
+  const drawerToggleRef = useRef<HTMLButtonElement | null>(null);
+  // The element that opened the drawer (the Filters trigger or a chip). Focus is
+  // returned here when the drawer closes so keyboard users keep their place.
+  const filterTriggerRef = useRef<HTMLElement | null>(null);
+  // Field whose first control should receive focus when the drawer opens.
+  const pendingDrawerFocusRef = useRef<FilterField | null>(null);
   const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
   const [listCursor, setListCursor] = useState<string | null>(() =>
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
@@ -755,21 +788,20 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
-    refetchInterval: listEnabled && !openFilter ? listPollMs : false,
+    refetchInterval: listEnabled && !drawerOpen ? listPollMs : false,
   });
 
-  const openFacet = facetForFilterField(openFilter);
-  const {
-    data: facetData,
-    isError: isFacetError,
-    isFetching: isFacetFetching,
-  } = useQuery({
-    queryKey: ['workflow-list-facet', openFacet, filters] as const,
-    enabled: listEnabled && filterValidationErrors.length === 0 && Boolean(openFacet),
+  // Facets enrich the include/exclude dropdowns. The drawer shows every value
+  // field at once, so we fetch each field's facet values while the drawer is
+  // open. This reuses the existing single-facet backend contract (one request
+  // per facet) without any API changes.
+  const getFacetQueryOptions = (facet: ExecutionFacetResponse['facet']) => ({
+    queryKey: ['workflow-list-facet', facet, filters] as const,
+    enabled: listEnabled && filterValidationErrors.length === 0 && drawerOpen,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
-      params.set('facet', openFacet as string);
+      params.set('facet', facet);
       params.set('pageSize', '50');
       appendFilterParams(params, filters);
       const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
@@ -782,56 +814,100 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     retry: false,
   });
 
-  useEffect(() => {
-    if (!openFilter) return;
-    setDraftFilters(filters);
-  }, [openFilter, filters]);
+  const facetByField = {
+    status: useQuery(getFacetQueryOptions('status')),
+    targetRuntime: useQuery(getFacetQueryOptions('targetRuntime')),
+    targetSkill: useQuery(getFacetQueryOptions('targetSkill')),
+    repository: useQuery(getFacetQueryOptions('repository')),
+  } as const;
 
-  const closeFilter = useCallback((nextDraftFilters = filters, fieldToFocus = openFilter) => {
-    const fallback = fieldToFocus
-      ? document.querySelector<HTMLButtonElement>(
-          `.workflow-list-column-filter-button[data-filter-field="${fieldToFocus}"]`,
-        )
-      : null;
-    if (fieldToFocus) {
-      (filterTriggerRef.current?.isConnected ? filterTriggerRef.current : fallback)?.focus();
-    }
-    setOpenFilter(null);
-    setDraftFilters(nextDraftFilters);
-    setPendingFocusField(fieldToFocus);
-  }, [filters, openFilter]);
+  const resetToFirstPage = useCallback(() => {
+    setListCursor(null);
+    setCursorStack([]);
+  }, []);
 
-  useEffect(() => {
-    if (openFilter || !pendingFocusField) return;
-    const fallback = document.querySelector<HTMLButtonElement>(
-      `.workflow-list-column-filter-button[data-filter-field="${pendingFocusField}"]`,
-    );
-    (filterTriggerRef.current?.isConnected ? filterTriggerRef.current : fallback)?.focus();
-    setPendingFocusField(null);
-  }, [openFilter, pendingFocusField]);
-
-  useEffect(() => {
-    if (!openFilter) return;
+  const restoreTriggerFocus = useCallback(() => {
+    const trigger = filterTriggerRef.current;
     window.requestAnimationFrame(() => {
-      const firstControl = popoverRef.current?.querySelector<HTMLElement>(
+      if (trigger?.isConnected) {
+        trigger.focus();
+      } else {
+        drawerToggleRef.current?.focus();
+      }
+    });
+  }, []);
+
+  const openDrawer = useCallback(
+    (field: FilterField | null, trigger: HTMLElement | null) => {
+      filterTriggerRef.current = trigger;
+      pendingDrawerFocusRef.current = field;
+      setDraftFilters(filters);
+      setDrawerOpen(true);
+    },
+    [filters],
+  );
+
+  const closeDrawer = useCallback(
+    (options: { restoreFocus?: boolean } = {}) => {
+      setDrawerOpen(false);
+      setDraftFilters(filters);
+      if (options.restoreFocus !== false) {
+        restoreTriggerFocus();
+      }
+    },
+    [filters, restoreTriggerFocus],
+  );
+
+  const applyDraftFilters = useCallback(() => {
+    setHasEditedFilters(true);
+    setFilters(draftFilters);
+    resetToFirstPage();
+    setDrawerOpen(false);
+    restoreTriggerFocus();
+  }, [draftFilters, resetToFirstPage, restoreTriggerFocus]);
+
+  const resetDraftFilters = useCallback(() => {
+    const cleared = emptyFilters();
+    setHasEditedFilters(true);
+    setDraftFilters(cleared);
+    setFilters(cleared);
+    resetToFirstPage();
+  }, [resetToFirstPage]);
+
+  const removeActiveFilter = useCallback(
+    (field: FilterField) => {
+      setHasEditedFilters(true);
+      const next = clearFilterField(filters, field);
+      setFilters(next);
+      setDraftFilters(next);
+      resetToFirstPage();
+    },
+    [filters, resetToFirstPage],
+  );
+
+  // When the drawer opens, move focus to the first control of the requested
+  // field (or the first control overall). This drives the keyboard "open the
+  // drawer" and "navigate fields" behaviors.
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const frame = window.requestAnimationFrame(() => {
+      const field = pendingDrawerFocusRef.current;
+      pendingDrawerFocusRef.current = null;
+      const root = drawerRef.current;
+      if (!root) return;
+      // Focus the requested field's first control, or fall back to the first
+      // control in the filter body (not the header close button).
+      const scope =
+        (field && root.querySelector<HTMLElement>(`[data-filter-section="${field}"]`)) ||
+        root.querySelector<HTMLElement>('.workflow-list-filter-drawer-body') ||
+        root;
+      const focusTarget = scope.querySelector<HTMLElement>(
         'input:not([disabled]), select:not([disabled]), button:not([disabled])',
       );
-      firstControl?.focus();
+      focusTarget?.focus();
     });
-  }, [openFilter]);
-
-  useEffect(() => {
-    if (!openFilter) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      const targetElement = event.target as Element | null;
-      if (target && popoverRef.current?.contains(target)) return;
-      if (targetElement?.closest('.workflow-list-column-filter-button, .workflow-list-filter-chip-open')) return;
-      closeFilter(filters, openFilter);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    return () => document.removeEventListener('mousedown', onPointerDown);
-  }, [closeFilter, openFilter, filters]);
+    return () => window.cancelAnimationFrame(frame);
+  }, [drawerOpen]);
 
   const sortedItems = useMemo(() => {
     const items = data?.items || [];
@@ -843,11 +919,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const pageEnd = pageIndex * pageSize + sortedItems.length;
   const countSummary = displayTemporalCount(data?.count, data?.countMode);
   const hasPaginationContext = cursorStack.length > 0 || Boolean(listCursor);
-
-  const resetToFirstPage = useCallback(() => {
-    setListCursor(null);
-    setCursorStack([]);
-  }, []);
 
   const onHeaderClick = (field: string) => {
     if (sortField === field) {
@@ -945,13 +1016,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       </div>
     </div>
   );
-  const filterValueForField = useCallback(
-    (field: string): string => {
-      if (!isFilterField(field)) return '';
-      return filterSummary(field, filters);
-    },
-    [filters],
-  );
   const activeFilters = useMemo(
     () =>
       FILTER_FIELDS.map(([field, label]) => {
@@ -964,20 +1028,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     [filters],
   );
   const hasActiveFilters = activeFilters.length > 0;
-  const toggleFilter = useCallback((field: FilterField) => {
-    setOpenFilter((current) => (current === field ? null : field));
-  }, []);
-
-  const applyFilters = useCallback(
-    (nextFilters: ColumnFilters, focusField: FilterField | null = openFilter) => {
-      setHasEditedFilters(true);
-      setFilters(nextFilters);
-      setDraftFilters(nextFilters);
-      closeFilter(nextFilters, focusField);
-      resetToFirstPage();
-    },
-    [closeFilter, openFilter, resetToFirstPage],
-  );
 
   const updateDraftText = (field: 'workflowId' | 'title', value: string) => {
     setDraftFilters((current) => ({
@@ -1023,47 +1073,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
   };
 
-  const applySecondaryValues = (
-    field: 'status' | 'targetRuntime' | 'targetSkill',
-    values: string[],
-  ) => {
-    const dedupedValues = field === 'targetRuntime' ? uniqueRuntimeValues(values) : uniqueValues(values);
-    const currentField = filters[field];
-    applyFilters({
-      ...filters,
-      [field]:
-        dedupedValues.length === 0
-          ? { ...emptyValueFilter(), mode: currentField.mode }
-          : { ...currentField, values: dedupedValues, blank: '' },
-    });
-  };
-
-  const applySecondaryRepository = (value: string) => {
-    applyFilters({
-      ...filters,
-      repository: { ...filters.repository, mode: 'include', values: [], exactText: value },
-    });
-  };
-
-  const applySecondaryDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
-    applyFilters({
-      ...filters,
-      [field]: { ...filters[field], ...patch },
-    });
-  };
-
-  const filterAccessibilityLabel = (field: string, label: string): string => {
-    const value = filterValueForField(field);
-    if (!isFilterField(field)) return `Filter ${label}. No filter available.`;
-    if (!value) return `Filter ${label}. No filter applied.`;
-    return `Filter ${label}. Filter active: ${value}.`;
-  };
-
   const valueOptionsForField = (field: FilterField): string[] => {
+    const facetKey = facetForFilterField(field);
+    const facetData = facetKey ? facetByField[facetKey].data : undefined;
     const facetValues =
-      facetData && facetForFilterField(field) === facetData.facet
-        ? facetData.items.map((item) => item.value)
-        : [];
+      facetData && facetData.facet === facetKey ? facetData.items.map((item) => item.value) : [];
     if (field === 'status') return uniqueValues([...facetValues, ...TEMPORAL_STATUSES]);
     if (field === 'targetRuntime') {
       return uniqueRuntimeValues([
@@ -1093,32 +1107,36 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   };
 
   const renderFacetNotice = (field: FilterField) => {
-    if (facetForFilterField(field) !== openFacet) return null;
-    if (isFacetError) {
+    const facetKey = facetForFilterField(field);
+    if (!facetKey) return null;
+    const facetQuery = facetByField[facetKey];
+    if (facetQuery.isError) {
       return (
         <p className="small workflow-list-facet-notice" role="status">
           Facet values unavailable. Showing current page values only.
         </p>
       );
     }
-    if (isFacetFetching) {
+    if (facetQuery.isFetching) {
       return <p className="small workflow-list-facet-notice">Loading facet values...</p>;
     }
-    if (facetData?.truncated) {
+    if (facetQuery.data?.truncated) {
       return <p className="small workflow-list-facet-notice">Facet values truncated by the server.</p>;
     }
     return null;
   };
 
-  const renderFilterControl = (field: FilterField, labelPrefix = '') => {
-    const isSecondary = Boolean(labelPrefix);
+  // Renders one filter's controls bound to the draft filter state. The drawer is
+  // the only surface that renders these now; edits stage into `draftFilters`
+  // until the user applies them.
+  const renderFilterControl = (field: FilterField) => {
     if (field === 'workflowId' || field === 'title') {
       const label = field === 'workflowId' ? 'ID' : 'Title';
-      const draft = isSecondary ? filters[field] : draftFilters[field];
+      const draft = draftFilters[field];
       return (
-        <div className="queue-inline-filter workflow-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-filter-control">
           <label>
-            {labelPrefix}{label} filter value
+            {label} filter value
             <input
               type="text"
               value={draft.contains || ''}
@@ -1129,10 +1147,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   ? 'Prefix match: finds workflow IDs that start with this text.'
                   : 'Word match: finds titles containing this whole word.'
               }
-              onChange={(event) => {
-              if (isSecondary) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
-                else updateDraftText(field, event.target.value);
-              }}
+              onChange={(event) => updateDraftText(field, event.target.value)}
             />
           </label>
         </div>
@@ -1140,22 +1155,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }
 
     if (field === 'status') {
-      const draft = isSecondary ? filters.status : draftFilters.status;
+      const draft = draftFilters.status;
       return (
-        <div className="queue-inline-filter workflow-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-filter-control">
           <label>
-            {labelPrefix}Status filter mode
+            Status filter mode
             <select
               value={draft.mode}
               disabled={!listEnabled}
-              onChange={(event) => {
-                const mode = event.target.value as ValueFilter['mode'];
-                if (isSecondary) {
-                  applyFilters({ ...filters, status: { ...filters.status, mode } });
-                } else {
-                  updateDraftValueMode('status', mode);
-                }
-              }}
+              onChange={(event) => updateDraftValueMode('status', event.target.value as ValueFilter['mode'])}
             >
               <option value="include">Include selected</option>
               <option value="exclude">Exclude selected</option>
@@ -1166,15 +1174,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             options={[...TEMPORAL_STATUSES]}
             formatValue={formatStatusLabel}
             disabled={!listEnabled}
-            ariaLabelAdd={`${labelPrefix}Status filter value`}
-            ariaLabelSelected={`${labelPrefix}Selected status filters`}
+            ariaLabelAdd="Status filter value"
+            ariaLabelSelected="Selected status filters"
             addPlaceholder="Add status"
             emptyMessage="No status filters selected"
-            onChange={(next) => {
-              const normalized = next.map((value) => value.toLowerCase());
-              if (isSecondary) applySecondaryValues('status', normalized);
-              else updateDraftValues('status', normalized);
-            }}
+            onChange={(next) => updateDraftValues('status', next.map((value) => value.toLowerCase()))}
           />
           {renderFacetNotice('status')}
         </div>
@@ -1182,23 +1186,21 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }
 
     if (field === 'repository') {
+      const repositoryOptions = valueOptionsForField('repository');
       return (
-        <div className="queue-inline-filter workflow-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-filter-control">
           <label>
-            {labelPrefix}Repository filter value
+            Repository filter value
             <input
               type="text"
-              value={isSecondary ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
+              value={draftFilters.repository.exactText || ''}
               disabled={!listEnabled}
               placeholder="repo starts with…"
               title="Prefix match: finds repository names that start with this text."
-              onChange={(event) => {
-                if (isSecondary) applySecondaryRepository(event.target.value);
-                else updateDraftRepository(event.target.value);
-              }}
+              onChange={(event) => updateDraftRepository(event.target.value)}
             />
           </label>
-          {!isSecondary && valueOptionsForField('repository').length > 0 ? (
+          {repositoryOptions.length > 0 ? (
             <label>
               Repository values
               <select
@@ -1218,7 +1220,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 }}
               >
                 <option value="">Repository values</option>
-                {valueOptionsForField('repository').map((repo) => (
+                {repositoryOptions.map((repo) => (
                   <option key={repo} value={repo}>
                     {repo}
                   </option>
@@ -1233,19 +1235,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'targetRuntime') {
       const runtimeOptions = valueOptionsForField('targetRuntime');
-      const draft = isSecondary ? filters.targetRuntime : draftFilters.targetRuntime;
+      const draft = draftFilters.targetRuntime;
       return (
-        <div className="queue-inline-filter workflow-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-filter-control">
           <label>
-            {labelPrefix}Runtime filter mode
+            Runtime filter mode
             <select
               value={draft.mode}
               disabled={!listEnabled}
-              onChange={(event) => {
-                const mode = event.target.value as ValueFilter['mode'];
-                if (isSecondary) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } }, null);
-                else updateDraftValueMode('targetRuntime', mode);
-              }}
+              onChange={(event) => updateDraftValueMode('targetRuntime', event.target.value as ValueFilter['mode'])}
             >
               <option value="include">Include selected</option>
               <option value="exclude">Exclude selected</option>
@@ -1256,14 +1254,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             options={runtimeOptions}
             formatValue={formatRuntimeLabel}
             disabled={!listEnabled}
-            ariaLabelAdd={`${labelPrefix}Runtime filter value`}
-            ariaLabelSelected={`${labelPrefix}Selected runtime filters`}
+            ariaLabelAdd="Runtime filter value"
+            ariaLabelSelected="Selected runtime filters"
             addPlaceholder="Add runtime"
             emptyMessage="No runtime filters selected"
-            onChange={(next) => {
-              if (isSecondary) applySecondaryValues('targetRuntime', next);
-              else updateDraftValues('targetRuntime', next);
-            }}
+            onChange={(next) => updateDraftValues('targetRuntime', next)}
           />
           {renderFacetNotice('targetRuntime')}
         </div>
@@ -1272,19 +1267,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'targetSkill') {
       const skillOptions = valueOptionsForField('targetSkill');
-      const draft = isSecondary ? filters.targetSkill : draftFilters.targetSkill;
+      const draft = draftFilters.targetSkill;
       return (
-        <div className="queue-inline-filter workflow-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-filter-control">
           <label>
-            {labelPrefix}Skill filter mode
+            Skill filter mode
             <select
               value={draft.mode}
               disabled={!listEnabled}
-              onChange={(event) => {
-                const mode = event.target.value as ValueFilter['mode'];
-                if (isSecondary) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } }, null);
-                else updateDraftValueMode('targetSkill', mode);
-              }}
+              onChange={(event) => updateDraftValueMode('targetSkill', event.target.value as ValueFilter['mode'])}
             >
               <option value="include">Include selected</option>
               <option value="exclude">Exclude selected</option>
@@ -1294,14 +1285,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             values={draft.values}
             options={skillOptions}
             disabled={!listEnabled}
-            ariaLabelAdd={`${labelPrefix}Skill filter value`}
-            ariaLabelSelected={`${labelPrefix}Selected skill filters`}
+            ariaLabelAdd="Skill filter value"
+            ariaLabelSelected="Selected skill filters"
             addPlaceholder="Add skill"
             emptyMessage="No skill filters selected"
-            onChange={(next) => {
-              if (isSecondary) applySecondaryValues('targetSkill', next);
-              else updateDraftValues('targetSkill', next);
-            }}
+            onChange={(next) => updateDraftValues('targetSkill', next)}
           />
           {renderFacetNotice('targetSkill')}
         </div>
@@ -1310,44 +1298,36 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') {
       const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
-      const draft = isSecondary ? filters[field] : draftFilters[field];
+      const draft = draftFilters[field];
       return (
-        <div className="queue-inline-filter workflow-list-header-filter-control">
+        <div className="queue-inline-filter workflow-list-filter-control">
           <label>
-            {labelPrefix}{label} from
+            {label} from
             <input
               type="date"
               value={draft.from || ''}
               disabled={!listEnabled}
-              onChange={(event) => {
-                if (isSecondary) applySecondaryDate(field, { from: event.target.value });
-                else updateDraftDate(field, { from: event.target.value });
-              }}
+              onChange={(event) => updateDraftDate(field, { from: event.target.value })}
             />
           </label>
           <label>
-            {labelPrefix}{label} to
+            {label} to
             <input
               type="date"
               value={draft.to || ''}
               disabled={!listEnabled}
-              onChange={(event) => {
-                if (isSecondary) applySecondaryDate(field, { to: event.target.value });
-                else updateDraftDate(field, { to: event.target.value });
-              }}
+              onChange={(event) => updateDraftDate(field, { to: event.target.value })}
             />
           </label>
           {field !== 'createdAt' ? (
             <label>
-              {labelPrefix}{label} blank values
+              {label} blank values
               <select
                 value={draft.blank || ''}
                 disabled={!listEnabled}
-                onChange={(event) => {
-                  const blank = event.target.value as NonNullable<DateFilter['blank']>;
-                  if (isSecondary) applySecondaryDate(field, { blank });
-                  else updateDraftDate(field, { blank });
-                }}
+                onChange={(event) =>
+                  updateDraftDate(field, { blank: event.target.value as NonNullable<DateFilter['blank']> })
+                }
               >
                 <option value="">Ignore blanks</option>
                 <option value="include">Include blanks</option>
@@ -1360,74 +1340,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }
 
     return null;
-  };
-
-  const renderFilterPopover = (field: FilterField, label: string) => {
-    if (openFilter !== field) return null;
-
-    const control = renderFilterControl(field) || (
-      <p className="small">No filter is available for {label} yet.</p>
-    );
-
-    return (
-      <div
-        className="workflow-list-header-filter-popover"
-        role="dialog"
-        aria-label={`${label} filter`}
-        ref={popoverRef}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            closeFilter(filters, field);
-          }
-          if (event.key === 'Enter' && event.target instanceof HTMLElement) {
-            const tagName = event.target.tagName.toLowerCase();
-            if (tagName !== 'textarea' && tagName !== 'button' && !event.defaultPrevented) {
-              event.preventDefault();
-              applyFilters(draftFilters, field);
-            }
-          }
-        }}
-      >
-        {control}
-        {isFilterField(field) ? (
-          <div className="workflow-list-filter-actions">
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => {
-                const next = { ...draftFilters };
-                if (field === 'workflowId' || field === 'title') next[field] = {};
-                else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
-                else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
-                else next[field] = emptyValueFilter();
-                applyFilters(next, field);
-              }}
-              disabled={!listEnabled}
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => {
-                closeFilter(filters, field);
-              }}
-              aria-label={`Cancel ${label} filter`}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => applyFilters(draftFilters, field)}
-              disabled={!listEnabled}
-              aria-label={`Apply ${label} filter`}
-            >
-              Apply
-            </button>
-          </div>
-        ) : null}
-      </div>
-    );
   };
 
   return (
@@ -1449,21 +1361,39 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           </div>
         ) : null}
 
-        {hasActiveFilters ? (
-          <div className="workflow-list-filter-row" aria-live="polite">
-            <div className="workflow-list-filter-chips" aria-label="Active filters">
+        <div className="workflow-list-filter-bar">
+          <button
+            type="button"
+            className={`workflow-list-filter-trigger${hasActiveFilters ? ' is-active' : ''}`}
+            ref={drawerToggleRef}
+            aria-haspopup="dialog"
+            aria-expanded={drawerOpen}
+            onClick={(event) => openDrawer(null, event.currentTarget)}
+          >
+            <svg
+              aria-hidden="true"
+              className="workflow-list-filter-trigger-icon"
+              viewBox="0 0 16 16"
+              focusable="false"
+            >
+              <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+            </svg>
+            <span>Filters</span>
+            {hasActiveFilters ? (
+              <span className="workflow-list-filter-trigger-count" aria-hidden="true">
+                {activeFilters.length}
+              </span>
+            ) : null}
+          </button>
+          {hasActiveFilters ? (
+            <div className="workflow-list-filter-chips" aria-label="Active filters" aria-live="polite">
               {activeFilters.map(({ field, label, value }) => (
                 <span className="workflow-list-filter-chip" key={`${label}:${value}`}>
                   <button
                     type="button"
                     className="workflow-list-filter-chip-open"
                     data-filter-field={field}
-                    onMouseDown={(event) => event.stopPropagation()}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      filterTriggerRef.current = event.currentTarget;
-                      setOpenFilter(field);
-                    }}
+                    onClick={(event) => openDrawer(field, event.currentTarget)}
                     aria-label={`${label} filter: ${value}`}
                   >
                     <span>{label}</span>
@@ -1472,14 +1402,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   <button
                     type="button"
                     className="workflow-list-filter-chip-remove"
-                    onClick={() => {
-                      const next = { ...filters };
-                      if (field === 'workflowId' || field === 'title') next[field] = {};
-                      else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
-                      else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
-                      else next[field] = emptyValueFilter();
-                      applyFilters(next);
-                    }}
+                    onClick={() => removeActiveFilter(field)}
                     aria-label={`Remove ${label} filter`}
                   >
                     ×
@@ -1487,30 +1410,122 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 </span>
               ))}
             </div>
-          </div>
-        ) : null}
-        <div className="workflow-list-secondary-filter-disclosure">
-          <button
-            type="button"
-            className="workflow-list-secondary-filter-toggle"
-            aria-expanded={secondaryFiltersOpen}
-            aria-controls="workflow-list-secondary-filter-panel"
-            onClick={() => setSecondaryFiltersOpen((open) => !open)}
-          >
-            {secondaryFiltersOpen ? 'Hide filters' : 'Show filters'}
-            {hasActiveFilters ? ` (${activeFilters.length})` : ''}
-          </button>
-          <div
-            id="workflow-list-secondary-filter-panel"
-            className={`workflow-list-secondary-filter-controls${secondaryFiltersOpen ? ' is-open' : ''}`}
-            aria-label="Secondary workflow filters"
-          >
-            {FILTER_FIELDS.map(([field]) =>
-              isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Secondary ')}</div> : null,
-            )}
-          </div>
+          ) : (
+            <span className="workflow-list-filter-empty small">No filters applied.</span>
+          )}
         </div>
       </section>
+
+      {drawerOpen ? (
+        <div
+          className="workflow-list-filter-drawer-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeDrawer();
+          }}
+        >
+          <div
+            className="workflow-list-filter-drawer"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Advanced filters"
+            ref={drawerRef}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.stopPropagation();
+                closeDrawer();
+                return;
+              }
+              if (event.key === 'Tab') {
+                // Trap focus inside the modal drawer so keyboard users cannot
+                // Tab/Shift+Tab into the inert background while it is open.
+                const root = drawerRef.current;
+                if (!root) return;
+                const focusable = Array.from(
+                  root.querySelectorAll<HTMLElement>(
+                    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                  ),
+                );
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (!first || !last) {
+                  event.preventDefault();
+                  return;
+                }
+                const active = document.activeElement as HTMLElement | null;
+                if (event.shiftKey) {
+                  if (active === first || !root.contains(active)) {
+                    event.preventDefault();
+                    last.focus();
+                  }
+                } else if (active === last || !root.contains(active)) {
+                  event.preventDefault();
+                  first.focus();
+                }
+                return;
+              }
+              if (
+                event.key === 'Enter' &&
+                event.target instanceof HTMLInputElement &&
+                !event.defaultPrevented
+              ) {
+                event.preventDefault();
+                applyDraftFilters();
+              }
+            }}
+          >
+            <header className="workflow-list-filter-drawer-header">
+              <h2 className="workflow-list-filter-drawer-title">Advanced filters</h2>
+              <button
+                type="button"
+                className="secondary workflow-list-filter-drawer-close"
+                onClick={() => closeDrawer()}
+                aria-label="Close filters"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            </header>
+            <div className="workflow-list-filter-drawer-body">
+              {DRAWER_FILTER_FIELDS.map(([field, label]) => (
+                <section
+                  key={field}
+                  className="workflow-list-filter-section"
+                  data-filter-section={field}
+                  aria-label={`${label} filter`}
+                >
+                  {renderFilterControl(field)}
+                </section>
+              ))}
+            </div>
+            <footer className="workflow-list-filter-drawer-actions workflow-list-filter-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={resetDraftFilters}
+                disabled={!listEnabled || !hasActiveFilters}
+                aria-label="Reset filters"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => closeDrawer()}
+                aria-label="Cancel filters"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={applyDraftFilters}
+                disabled={!listEnabled}
+                aria-label="Apply filters"
+              >
+                Apply
+              </button>
+            </footer>
+          </div>
+        </div>
+      ) : null}
 
       <section
         className="queue-layouts panel--data workflow-list-data-slab"
@@ -1547,63 +1562,29 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   </colgroup>
                   <thead>
                     <tr>
-                      {TABLE_COLUMNS.map(({ field, label, sortable, filterField }) => {
+                      {TABLE_COLUMNS.map(({ field, label, sortable }) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
                         return (
                           <th
                             key={field}
                             aria-sort={sortable ? ariaSort : undefined}
-                            className={`workflow-list-compound-header-cell${filterField && openFilter === filterField ? " is-filter-open" : ""}`}
+                            className="workflow-list-header-cell"
                           >
-                            <div className="workflow-list-compound-header">
-                              {sortable ? (
-                                <button
-                                  type="button"
-                                  className="table-sort-button"
-                                  onClick={() => onHeaderClick(field)}
-                                  aria-label={ariaLabel}
-                                  title={CURRENT_PAGE_SORT_NOTICE}
-                                >
-                                  {label}
-                                  {sortIndicator(field)}
-                                  <span className="sr-only">{sortHint}</span>
-                                </button>
-                              ) : (
-                                <span className="workflow-list-static-header">{label}</span>
-                              )}
-                              {filterField ? (
-                                <button
-                                  type="button"
-                                  className={`workflow-list-column-filter-button${
-                                    filterValueForField(field) ? ' is-active' : ''
-                                  }`}
-                                  data-filter-field={field}
-                                  ref={
-                                    pendingFocusField === filterField
-                                      ? (node) => node?.focus()
-                                      : undefined
-                                  }
-                                  onMouseDown={(event) => event.stopPropagation()}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    filterTriggerRef.current = event.currentTarget;
-                                    toggleFilter(filterField);
-                                  }}
-                                  aria-label={filterAccessibilityLabel(field, label)}
-                                  aria-expanded={openFilter === filterField}
-                                >
-                                  <svg
-                                    aria-hidden="true"
-                                    className="workflow-list-column-filter-icon"
-                                    viewBox="0 0 16 16"
-                                    focusable="false"
-                                  >
-                                    <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
-                                  </svg>
-                                </button>
-                              ) : null}
-                            </div>
-                            {filterField ? renderFilterPopover(filterField, label) : null}
+                            {sortable ? (
+                              <button
+                                type="button"
+                                className="table-sort-button"
+                                onClick={() => onHeaderClick(field)}
+                                aria-label={ariaLabel}
+                                title={CURRENT_PAGE_SORT_NOTICE}
+                              >
+                                {label}
+                                {sortIndicator(field)}
+                                <span className="sr-only">{sortHint}</span>
+                              </button>
+                            ) : (
+                              <span className="workflow-list-static-header">{label}</span>
+                            )}
                           </th>
                         );
                       })}
