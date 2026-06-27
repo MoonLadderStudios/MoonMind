@@ -342,7 +342,7 @@ class ManagedRuntimeWorkspaceJanitor:
                 result = self._record_decision(result, candidate, delete_result)
 
         if self._config.record_retention is not None:
-            result = self._delete_record_candidates(result)
+            result = self._delete_record_candidates(result, delete_paths, delete_bytes)
         return replace(result, errors=tuple((*result.errors, *errors)))
 
     def _load_snapshot(self) -> _Snapshot:
@@ -507,6 +507,8 @@ class ManagedRuntimeWorkspaceJanitor:
     def _delete_record_candidates(
         self,
         result: ManagedRuntimeCleanupResult,
+        delete_paths: int,
+        delete_bytes: int,
     ) -> ManagedRuntimeCleanupResult:
         assert self._config.record_retention is not None
         try:
@@ -530,9 +532,28 @@ class ManagedRuntimeWorkspaceJanitor:
                 continue
             if self._config.dry_run:
                 continue
+            record_path = self._run_store._resolve_path(record.run_id)
+            estimated_bytes = self._estimate_bytes(record_path)
+            if delete_paths >= self._config.max_delete_paths:
+                result = replace(result, skipped_total=result.skipped_total + 1)
+                continue
+            if (
+                self._config.max_delete_bytes is not None
+                and delete_bytes + estimated_bytes > self._config.max_delete_bytes
+            ):
+                result = replace(result, skipped_total=result.skipped_total + 1)
+                continue
             try:
                 self._run_store.delete(record.run_id)
                 deleted += 1
+                delete_paths += 1
+                delete_bytes += estimated_bytes
+                result = replace(
+                    result,
+                    estimated_deleted_bytes=(
+                        result.estimated_deleted_bytes + estimated_bytes
+                    ),
+                )
             except Exception as exc:
                 errors.append(f"run-record-delete-failed:{record.run_id}:{exc}")
         for record in snapshot.session_records:
@@ -540,9 +561,28 @@ class ManagedRuntimeWorkspaceJanitor:
                 continue
             if self._config.dry_run:
                 continue
+            record_path = self._session_store._resolve_path(record.session_id)
+            estimated_bytes = self._estimate_bytes(record_path)
+            if delete_paths >= self._config.max_delete_paths:
+                result = replace(result, skipped_total=result.skipped_total + 1)
+                continue
+            if (
+                self._config.max_delete_bytes is not None
+                and delete_bytes + estimated_bytes > self._config.max_delete_bytes
+            ):
+                result = replace(result, skipped_total=result.skipped_total + 1)
+                continue
             try:
                 self._session_store.delete(record.session_id)
                 deleted += 1
+                delete_paths += 1
+                delete_bytes += estimated_bytes
+                result = replace(
+                    result,
+                    estimated_deleted_bytes=(
+                        result.estimated_deleted_bytes + estimated_bytes
+                    ),
+                )
             except Exception as exc:
                 errors.append(f"session-record-delete-failed:{record.session_id}:{exc}")
         return replace(
@@ -563,6 +603,8 @@ class ManagedRuntimeWorkspaceJanitor:
         for raw_path in _record_paths(record):
             root = self._ownership_root(raw_path)
             if root is not None and root.exists():
+                return False
+            if self._artifact_directory_path(raw_path) is not None:
                 return False
         for ref in _artifact_refs(record):
             path = self._artifact_path_from_ref(ref)
@@ -705,6 +747,18 @@ class ManagedRuntimeWorkspaceJanitor:
         if not first or first in {".", ".."}:
             return None
         return (self._config.artifact_root / first).resolve()
+
+    def _artifact_directory_path(self, raw_path: str | None) -> Path | None:
+        if not raw_path:
+            return None
+        try:
+            path = Path(raw_path).resolve()
+            artifact_root = self._config.artifact_root.resolve()
+        except OSError:
+            return None
+        if self._is_under(path, artifact_root) and path.exists():
+            return path
+        return None
 
     def _iter_children(self, root: Path) -> Iterable[Path]:
         try:

@@ -243,6 +243,63 @@ def test_optional_record_delete_waits_for_workspace_and_artifact_cleanup(
     assert session_store.load("sess-1") is None
 
 
+def test_record_delete_waits_for_session_artifact_spool_cleanup(tmp_path) -> None:
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
+    artifact_spool = tmp_path / "artifacts" / "sess-1"
+    artifact_spool.mkdir(parents=True)
+    os.utime(artifact_spool, (NOW.timestamp(), NOW.timestamp()))
+    session_store.save(
+        _session_record(
+            "sess-1",
+            workspace_path=str(tmp_path / "sess-1" / "session"),
+            artifact_spool_path=str(artifact_spool),
+        )
+    )
+
+    result = _janitor(
+        tmp_path,
+        run_store,
+        session_store,
+        record_retention=timedelta(days=180),
+    ).run()
+
+    assert result.deleted_record_files == 0
+    assert session_store.load("sess-1") is not None
+
+
+def test_record_delete_respects_path_budget(tmp_path) -> None:
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    session_store = ManagedSessionStore(tmp_path / "managed_sessions")
+    run_store.save(
+        _run_record("run-1", workspace_path=str(tmp_path / "run-1" / "repo"))
+    )
+    session_store.save(
+        _session_record(
+            "sess-1",
+            workspace_path=str(tmp_path / "sess-1" / "session"),
+            artifact_spool_path=str(tmp_path / "artifacts" / "sess-1"),
+        )
+    )
+
+    result = _janitor(
+        tmp_path,
+        run_store,
+        session_store,
+        record_retention=timedelta(days=180),
+        max_delete_paths=1,
+    ).run()
+
+    assert result.deleted_record_files == 1
+    assert result.skipped_total == 1
+    remaining_records = [
+        record
+        for record in (run_store.load("run-1"), session_store.load("sess-1"))
+        if record is not None
+    ]
+    assert len(remaining_records) == 1
+
+
 @pytest.mark.asyncio
 async def test_activity_returns_disabled_structured_result(
     tmp_path, monkeypatch
