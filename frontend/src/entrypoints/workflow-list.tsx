@@ -1349,7 +1349,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   return (
     <div className="stack">
       {hasWorkflowListNotices ? (
-        <section className="workflow-list-control-deck" aria-label="Workflow list notices">
+        <section className="workflow-list-notices-deck" aria-label="Workflow list notices">
           {!listEnabled ? (
             <div className="notice error">Temporal workflow list is disabled in server configuration.</div>
           ) : null}

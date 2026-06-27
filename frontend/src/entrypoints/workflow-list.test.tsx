@@ -1348,7 +1348,7 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
-    const controlDeck = document.querySelector<HTMLElement>('.workflow-list-control-deck');
+    const noticesDeck = document.querySelector<HTMLElement>('.workflow-list-notices-deck');
     const dataSlab = document.querySelector<HTMLElement>('.workflow-list-data-slab.panel--data');
     const resultsHeader = dataSlab?.querySelector<HTMLElement>('.workflow-list-results-header');
     const tableWrapper = dataSlab?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
@@ -1356,7 +1356,7 @@ describe('Workflows Entrypoint', () => {
     const tableHead = tableWrapper?.querySelector<HTMLElement>('thead');
     const firstHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
-    expect(controlDeck).toBeNull();
+    expect(noticesDeck).toBeNull();
     expect(resultsHeader?.querySelector('.workflow-list-filter-trigger')).toBeTruthy();
     expect(resultsHeader?.textContent).toContain('Workflows');
     expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
@@ -1389,7 +1389,7 @@ describe('Workflows Entrypoint', () => {
     expect(Number(getComputedStyle(firstHeader as HTMLElement).zIndex)).toBeGreaterThan(1);
   });
 
-  it('keeps the workflow list surfaces to one data slab without an empty control deck', async () => {
+  it('keeps the workflow list surfaces to one data slab without an empty notices deck', async () => {
     renderWithClient(
       <section className="panel" aria-live="polite">
         <WorkflowListPage payload={mockPayload} />
@@ -1399,10 +1399,10 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     const shellPanel = document.querySelector<HTMLElement>('.panel');
-    const controlDecks = document.querySelectorAll<HTMLElement>('.workflow-list-control-deck');
+    const noticesDecks = document.querySelectorAll<HTMLElement>('.workflow-list-notices-deck');
     const dataSlabs = document.querySelectorAll<HTMLElement>('.workflow-list-data-slab.panel--data');
 
-    expect(controlDecks).toHaveLength(0);
+    expect(noticesDecks).toHaveLength(0);
     expect(dataSlabs).toHaveLength(1);
 
     const dataSlab = dataSlabs[0] as HTMLElement;

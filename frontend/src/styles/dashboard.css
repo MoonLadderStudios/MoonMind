@@ -493,7 +493,7 @@ h1 {
   margin-inline: auto;
 }
 
-.panel:has(.workflow-list-control-deck),
+.panel:has(.workflow-list-notices-deck),
 .panel:has(.workflow-list-data-slab) {
   border: 0;
   background: transparent;
@@ -952,7 +952,7 @@ h1 {
   }
 }
 
-.workflow-list-control-deck {
+.workflow-list-notices-deck {
   display: grid;
   gap: 0.85rem;
   padding: 0;
