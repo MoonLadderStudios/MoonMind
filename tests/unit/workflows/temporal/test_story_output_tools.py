@@ -1207,6 +1207,85 @@ async def test_create_jira_issues_accepts_imperative_file_backed_story_without_c
     assert "Canonical Claim IDs:" not in service.requests[0].description
 
 @pytest.mark.asyncio
+async def test_create_jira_issues_blocks_misclassified_canonical_story_without_claim_ids():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "storyBreakdown": {
+                "source": {
+                    "referencePath": "docs/Designs/RuntimeTypes.md",
+                    "sourceDocumentClass": "imperative-input",
+                },
+                "stories": [
+                    {
+                        "id": "STORY-001",
+                        "summary": "Misclassified canonical source",
+                    },
+                ],
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert service.requests == []
+    assert result.outputs["storyOutput"]["status"] == "fallback"
+    assert "requires sourceReference.claimIds" in result.outputs["storyOutput"]["reason"]
+    assert "STORY-001" in result.outputs["storyOutput"]["reason"]
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_preserves_source_metadata_from_story_breakdown_json():
+    service = _FakeJiraService()
+    breakdown = {
+        "source": {
+            "referencePath": "docs/tmp/Roadmap.md",
+            "sourceDocumentClass": "imperative-input",
+        },
+        "stories": [
+            {
+                "id": "STORY-001",
+                "summary": "JSON payload story",
+                "sourceReference": {
+                    "coverageIds": ["DESIGN-REQ-001"],
+                },
+            },
+        ],
+    }
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "storyBreakdownJson": json.dumps(breakdown),
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert result.outputs["jira"]["issueMappings"][0]["sourceDesignPath"] == (
+        "docs/tmp/Roadmap.md"
+    )
+    assert len(service.requests) == 1
+    assert service.requests[0].description.startswith(
+        "Source Reference\nSource Document: docs/tmp/Roadmap.md"
+    )
+    assert "Coverage IDs:" in service.requests[0].description
+
+@pytest.mark.asyncio
 async def test_create_jira_issues_accepts_optional_file_backed_story_without_claim_ids():
     service = _FakeJiraService()
 
@@ -1260,6 +1339,21 @@ def test_requires_story_source_reference_accepts_falsy_policy_values(policy):
         )
         is False
     )
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (".specify/memory/constitution.md", True),
+        ("./.specify/memory/constitution.md", True),
+        ("/.specify/memory/constitution.md", True),
+        ("docs/Designs/RuntimeTypes.md", True),
+        ("./docs/Designs/RuntimeTypes.md", True),
+        ("docs/tmp/Roadmap.md", False),
+        ("artifacts/story-breakdowns/demo/stories.json", False),
+    ],
+)
+def test_is_canonical_source_path_handles_prefixes(path, expected):
+    assert story_tools._is_canonical_source_path(path) is expected
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_accepts_claim_backed_source_reference_from_breakdown():

@@ -513,6 +513,16 @@ def _coerce_story_payload(value: Any) -> list[dict[str, Any]]:
         return [dict(value)] if value.get("summary") or value.get("title") else []
     return [dict(story) for story in _list(value) if isinstance(story, Mapping)]
 
+def _parse_story_breakdown_payload(value: Any) -> Any:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    if isinstance(value, str) and value.strip():
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
 def _has_explicit_empty_story_list(value: Any) -> bool:
     if isinstance(value, str) and value.strip():
         try:
@@ -850,7 +860,10 @@ def _breakdown_source_document_class(value: Any) -> str:
 
 
 def _is_canonical_source_path(path: str) -> bool:
-    normalized = _string(path).replace("\\", "/").lstrip("./")
+    normalized = _string(path).replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = normalized.lstrip("/")
     if not normalized:
         return False
     if (
@@ -869,6 +882,8 @@ def _source_reference_requires_claim_ids(
     source_path: str,
 ) -> bool:
     source_class = _normalize_source_document_class(source_document_class)
+    if _is_canonical_source_path(source_path):
+        return True
     if source_class == "canonical-declarative":
         return True
     if source_class in {"declarative-text", "imperative-input"}:
@@ -2087,11 +2102,12 @@ async def create_jira_issues_from_stories(
         or previous_story_output.get("story_breakdown")
         or previous_story_output.get("storyBreakdownJson")
     )
-    breakdown_source_path = _breakdown_source_path(raw_story_payload)
+    parsed_story_payload = _parse_story_breakdown_payload(raw_story_payload)
+    breakdown_source_path = _breakdown_source_path(parsed_story_payload)
     breakdown_source_document_class = _breakdown_source_document_class(
-        raw_story_payload
+        parsed_story_payload
     )
-    stories = _coerce_story_payload(raw_story_payload)
+    stories = _coerce_story_payload(parsed_story_payload)
     artifact_ref_was_read = False
     artifact_payload_had_explicit_empty_stories = False
     artifact_payload_failure_reason = ""
@@ -2117,16 +2133,7 @@ async def create_jira_issues_from_stories(
                 artifact_payload = artifact_reader(artifact_ref)
                 if inspect.isawaitable(artifact_payload):
                     artifact_payload = await artifact_payload  # type: ignore[assignment]
-                if isinstance(artifact_payload, bytes):
-                    artifact_payload = artifact_payload.decode(
-                        "utf-8", errors="replace"
-                    )
-                parsed_payload: Any = artifact_payload
-                if isinstance(artifact_payload, str) and artifact_payload.strip():
-                    try:
-                        parsed_payload = json.loads(artifact_payload)
-                    except json.JSONDecodeError:
-                        parsed_payload = artifact_payload
+                parsed_payload = _parse_story_breakdown_payload(artifact_payload)
                 breakdown_source_path = _breakdown_source_path(parsed_payload)
                 breakdown_source_document_class = _breakdown_source_document_class(
                     parsed_payload
@@ -2218,17 +2225,12 @@ async def create_jira_issues_from_stories(
                 fetched = story_fetcher(repo, ref, path)
                 if inspect.isawaitable(fetched):
                     fetched = await fetched  # type: ignore[assignment]
-                fetched_payload: Any = fetched
-                if isinstance(fetched, str) and fetched.strip():
-                    try:
-                        fetched_payload = json.loads(fetched)
-                    except json.JSONDecodeError:
-                        fetched_payload = fetched
+                fetched_payload = _parse_story_breakdown_payload(fetched)
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
                 breakdown_source_document_class = _breakdown_source_document_class(
                     fetched_payload
                 )
-                stories = _coerce_story_payload(fetched)
+                stories = _coerce_story_payload(fetched_payload)
             except Exception as exc:
                 reason = _repo_handoff_read_failure_reason(
                     repo=repo,
