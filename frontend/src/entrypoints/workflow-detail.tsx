@@ -103,11 +103,16 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
-type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs';
+type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
 
 function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
-  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs))?$/);
-  if (match?.[1] === 'steps' || match?.[1] === 'artifacts' || match?.[1] === 'runs') {
+  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs|debug))?$/);
+  if (
+    match?.[1] === 'steps'
+    || match?.[1] === 'artifacts'
+    || match?.[1] === 'runs'
+    || match?.[1] === 'debug'
+  ) {
     return match[1];
   }
   return 'overview';
@@ -4736,6 +4741,7 @@ function WorkflowDetailSubrouteNav({
     { route: 'steps', label: 'Steps' },
     { route: 'artifacts', label: 'Artifacts' },
     { route: 'runs', label: 'Runs' },
+    { route: 'debug', label: 'Debug' },
   ];
   return (
     <nav className="td-subroute-nav" aria-label="Workflow detail sections">
@@ -4885,7 +4891,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
 
   const workflowIdMatch = window.location.pathname.match(
-    /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs))?$/,
+    /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/,
   );
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
@@ -5675,21 +5681,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             <div className="td-hero-body">
               <div className="td-hero-headline">
                 <h3 className="td-title-text">{execution.title}</h3>
-                <span className="meta-inline">
-                  Temporal
-                  {execution.workflowType ? (
-                    <>
-                      <span className="dot">·</span>
-                      {execution.workflowType}
-                    </>
-                  ) : null}
-                  {execution.entry ? (
-                    <>
-                      <span className="dot">·</span>
-                      {execution.entry}
-                    </>
-                  ) : null}
-                </span>
+                {workflowId ? (
+                  <span className="meta-inline td-hero-workflow-id">
+                    <code className="text-xs break-all">{workflowId}</code>
+                  </span>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -5851,27 +5847,47 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
                 {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
               </FactGroup>
-
-              <FactGroup title="Temporal">
-                <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
-                <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
-                {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
-                <Fact label="Source">Temporal</Fact>
-                <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
-                <Fact label="Entry">{execution.entry || '—'}</Fact>
-                <Fact label="Current Run ID">
-                  <code className="text-xs break-all">{latestRunId || '—'}</code>
-                </Fact>
-                {resolvedAgentRunId ? (
-                  <Fact label="Workflow Run">
-                    <code className="text-xs break-all">{resolvedAgentRunId}</code>
-                  </Fact>
-                ) : null}
-                <Fact label="Workflow ID">
-                  <code className="text-xs break-all">{workflowId}</code>
-                </Fact>
-              </FactGroup>
             </div>
+          ) : null}
+
+          {detailSubroute === 'debug' ? (
+            <section className="stack td-debug-region" aria-label="Workflow debug details">
+              <div>
+                <h3>Debug</h3>
+                <p className="small">
+                  Raw Temporal and runtime identifiers for this workflow. These details are
+                  diagnostic only and do not affect the default overview.
+                </p>
+              </div>
+              <div className="td-facts-region">
+                <FactGroup title="Temporal">
+                  <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
+                  <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
+                  {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
+                  <Fact label="Source">Temporal</Fact>
+                  <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
+                  <Fact label="Entry">{execution.entry || '—'}</Fact>
+                  <Fact label="Current Run ID">
+                    <code className="text-xs break-all">{latestRunId || '—'}</code>
+                  </Fact>
+                  {resolvedAgentRunId ? (
+                    <Fact label="Workflow Run">
+                      <code className="text-xs break-all">{resolvedAgentRunId}</code>
+                    </Fact>
+                  ) : null}
+                  <Fact label="Workflow ID">
+                    <code className="text-xs break-all">{workflowId}</code>
+                  </Fact>
+                </FactGroup>
+                {actions ? (
+                  <FactGroup title="Action Capability Map">
+                    <Fact label="Raw Actions">
+                      <pre className="text-xs break-all">{JSON.stringify(actions, null, 2)}</pre>
+                    </Fact>
+                  </FactGroup>
+                ) : null}
+              </div>
+            </section>
           ) : null}
 
           {detailSubroute === 'overview' && runSummary ? (
@@ -6381,7 +6397,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'overview' && debugOn && execution.debugFields ? (
+          {detailSubroute === 'debug' && debugOn && execution.debugFields ? (
             <section className="stack">
               <h3>Debug Metadata</h3>
               <div className="grid-2">

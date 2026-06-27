@@ -1005,6 +1005,68 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('MM-957 keeps raw Temporal facts out of the default overview while preserving summary and evidence sections', async () => {
+    window.history.pushState({}, 'Overview Debug IA Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      // Summary and evidence preview sections still render on the default overview.
+      expect(screen.getByRole('heading', { name: 'Summary' })).toBeTruthy();
+      expect(screen.getByText('Focused route summary')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
+    });
+
+    // The raw Temporal FactGroup no longer competes with outcome/evidence content.
+    expect(screen.queryByRole('heading', { name: 'Temporal' })).toBeNull();
+    for (const label of ['Temporal Status', 'Workflow State', 'Workflow Type', 'Entry', 'Source']) {
+      expect(screen.queryByText(new RegExp(`^${label}:?$`))).toBeNull();
+    }
+    // The hero no longer leads with Temporal metadata, but the compact workflow ID stays accessible.
+    expect(screen.queryByText('MoonMind.UserWorkflow')).toBeNull();
+    expect(screen.getAllByText('test-123').length).toBeGreaterThan(0);
+  });
+
+  it('MM-957 exposes the moved Temporal fields on the keyboard-accessible Debug subroute', async () => {
+    window.history.pushState({}, 'Debug Route Test', '/workflows/test-123/debug?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Debug' })).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Temporal' })).toBeTruthy();
+    });
+
+    // All moved Temporal/runtime identifiers are exposed in the Debug view.
+    for (const label of [
+      'Temporal Status',
+      'Workflow State',
+      'Source',
+      'Workflow Type',
+      'Entry',
+      'Current Run ID',
+      'Workflow ID',
+    ]) {
+      expect(screen.getByText(new RegExp(`^${label}:?$`))).toBeTruthy();
+    }
+    expect(screen.getAllByText('MoonMind.UserWorkflow').length).toBeGreaterThan(0);
+
+    // Deep-linking to the subroute selects the Debug tab, and tab navigation uses
+    // focusable anchor links (keyboard accessible by default).
+    const debugLink = screen.getByRole('link', { name: 'Debug' });
+    expect(debugLink.getAttribute('aria-current')).toBe('page');
+    expect(debugLink.tagName).toBe('A');
+    expect(debugLink.getAttribute('href')).toBe('/workflows/test-123/debug?source=temporal');
+    // Overview is reachable from the Debug subroute (deep links round-trip).
+    expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('href')).toBe('/workflows/test-123?source=temporal');
+
+    // Raw Temporal facts are scoped to Debug only — not the Overview preview cards.
+    expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
+  });
+
   it('returns null for route templates with missing parameters', () => {
     expect(
       expandRouteTemplate('/api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}', {
@@ -1149,16 +1211,20 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
+      // MM-957: raw Temporal fact labels are no longer surfaced on the default overview.
       for (const label of [
         'Workflow ID',
         'Current Run ID',
         'Workflow Type',
         'Workflow State',
       ]) {
-        expect(screen.getByText(new RegExp(`^${label}:?$`))).toBeTruthy();
+        expect(screen.queryByText(new RegExp(`^${label}:?$`))).toBeNull();
       }
+      // The compact workflow ID stays accessible in the hero as secondary metadata.
+      expect(screen.getAllByText('test-123').length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
