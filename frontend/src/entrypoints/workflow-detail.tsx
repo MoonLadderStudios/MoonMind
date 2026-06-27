@@ -5618,7 +5618,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         </div>
         <div className="toolbar-controls">
           <span className="small">
-            Live updates enabled. Polling every ${Math.round(detailPoll / 1000)}s
+            Live updates enabled. Polling every {Math.round(detailPoll / 1000)}s
           </span>
         </div>
       </div>

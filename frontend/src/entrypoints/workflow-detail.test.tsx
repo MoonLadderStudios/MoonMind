@@ -420,6 +420,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+      expect(screen.getByText('Live updates enabled. Polling every 0s')).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
