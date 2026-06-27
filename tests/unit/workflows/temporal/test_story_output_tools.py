@@ -410,6 +410,38 @@ async def test_load_jira_preset_brief_resolves_existing_source_design_path(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_load_jira_preset_brief_resolves_single_path_without_worker_cwd_validation():
+    service = _FakeJiraService()
+    source_path = "docs/ExternalProject/DesiredState.md"
+    service.issue_responses["MM-941"] = {
+        "key": "MM-941",
+        "fields": {
+            "summary": f"Implement {source_path}",
+            "description": "Break the external repository design into work.",
+        },
+    }
+
+    result = await load_jira_preset_brief(
+        {"issueKey": "MM-941"},
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["resolvedSourceDesignPath"] == source_path
+    resolution = result.outputs["sourceResolution"]
+    assert resolution["status"] == "resolved"
+    assert resolution["selectedPath"] == source_path
+    assert resolution["candidatePaths"] == [
+        {
+            "path": source_path,
+            "sourceField": "jira.summary",
+            "sourceFields": ["jira.summary", "jira.presetBrief"],
+            "exists": None,
+        }
+    ]
+    assert "repository-root validation not run" in resolution["reason"]
+
+
+@pytest.mark.asyncio
 async def test_load_jira_preset_brief_reports_ambiguous_source_paths(tmp_path):
     first_path = "docs/ManagedAgents/ManagedRuntimeCleanup.md"
     second_path = "docs/ManagedAgents/ManagedAgentArchitecture.md"

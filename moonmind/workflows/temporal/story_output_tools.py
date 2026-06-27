@@ -2637,7 +2637,7 @@ def _load_preset_brief_issue_key(inputs: Mapping[str, Any]) -> str:
 def _source_resolution_root(
     inputs: Mapping[str, Any],
     context: Mapping[str, Any] | None,
-) -> Path:
+) -> Path | None:
     context_mapping = _mapping(context)
     root = _string(
         inputs.get("repositoryRoot")
@@ -2651,7 +2651,7 @@ def _source_resolution_root(
         or context_mapping.get("workspacePath")
         or context_mapping.get("workspace_path")
     )
-    return Path(root) if root else Path.cwd()
+    return Path(root) if root else None
 
 
 def _normalize_source_document_path(value: object) -> str:
@@ -2678,9 +2678,11 @@ def _normalize_source_document_path(value: object) -> str:
 
 
 def _source_document_path_exists(
-    repo_root: Path,
+    repo_root: Path | None,
     source_path: str,
-) -> bool:
+) -> bool | None:
+    if repo_root is None:
+        return None
     if not source_path:
         return False
     try:
@@ -2693,7 +2695,7 @@ def _source_document_path_exists(
 def _source_path_candidates(
     *,
     texts: Sequence[tuple[str, str]],
-    repo_root: Path,
+    repo_root: Path | None,
 ) -> list[dict[str, Any]]:
     candidates: dict[str, dict[str, Any]] = {}
     for source_field, text in texts:
@@ -2736,9 +2738,10 @@ def _resolve_source_design_path_from_issue(
     )
     if explicit_path:
         exists = _source_document_path_exists(repo_root, explicit_path)
+        resolved = exists is not False
         return {
-            "status": "resolved" if exists else "invalid_explicit_path",
-            "selectedPath": explicit_path if exists else "",
+            "status": "resolved" if resolved else "invalid_explicit_path",
+            "selectedPath": explicit_path if resolved else "",
             "candidatePaths": [
                 {
                     "path": explicit_path,
@@ -2749,8 +2752,13 @@ def _resolve_source_design_path_from_issue(
             ],
             "reason": (
                 "explicit source_design_path exists in the repository checkout"
-                if exists
-                else "explicit source_design_path was not found in the repository checkout"
+                if exists is True
+                else (
+                    "explicit source_design_path selected without repository-root "
+                    "validation"
+                    if exists is None
+                    else "explicit source_design_path was not found in the repository checkout"
+                )
             ),
         }
 
@@ -2763,9 +2771,11 @@ def _resolve_source_design_path_from_issue(
         ),
         repo_root=repo_root,
     )
-    existing_paths = [item for item in candidate_paths if item["exists"]]
-    if len(existing_paths) == 1:
-        selected = existing_paths[0]
+    existing_paths = [item for item in candidate_paths if item["exists"] is True]
+    if len(existing_paths) == 1 or (
+        repo_root is None and len(candidate_paths) == 1
+    ):
+        selected = existing_paths[0] if existing_paths else candidate_paths[0]
         return {
             "status": "resolved",
             "selectedPath": selected["path"],
@@ -2773,6 +2783,11 @@ def _resolve_source_design_path_from_issue(
             "reason": (
                 f"found one existing canonical document path in "
                 f"{selected['sourceField']}"
+                if selected["exists"] is True
+                else (
+                    f"found one canonical document path in "
+                    f"{selected['sourceField']}; repository-root validation not run"
+                )
             ),
         }
     if len(existing_paths) > 1:
