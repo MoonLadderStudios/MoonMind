@@ -17061,8 +17061,9 @@ describe("Task Create MM-937 step hover containment", () => {
 
   beforeAll(async () => {
     const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
     dashboardCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/dashboard.css`,
+      resolve(__dirname, "../styles/dashboard.css"),
       "utf8",
     );
   });
@@ -17077,10 +17078,11 @@ describe("Task Create MM-937 step hover containment", () => {
     expect(dashboardCss).toMatch(
       /\.queue-step-icon-button:hover\s*\{[^}]*transform:\s*scale\(var\(--mm-control-hover-scale\)\);/s,
     );
-    // The containment fix: scale from the trailing edge so the control grows
-    // inward instead of spilling past the container boundary when hovered.
+    // The containment fix: scale only the trailing control from its right edge
+    // so it grows inward instead of spilling past the container boundary when
+    // hovered, while the leading controls keep their natural center scaling.
     expect(dashboardCss).toMatch(
-      /\.queue-step-controls\s+\.queue-step-icon-button\s*\{[^}]*transform-origin:\s*right center;/s,
+      /\.queue-step-controls\s+\.queue-step-icon-button:last-child\s*\{[^}]*transform-origin:\s*right center;/s,
     );
   });
 });
