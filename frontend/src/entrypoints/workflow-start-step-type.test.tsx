@@ -637,7 +637,7 @@ describe("Task Create Step Type authoring", () => {
     ).toBe("pentestgpt-claude-oauth");
     expect(screen.getByText("Approved Scope")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(await screen.findAllByText("Target is required.")).toHaveLength(2);
   });
@@ -670,7 +670,7 @@ describe("Task Create Step Type authoring", () => {
 
     await screen.findByText("Approved scope attached: art_scope_123");
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       const createCall = fetchSpy.mock.calls.find(
