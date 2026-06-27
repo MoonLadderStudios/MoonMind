@@ -64,7 +64,7 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     expect(await screen.findByText('Cannot combine stateIn and stateNotIn.')).toBeTruthy();
-    expect(screen.getByLabelText('Live updates')).toBeTruthy();
+    expect(screen.queryByLabelText('Live updates')).toBeNull();
   });
 
   it('keeps active filter chips visible on an empty first page with active filters', async () => {
@@ -105,7 +105,7 @@ describe('Workflows Entrypoint', () => {
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
-    expect(screen.getByLabelText('Live updates')).toBeTruthy();
+    expect(screen.queryByLabelText('Live updates')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   }, 10000);
 
@@ -1103,8 +1103,8 @@ describe('Workflows Entrypoint', () => {
     const liveBlock = footer?.querySelector('.workflow-list-footer-live');
     const paginationBlock = footer?.querySelector('.workflow-list-footer-pagination');
     const paginationSummary = footer?.querySelector('.workflow-list-footer-page-summary');
-    expect(liveBlock?.contains(screen.getByLabelText('Live updates'))).toBe(true);
-    expect(liveBlock?.textContent).toContain('Polling every 5s');
+    expect(liveBlock?.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(liveBlock?.textContent).toContain('Live updates enabled. Polling every 5s');
     expect(paginationBlock?.contains(screen.getByLabelText('Show'))).toBe(true);
     expect(getComputedStyle(paginationBlock as Element).flexWrap).toBe('wrap');
     expect(paginationSummary?.textContent).toContain('1 - 1');
@@ -1174,8 +1174,8 @@ describe('Workflows Entrypoint', () => {
 
     expect(controlDeck?.classList.contains('panel--controls')).toBe(false);
     expect(controlDeck?.querySelector('.workflow-list-utility-cluster')).toBeNull();
-    expect(dataSlab?.querySelector('.workflow-list-results-footer')?.contains(screen.getByLabelText('Live updates'))).toBe(
-      true,
+    expect(dataSlab?.querySelector('.workflow-list-results-footer')?.textContent).toContain(
+      'Live updates enabled. Polling every 5s',
     );
     expect(screen.queryByText('Showing all task executions.')).toBeNull();
     expect(dataSlab).toBeTruthy();

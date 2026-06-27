@@ -420,6 +420,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+      expect(screen.getByText('Live updates enabled. Polling every 0s')).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
@@ -2746,7 +2747,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     fireEvent.click(trigger);
     const focusMenu = screen.getByRole('menu', { name: 'Workflow actions' });
-    fireEvent.blur(focusMenu, { relatedTarget: screen.getByLabelText('Live updates') });
+    fireEvent.blur(focusMenu, { relatedTarget: document.body });
     expect(screen.queryByRole('menu', { name: 'Workflow actions' })).toBeNull();
     expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/signal') && init?.method === 'POST')).toBe(false);
 

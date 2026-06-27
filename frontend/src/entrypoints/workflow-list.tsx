@@ -632,7 +632,6 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
   );
   const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const [liveUpdates, setLiveUpdates] = useState(true);
   const [sortField, setSortField] = useState<string>(() => normalizeTableSortField(initial.get('sort')));
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>(() => {
     const initialSortDir = initial.get('sortDir');
@@ -693,7 +692,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
-    refetchInterval: liveUpdates && listEnabled && !openFilter ? listPollMs : false,
+    refetchInterval: listEnabled && !openFilter ? listPollMs : false,
   });
 
   const openFacet = facetForFilterField(openFilter);
@@ -838,19 +837,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const resultsFooter = (
     <div className="queue-results-toolbar workflow-list-results-footer">
       <div className="workflow-list-footer-live">
-        <label className="queue-inline-toggle toolbar-live-toggle workflow-list-footer-live-toggle">
-          <input
-            type="checkbox"
-            checked={liveUpdates}
-            disabled={!listEnabled}
-            onChange={(event) => setLiveUpdates(event.target.checked)}
-          />
-          Live updates
-        </label>
         <span className="small">
-          {liveUpdates && listEnabled
-            ? `Polling every ${Math.round(listPollMs / 1000)}s`
-            : 'Updates paused to keep selections stable.'}
+          {listEnabled
+            ? `Live updates enabled. Polling every ${Math.round(listPollMs / 1000)}s`
+            : 'Live updates unavailable while the list is disabled.'}
         </span>
       </div>
       <div className="queue-pagination workflow-list-footer-pagination">
