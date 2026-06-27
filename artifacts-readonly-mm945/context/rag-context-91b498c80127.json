@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. tests/e2e/test_confluence_e2e.py (score: 1.000, trust: canonical)\n    line 84: assert response.status_code == 200, f\"API call failed: {response.text}\"\n2. tests/e2e/test_task_create_submit_browser.py (score: 1.000, trust: canonical)\n    line 105: \"codex\": {\"models\": [\"gpt-5.3-codex\"], \"efforts\": [\"high\"]},\n3. moonmind/manifest/reader_adapter.py (score: 1.000, trust: canonical)\n    line 83: \"Overwriting existing adapter for type '%s': %s -> %s\",\n4. docs/MoonMindArchitecture.md (score: 1.000, trust: canonical)\n    line 6: **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtime runs, Codex CLI managed sessions, Claude Code managed runs, external agents, artifacts, provider profiles, and workload containers.\n5. docs/MoonMindRoadmap.md (score: 1.000, trust: canonical)\n    line 4: > **safety, resiliency, and observability for Claude Code and Codex CLI.**\n6. moonmind/planning/__init__.py (score: 1.000, trust: canonical)\n    line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"\n7. docs/tmp/TaskTerminologyCleanupPlan.md (score: 1.000, trust: canonical)\n    line 19: - **Broader task-shaped snapshot terminology:** The root user workflow type, workflow create envelope, workflow proposal contract, preset/recurring database names, frontend preset routes, code-scope enforcement, and agent-run identifiers are switched. Broader task-shaped snapshot keys such as original-input authoring fields and runtime draft-shape metadata remain compatibility-sensitive and should be handled as a separate cutover if the product contract is renamed further.\n8. docs/tmp/JiraOrchestrateMM821Submission.md (score: 1.000, trust: canonical)\n    line 1: # Jira Orchestrate MM-821 Submission",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "tests/e2e/test_confluence_e2e.py",
+      "text": "line 84: assert response.status_code == 200, f\"API call failed: {response.text}\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 84,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "tests/e2e/test_task_create_submit_browser.py",
+      "text": "line 105: \"codex\": {\"models\": [\"gpt-5.3-codex\"], \"efforts\": [\"high\"]},",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 105,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/manifest/reader_adapter.py",
+      "text": "line 83: \"Overwriting existing adapter for type '%s': %s -> %s\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 83,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindArchitecture.md",
+      "text": "line 6: **Purpose:** Top-level architecture for MoonMind's Temporal-native agent orchestration model, including managed runtime runs, Codex CLI managed sessions, Claude Code managed runs, external agents, artifacts, provider profiles, and workload containers.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindRoadmap.md",
+      "text": "line 4: > **safety, resiliency, and observability for Claude Code and Codex CLI.**",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 4,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "moonmind/planning/__init__.py",
+      "text": "line 1: \"\"\"Planning utilities for generating Jira stories.\"\"\"",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/tmp/TaskTerminologyCleanupPlan.md",
+      "text": "line 19: - **Broader task-shaped snapshot terminology:** The root user workflow type, workflow create envelope, workflow proposal contract, preset/recurring database names, frontend preset routes, code-scope enforcement, and agent-run identifiers are switched. Broader task-shaped snapshot keys such as original-input authoring fields and runtime draft-shape metadata remain compatibility-sensitive and should be handled as a separate cutover if the product contract is renamed further.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 19,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/tmp/JiraOrchestrateMM821Submission.md",
+      "text": "line 1: # Jira Orchestrate MM-821 Submission",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-27T07:29:37Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
