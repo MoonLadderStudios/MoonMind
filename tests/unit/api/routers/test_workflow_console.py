@@ -19,6 +19,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api_service.main import app as main_app
 from api_service.api.routers.workflow_console import (
     _get_temporal_service,
     _is_allowed_path,
@@ -188,6 +189,21 @@ def test_root_route_renders_dashboard_shell(client: TestClient) -> None:
     boot_payload = _extract_boot_payload(response.text)
     assert boot_payload["page"] == "workflow-list"
     assert boot_payload["initialData"]["dashboardConfig"]["initialPath"] == "/workflows"
+
+def test_default_app_url_redirects_to_dashboard() -> None:
+    response = TestClient(main_app).get("/", follow_redirects=False)
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/workflows"
+
+def test_openapi_route_serves_swagger_ui() -> None:
+    client = TestClient(main_app)
+
+    response = client.get("/openapi")
+
+    assert response.status_code == 200
+    assert "swagger-ui" in response.text
+    assert "/openapi.json" in response.text
 
 def test_static_sub_routes_render_react_shell(client: TestClient) -> None:
     for path in (
