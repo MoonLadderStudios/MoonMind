@@ -1,0 +1,18 @@
+{
+  "source": {
+    "title": "MM-940: docs/ManagedAgents/ManagedRuntimeCleanup.md",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "imperative-input",
+    "originalText": "MM-940: docs/ManagedAgents/ManagedRuntimeCleanup.md\n\nImplement docs/ManagedAgents/ManagedRuntimeCleanup.md"
+  },
+  "extractedAt": "2026-06-27T00:08:52Z",
+  "error": {
+    "code": "moonspec-breakdown.imperative-input",
+    "message": "ERROR \"Imperative input: provide the underlying declarative design or explicitly confirm imperative input\"",
+    "classificationRationale": "No source declarative document path was provided, so the trusted Jira preset brief was selected. The selected brief is primarily an imperative instruction to implement docs/ManagedAgents/ManagedRuntimeCleanup.md rather than a declarative design describing desired state."
+  },
+  "coverageGate": "NOT_RUN - source input failed declarative classification.",
+  "stories": [],
+  "coverageMatrix": {}
+}
