@@ -97,3 +97,14 @@ def test_iter_all_and_delete_are_explicit_retained_state_apis(tmp_path) -> None:
 
     assert store.load("sess-2") is None
     assert {record.session_id for record in store.iter_all()} == {"sess-1"}
+
+
+def test_iter_all_raises_for_corrupt_records(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+    (tmp_path / "corrupt.json").write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        tuple(store.iter_all())
+
+    assert {record.session_id for record in store.list_active()} == {"sess-1"}

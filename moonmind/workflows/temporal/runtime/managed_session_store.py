@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -90,14 +91,6 @@ class ManagedSessionStore:
             return updated
 
     def list_active(self) -> list[CodexManagedSessionRecord]:
-        return [
-            record
-            for record in self.iter_all()
-            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES
-        ]
-
-    def iter_all(self) -> list[CodexManagedSessionRecord]:
-        """Return all readable session records, including terminal records."""
         self.store_root.mkdir(parents=True, exist_ok=True)
         records: list[CodexManagedSessionRecord] = []
         for path in self.store_root.glob("*.json"):
@@ -106,8 +99,20 @@ class ManagedSessionStore:
                 record = CodexManagedSessionRecord(**data)
             except (json.JSONDecodeError, ValueError):
                 continue
-            records.append(record)
+            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES:
+                records.append(record)
         return records
+
+    def iter_all(self) -> Iterable[CodexManagedSessionRecord]:
+        """Return all session records, including terminal records.
+
+        Unlike active reconciliation, retained-state cleanup must fail closed
+        when any durable owner record is unreadable.
+        """
+        self.store_root.mkdir(parents=True, exist_ok=True)
+        for path in self.store_root.glob("*.json"):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            yield CodexManagedSessionRecord(**data)
 
     def delete(self, session_id: str) -> None:
         """Delete one session record by explicit session id."""
