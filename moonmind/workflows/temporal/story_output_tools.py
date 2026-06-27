@@ -823,6 +823,59 @@ def _breakdown_source_path(value: Any) -> str:
             return path
     return ""
 
+
+def _normalize_source_document_class(value: Any) -> str:
+    return _string(value).strip().lower().replace("_", "-")
+
+
+def _breakdown_source_document_class(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    source = value.get("source")
+    if isinstance(source, Mapping):
+        source_class = _normalize_source_document_class(
+            source.get("sourceDocumentClass")
+            or source.get("source_document_class")
+            or source.get("documentClass")
+            or source.get("document_class")
+        )
+        if source_class:
+            return source_class
+    return _normalize_source_document_class(
+        value.get("sourceDocumentClass")
+        or value.get("source_document_class")
+        or value.get("documentClass")
+        or value.get("document_class")
+    )
+
+
+def _is_canonical_source_path(path: str) -> bool:
+    normalized = _string(path).replace("\\", "/").lstrip("./")
+    if not normalized:
+        return False
+    if (
+        normalized == ".specify/memory/constitution.md"
+        or normalized.endswith("/.specify/memory/constitution.md")
+    ):
+        return True
+    if normalized.startswith("docs/tmp/") or "/docs/tmp/" in normalized:
+        return False
+    return normalized.startswith("docs/") or "/docs/" in normalized
+
+
+def _source_reference_requires_claim_ids(
+    *,
+    source_document_class: str,
+    source_path: str,
+) -> bool:
+    source_class = _normalize_source_document_class(source_document_class)
+    if source_class == "canonical-declarative":
+        return True
+    if source_class in {"declarative-text", "imperative-input"}:
+        return False
+    return _is_canonical_source_path(source_path)
+
+
 def _story_source_reference(
     story: Mapping[str, Any],
     *,
@@ -863,11 +916,20 @@ def _missing_source_claim_story_ids(
     stories: Sequence[Mapping[str, Any]],
     *,
     fallback_path: str,
+    source_document_class: str = "",
 ) -> list[str]:
     missing: list[str] = []
     for index, story in enumerate(stories, start=1):
         reference = _story_source_reference(story, fallback_path=fallback_path)
-        if _string(reference.get("path")) and not _story_source_claim_ids(reference):
+        source_path = _string(reference.get("path"))
+        if (
+            source_path
+            and _source_reference_requires_claim_ids(
+                source_document_class=source_document_class,
+                source_path=source_path,
+            )
+            and not _story_source_claim_ids(reference)
+        ):
             missing.append(_story_id(story, index=index))
     return missing
 
@@ -2026,6 +2088,9 @@ async def create_jira_issues_from_stories(
         or previous_story_output.get("storyBreakdownJson")
     )
     breakdown_source_path = _breakdown_source_path(raw_story_payload)
+    breakdown_source_document_class = _breakdown_source_document_class(
+        raw_story_payload
+    )
     stories = _coerce_story_payload(raw_story_payload)
     artifact_ref_was_read = False
     artifact_payload_had_explicit_empty_stories = False
@@ -2063,6 +2128,9 @@ async def create_jira_issues_from_stories(
                     except json.JSONDecodeError:
                         parsed_payload = artifact_payload
                 breakdown_source_path = _breakdown_source_path(parsed_payload)
+                breakdown_source_document_class = _breakdown_source_document_class(
+                    parsed_payload
+                )
                 artifact_payload_failure_reason = _story_breakdown_failure_reason(
                     parsed_payload
                 )
@@ -2157,6 +2225,9 @@ async def create_jira_issues_from_stories(
                     except json.JSONDecodeError:
                         fetched_payload = fetched
                 breakdown_source_path = _breakdown_source_path(fetched_payload)
+                breakdown_source_document_class = _breakdown_source_document_class(
+                    fetched_payload
+                )
                 stories = _coerce_story_payload(fetched)
             except Exception as exc:
                 reason = _repo_handoff_read_failure_reason(
@@ -2241,6 +2312,7 @@ async def create_jira_issues_from_stories(
         _missing_source_claim_story_ids(
             stories,
             fallback_path=breakdown_source_path,
+            source_document_class=breakdown_source_document_class,
         )
         if requires_source_reference
         else []
@@ -2248,7 +2320,7 @@ async def create_jira_issues_from_stories(
     if missing_claim_ids:
         reason = (
             "Jira story creation requires sourceReference.claimIds for every "
-            "file-backed story with sourceReference.path or breakdown "
+            "canonical declarative story with sourceReference.path or breakdown "
             "source.referencePath. Missing: "
             + ", ".join(missing_claim_ids)
         )

@@ -781,11 +781,8 @@ async def test_create_jira_issues_fails_for_failed_empty_story_artifact():
     service = _FakeJiraService()
     breakdown = {
         "error": {
-            "code": "moonspec-breakdown.imperative-input",
-            "message": (
-                "Imperative input: provide the underlying declarative design or "
-                "explicitly confirm imperative input"
-            ),
+            "code": "moonspec-breakdown.no-technical-design",
+            "message": "No technical design provided",
         },
         "stories": [],
     }
@@ -796,7 +793,7 @@ async def test_create_jira_issues_fails_for_failed_empty_story_artifact():
 
     with pytest.raises(
         ValueError,
-        match="moonspec-breakdown\\.imperative-input",
+        match="moonspec-breakdown\\.no-technical-design",
     ):
         await create_jira_issues_from_stories(
             {
@@ -1168,6 +1165,46 @@ async def test_create_jira_issues_blocks_file_backed_story_without_claim_ids():
     assert result.outputs["storyOutput"]["status"] == "fallback"
     assert "requires sourceReference.claimIds" in result.outputs["storyOutput"]["reason"]
     assert "STORY-001" in result.outputs["storyOutput"]["reason"]
+
+@pytest.mark.asyncio
+async def test_create_jira_issues_accepts_imperative_file_backed_story_without_claim_ids():
+    service = _FakeJiraService()
+
+    result = await create_jira_issues_from_stories(
+        {
+            "storyOutput": {
+                "mode": "jira",
+                "jira": {
+                    "projectKey": "MM",
+                    "issueTypeId": "10001",
+                    "dependencyMode": "none",
+                },
+            },
+            "storyBreakdown": {
+                "source": {
+                    "referencePath": "docs/tmp/Roadmap.md",
+                    "sourceDocumentClass": "imperative-input",
+                },
+                "stories": [
+                    {
+                        "id": "STORY-001",
+                        "summary": "Imperative fallback story",
+                        "sourceReference": {
+                            "path": "docs/tmp/Roadmap.md",
+                            "claimIds": [],
+                            "coverageIds": ["DESIGN-REQ-001"],
+                        },
+                    },
+                ],
+            },
+        },
+        jira_service_factory=lambda: service,
+    )
+
+    assert result.outputs["storyOutput"]["status"] == "jira_created"
+    assert len(service.requests) == 1
+    assert "Coverage IDs:" in service.requests[0].description
+    assert "Canonical Claim IDs:" not in service.requests[0].description
 
 @pytest.mark.asyncio
 async def test_create_jira_issues_accepts_optional_file_backed_story_without_claim_ids():

@@ -19,7 +19,7 @@ Good inputs include:
 - A pasted technical design.
 - A declarative design document.
 - A file path to a design artifact.
-- A trusted Jira issue brief or description when no declarative document path is provided.
+- A trusted Jira issue brief or description when no source document path is provided.
 - A request to run or reproduce `/speckit.breakdown`.
 
 Do not use this skill for a single natural-language feature request. Use `moonspec-specify` for one clearly scoped story.
@@ -27,8 +27,8 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
 ## Inputs
 
 - Select breakdown input content using this preference chain:
-  1. Declarative document path: if an explicit source or declarative document path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
-  2. Jira issue description: if no declarative document path is provided and trusted Jira issue context is available from MoonMind previous outputs, use `jiraPresetBrief` or the Jira issue description/acceptance criteria from that trusted context.
+  1. Source document path: if an explicit source document path is provided, resolve it relative to the repo root unless it is absolute, then read it before extracting stories.
+  2. Jira issue description: if no source document path is provided and trusted Jira issue context is available from MoonMind previous outputs, use `jiraPresetBrief` or the Jira issue description/acceptance criteria from that trusted context.
   3. Workflow instructions: if neither of the above is available, use the workflow instructions or user request text as the source design.
 - If no selected input content is available after applying the preference chain, stop with: `ERROR "No technical design provided"`.
 - Preserve the original design text verbatim in the breakdown output so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
@@ -42,11 +42,18 @@ Classify the source design before extracting coverage points, using the document
 
 - `canonical-declarative`: a readable repo path under `docs/` (or `.specify/memory/constitution.md`) describing desired state.
 - `declarative-text`: pasted declarative design text, trusted Jira issue description, workflow instructions, or a file-backed declarative design outside `docs/`.
-- `imperative-override`: a document whose primary framing is steps, phases, checkboxes, status, or migration sequencing, accepted only with an explicit user override.
+- `imperative-input`: a selected source whose primary framing is steps, phases, checkboxes, status, or migration sequencing.
 
 A document is declarative when it describes what the system is or should be; it is imperative when its primary framing is steps, phases, checkboxes, or status. Mixed documents are classified by their primary framing.
 
-If the input is primarily imperative and the user has not explicitly confirmed imperative input, stop with: `ERROR "Imperative input: provide the underlying declarative design or explicitly confirm imperative input"`. Decomposing a checklist produces stories that mistake process steps for requirements; the underlying declarative document must be written or identified first.
+Prefer declarative sources when the input preference chain provides one. If no
+declarative design is selected, use the imperative input instead of requiring
+explicit confirmation. For `imperative-input`, infer the underlying desired
+system behavior, constraints, and operator outcomes from the steps. Do not
+create one story per checklist item unless that item is independently valuable
+and testable as a user or operational outcome. Preserve any story-critical
+uncertainty as assumptions or `needsClarification` rather than stopping solely
+because the source is imperative.
 
 Record the resulting class as `sourceDocumentClass` in the breakdown output.
 
@@ -100,8 +107,8 @@ Summarize the design in a few sentences, focusing on:
 
 ### 2. Extract Canonical Claims And Coverage Points
 
-For file-backed declarative documents, identify the selected stable canonical
-claims before creating run-local coverage points:
+For canonical file-backed declarative documents, identify the selected stable
+canonical claims before creating run-local coverage points:
 
 - If the source document already contains stable claim identifiers, preserve
   those exact identifiers.
@@ -112,9 +119,10 @@ claims before creating run-local coverage points:
 - Record each selected claim with `id`, `path`, `sections`, and a concise claim
   summary. The `path` must be the canonical repo-relative document path when
   the source came from a repo file.
-- For trusted Jira descriptions or pasted workflow instructions that do not
-  have a canonical file path, do not fabricate canonical claim IDs. Use only
-  run-local coverage IDs and preserve the selected source title/key.
+- For non-canonical file-backed sources, trusted Jira descriptions, pasted
+  workflow instructions, or `imperative-input`, do not fabricate canonical claim
+  IDs. Use only run-local coverage IDs and preserve the selected source
+  title/key and source path when one exists.
 
 Convert the design into normalized major design points with stable IDs: `DESIGN-REQ-001`, `DESIGN-REQ-002`, and so on.
 
@@ -157,7 +165,7 @@ For each story, define:
 - Title.
 - 2-4 word short name for directory naming.
 - Why the story exists.
-- Source document reference: the original declarative document path plus the relevant source section or heading when available.
+- Source document reference: the original source document path plus the relevant source section or heading when available.
 - Scope and out of scope.
 - Independent test.
 - Acceptance criteria.
@@ -205,7 +213,7 @@ Never name any breakdown output `spec.md`. Never write to `specs/` during breakd
 
 The JSON file must be an object with:
 
-- `source`: object containing `title`, `path`, `referencePath`, `sourceDocumentClass`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For trusted Jira issue descriptions or pasted workflow instructions without a file path, set paths to `null` and use a clear title such as the Jira issue key/summary or `inline workflow instructions`. `sourceDocumentClass` must be `canonical-declarative`, `declarative-text`, or `imperative-override` per the Input Classification section.
+- `source`: object containing `title`, `path`, `referencePath`, `sourceDocumentClass`, and the original design text. For file-backed designs, `path` and `referencePath` must both contain the original design document path. For trusted Jira issue descriptions or pasted workflow instructions without a file path, set paths to `null` and use a clear title such as the Jira issue key/summary or `inline workflow instructions`. `sourceDocumentClass` must be `canonical-declarative`, `declarative-text`, or `imperative-input` per the Input Classification section.
 - `extractedAt`: ISO-8601 timestamp.
 - `coverageGate`: exactly `PASS - every major design point is owned by at least one story.`
 - `stories`: ordered list of story objects.
@@ -217,7 +225,7 @@ Each story object must include:
 - `id`: stable story ID, such as `STORY-001`.
 - `summary`: concise title suitable for a Jira issue summary.
 - `description`: user-story or task narrative.
-- `sourceReference`: object containing `path`, `title`, `sections`, `claimIds`, and `coverageIds`. For file-backed designs, `path` must be the same original design document path from `source.referencePath`, and `claimIds` must contain the selected stable canonical claim IDs owned by the story; do not omit either value from any story. For trusted Jira issue descriptions or workflow instructions, set `path` to `null`, set `claimIds` to an empty list, and preserve the selected source title.
+- `sourceReference`: object containing `path`, `title`, `sections`, `claimIds`, and `coverageIds`. For canonical file-backed declarative designs, `path` must be the same original design document path from `source.referencePath`, and `claimIds` must contain the selected stable canonical claim IDs owned by the story; do not omit either value from any story. For non-canonical file-backed sources and `imperative-input`, preserve the source path when one exists, set `claimIds` to an empty list, and rely on `coverageIds` for run-local traceability. For trusted Jira issue descriptions or workflow instructions without a file path, set `path` to `null`, set `claimIds` to an empty list, and preserve the selected source title.
 - `independentTest`: how this story can be validated independently.
 - `acceptanceCriteria`: concrete acceptance criteria.
 - `requirements`: functional requirements owned by the story.
@@ -289,14 +297,17 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 - One breakdown story candidate equals one future `spec.md`.
 - The canonical source document remains the source of truth for desired state; breakdown output is a temporary derived view and is never cited as authority over its source.
-- Classify the input per `docs/Workflows/MoonSpecDocumentModel.md` and fail fast on imperative inputs without an explicit override.
+- Classify the input per `docs/Workflows/MoonSpecDocumentModel.md`; prefer declarative sources, but use `imperative-input` when no declarative design is selected instead of requiring explicit confirmation.
 - Preserve the original technical or declarative design verbatim in the breakdown output for later specify.
-- Every story candidate must carry a `sourceReference.path` and non-empty
-  `sourceReference.claimIds` back to stable canonical claims in the original
-  declarative document when the source came from a file; otherwise it must carry
-  the selected source title/key with `path: null` and empty `claimIds`.
+- Every story candidate from a canonical declarative file must carry a
+  `sourceReference.path` and non-empty `sourceReference.claimIds` back to stable
+  canonical claims in the original declarative document. Non-canonical
+  file-backed and imperative inputs preserve the selected source path when one
+  exists and use run-local `coverageIds` with empty `claimIds`. Source text
+  without a file path must carry the selected source title/key with `path: null`
+  and empty `claimIds`.
 - Prefer vertical user or operational outcomes over technical-layer slices.
-- Extract stable canonical claim IDs for file-backed documents and run-local
+- Extract stable canonical claim IDs for canonical file-backed documents and run-local
   `DESIGN-REQ-*` coverage points before drafting story candidates.
 - Do not write specs in this skill.
 - Every major design point, constraint, and non-goal must be explicitly owned by at least one story candidate.

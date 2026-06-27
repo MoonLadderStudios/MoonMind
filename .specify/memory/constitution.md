@@ -1,8 +1,19 @@
+<!--
+Sync Impact Report
+- Version change: 2.1.0 -> 2.2.0
+- Modified principles: Resilient by Default (expanded intelligent fallback/workaround guidance)
+- Added sections: none
+- Removed sections: none
+- Templates requiring updates: .specify/templates/plan-template.md reviewed/no change; .specify/templates/spec-template.md reviewed/no change; .specify/templates/tasks-template.md reviewed/no change
+- Runtime guidance requiring updates: moonspec-breakdown skill/presets and MoonSpec document/tool contracts updated in this change
+- Follow-up TODOs: none
+-->
+
 # MoonMind Constitution
 
-**Version:** 2.1.0 · **Last amended:** 2026-06-25
+**Version:** 2.2.0 · **Last amended:** 2026-06-27
 
-> Principles are cited **by name**, not by number — ordering and numbering may change across amendments. See **Governance** at the end of this document for the versioning policy, amendment procedure, and amendment log. This revision adds explicit simplicity-as-safety, name-only internal capability identity for skill-name, preset-slug, and tool-name references, and narrowed short-lived internal workflow cutover guidance while preserving durable-execution safety.
+> Principles are cited **by name**, not by number — ordering and numbering may change across amendments. See **Governance** at the end of this document for the versioning policy, amendment procedure, and amendment log. This revision adds intelligent fallback and workaround guidance to **Resilient by Default** while preserving policy, security, billing, and traceability guardrails.
 
 ## Core Principles
 
@@ -224,6 +235,9 @@ MoonMind MUST enable fire-and-forget execution — operators should be able to s
 
 Non-negotiable rules:
 
+- Resilience is a core product pillar alongside safety and observability. Workflows MUST attempt an evidence-backed fallback, degraded mode, retry, reroute, or workaround before failing when the system can preserve operator intent, policy boundaries, source traceability, and cost controls.
+- Missing ideal inputs MUST NOT cause brittle failure when the workflow can intelligently infer a safe substitute from trusted context or the user's provided instructions. The chosen fallback MUST be explicit in durable artifacts, status, or summaries so operators can audit what was inferred and why.
+- Fallbacks MUST NOT silently substitute credentials, provider profiles, billing-relevant runtime values, source authority, or less-constrained execution paths. When those boundaries are missing, ambiguous, or unsafe, fail with an actionable error per **Safety and Governance by Construction**.
 - All externally visible side effects (starting runs, publishing results, posting to GitHub/Jira) MUST be retry-safe so that a crash mid-operation never produces duplicates. At the workflow boundary this is realized through the activity-idempotency rule in **Temporal-Native Durable Orchestration**.
 - Long-running workflows MUST persist enough state to resume, retry, or fail deterministically after worker restarts.
 - MoonMind MUST detect stuck agents (loops, repeated failures) and apply escalating interventions (soft reset, hard reset, termination) before burning through the operator's API budget.
@@ -243,7 +257,7 @@ Evidence-based recovery and remediation:
 - Checkpoint resume SHOULD be the default recovery path when evidence supports it. *(Operator-driven recovery is current; resume-as-default is target state, tracked in Roadmap Milestone 13.)*
 - Autonomous remediation MUST NOT outrun the safety and observability substrate it depends on (see **Safety and Governance by Construction**).
 
-Rationale: Resiliency is what makes unattended execution possible. The system must withstand infrastructure failures, agent failures, and runaway costs — and when a run does fail, recovery must be driven by durable evidence, not by whatever happened to survive in a container.
+Rationale: Resiliency is what makes unattended execution possible. The system must withstand infrastructure failures, agent failures, missing-but-inferable inputs, and runaway costs — and when a run does fail, recovery must be driven by durable evidence, not by whatever happened to survive in a container. Agentic intelligence creates product value when it can safely reason around recoverable gaps instead of demanding brittle magic words from the operator.
 
 ### XIII. Facilitate Continuous Improvement
 
@@ -319,7 +333,7 @@ Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds
 - **Validation is required**:
   - Each feature MUST define at least one independent validation path (automated tests or a deterministic quickstart/manual validation).
 - **Clarity over cleverness**:
-  - Prefer explicit contracts, explicit adapters, and explicit errors over implicit fallback behavior.
+  - Prefer explicit contracts, explicit adapters, explicit fallback behavior, and explicit errors over implicit or unauditable recovery paths.
 - **Simplicity gate**:
   - Plans and implementations MUST reject unnecessary aliases, duplicate identity systems, speculative abstractions, and generated context bulk that obscures the canonical path. Added complexity MUST be justified by a concrete safety, durability, or operator-value need.
 - **Exceptions must be visible**:
@@ -335,6 +349,7 @@ Rationale: In a pre-release project, the cost of legacy confusion vastly exceeds
   - **PATCH** — clarifications, wording, or non-semantic fixes.
 - **Amendment procedure.** Amendments MUST update the version and `Last amended` date, summarize the change in the amendment log below, and propagate any renamed principles to dependent references (e.g., agent instruction files, `docs/` cross-references) in the same change, per **Pre-Release Velocity: Delete, Don't Deprecate**.
 - **Amendment log.**
+  - **2.2.0 (2026-06-27)** — Expanded **Resilient by Default** to state that resilience is a core MoonMind pillar and that workflows must use evidence-backed fallbacks, degraded modes, retries, reroutes, or workarounds when operator intent and safety boundaries remain clear. Clarified that intelligent fallback must be explicit and auditable, while credentials, provider profiles, billing-relevant values, source authority, and execution constraints still fail fast when unsafe or ambiguous.
   - **2.1.0 (2026-06-25)** — Added explicit simplicity-as-safety language to **Safety and Governance by Construction**, name-only internal capability identity for skill-name, preset-slug, and tool-name references under **Skills Are First-Class and Easy to Add**, and narrowed **Temporal-Native Durable Orchestration** / **Pre-Release Velocity: Delete, Don't Deprecate** guidance so short-lived internal pre-release workflows may use explicit cutover without compatibility shims while durable histories and persisted payloads remain protected. Added a simplicity gate to quality gates. Traceability: MM-911, source issue MM-901.
   - **2.0.0 (2026-06-16)** — Added **Safety and Governance by Construction**, **Temporal-Native Durable Orchestration**, and **Artifacts Are the Durable Evidence Layer**. Updated **Orchestrate, Don't Recreate** (three execution classes; session-capability claim discipline), **Resilient by Default** (evidence-based/typed remediation; autonomous-repair gate), **Docs-First Development and Traceability** (release-metadata hygiene; constitution as a versioned doc surface), and **Pre-Release Velocity: Delete, Don't Deprecate** (durable-execution carve-out). Reordered so the execution-model principles follow **Orchestrate, Don't Recreate**, with Safety leading. Relocated the former *Non-Negotiable Product & Operational Constraints* (security/secret hygiene, observability/Mission Control, compatibility/migration) into their owning principles so each rule lives once. Established versioning and the cite-by-name convention.
   - **1.x (unversioned)** — Original thirteen-principle constitution prior to the introduction of version metadata.

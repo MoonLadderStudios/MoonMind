@@ -2137,13 +2137,16 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "Inline workflow source." in expanded_with_null_optional_sources[
                 "steps"
             ][0]["instructions"]
-            assert "inline workflow-instruction override" in (
+            assert "sourceDocumentClass as imperative-input" in (
                 expanded_with_null_optional_sources["steps"][0]["instructions"]
             )
-            assert "imperative-override" in (
+            assert "underlying actionable desired system behavior" in (
                 expanded_with_null_optional_sources["steps"][0]["instructions"]
             )
             assert "fail fast with the moonspec-breakdown imperative-input error" not in (
+                expanded_with_null_optional_sources["steps"][0]["instructions"]
+            )
+            assert "imperative-override" not in (
                 expanded_with_null_optional_sources["steps"][0]["instructions"]
             )
 
@@ -2167,10 +2170,10 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
             assert "docs/Designs/RuntimeTypes.md" in expanded_with_path_and_issue[
                 "steps"
             ][0]["instructions"]
-            assert "inline workflow-instruction override" not in (
+            assert "sourceDocumentClass as imperative-input" in (
                 expanded_with_path_and_issue["steps"][0]["instructions"]
             )
-            assert "fail fast with the moonspec-breakdown imperative-input error" in (
+            assert "fail fast with the moonspec-breakdown imperative-input error" not in (
                 expanded_with_path_and_issue["steps"][0]["instructions"]
             )
 
@@ -2190,7 +2193,7 @@ async def test_seed_catalog_includes_jira_breakdown_preset(
         {
             "path": "preset.inputs",
             "message": (
-                "Provide a Declarative Document Path, Source Jira Issue Key, "
+                "Provide a Source Document Path, Source Jira Issue Key, "
                 "or Workflow Instructions."
             ),
             "code": "required",
@@ -2261,11 +2264,11 @@ async def test_jira_breakdown_presets_allow_inline_instruction_roadmaps(
             )
 
     breakdown_instructions = expanded["steps"][0]["instructions"]
-    assert "inline workflow-instruction override" in breakdown_instructions
-    assert "decompose the actionable desired system behavior" in (
+    assert "sourceDocumentClass as imperative-input" in breakdown_instructions
+    assert "decompose the underlying actionable desired system behavior" in (
         breakdown_instructions
     )
-    assert "imperative-override" in breakdown_instructions
+    assert "imperative-override" not in breakdown_instructions
     assert "fail fast with the moonspec-breakdown imperative-input error" not in (
         breakdown_instructions
     )

@@ -23,11 +23,13 @@ This document defines the document classes MoonSpec workflows operate on, the pr
 - **Content**: checklists, status trackers, migration and rollout plans, cleanup sequences — anything whose primary framing is steps, phases, checkboxes, or status.
 - **Lifecycle**: time-bound. Delete or archive them when the work completes (Constitution XII).
 
-## Classification Rule
+## Classification And Fallback Rule
 
 A document is **declarative** when it describes what the system is or should be. A document is **imperative** when its primary framing is steps, phases, checkboxes, or status. Mixed documents are classified by their primary framing.
 
-MoonSpec breakdown and specification workflows require declarative input. An imperative document is not a valid substitute for a declarative design: decomposing a checklist produces stories that mistake process steps for requirements. When only an imperative document exists, the underlying declarative document must be written or identified first.
+MoonSpec breakdown workflows prefer declarative input and must select a declarative source when one is provided or can be resolved. When no declarative design is available, breakdown workflows may use imperative input as a resilience fallback: extract the underlying desired system behavior, constraints, and operator outcomes from the steps instead of requiring explicit user confirmation. The output must record that source as imperative input and must not treat checklist steps, phases, or status rows as story boundaries unless they are independently valuable and testable user or operational outcomes.
+
+MoonSpec specification workflows still produce declarative, single-story specs. If a spec starts from imperative input, it must translate that input into desired-state requirements and preserve assumptions or unresolved choices explicitly.
 
 ## Precedence Rule
 
@@ -51,13 +53,13 @@ Stylistic preferences, speculative improvements, and unverified observations nev
 
 ## Documentation Architecture Standard
 
-The [Documentation Architecture Standard](../DocumentationArchitecture.md) defines the documentation viewpoints (architecture, design, and contract viewpoints) that organize canonical declarative documents. Its viewpoint rules **refine** canonical declarative documents; they do **not** replace this model's lifecycle, classification, precedence, or reconciliation rules. The document classes, classification rule, precedence rule, and reconciliation expectation defined above remain authoritative, and the standard is read as a refinement layered on top of them rather than a substitute. See the standard for the rules themselves; they are not restated here.
+The [Documentation Architecture Standard](../DocumentationArchitecture.md) defines the documentation viewpoints (architecture, design, and contract viewpoints) that organize canonical declarative documents. Its viewpoint rules **refine** canonical declarative documents; they do **not** replace this model's lifecycle, classification, fallback, precedence, or reconciliation rules. The document classes, classification and fallback rule, precedence rule, and reconciliation expectation defined above remain authoritative, and the standard is read as a refinement layered on top of them rather than a substitute. See the standard for the rules themselves; they are not restated here.
 
 ### Read order
 
 Read MoonSpec documentation in this order:
 
-1. **MoonSpec Document Model** (this document) — document classes, classification, precedence, and reconciliation.
+1. **MoonSpec Document Model** (this document) — document classes, classification and fallback, precedence, and reconciliation.
 2. **[Documentation Architecture Standard](../DocumentationArchitecture.md)** — viewpoint rules that refine the canonical declarative documents.
 3. **Project-local architecture / design / contract docs** — the canonical declarative documents for the project at hand.
 4. **Optional project-local implementation scratch** — temporary execution artifacts and imperative working documents, when present.

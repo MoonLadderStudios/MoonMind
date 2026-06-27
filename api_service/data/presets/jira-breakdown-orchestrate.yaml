@@ -21,7 +21,7 @@ inputs:
     required: false
     default: ""
   - name: source_design_path
-    label: Declarative Document Path
+    label: Source Document Path
     type: repo_path
     required: false
     default: ""
@@ -68,7 +68,7 @@ steps:
     instructions: |-
       Fetch source Jira issue {{ inputs.source_issue_key }} through the deterministic trusted Jira tool surface.
 
-      Build a compact source brief from the issue key, summary, description, and acceptance criteria. The following breakdown step may use this trusted Jira issue description only when no declarative document path is provided.
+      Build a compact source brief from the issue key, summary, description, and acceptance criteria. The following breakdown step may use this trusted Jira issue description only when no source document path is provided.
     tool:
       id: jira.load_preset_brief
       requiredCapabilities:
@@ -80,14 +80,14 @@ steps:
     instructions: |-
       Run moonspec-breakdown using this input preference chain:
 
-      1. If Source declarative document path is non-empty, read that repo path and use it as the source design.
+      1. If Source document path is non-empty, read that repo path and use it as the source design.
       2. Otherwise, if trusted Jira previous output from the prior step includes sourceResolution.status = "resolved" and resolvedSourceDesignPath is non-empty, read resolvedSourceDesignPath as the source design.
       3. Otherwise, if trusted Jira previous output from the prior step is available, use its jiraPresetBrief as the source design.
       4. Otherwise, use Workflow instructions as the source design.
 
       If trusted Jira sourceResolution.status is "ambiguous", "invalid_candidates", or "invalid_explicit_path", fail fast with an actionable source-resolution error instead of decomposing the Jira brief as inline text.
 
-      Source declarative document path:
+      Source document path:
       {{ inputs.source_design_path }}
 
       Source Jira issue key:
@@ -96,16 +96,13 @@ steps:
       Workflow instructions:
       {{ inputs.feature_request }}
 
-      If the input is a readable repo path, use that file as the original declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
-      If the selected input is trusted Jira resolvedSourceDesignPath, treat it as a readable repo path selected through deterministic source resolution and preserve that path the same way.
+      If the selected input is a readable repo path under docs/ (except docs/tmp/) or .specify/memory/constitution.md, use that file as the canonical declarative document and preserve its path plus stable canonical claim IDs in every story's sourceReference.path and sourceReference.claimIds.
+      If the selected input is trusted Jira resolvedSourceDesignPath, treat it as a readable repo path selected through deterministic source resolution and preserve canonical claim IDs only when the resolved path is a canonical declarative source.
+      If the selected input is a non-canonical file-backed source, preserve that source path in source.path, source.referencePath, and story sourceReference.path, record sourceReference.claimIds as an empty list, and use sourceReference.coverageIds for run-local traceability.
       If the selected input is the trusted Jira issue description, preserve the Jira issue key and summary as the source title, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       If the selected input is workflow instructions without a readable path, preserve those instructions as inline source text, set source.path and source.referencePath to null, set each story's sourceReference.path to null, and set sourceReference.claimIds to an empty list.
       The canonical declarative document is the primary source of truth; the breakdown output is a temporary derived view (see docs/Workflows/MoonSpecDocumentModel.md).
-      {% if (inputs.source_design_path or '') | trim == '' and (inputs.source_issue_key or '') | trim == '' %}
-      When the selected input falls through to literal Workflow Instructions text instead of a readable repo path, treat this as an explicit inline workflow-instruction override for the moonspec-breakdown input classification gate: if the instructions are primarily framed as steps, phases, recommendations, checklist items, or a roadmap, decompose the actionable desired system behavior into Jira-ready MoonSpec stories instead of failing fast solely because the inline text is imperative. Record sourceDocumentClass as imperative-override for that case; otherwise record declarative-text.
-      {% else %}
-      Classify the input before extracting stories. If it is primarily an imperative checklist, status tracker, or migration plan and no explicit imperative override was given, fail fast with the moonspec-breakdown imperative-input error instead of decomposing it.
-      {% endif %}
+      Classify the selected input before extracting stories. Prefer declarative sources when one is selected or resolved. If the selected input is primarily framed as steps, phases, recommendations, checklist items, status, or a roadmap, record sourceDocumentClass as imperative-input and decompose the underlying actionable desired system behavior into Jira-ready MoonSpec stories instead of failing solely because the source is imperative. Otherwise record sourceDocumentClass as canonical-declarative or declarative-text as appropriate.
       Record sourceDocumentClass in the breakdown output.
       Write the coverage-checked story breakdown to the runtime-provided story breakdown paths.
     skill:
