@@ -6,7 +6,6 @@ Implements MM-949 from source issue MM-940.
 from __future__ import annotations
 
 import os
-import shutil
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -216,6 +215,7 @@ class DockerReferenceState:
 
 
 DockerReferenceProvider = Callable[[], DockerReferenceState | Mapping[str, object]]
+CleanupProgressCallback = Callable[[Mapping[str, object]], None]
 
 
 class ManagedRuntimeWorkspaceJanitor:
@@ -228,12 +228,14 @@ class ManagedRuntimeWorkspaceJanitor:
         session_store: ManagedSessionStore,
         config: ManagedRuntimeCleanupConfig | None = None,
         docker_reference_provider: DockerReferenceProvider | None = None,
+        progress_callback: CleanupProgressCallback | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._run_store = run_store
         self._session_store = session_store
         self._config = config or ManagedRuntimeCleanupConfig.from_env()
         self._docker_reference_provider = docker_reference_provider
+        self._progress_callback = progress_callback
         self._now = now or (lambda: datetime.now(tz=UTC))
 
     def run(self) -> ManagedRuntimeCleanupResult:
@@ -281,16 +283,18 @@ class ManagedRuntimeWorkspaceJanitor:
             errors.append(docker_state.reason or "docker_reference_scan_failed")
         candidates = self._build_candidates(run_records, session_records)
         budget = _CleanupBudget()
-        decisions = tuple(
-            self._classify_candidate(
-                candidate,
-                docker_state=docker_state,
-                budget=budget,
+        decisions: list[ManagedRuntimeCleanupDecision] = []
+        for index, candidate in enumerate(candidates):
+            self._emit_progress("classify", candidate, index=index, total=len(candidates))
+            decisions.append(
+                self._classify_candidate(
+                    candidate,
+                    docker_state=docker_state,
+                    budget=budget,
+                )
             )
-            for candidate in candidates
-        )
         return self._summarize(
-            decisions,
+            tuple(decisions),
             scanned_run_records=len(run_records),
             scanned_session_records=len(session_records),
             errors=tuple(errors),
@@ -478,6 +482,7 @@ class ManagedRuntimeWorkspaceJanitor:
             if relative.parts:
                 return workspaces_root / relative.parts[0]
         except (OSError, ValueError):
+            # Paths outside /workspaces fall through to the per-run root check.
             pass
         try:
             relative = path.absolute().relative_to(runtime_root.absolute())
@@ -489,6 +494,7 @@ class ManagedRuntimeWorkspaceJanitor:
             }:
                 return runtime_root / relative.parts[0]
         except (OSError, ValueError):
+            # Paths outside the runtime root have no cleanup ownership root.
             pass
         return None
 
@@ -568,7 +574,8 @@ class ManagedRuntimeWorkspaceJanitor:
                 return self._decision(
                     candidate, "protected_recent", "grace window has not elapsed", newest
                 )
-            estimated_bytes = _path_size(path)
+            self._emit_progress("size", candidate)
+            estimated_bytes = _path_size(path, progress_callback=self._progress_callback)
             if budget.deleted_paths >= self._config.max_delete_paths:
                 return self._decision(
                     candidate,
@@ -598,6 +605,7 @@ class ManagedRuntimeWorkspaceJanitor:
                     newest,
                     estimated_bytes,
                 )
+            self._emit_progress("delete", candidate)
             self._delete_candidate(candidate)
             budget.deleted_paths += 1
             budget.deleted_bytes += estimated_bytes
@@ -756,10 +764,15 @@ class ManagedRuntimeWorkspaceJanitor:
             )
         except (OSError, ValueError):
             return True
+        docker_state = self._docker_reference_state()
+        if docker_state.failed:
+            return True
         for fresh in current:
             if fresh.kind == candidate.kind and fresh.path == candidate.path:
-                return self._has_active_owner(fresh)
-        return False
+                return self._has_active_owner(fresh) or self._has_live_docker_reference(
+                    fresh, docker_state
+                )
+        return self._has_live_docker_reference(candidate, docker_state)
 
     def _delete_candidate(self, candidate: ManagedRuntimeCleanupCandidate) -> None:
         if candidate.kind == "run_record":
@@ -776,10 +789,28 @@ class ManagedRuntimeWorkspaceJanitor:
             f".gc-{uuid.uuid4().hex}-{candidate.path.name}"
         )
         candidate.path.rename(quarantine)
-        if quarantine.is_dir():
-            shutil.rmtree(quarantine)
-        else:
-            quarantine.unlink(missing_ok=True)
+        _delete_path(quarantine, progress_callback=self._progress_callback)
+
+    def _emit_progress(
+        self,
+        phase: str,
+        candidate: ManagedRuntimeCleanupCandidate,
+        *,
+        index: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        if self._progress_callback is None:
+            return
+        payload: dict[str, object] = {
+            "phase": phase,
+            "kind": candidate.kind,
+            "path": str(candidate.path),
+        }
+        if index is not None:
+            payload["index"] = index
+        if total is not None:
+            payload["total"] = total
+        self._progress_callback(payload)
 
     def _summarize(
         self,
@@ -866,6 +897,7 @@ class _JanitorLock:
         try:
             self._path.unlink()
         except FileNotFoundError:
+            # Another cleanup path already removed the lock; exit remains successful.
             pass
 
 
@@ -875,6 +907,7 @@ def cleanup_managed_runtime_files(
     session_store: ManagedSessionStore,
     config: ManagedRuntimeCleanupConfig | None = None,
     docker_reference_provider: DockerReferenceProvider | None = None,
+    progress_callback: CleanupProgressCallback | None = None,
 ) -> ManagedRuntimeCleanupResult:
     """Run one managed-runtime retained cleanup pass."""
     return ManagedRuntimeWorkspaceJanitor(
@@ -882,6 +915,7 @@ def cleanup_managed_runtime_files(
         session_store=session_store,
         config=config,
         docker_reference_provider=docker_reference_provider,
+        progress_callback=progress_callback,
     ).run()
 
 
@@ -947,12 +981,18 @@ def _artifact_job_id(ref: str) -> str | None:
     return cleaned.split("/", 1)[0]
 
 
-def _path_size(path: Path) -> int:
+def _path_size(
+    path: Path,
+    *,
+    progress_callback: CleanupProgressCallback | None = None,
+) -> int:
     try:
         if path.is_file():
             return path.stat().st_size
         total = 0
         for child in path.rglob("*"):
+            if progress_callback is not None:
+                progress_callback({"phase": "size_walk", "path": str(child)})
             try:
                 if child.is_file():
                     total += child.stat().st_size
@@ -961,3 +1001,34 @@ def _path_size(path: Path) -> int:
         return total
     except OSError:
         return 0
+
+
+def _delete_path(
+    path: Path,
+    *,
+    progress_callback: CleanupProgressCallback | None = None,
+) -> None:
+    if not path.exists():
+        return
+    if path.is_file():
+        if progress_callback is not None:
+            progress_callback({"phase": "delete_path", "path": str(path)})
+        path.unlink(missing_ok=True)
+        return
+    if not path.is_dir():
+        path.unlink(missing_ok=True)
+        return
+    children = sorted(path.rglob("*"), key=lambda child: len(child.parts), reverse=True)
+    for child in children:
+        if progress_callback is not None:
+            progress_callback({"phase": "delete_path", "path": str(child)})
+        try:
+            if child.is_dir() and not child.is_symlink():
+                child.rmdir()
+            else:
+                child.unlink(missing_ok=True)
+        except FileNotFoundError:
+            continue
+    if progress_callback is not None:
+        progress_callback({"phase": "delete_path", "path": str(path)})
+    path.rmdir()

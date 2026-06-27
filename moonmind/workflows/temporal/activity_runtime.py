@@ -8392,9 +8392,6 @@ class TemporalAgentRuntimeActivities:
             raise TemporalActivityRuntimeError(
                 "run_store is required for agent_runtime.cleanup_managed_runtime_files"
             )
-        runtime_root = Path(
-            os.environ.get("MOONMIND_AGENT_RUNTIME_STORE", "/work/agent_jobs")
-        )
         config = ManagedRuntimeCleanupConfig.from_env()
         if isinstance(payload, Mapping) and isinstance(payload.get("config"), Mapping):
             config_payload = payload["config"]
@@ -8466,6 +8463,12 @@ class TemporalAgentRuntimeActivities:
             config=config,
             docker_reference_provider=(
                 None if docker_state is None else lambda: docker_state
+            ),
+            progress_callback=lambda progress: temporal_activity.heartbeat(
+                {
+                    "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                    **dict(progress),
+                }
             ),
         )
         return result.to_dict()

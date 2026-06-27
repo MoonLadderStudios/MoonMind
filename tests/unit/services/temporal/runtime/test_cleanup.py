@@ -269,6 +269,64 @@ def test_mm_949_live_docker_reference_prevents_deletion(tmp_path: Path) -> None:
     assert workspace_decision.reason == "live Docker reference"
 
 
+def test_mm_949_final_rescan_rechecks_live_docker_reference(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+    docker_states = iter(
+        (
+            DockerReferenceState(),
+            DockerReferenceState(active_mount_paths=frozenset({str(run_root)})),
+        )
+    )
+
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=_config(root, dry_run=False),
+        docker_reference_provider=lambda: next(docker_states),
+        now=lambda: NOW,
+    )
+
+    result = janitor.run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "protected_active"
+    assert workspace_decision.reason == "failed rescan before delete"
+    assert run_root.exists()
+
+
+def test_mm_949_cleanup_emits_progress_during_filesystem_walk(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_root = root / "run-1"
+    _touch_old(run_root)
+    (run_root / "repo").mkdir()
+    (run_root / "repo" / "README.md").write_text("done\n", encoding="utf-8")
+    run_store, session_store = _stores(root)
+    run_store.save(_run("run-1", "completed", root=root))
+    progress: list[dict[str, object]] = []
+
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=_config(root, dry_run=True),
+        progress_callback=lambda payload: progress.append(dict(payload)),
+        now=lambda: NOW,
+    )
+
+    result = janitor.run()
+
+    workspace_decision = next(d for d in result.decisions if d.kind == "workspace")
+    assert workspace_decision.classification == "eligible"
+    assert {"classify", "size", "size_walk"}.issubset(
+        {str(payload["phase"]) for payload in progress}
+    )
+
+
 def test_mm_949_enabled_delete_uses_rescan_and_deletes_records_after_retention(
     tmp_path: Path,
 ) -> None:
