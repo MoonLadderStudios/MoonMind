@@ -95,10 +95,10 @@ class ManagedRunStore:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 record = ManagedRunRecord(**data)
-                if record.status not in TERMINAL_AGENT_RUN_STATES:
-                    records.append(record)
             except (json.JSONDecodeError, ValueError):
                 continue
+            if record.status not in TERMINAL_AGENT_RUN_STATES:
+                records.append(record)
         return records
 
     def iter_all(self) -> Iterable[ManagedRunRecord]:
@@ -113,7 +113,7 @@ class ManagedRunStore:
             yield ManagedRunRecord(**data)
 
     def delete(self, run_id: str) -> None:
-        """Delete a run record file if it exists."""
+        """Delete one run record by explicit run id."""
         path = self._resolve_path(run_id)
         try:
             path.unlink()

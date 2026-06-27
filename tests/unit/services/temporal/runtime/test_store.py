@@ -72,7 +72,7 @@ def test_list_active(tmp_path):
     active_ids = {r.run_id for r in active}
     assert active_ids == {"run-1", "run-3"}
 
-def test_iter_all_and_delete_include_terminal_records(tmp_path):
+def test_iter_all_and_delete_are_explicit_retained_state_apis(tmp_path):
     store = ManagedRunStore(tmp_path)
     store.save(_make_record("run-1", "running"))
     store.save(_make_record("run-2", "completed"))
@@ -80,6 +80,7 @@ def test_iter_all_and_delete_include_terminal_records(tmp_path):
     assert {record.run_id for record in store.iter_all()} == {"run-1", "run-2"}
 
     store.delete("run-2")
+
     assert store.load("run-2") is None
     assert {record.run_id for record in store.iter_all()} == {"run-1"}
 

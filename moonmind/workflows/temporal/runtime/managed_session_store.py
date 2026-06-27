@@ -115,7 +115,7 @@ class ManagedSessionStore:
             yield CodexManagedSessionRecord(**data)
 
     def delete(self, session_id: str) -> None:
-        """Delete a session record file if it exists."""
+        """Delete one session record by explicit session id."""
         path = self._resolve_path(session_id)
         try:
             path.unlink()
