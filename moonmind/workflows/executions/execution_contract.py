@@ -2203,8 +2203,8 @@ class CanonicalWorkflowExecutionPayload(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    repository: str = Field(
-        ...,
+    repository: str | None = Field(
+        None,
         alias="repository",
         validation_alias=AliasChoices("repository", "repo"),
     )
@@ -2549,7 +2549,21 @@ def build_canonical_workflow_view(
         required.extend(canonical_existing)
 
     required.append(target_runtime)
-    required.append("git")
+    workflow_git_node = (canonical.get("workflow") or {}).get("git")
+    workflow_git = workflow_git_node if isinstance(workflow_git_node, Mapping) else {}
+    has_git_checkout_context = any(
+        _clean_optional_str(workflow_git.get(key))
+        for key in (
+            "repository",
+            "repo",
+            "branch",
+            "startingBranch",
+            "targetBranch",
+            "ref",
+        )
+    )
+    if _clean_optional_str(canonical.get("repository")) or has_git_checkout_context:
+        required.append("git")
 
     source_publish_mode = None
     if normalized_type == CANONICAL_WORKFLOW_JOB_TYPE:
