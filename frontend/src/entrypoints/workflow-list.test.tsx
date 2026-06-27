@@ -177,6 +177,36 @@ describe('Workflows Entrypoint', () => {
     expect(updatedCell.getAttribute('title')).not.toContain('2026');
   });
 
+  it('floors relative Updated values so units roll over at the exact threshold', async () => {
+    // 1h50m before now: Math.floor -> "1h ago"; Math.round would show "2h ago".
+    // Computed against the real clock so the assertion is deterministic.
+    const closedAt = new Date(Date.now() - (1 * 3600 + 50 * 60) * 1000).toISOString();
+    const createdAt = new Date(Date.now() - 3 * 3600 * 1000).toISOString();
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-floor',
+            source: 'temporal',
+            title: 'Floor task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            createdAt,
+            closedAt,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Floor task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    expect(updatedCell.textContent).toBe('1h ago');
+  });
+
   it('does not query or render operational metrics on the workflow overview', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
@@ -271,26 +301,26 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
-    expect(screen.getByLabelText('Mobile ID filter value')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Skill filter value')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Title filter value')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Scheduled from')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Created from')).toBeTruthy();
-    expect(screen.getByLabelText('Mobile Finished blank values')).toBeTruthy();
+    expect(screen.getByLabelText('Secondary ID filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Secondary Skill filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Secondary Title filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Secondary Scheduled from')).toBeTruthy();
+    expect(screen.getByLabelText('Secondary Created from')).toBeTruthy();
+    expect(screen.getByLabelText('Secondary Finished blank values')).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText('Mobile ID filter value'), {
+    fireEvent.change(screen.getByLabelText('Secondary ID filter value'), {
       target: { value: 'task-123' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Status filter value'), {
+    fireEvent.change(screen.getByLabelText('Secondary Status filter value'), {
       target: { value: 'completed' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Repository filter value'), {
+    fireEvent.change(screen.getByLabelText('Secondary Repository filter value'), {
       target: { value: 'owner/repo' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Runtime filter value'), {
+    fireEvent.change(screen.getByLabelText('Secondary Runtime filter value'), {
       target: { value: 'codex_cloud' },
     });
-    fireEvent.change(screen.getByLabelText('Mobile Title filter value'), {
+    fireEvent.change(screen.getByLabelText('Secondary Title filter value'), {
       target: { value: 'Example' },
     });
 
@@ -338,13 +368,13 @@ describe('Workflows Entrypoint', () => {
     // The Skill filter moves out of the default desktop header but stays in the
     // preserved filter data model via the secondary filter controls, which apply
     // on change. Select the value first, then flip to exclude mode.
-    fireEvent.change(screen.getByLabelText('Mobile Skill filter value'), { target: { value: 'pr-resolver' } });
+    fireEvent.change(screen.getByLabelText('Secondary Skill filter value'), { target: { value: 'pr-resolver' } });
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('targetSkillIn=pr-resolver');
     });
     await screen.findAllByText('Example task');
 
-    fireEvent.change(screen.getByLabelText('Mobile Skill filter mode'), { target: { value: 'exclude' } });
+    fireEvent.change(screen.getByLabelText('Secondary Skill filter mode'), { target: { value: 'exclude' } });
     await waitFor(() => {
       const url = fetchSpy.mock.calls.at(-1)?.[0];
       expect(url).toContain('targetRuntimeNotIn=codex_cli');
@@ -676,6 +706,50 @@ describe('Workflows Entrypoint', () => {
     expect((await screen.findAllByText('—')).length).toBeGreaterThan(0);
   });
 
+  it('sorts the Updated column by the displayed updated timestamp, including closedAt', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-open',
+            source: 'temporal',
+            title: 'Open later task',
+            status: 'queued',
+            state: 'scheduled',
+            rawState: 'scheduled',
+            scheduledFor: '2026-04-15T10:00:00Z',
+            createdAt: '2026-04-15T05:00:00Z',
+          },
+          {
+            taskId: 'task-closed',
+            source: 'temporal',
+            title: 'Closed latest task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            scheduledFor: '2026-04-15T01:00:00Z',
+            createdAt: '2026-04-15T00:30:00Z',
+            closedAt: '2026-04-15T20:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const closedTitle = (await screen.findAllByText('Closed latest task'))[0]!;
+    const table = closedTitle.closest('table') as HTMLTableElement;
+    const closedLink = within(table).getByRole('link', { name: 'Closed latest task' });
+    const openLink = within(table).getByRole('link', { name: 'Open later task' });
+    // Default Updated sort is descending by rowUpdatedAt (closedAt || scheduledFor || createdAt),
+    // so the completed row whose closedAt is newest sorts first even though its
+    // scheduledFor is older than the open row's scheduledFor.
+    expect(
+      closedLink.compareDocumentPosition(openLink) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it('reuses the trimmed repository column filter for both the request and the query key', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
@@ -878,7 +952,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('dialog', { name: 'Workflow filter' })).toBeTruthy();
   });
 
-  it('keeps mobile filter focus from jumping to a stale desktop trigger', async () => {
+  it('keeps secondary filter focus from jumping to a stale desktop trigger', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -888,11 +962,11 @@ describe('Workflows Entrypoint', () => {
     fireEvent.click(desktopStatusFilter);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel Status filter' }));
 
-    const mobileStatusFilter = screen.getByLabelText('Mobile Status filter value') as HTMLSelectElement;
-    mobileStatusFilter.focus();
-    fireEvent.change(mobileStatusFilter, { target: { value: 'completed' } });
+    const secondaryStatusFilter = screen.getByLabelText('Secondary Status filter value') as HTMLSelectElement;
+    secondaryStatusFilter.focus();
+    fireEvent.change(secondaryStatusFilter, { target: { value: 'completed' } });
 
-    expect(document.activeElement).toBe(mobileStatusFilter);
+    expect(document.activeElement).toBe(secondaryStatusFilter);
   });
 
   it('applies status exclude semantics and removes only the selected chip', async () => {
@@ -1016,7 +1090,7 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     // Skill and Finished filters live in the preserved secondary filter controls.
-    fireEvent.change(screen.getByLabelText('Mobile Skill filter value'), {
+    fireEvent.change(screen.getByLabelText('Secondary Skill filter value'), {
       target: { value: 'moonspec-implement' },
     });
 
@@ -1026,7 +1100,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('button', { name: 'Skill filter: moonspec-implement' })).toBeTruthy();
     await screen.findAllByText('Example task');
 
-    fireEvent.change(screen.getByLabelText('Mobile Finished blank values'), { target: { value: 'include' } });
+    fireEvent.change(screen.getByLabelText('Secondary Finished blank values'), { target: { value: 'include' } });
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.at(-1)?.[0]).toContain('finishedBlank=include');

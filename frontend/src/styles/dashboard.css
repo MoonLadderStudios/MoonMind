@@ -1579,13 +1579,13 @@ h1 {
   flex: 0 0 auto;
 }
 
-.workflow-list-mobile-filter-disclosure {
-  display: none;
+.workflow-list-secondary-filter-disclosure {
+  display: flex;
   flex-direction: column;
   gap: 0.7rem;
 }
 
-.workflow-list-mobile-filter-toggle {
+.workflow-list-secondary-filter-toggle {
   align-self: stretch;
   display: inline-flex;
   align-items: center;
@@ -1602,10 +1602,10 @@ h1 {
   box-shadow: inset 0 1px 0 var(--mm-glass-edge);
 }
 
-.workflow-list-mobile-filter-toggle:hover,
-.workflow-list-mobile-filter-toggle:focus-visible,
-.workflow-list-mobile-filter-toggle:active,
-.workflow-list-mobile-filter-toggle[aria-expanded="true"] {
+.workflow-list-secondary-filter-toggle:hover,
+.workflow-list-secondary-filter-toggle:focus-visible,
+.workflow-list-secondary-filter-toggle:active,
+.workflow-list-secondary-filter-toggle[aria-expanded="true"] {
   background: var(--mm-control-shell-hover);
   background-image: none;
   border-color: rgb(var(--mm-accent) / 0.7);
@@ -1615,13 +1615,17 @@ h1 {
   filter: none;
 }
 
-.workflow-list-mobile-filter-controls {
+.workflow-list-secondary-filter-controls {
   display: none;
   gap: 0.7rem;
   grid-template-columns: minmax(0, 1fr);
 }
 
-.workflow-list-mobile-filter-controls .queue-inline-filter {
+.workflow-list-secondary-filter-controls.is-open {
+  display: grid;
+}
+
+.workflow-list-secondary-filter-controls .queue-inline-filter {
   border-radius: 0.6rem;
   padding: 0.28rem 0.6rem;
 }
@@ -2275,14 +2279,6 @@ tr[data-proposal-id].proposal-consuming td {
 
   .workflow-list-clear-filters {
     width: 100%;
-  }
-
-  .workflow-list-mobile-filter-disclosure {
-    display: flex;
-  }
-
-  .workflow-list-mobile-filter-controls.is-open {
-    display: grid;
   }
 
   .queue-results-toolbar,

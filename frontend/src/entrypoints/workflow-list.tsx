@@ -54,7 +54,7 @@ const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
 const TASK_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
 
-const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
+const TIMESTAMP_SORT_FIELDS = new Set(['updatedAt', 'scheduledFor', 'createdAt', 'closedAt']);
 type FilterField =
   | 'workflowId'
   | 'status'
@@ -83,7 +83,7 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'nextAction', label: 'Next action', sortable: false, filterField: null, colClassName: 'queue-table-column-next-action' },
   { field: 'repository', label: 'Repository', sortable: true, filterField: 'repository', colClassName: 'queue-table-column-repository' },
   { field: 'targetRuntime', label: 'Runtime', sortable: true, filterField: 'targetRuntime', colClassName: 'queue-table-column-runtime' },
-  { field: 'scheduledFor', label: 'Updated', sortable: true, filterField: null, colClassName: 'queue-table-column-date' },
+  { field: 'updatedAt', label: 'Updated', sortable: true, filterField: null, colClassName: 'queue-table-column-date' },
 ];
 
 // All filterable columns. This is the durable filter data model and stays complete
@@ -101,7 +101,7 @@ const FILTER_FIELDS = [
   ['closedAt', 'Finished'],
 ] as const;
 type FilterColumn = (typeof FILTER_FIELDS)[number];
-const VALID_TABLE_SORT_FIELDS = new Set<string>([...FILTER_FIELDS.map((column) => column[0]), 'integration']);
+const VALID_TABLE_SORT_FIELDS = new Set<string>([...FILTER_FIELDS.map((column) => column[0]), 'integration', 'updatedAt']);
 const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'workflowId',
   'status',
@@ -196,7 +196,7 @@ function readListDashboardConfig(payload: BootPayload): ListDashboardConfig | un
 
 function normalizeTableSortField(raw: string | null): string {
   const candidate = (raw || '').trim();
-  return VALID_TABLE_SORT_FIELDS.has(candidate) ? candidate : 'scheduledFor';
+  return VALID_TABLE_SORT_FIELDS.has(candidate) ? candidate : 'updatedAt';
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -284,7 +284,7 @@ function formatRelative(iso: string | null | undefined): string {
   const suffix = diffSeconds >= 0 ? 'ago' : 'from now';
   for (const [label, unitSeconds] of RELATIVE_TIME_UNITS) {
     if (absSeconds >= unitSeconds) {
-      return `${Math.round(absSeconds / unitSeconds)}${label} ${suffix}`;
+      return `${Math.floor(absSeconds / unitSeconds)}${label} ${suffix}`;
     }
   }
   return `${absSeconds}s ${suffix}`;
@@ -305,6 +305,7 @@ function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'
     let rightVal: string | number;
     if (TIMESTAMP_SORT_FIELDS.has(field)) {
       const getTimestamp = (row: ExecutionRow) => {
+        if (field === 'updatedAt') return rowUpdatedAt(row);
         if (field === 'scheduledFor') return row.scheduledFor || row.createdAt;
         return (row as Record<string, unknown>)[field] as string | undefined;
       };
@@ -689,7 +690,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [hasEditedFilters, setHasEditedFilters] = useState(false);
   const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
-  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [secondaryFiltersOpen, setSecondaryFiltersOpen] = useState(false);
   const [pendingFocusField, setPendingFocusField] = useState<FilterField | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const filterTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -717,7 +718,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
-    if (sortField !== 'scheduledFor' || sortDir !== 'desc') {
+    if (sortField !== 'updatedAt' || sortDir !== 'desc') {
       params.set('sort', sortField);
       params.set('sortDir', sortDir);
     }
@@ -1023,7 +1024,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
   };
 
-  const applyMobileValues = (
+  const applySecondaryValues = (
     field: 'status' | 'targetRuntime' | 'targetSkill',
     values: string[],
   ) => {
@@ -1038,14 +1039,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     });
   };
 
-  const applyMobileRepository = (value: string) => {
+  const applySecondaryRepository = (value: string) => {
     applyFilters({
       ...filters,
       repository: { ...filters.repository, mode: 'include', values: [], exactText: value },
     });
   };
 
-  const applyMobileDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+  const applySecondaryDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
     applyFilters({
       ...filters,
       [field]: { ...filters[field], ...patch },
@@ -1111,10 +1112,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   };
 
   const renderFilterControl = (field: FilterField, labelPrefix = '') => {
-    const isMobile = Boolean(labelPrefix);
+    const isSecondary = Boolean(labelPrefix);
     if (field === 'workflowId' || field === 'title') {
       const label = field === 'workflowId' ? 'ID' : 'Title';
-      const draft = isMobile ? filters[field] : draftFilters[field];
+      const draft = isSecondary ? filters[field] : draftFilters[field];
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1130,7 +1131,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   : 'Word match: finds titles containing this whole word.'
               }
               onChange={(event) => {
-              if (isMobile) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
+              if (isSecondary) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
                 else updateDraftText(field, event.target.value);
               }}
             />
@@ -1140,7 +1141,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }
 
     if (field === 'status') {
-      const draft = isMobile ? filters.status : draftFilters.status;
+      const draft = isSecondary ? filters.status : draftFilters.status;
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1150,7 +1151,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) {
+                if (isSecondary) {
                   applyFilters({ ...filters, status: { ...filters.status, mode } });
                 } else {
                   updateDraftValueMode('status', mode);
@@ -1172,7 +1173,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             emptyMessage="No status filters selected"
             onChange={(next) => {
               const normalized = next.map((value) => value.toLowerCase());
-              if (isMobile) applyMobileValues('status', normalized);
+              if (isSecondary) applySecondaryValues('status', normalized);
               else updateDraftValues('status', normalized);
             }}
           />
@@ -1188,17 +1189,17 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             {labelPrefix}Repository filter value
             <input
               type="text"
-              value={isMobile ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
+              value={isSecondary ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
               disabled={!listEnabled}
               placeholder="repo starts with…"
               title="Prefix match: finds repository names that start with this text."
               onChange={(event) => {
-                if (isMobile) applyMobileRepository(event.target.value);
+                if (isSecondary) applySecondaryRepository(event.target.value);
                 else updateDraftRepository(event.target.value);
               }}
             />
           </label>
-          {!isMobile && valueOptionsForField('repository').length > 0 ? (
+          {!isSecondary && valueOptionsForField('repository').length > 0 ? (
             <label>
               Repository values
               <select
@@ -1233,7 +1234,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'targetRuntime') {
       const runtimeOptions = valueOptionsForField('targetRuntime');
-      const draft = isMobile ? filters.targetRuntime : draftFilters.targetRuntime;
+      const draft = isSecondary ? filters.targetRuntime : draftFilters.targetRuntime;
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1243,7 +1244,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } }, null);
+                if (isSecondary) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } }, null);
                 else updateDraftValueMode('targetRuntime', mode);
               }}
             >
@@ -1261,7 +1262,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             addPlaceholder="Add runtime"
             emptyMessage="No runtime filters selected"
             onChange={(next) => {
-              if (isMobile) applyMobileValues('targetRuntime', next);
+              if (isSecondary) applySecondaryValues('targetRuntime', next);
               else updateDraftValues('targetRuntime', next);
             }}
           />
@@ -1272,7 +1273,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'targetSkill') {
       const skillOptions = valueOptionsForField('targetSkill');
-      const draft = isMobile ? filters.targetSkill : draftFilters.targetSkill;
+      const draft = isSecondary ? filters.targetSkill : draftFilters.targetSkill;
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1282,7 +1283,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } }, null);
+                if (isSecondary) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } }, null);
                 else updateDraftValueMode('targetSkill', mode);
               }}
             >
@@ -1299,7 +1300,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             addPlaceholder="Add skill"
             emptyMessage="No skill filters selected"
             onChange={(next) => {
-              if (isMobile) applyMobileValues('targetSkill', next);
+              if (isSecondary) applySecondaryValues('targetSkill', next);
               else updateDraftValues('targetSkill', next);
             }}
           />
@@ -1310,7 +1311,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') {
       const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
-      const draft = isMobile ? filters[field] : draftFilters[field];
+      const draft = isSecondary ? filters[field] : draftFilters[field];
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1320,7 +1321,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               value={draft.from || ''}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (isMobile) applyMobileDate(field, { from: event.target.value });
+                if (isSecondary) applySecondaryDate(field, { from: event.target.value });
                 else updateDraftDate(field, { from: event.target.value });
               }}
             />
@@ -1332,7 +1333,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               value={draft.to || ''}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (isMobile) applyMobileDate(field, { to: event.target.value });
+                if (isSecondary) applySecondaryDate(field, { to: event.target.value });
                 else updateDraftDate(field, { to: event.target.value });
               }}
             />
@@ -1345,7 +1346,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 disabled={!listEnabled}
                 onChange={(event) => {
                   const blank = event.target.value as NonNullable<DateFilter['blank']>;
-                  if (isMobile) applyMobileDate(field, { blank });
+                  if (isSecondary) applySecondaryDate(field, { blank });
                   else updateDraftDate(field, { blank });
                 }}
               >
@@ -1489,24 +1490,24 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         ) : null}
-        <div className="workflow-list-mobile-filter-disclosure">
+        <div className="workflow-list-secondary-filter-disclosure">
           <button
             type="button"
-            className="workflow-list-mobile-filter-toggle"
-            aria-expanded={mobileFiltersOpen}
-            aria-controls="workflow-list-mobile-filter-panel"
-            onClick={() => setMobileFiltersOpen((open) => !open)}
+            className="workflow-list-secondary-filter-toggle"
+            aria-expanded={secondaryFiltersOpen}
+            aria-controls="workflow-list-secondary-filter-panel"
+            onClick={() => setSecondaryFiltersOpen((open) => !open)}
           >
-            {mobileFiltersOpen ? 'Hide filters' : 'Show filters'}
+            {secondaryFiltersOpen ? 'Hide filters' : 'Show filters'}
             {hasActiveFilters ? ` (${activeFilters.length})` : ''}
           </button>
           <div
-            id="workflow-list-mobile-filter-panel"
-            className={`workflow-list-mobile-filter-controls${mobileFiltersOpen ? ' is-open' : ''}`}
-            aria-label="Mobile workflow filters"
+            id="workflow-list-secondary-filter-panel"
+            className={`workflow-list-secondary-filter-controls${secondaryFiltersOpen ? ' is-open' : ''}`}
+            aria-label="Secondary workflow filters"
           >
             {FILTER_FIELDS.map(([field]) =>
-              isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
+              isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Secondary ')}</div> : null,
             )}
           </div>
         </div>
