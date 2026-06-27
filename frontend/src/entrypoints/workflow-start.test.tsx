@@ -2765,7 +2765,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(await screen.findByRole("heading", { name: "Start Workflow" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Create" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Start Workflow" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Create Task" })).toBeNull();
     expect(screen.queryByText(/^Task ID:?$/)).toBeNull();
     expect(screen.queryByText(/^Step Attempt:?$/)).toBeNull();
@@ -2787,7 +2787,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("renders the create submit action as an icon-only right-pointing arrow with a stable label", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const createButton = await screen.findByRole("button", { name: "Create" });
+    const createButton = await screen.findByRole("button", { name: "Start Workflow" });
     const arrow = createButton.querySelector<HTMLElement>(
       "[data-submit-arrow='right']",
     );
@@ -2802,8 +2802,8 @@ describe.skip("Task Create Entrypoint", () => {
     expect(createButton.classList.contains("queue-submit-primary--icon")).toBe(
       true,
     );
-    expect(createButton.getAttribute("aria-label")).toBe("Create");
-    expect(createButton.getAttribute("title")).toBe("Create this task");
+    expect(createButton.getAttribute("aria-label")).toBe("Start Workflow");
+    expect(createButton.getAttribute("title")).toBe("Start this workflow");
     expect(createButton.textContent?.trim()).toBe("");
   });
 
@@ -2815,9 +2815,9 @@ describe.skip("Task Create Entrypoint", () => {
       screen.queryByText("Primary step must include instructions or an explicit skill."),
     ).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "Start Workflow" });
     expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
     expect(createButton.getAttribute("aria-busy")).toBe("false");
     expect(
@@ -2833,7 +2833,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("keeps create page authoring controls available with the arrow submit action", async () => {
     renderWithClient(<WorkflowStartPage payload={withJiraIntegration()} />);
 
-    const createButton = await screen.findByRole("button", { name: "Create" });
+    const createButton = await screen.findByRole("button", { name: "Start Workflow" });
     expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
     expect(screen.getByRole("button", { name: "Add Step" })).toBeTruthy();
     expect(screen.getByLabelText("Runtime")).toBeTruthy();
@@ -3006,7 +3006,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(draft.branch).toBeNull();
     expect(draft.legacyBranchWarning).toBe(
-      "This older task only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
+      "This older workflow only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
     );
   });
 
@@ -3357,7 +3357,7 @@ describe.skip("Task Create Entrypoint", () => {
       repository: "MoonLadderStudios/MoonMind",
       branch: "main",
       legacyBranchWarning:
-        "This older task used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.",
+        "This older workflow used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.",
       publishMode: "none",
       taskInstructions: "",
       primarySkill: "moonspec-orchestrate",
@@ -3731,7 +3731,7 @@ describe.skip("Task Create Entrypoint", () => {
           },
         },
       }),
-    ).toThrow("Task instructions could not be reconstructed from this execution.");
+    ).toThrow("Workflow instructions could not be reconstructed from this execution.");
   });
 
   it("loads edit mode from an active Temporal execution and prefills the shared form", async () => {
@@ -4199,7 +4199,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "This older task only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
+          "This older workflow only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
         ),
       ).toBeTruthy();
     });
@@ -4208,7 +4208,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "Choose a branch before saving or rerunning this publish-mode task.",
+        "Choose a branch before saving or rerunning this publish-mode workflow.",
       ),
     ).toBeTruthy();
     expect(
@@ -4356,7 +4356,7 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(false);
     expect(
       screen.queryByText(
-        "Task instructions could not be loaded from the input artifact.",
+        "Workflow instructions could not be loaded from the input artifact.",
       ),
     ).toBeNull();
   });
@@ -4580,7 +4580,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "Task instructions could not be loaded from the input artifact.",
+        "Workflow instructions could not be loaded from the input artifact.",
       ),
     ).toBeTruthy();
     expect(
@@ -4599,7 +4599,7 @@ describe.skip("Task Create Entrypoint", () => {
     const { unmount } = renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
     expect(
-      await screen.findByText("Task input artifact did not contain valid JSON."),
+      await screen.findByText("Workflow input artifact did not contain valid JSON."),
     ).toBeTruthy();
     expect(
       (screen.getByRole("button", { name: "Start New Run" }) as HTMLButtonElement)
@@ -4611,7 +4611,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "Task instructions could not be reconstructed from this execution.",
+        "Workflow instructions could not be reconstructed from this execution.",
       ),
     ).toBeTruthy();
     expect(
@@ -5184,7 +5184,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "Start Workflow" });
     expect(createButton.querySelector("[data-submit-arrow='right']")).not.toBeNull();
     fireEvent.click(createButton);
 
@@ -5328,7 +5328,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -5389,7 +5389,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -5466,7 +5466,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "high" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -5552,7 +5552,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Run advanced routing regression flow." },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -5643,7 +5643,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(skillArgsField, {
       target: { value: '{"broken":' },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -5687,7 +5687,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Run without hidden advanced routing." },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -5727,7 +5727,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { files: [file] },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -5809,7 +5809,7 @@ describe.skip("Task Create Entrypoint", () => {
       screen.queryByLabelText("Instructions attachments"),
     ).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -5847,7 +5847,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { files: [file] },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -5888,7 +5888,7 @@ describe.skip("Task Create Entrypoint", () => {
     renderForEdit("mm:edit-123", withAttachmentPolicy());
 
     const legacyWarning =
-      "This older task used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.";
+      "This older workflow used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.";
     expect(await screen.findByText(legacyWarning)).toBeTruthy();
 
     fireEvent.change(await screen.findByLabelText("Step 1 attachment file picker"), {
@@ -5930,7 +5930,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { files: [file] },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -6069,7 +6069,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { files: [file] },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -6156,7 +6156,7 @@ describe.skip("Task Create Entrypoint", () => {
       }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -6231,7 +6231,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -6312,7 +6312,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -6342,7 +6342,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "deferred_minutes" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -6410,7 +6410,7 @@ describe.skip("Task Create Entrypoint", () => {
             ],
           },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+        fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
         await waitFor(
           () => {
@@ -6447,7 +6447,7 @@ describe.skip("Task Create Entrypoint", () => {
       expect(screen.getByText(/Build shared schema/)).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7039,7 +7039,7 @@ describe.skip("Task Create Entrypoint", () => {
     ) as HTMLSelectElement;
     expect(publishSelect.value).toBe("pr");
     expect(publishSelect.getAttribute("title")).toBe(
-      "Select how MoonMind publishes task changes",
+      "Select how MoonMind publishes workflow changes",
     );
     expect(publishSelect.disabled).toBe(false);
     const mergeAutomationOption = Array.from(publishSelect.options).find(
@@ -7051,7 +7051,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "pr_with_merge_automation" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7588,7 +7588,7 @@ describe.skip("Task Create Entrypoint", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7660,7 +7660,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Publish Mode"), {
       target: { value: "pr_with_merge_automation" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7686,7 +7686,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Publish Mode"), {
       target: { value: "branch" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7730,7 +7730,7 @@ describe.skip("Task Create Entrypoint", () => {
         target: { value: "Resolve the current branch PR." },
       },
     );
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7784,7 +7784,7 @@ describe.skip("Task Create Entrypoint", () => {
       )?.disabled,
     ).toBe(true);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -7827,7 +7827,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "5" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -8025,10 +8025,10 @@ describe.skip("Task Create Entrypoint", () => {
     expectAllButtonsHaveTitles();
     expect(
       screen.getByRole("button", { name: "Add Step" }).getAttribute("title"),
-    ).toBe("Add another task step");
+    ).toBe("Add another workflow step");
     expect(
-      screen.getByRole("button", { name: "Create" }).getAttribute("title"),
-    ).toBe("Create this task");
+      screen.getByRole("button", { name: "Start Workflow" }).getAttribute("title"),
+    ).toBe("Start this workflow");
   });
 
   it("adds hover tooltips to floating bar repository, branch, and publish controls", async () => {
@@ -8039,29 +8039,29 @@ describe.skip("Task Create Entrypoint", () => {
     const publishModeSelect = screen.getByLabelText("Publish Mode");
 
     expect(repoInput.getAttribute("title")).toBe(
-      "Select the GitHub repository for this task",
+      "Select the GitHub repository for this workflow",
     );
     expect(
       repoInput.closest(".queue-inline-selector--repo")?.getAttribute("title"),
-    ).toBe("Select the GitHub repository for this task");
+    ).toBe("Select the GitHub repository for this workflow");
     await waitFor(() => {
       expect(branchInput.getAttribute("title")).toBe(
-        "Select the branch to check out before the task starts",
+        "Select the branch to check out before the workflow starts",
       );
     });
     expect(
       branchInput
         .closest(".queue-inline-selector--branch")
         ?.getAttribute("title"),
-    ).toBe("Select the branch to check out before the task starts");
+    ).toBe("Select the branch to check out before the workflow starts");
     expect(publishModeSelect.getAttribute("title")).toBe(
-      "Select how MoonMind publishes task changes",
+      "Select how MoonMind publishes workflow changes",
     );
     expect(
       publishModeSelect
         .closest(".queue-inline-selector--publish")
         ?.getAttribute("title"),
-    ).toBe("Select how MoonMind publishes task changes");
+    ).toBe("Select how MoonMind publishes workflow changes");
   });
 
   it("adds hover tooltips to Jira browser buttons", async () => {
@@ -8470,7 +8470,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
 
     expect(await screen.findByDisplayValue("Fetch MM-558.")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -8552,7 +8552,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
     selectStepType(step, "Preset");
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       await screen.findByText(
@@ -8652,7 +8652,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "Run a tool Step Type submission." },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       await screen.findByText("Select a Tool before submitting a Tool step."),
@@ -8680,7 +8680,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: '{"issueKey":"MM-563"}' },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -8723,7 +8723,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { value: "[" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       await screen.findByText("Step 1 Tool Inputs must be valid JSON object text."),
@@ -8743,7 +8743,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.queryByLabelText("Preset Template")).toBeNull();
     expect(screen.queryByText("Browse Jira issue")).toBeNull();
     expect(screen.queryByLabelText(/attachments/i)).toBeNull();
-    expect(screen.getByRole("button", { name: "Create" })).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Start Workflow" })).not.toBeNull();
   });
 
   it("does not let Jira import bypass repository validation", async () => {
@@ -8766,7 +8766,7 @@ describe.skip("Task Create Entrypoint", () => {
       "Complete Jira issue ENG-202: Build browser shell",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       await screen.findByText(
@@ -8793,7 +8793,7 @@ describe.skip("Task Create Entrypoint", () => {
         ],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       await screen.findByText(
@@ -8835,7 +8835,7 @@ describe.skip("Task Create Entrypoint", () => {
     await waitFor(() => {
       expect(screen.queryByLabelText("Enable merge automation")).toBeNull();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -8863,7 +8863,7 @@ describe.skip("Task Create Entrypoint", () => {
     const floatingBars = document.querySelectorAll<HTMLElement>(
       ".queue-floating-bar.queue-floating-bar--liquid-glass.queue-step-submit-actions",
     );
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "Start Workflow" });
 
     expect(stepsSection).not.toBeNull();
     expect(stepsSection?.classList.contains("card")).toBe(true);
@@ -8879,10 +8879,10 @@ describe.skip("Task Create Entrypoint", () => {
     expect(floatingBar.closest('[data-canonical-create-section="Submit"]')).toBe(
       submitSection,
     );
-    expect(within(floatingBar).getByRole("button", { name: "Create" })).toBe(
+    expect(within(floatingBar).getByRole("button", { name: "Start Workflow" })).toBe(
       createButton,
     );
-    expect(createButton.getAttribute("title")).toBe("Create this task");
+    expect(createButton.getAttribute("title")).toBe("Start this workflow");
   });
 
   it("keeps create page instruction textareas matte and outside the glass rail", async () => {
@@ -8920,7 +8920,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(submitSection).not.toBeNull();
 
     const addStepButton = screen.getByRole("button", { name: "Add Step" });
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "Start Workflow" });
     const repoInput = screen.getByLabelText(/GitHub Repo/);
     const branchSelect = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
@@ -8965,8 +8965,8 @@ describe.skip("Task Create Entrypoint", () => {
     expect(createButton.classList.contains("queue-submit-primary--icon")).toBe(
       true,
     );
-    expect(createButton.getAttribute("aria-label")).toBe("Create");
-    expect(createButton.getAttribute("title")).toBe("Create this task");
+    expect(createButton.getAttribute("aria-label")).toBe("Start Workflow");
+    expect(createButton.getAttribute("title")).toBe("Start this workflow");
     expect(
       repoInput.closest('[data-canonical-create-section="Steps"]'),
     ).toBeNull();
@@ -9020,7 +9020,7 @@ describe.skip("Task Create Entrypoint", () => {
   it("applies the liquid glass treatment to the bottom submission controls without changing accessible controls", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
 
-    const createButton = await screen.findByRole("button", { name: "Create" });
+    const createButton = await screen.findByRole("button", { name: "Start Workflow" });
     const floatingBar = createButton.closest<HTMLElement>(".queue-floating-bar");
 
     expect(floatingBar).not.toBeNull();
@@ -9039,7 +9039,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(
       within(floatingBar as HTMLElement).queryByLabelText("Produce report artifact"),
     ).toBeNull();
-    expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Create" })).toBe(
+    expect(within(floatingBar as HTMLElement).getByRole("button", { name: "Start Workflow" })).toBe(
       createButton,
     );
   });
@@ -9134,7 +9134,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Implement single branch create page." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9196,7 +9196,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Use the repository default branch." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9240,7 +9240,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Use the hidden repository default branch." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9273,7 +9273,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Submit with an intentionally blank branch." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9410,7 +9410,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Submit through MoonMind REST only." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9476,7 +9476,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Large instructions ".repeat(1000) },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9631,7 +9631,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Large instructions ".repeat(1000) },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9784,7 +9784,7 @@ describe.skip("Task Create Entrypoint", () => {
         fireEvent.change(await screen.findByLabelText("Instructions"), {
           target: { value: "Large instructions ".repeat(1000) },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Create" }));
+        fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
         await waitFor(
           () => {
@@ -9816,12 +9816,12 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
 
     const stepTextarea = await screen.findByPlaceholderText(
-      "Step-specific instructions (leave blank to continue from the task objective).",
+      "Step-specific instructions (leave blank to continue from the workflow objective).",
     );
     fireEvent.change(stepTextarea, {
       target: { value: "Long step instructions ".repeat(1000) },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -9959,7 +9959,7 @@ describe.skip("Task Create Entrypoint", () => {
       "Write a plan for the task builder recovery.",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -10253,7 +10253,7 @@ describe.skip("Task Create Entrypoint", () => {
       screen.getByDisplayValue("Clarify the {{ inputs.feature_name }} scope."),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -10325,7 +10325,7 @@ describe.skip("Task Create Entrypoint", () => {
       target: { files: [file] },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -10425,7 +10425,7 @@ describe.skip("Task Create Entrypoint", () => {
       "Clarify the {{ inputs.feature_name }} scope.",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -10478,7 +10478,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run end-to-end regression flow." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(screen.getByText("Plaintext execution failure.")).not.toBeNull();
@@ -10728,13 +10728,13 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        /Failed to load recent runs\. You can still create the task without dependencies/,
+        /Failed to load recent runs\. You can still start the workflow without dependencies/,
       ),
     ).toBeTruthy();
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Create the task manually after dependency lookup fails." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -11011,7 +11011,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "Failed to load Jira projects. You can continue creating the task manually. Jira is unavailable.",
+        "Failed to load Jira projects. You can continue creating the workflow manually. Jira is unavailable.",
       ),
     ).toBeTruthy();
     fireEvent.change(stepInstructions, {
@@ -11021,7 +11021,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect((stepInstructions as HTMLTextAreaElement).value).toBe(
       "Write the task manually after Jira failed.",
     );
-    expect((screen.getByRole("button", { name: "Create" }) as HTMLButtonElement).disabled)
+    expect((screen.getByRole("button", { name: "Start Workflow" }) as HTMLButtonElement).disabled)
       .toBe(false);
   });
 
@@ -11047,7 +11047,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "No Jira boards are available for this project. You can continue creating the task manually.",
+        "No Jira boards are available for this project. You can continue creating the workflow manually.",
       ),
     ).toBeTruthy();
     expect(screen.getByLabelText("Instructions")).toBeTruthy();
@@ -11075,7 +11075,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "No Jira projects are available. You can continue creating the task manually.",
+        "No Jira projects are available. You can continue creating the workflow manually.",
       ),
     ).toBeTruthy();
     expect(screen.getByLabelText("Instructions")).toBeTruthy();
@@ -11117,7 +11117,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "No Jira issues are available in this column. You can continue creating the task manually.",
+        "No Jira issues are available in this column. You can continue creating the workflow manually.",
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("button", { name: /ENG-202/ })).toBeNull();
@@ -11159,7 +11159,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "No Jira columns are available for this board. You can continue creating the task manually.",
+        "No Jira columns are available for this board. You can continue creating the workflow manually.",
       ),
     ).toBeTruthy();
   });
@@ -11405,7 +11405,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "Failed to load Jira issue. You can continue creating the task manually. Jira issue detail failed.",
+        "Failed to load Jira issue. You can continue creating the workflow manually. Jira issue detail failed.",
       ),
     ).toBeTruthy();
     expect(
@@ -11998,7 +11998,7 @@ describe.skip("Task Create Entrypoint", () => {
     });
 
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -12590,7 +12590,7 @@ describe.skip("Task Create Entrypoint", () => {
         .textContent,
     ).toBe("Jira: ENG-202");
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         "/api/executions",
@@ -12855,7 +12855,7 @@ describe.skip("Task Create Entrypoint", () => {
         screen.queryByRole("dialog", { name: "Browse Jira issue" }),
       ).toBeNull();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -12914,10 +12914,10 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(
       await screen.findByText(
-        "Failed to load Jira projects. You can continue creating the task manually. Jira is unavailable.",
+        "Failed to load Jira projects. You can continue creating the workflow manually. Jira is unavailable.",
       ),
     ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -13112,7 +13112,7 @@ describe.skip("Task Create Entrypoint", () => {
       fireEvent.change(screen.getByLabelText("Instructions"), {
         target: { value: "Create this task manually." },
       });
-      fireEvent.click(screen.getByRole("button", { name: "Create" }));
+      fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
       await waitFor(() => {
         expect(fetchSpy).toHaveBeenCalledWith(
@@ -13169,7 +13169,7 @@ describe.skip("Task Create Entrypoint", () => {
 
     expect(
       await screen.findByText(
-        "Failed to load Jira projects. You can continue creating the task manually. Jira unavailable",
+        "Failed to load Jira projects. You can continue creating the workflow manually. Jira unavailable",
       ),
     ).toBeTruthy();
     expect(screen.getByRole("dialog", { name: "Browse Jira issue" }))
@@ -13231,7 +13231,7 @@ describe.skip("Task Create Entrypoint", () => {
     );
     expect(
       await screen.findByText(
-        "Failed to load Jira projects. You can continue creating the task manually. Jira was temporarily unavailable.",
+        "Failed to load Jira projects. You can continue creating the workflow manually. Jira was temporarily unavailable.",
       ),
     ).toBeTruthy();
 
@@ -13239,7 +13239,7 @@ describe.skip("Task Create Entrypoint", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Create this task manually." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -13396,7 +13396,7 @@ describe("Task Create MM-641 authoring validation", () => {
     const submitSection = document.querySelector<HTMLElement>(
       '[data-canonical-create-section="Submit"]',
     );
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "Start Workflow" });
     const repoInput = await screen.findByLabelText("GitHub Repo");
     const branchInput = screen.getByLabelText("Branch");
     const publishModeSelect = screen.getByLabelText("Publish Mode");
@@ -13492,7 +13492,7 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(within(controls).queryByLabelText("Priority")).toBeNull();
     expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -13520,7 +13520,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(screen.getByLabelText("Publish Mode"), {
       target: { value: "branch" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -13588,7 +13588,7 @@ describe("Task Create MM-641 authoring validation", () => {
       },
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -13647,7 +13647,7 @@ describe("Task Create MM-641 authoring validation", () => {
     fireEvent.change(screen.getByLabelText("Instructions"), {
       target: { value: "Use a branch pasted while options are loading." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -13794,7 +13794,7 @@ describe("Task Create submit arrow animation", () => {
         target: { value: "Run end-to-end regression flow." },
       });
 
-      const createButton = screen.getByRole("button", { name: "Create" });
+      const createButton = screen.getByRole("button", { name: "Start Workflow" });
       const arrow = createButton.querySelector<HTMLElement>(
         "[data-submit-arrow='right']",
       );
@@ -13919,7 +13919,7 @@ describe("Task Create submit arrow animation", () => {
         target: { value: "Run end-to-end regression flow." },
       });
 
-      const createButton = screen.getByRole("button", { name: "Create" });
+      const createButton = screen.getByRole("button", { name: "Start Workflow" });
       fireEvent.click(createButton);
 
       await waitFor(() => {
@@ -14373,7 +14373,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       await screen.findByDisplayValue("Transition THOR-352 to In Progress."),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -14536,7 +14536,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     });
     expect(taskPublishSelect().disabled).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -14700,7 +14700,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fireEvent.change(taskPublishSelect(), {
       target: { value: "pr_with_merge_automation" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -14768,7 +14768,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     });
     expect(screen.getByDisplayValue("Edited generated MM-578 step.")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -14807,7 +14807,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fireEvent.click(within(step).getByRole("button", { name: "Expand" }));
     expect(await screen.findByDisplayValue("Fetch MM-578.")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -14897,7 +14897,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     });
     await chooseMm578Preset(step);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -14972,7 +14972,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     ) as HTMLElement;
     await chooseMm578Preset(thirdStep);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -15042,7 +15042,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     ) as HTMLElement;
     await chooseMm578Preset(secondStep);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -15076,7 +15076,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fireEvent.change(within(step).getByLabelText("Instructions"), {
       target: { value: "Create a regular task." },
     });
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "Start Workflow" });
     fireEvent.click(createButton);
     fireEvent.click(createButton);
 
@@ -15262,7 +15262,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       "section",
     ) as HTMLElement;
     await chooseMm578Preset(step);
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       (
@@ -15287,7 +15287,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     fireEvent.change(within(step).getByLabelText("Step 1 attachment file picker"), {
       target: { files: [file] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       (
@@ -15322,7 +15322,7 @@ describe("Task Create MM-578 Preset expansion", () => {
       "section",
     ) as HTMLElement;
     await chooseMm578Preset(step);
-    const createButton = screen.getByRole("button", { name: "Create" });
+    const createButton = screen.getByRole("button", { name: "Start Workflow" });
     fireEvent.click(createButton);
     fireEvent.click(createButton);
 
@@ -15418,7 +15418,7 @@ describe("Task Create MM-578 Preset expansion", () => {
     ).toBeTruthy();
     expect(screen.queryByDisplayValue("Fetch MM-578.")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     expect(
       (
@@ -15962,7 +15962,7 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(repositoryInput, {
       target: { value: "MoonLadderStudios/SchemaRepo" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -15997,7 +15997,7 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(effortInput.value).toBe("2");
     fireEvent.change(effortInput, { target: { value: "" } });
     expect(effortInput.value).toBe("");
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(
@@ -16218,7 +16218,7 @@ describe("Task Create governed Tool authoring", () => {
       target: { value: '{"issueKey":"MM-944"}' },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -16271,7 +16271,7 @@ describe("Task Create governed Tool authoring", () => {
       target: { value: '{"issueKey":"MM-945"}' },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -16334,7 +16334,7 @@ describe("Task Create governed Tool authoring", () => {
       target: { value: '{"issueKey":"MM-945"}' },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -16400,7 +16400,7 @@ describe("Task Create governed Tool authoring", () => {
     fireEvent.click(addToStep);
     fireEvent.click(within(step).getByRole("menuitem", { name: /^Jira/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -16473,7 +16473,7 @@ describe("Task Create governed Tool authoring", () => {
       within(step).getByText("· docker", { exact: false }),
     ).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         "/api/executions",
@@ -16762,7 +16762,7 @@ describe("Task Create governed Tool authoring", () => {
     expect(await within(step).findByText("unity")).toBeTruthy();
     expect(within(step).getByText("qdrant")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         "/api/executions",
@@ -16795,7 +16795,7 @@ describe("Task Create governed Tool authoring", () => {
     });
     fireEvent.change(attachmentInput, { target: { files: [file] } });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -16859,7 +16859,7 @@ describe("Task Create governed Tool authoring", () => {
     fireEvent.click(addToStep);
     fireEvent.click(within(step).getByRole("menuitem", { name: /^Jira/ }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -17088,7 +17088,7 @@ describe("Task Create runtime command previews", () => {
     fireEvent.change(screen.getByLabelText("GitHub Repo"), {
       target: { value: "MoonLadderStudios/MoonMind" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -17370,7 +17370,7 @@ describe("Task Create runtime switch layout stability", () => {
     fireEvent.change(await screen.findByLabelText("Instructions"), {
       target: { value: "Run the profile default effort task." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(

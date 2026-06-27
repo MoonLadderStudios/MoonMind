@@ -2283,7 +2283,7 @@ function InputImagesSection({
     <section className="stack">
       <h3>Input Images</h3>
       <p className="small">
-        Images are grouped by the persisted task target from the execution snapshot.
+        Images are grouped by the persisted workflow target from the execution snapshot.
       </p>
       <div className="queue-step-attachments">
         {groups.map((group) => (
@@ -4330,7 +4330,7 @@ function RemediationRelationshipsPanel({
       ) : null}
       {inboundItems.length > 0 ? (
         <div className="stack">
-          <h4>Remediation Tasks</h4>
+          <h4>Remediation Workflows</h4>
           <ul className="td-remediation-list">
             {inboundItems.map((item) => (
               <li key={item.remediationWorkflowId} className="card">
@@ -4374,7 +4374,7 @@ function RemediationRelationshipsPanel({
           </ul>
         </div>
       ) : showEmpty && !inboundError ? (
-        <p className="notice subtle">No inbound remediation tasks linked yet.</p>
+        <p className="notice subtle">No inbound remediation workflows linked yet.</p>
       ) : null}
       {outboundItems.length > 0 ? (
         <div className="stack">
@@ -4923,7 +4923,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       const suffix = sourceTemporal ? '?source=temporal' : '';
       const response = await fetch(`${payload.apiBase}/executions/${encodedTaskId}${suffix}`);
       if (!response.ok) {
-        throw new Error(`Failed to fetch task: ${response.statusText}`);
+        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
       }
       return ExecutionDetailSchema.parse(await response.json());
     },
@@ -5342,7 +5342,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return response.json();
     },
     onSuccess: () => {
-      setActionNotice('Remediation task creation submitted.');
+      setActionNotice('Remediation workflow creation submitted.');
       invalidate();
     },
     onError: (error: Error) => setActionError(error.message),
@@ -5381,7 +5381,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onRename = () => {
     setActionError(null);
-    const title = window.prompt('New task title', execution?.title || '');
+    const title = window.prompt('New workflow title', execution?.title || '');
     if (title === null || !title.trim()) return;
     updateMutation.mutate({ updateName: 'SetTitle', title: title.trim() });
   };
@@ -5398,7 +5398,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onResumeFromFailedStep = () => {
     setActionError(null);
-    if (!window.confirm('Resume from the failed step using the original task input snapshot?')) return;
+    if (!window.confirm('Resume from the failed step using the original workflow input snapshot?')) return;
     failedStepResumeMutation.mutate();
   };
 
@@ -5421,7 +5421,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onBypassDependencies = () => {
     setActionError(null);
-    if (!window.confirm('Bypass dependency waiting for this task?')) return;
+    if (!window.confirm('Bypass dependency waiting for this workflow?')) return;
     signalMutation.mutate({
       signalName: 'BypassDependencies',
       payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
@@ -5430,13 +5430,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onCancel = () => {
     setActionError(null);
-    if (!window.confirm('Cancel this task?')) return;
+    if (!window.confirm('Cancel this workflow?')) return;
     cancelMutation.mutate({ action: 'cancel', graceful: true });
   };
 
   const onForceCancel = () => {
     setActionError(null);
-    if (!window.confirm('Force cancel this task? This terminates the Temporal workflow immediately.')) return;
+    if (!window.confirm('Force cancel this workflow? This terminates the Temporal workflow immediately.')) return;
     cancelMutation.mutate({
       action: 'cancel',
       graceful: false,
@@ -5446,7 +5446,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onReject = () => {
     setActionError(null);
-    if (!window.confirm('Reject this task?')) return;
+    if (!window.confirm('Reject this workflow?')) return;
     cancelMutation.mutate({
       action: 'reject',
       graceful: true,
@@ -5666,7 +5666,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       ) : null}
 
       {detailQuery.isLoading ? (
-        <p className="loading">Loading task...</p>
+        <p className="loading">Loading workflow...</p>
       ) : detailQuery.isError ? (
         <div className="notice error">{(detailQuery.error as Error).message}</div>
       ) : execution ? (
@@ -6066,7 +6066,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
           {detailSubroute === 'steps' && execution.attentionRequired ? (
             <section className="notice">
-              <strong>Attention required.</strong> This task is waiting for external input before it can continue.
+              <strong>Attention required.</strong> This workflow is waiting for external input before it can continue.
             </section>
           ) : null}
 

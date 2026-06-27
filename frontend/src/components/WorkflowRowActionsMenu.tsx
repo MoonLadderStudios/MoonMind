@@ -300,7 +300,7 @@ export function WorkflowRowActionsMenu({
       handlers: {
         onRename: () => {
           setActionError(null);
-          const title = window.prompt('New task title', execution?.title || '');
+          const title = window.prompt('New workflow title', execution?.title || '');
           if (title === null || !title.trim()) return;
           updateMutation.mutate({ updateName: 'SetTitle', title: title.trim() });
         },
@@ -331,7 +331,7 @@ export function WorkflowRowActionsMenu({
         },
         onResumeFromFailedStep: () => {
           setActionError(null);
-          if (!window.confirm('Resume from the failed step using the original task input snapshot?')) {
+          if (!window.confirm('Resume from the failed step using the original workflow input snapshot?')) {
             return;
           }
           failedStepResumeMutation.mutate();
@@ -351,17 +351,17 @@ export function WorkflowRowActionsMenu({
         },
         onReject: () => {
           setActionError(null);
-          if (!window.confirm('Reject this task?')) return;
+          if (!window.confirm('Reject this workflow?')) return;
           cancelMutation.mutate({ action: 'reject', graceful: true, reason: 'Rejected by operator.' });
         },
         onCancel: () => {
           setActionError(null);
-          if (!window.confirm('Cancel this task?')) return;
+          if (!window.confirm('Cancel this workflow?')) return;
           cancelMutation.mutate({ action: 'cancel', graceful: true });
         },
         onForceCancel: () => {
           setActionError(null);
-          if (!window.confirm('Force cancel this task? This terminates the Temporal workflow immediately.')) return;
+          if (!window.confirm('Force cancel this workflow? This terminates the Temporal workflow immediately.')) return;
           cancelMutation.mutate({
             action: 'cancel',
             graceful: false,
@@ -377,7 +377,7 @@ export function WorkflowRowActionsMenu({
         },
         onBypassDependencies: () => {
           setActionError(null);
-          if (!window.confirm('Bypass dependency waiting for this task?')) return;
+          if (!window.confirm('Bypass dependency waiting for this workflow?')) return;
           signalMutation.mutate({
             signalName: 'BypassDependencies',
             payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
