@@ -2342,7 +2342,7 @@ describe('Workflow Detail Entrypoint', () => {
   it('renders loading state initially', () => {
     fetchSpy.mockImplementation(() => new Promise(() => {}));
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
-    expect(screen.getByText(/Loading task/i)).toBeTruthy();
+    expect(screen.getByText(/Loading workflow/i)).toBeTruthy();
   });
 
   it('builds canonical Temporal task editing routes', () => {
@@ -2688,7 +2688,7 @@ describe('Workflow Detail Entrypoint', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Cancel' }));
-    expect(confirmSpy).toHaveBeenCalledWith('Cancel this task?');
+    expect(confirmSpy).toHaveBeenCalledWith('Cancel this workflow?');
     expect(
       fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/cancel') && init?.method === 'POST'),
     ).toBe(false);
@@ -4047,7 +4047,7 @@ describe('Workflow Detail Entrypoint', () => {
     const menu = await openWorkflowActionsMenu();
     expect(within(menu).getByRole('menuitem', { name: 'Remediate' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Remediation Tasks' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Remediation Workflows' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Remediation Target' })).toBeTruthy();
     expect(screen.getByText('mm:remediation-1')).toBeTruthy();
     expect(screen.getByText('mm:target-1')).toBeTruthy();
@@ -4371,7 +4371,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionsPayload} />);
 
     expect(await screen.findByRole('heading', { name: 'Remediation' })).toBeTruthy();
-    expect(screen.getByText('No inbound remediation tasks linked yet.')).toBeTruthy();
+    expect(screen.getByText('No inbound remediation workflows linked yet.')).toBeTruthy();
     expect(screen.getByText('Evidence bundle is missing.')).toBeTruthy();
     expect(screen.getByText('Live follow is unavailable; durable remediation artifacts remain authoritative.')).toBeTruthy();
     expect(screen.getByText('No remediation evidence artifacts linked yet.')).toBeTruthy();
@@ -5103,7 +5103,7 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Bypass Dependencies' }));
 
     await waitFor(() => {
-      expect(confirmSpy).toHaveBeenCalledWith('Bypass dependency waiting for this task?');
+      expect(confirmSpy).toHaveBeenCalledWith('Bypass dependency waiting for this workflow?');
       expect(signalBodies).toEqual([
         {
           signalName: 'BypassDependencies',
@@ -5369,7 +5369,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Failed to fetch task: Not Found/i)).toBeTruthy();
+      expect(screen.getByText(/Failed to fetch workflow: Not Found/i)).toBeTruthy();
     });
   });
 

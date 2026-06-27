@@ -59,7 +59,7 @@ const JIRA_LAST_PROJECT_SESSION_KEY =
 const JIRA_LAST_BOARD_SESSION_KEY =
   "moonmind.workflow-start.jira.last-board-id";
 const JIRA_MANUAL_CONTINUATION_MESSAGE =
-  "You can continue creating the task manually.";
+  "You can continue creating the workflow manually.";
 const DEPENDENCY_LIMIT = 10;
 const PENTEST_TOOL_ID = "security.pentest.run";
 const PENTEST_SCOPE_ACTIONS = [
@@ -4019,7 +4019,7 @@ async function readTemporalInputArtifact(
     throw new Error(
       await responseErrorMessage(
         response,
-        "Task instructions could not be loaded from the input artifact.",
+        "Workflow instructions could not be loaded from the input artifact.",
       ),
     );
   }
@@ -4027,7 +4027,7 @@ async function readTemporalInputArtifact(
   try {
     return JSON.parse(rawText) as unknown;
   } catch {
-    throw new Error("Task input artifact did not contain valid JSON.");
+    throw new Error("Workflow input artifact did not contain valid JSON.");
   }
 }
 
@@ -4050,7 +4050,7 @@ async function createInputArtifact(
         content_type: "application/json; charset=utf-8",
         size_bytes: new TextEncoder().encode(body).length,
         metadata: {
-          label: "Submitted Task Input",
+          label: "Submitted Workflow Input",
           repository: repository || null,
           source: "workflow-console-submit",
           ...(sourceWorkflowId ? { sourceWorkflowId } : {}),
@@ -4097,8 +4097,8 @@ async function createInputArtifact(
   }
   if (uploadMode === "multipart") {
     throw new Error(
-      "Task input artifact is too large for the current browser submission flow. " +
-        "Reduce the submitted instructions or task step payload and retry.",
+      "Workflow input artifact is too large for the current browser submission flow. " +
+        "Reduce the submitted instructions or workflow step payload and retry.",
     );
   }
 
@@ -4144,14 +4144,14 @@ async function createInputArtifact(
     throw new Error(
       await responseErrorMessage(
         uploadResponse,
-        "Failed to upload task input artifact content.",
+        "Failed to upload workflow input artifact content.",
       ),
     );
   }
 
   await completeArtifactUpload(
     artifactId,
-    "Failed to finalize task input artifact upload.",
+    "Failed to finalize workflow input artifact upload.",
   );
   return { artifactId };
 }
@@ -4531,7 +4531,7 @@ async function linkInputArtifact(
         workflow_id: workflowId,
         run_id: runId,
         link_type: options.linkType || "input.instructions",
-        label: options.label || "Submitted Task Input",
+        label: options.label || "Submitted Workflow Input",
       }),
     });
   } catch (error) {
@@ -8439,7 +8439,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       if (!response.ok) {
         const detail = await responseErrorDetail(
           response,
-          isRerun ? "Failed to request task rerun." : "Failed to save task changes.",
+          isRerun
+            ? "Failed to request workflow rerun."
+            : "Failed to save workflow changes.",
         );
         throw new Error(detail.message);
       }
@@ -8790,7 +8792,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         if (expanded.warnings.length > 0) {
           setSubmitMessage(expanded.warnings.join(" "), "pending");
         } else {
-          setSubmitMessage("Creating task...", "pending");
+          setSubmitMessage("Starting workflow...", "pending");
         }
       } catch (error) {
         const failure =
@@ -8837,7 +8839,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         : normalizedPublishMode;
     if (effectivePublishMode === "branch" && !effectiveBranch) {
       setSubmitMessage(
-        "Choose a branch before saving or rerunning this publish-mode task.",
+        "Choose a branch before saving or rerunning this publish-mode workflow.",
       );
       clearSubmitBusy();
       return;
@@ -9937,7 +9939,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         body: JSON.stringify(requestBody),
       });
       if (!response.ok) {
-        const detail = await responseErrorDetail(response, "Failed to create task.");
+        const detail = await responseErrorDetail(
+          response,
+          "Failed to start workflow.",
+        );
         if (detail.code?.startsWith("dependency_")) {
           setDependencyMessage(detail.message);
           return;
@@ -9965,13 +9970,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             ? `/workflows/${encodeURIComponent(created.workflowId)}?source=temporal`
             : "");
       if (!redirectPath) {
-        throw new Error("Task was created but no redirect path was returned.");
+        throw new Error(
+          "Workflow was started but no redirect path was returned.",
+        );
       }
       navigateTo(redirectPath);
       didNavigateAfterCreate = true;
     } catch (error) {
       const failure =
-        error instanceof Error ? error : new Error("Failed to create task.");
+        error instanceof Error ? error : new Error("Failed to start workflow.");
       // Detect network-level fetch failures (TypeError: "Failed to fetch")
       // and log additional diagnostics to help troubleshoot.
       if (
@@ -10025,28 +10032,28 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         ? "Run edited workflow"
       : pageMode.mode === "rerun"
         ? "Start New Run"
-        : "Create";
+        : "Start Workflow";
   const showPrimaryCtaArrow = true;
   const primaryCtaTooltip =
     pageMode.intent === "comparison"
-      ? "Start a new comparison run from this task draft"
+      ? "Start a new comparison run from this workflow draft"
       : pageMode.intent === "edit"
       ? "Save changes to this workflow draft"
       : pageMode.intent === "edit-for-rerun"
-        ? "Start a new run from this edited task draft"
+        ? "Start a new run from this edited workflow draft"
       : pageMode.mode === "rerun"
-        ? "Start a new run from this task draft"
-        : "Create this task";
-  const repositoryTooltip = "Select the GitHub repository for this task";
+        ? "Start a new run from this workflow draft"
+        : "Start this workflow";
+  const repositoryTooltip = "Select the GitHub repository for this workflow";
   const branchTooltip = branchOptionsQuery.isLoading
     ? "Loading branches for the selected repository..."
     : branchControlDisabled
       ? branchStatusMessage ||
         "Choose a valid GitHub repository before selecting a branch"
-      : "Select the branch to check out before the task starts";
+      : "Select the branch to check out before the workflow starts";
   const publishModeTooltip = !mergeAutomationAvailable
     ? "Publishing is forced to None because the selected preset or resolver manages its own publish flow"
-    : "Select how MoonMind publishes task changes";
+    : "Select how MoonMind publishes workflow changes";
   const expandStepPresetTooltip =
     "Expand the selected preset into editable steps at this position";
   const modeLoadError =
@@ -10055,7 +10062,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       : temporalDraftQuery.isError
         ? temporalDraftQuery.error instanceof Error
           ? temporalDraftQuery.error.message
-          : "Failed to reconstruct the task draft."
+          : "Failed to reconstruct the workflow draft."
         : null;
   const isTemporalFormBlocked =
     pageMode.mode !== "create" &&
@@ -10126,7 +10133,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
 
       {pageMode.intent === "edit-for-rerun" && !modeLoadError ? (
         <p className="notice" role="status">
-          You are editing a previous task. Your changes will create a new run.
+          You are editing a previous workflow. Your changes will create a new run.
           The original run will remain unchanged.
         </p>
       ) : null}
@@ -11290,7 +11297,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                           data-step-field="runtimeProviderProfile"
                           data-step-index={String(index)}
                           value={step.runtimeProviderProfile}
-                          placeholder="inherit task profile"
+                          placeholder="inherit workflow profile"
                           onChange={(event) =>
                             updateStep(step.localId, {
                               runtimeProviderProfile: event.target.value,
@@ -11366,8 +11373,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                       data-step-index={String(index)}
                       placeholder={
                         isPrimaryStep
-                          ? "Describe the task to execute against the repository."
-                          : "Step-specific instructions (leave blank to continue from the task objective)."
+                          ? "Describe the workflow to execute against the repository."
+                          : "Step-specific instructions (leave blank to continue from the workflow objective)."
                       }
                       value={step.instructions}
                       onChange={(event) =>
@@ -11591,7 +11598,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 type="button"
                 className="queue-step-extension-button"
                 data-step-action="add"
-                title="Add another task step"
+                title="Add another workflow step"
                 onClick={addStep}
               >
                 <span className="queue-step-extension-plus" aria-hidden="true">
@@ -11920,7 +11927,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 Schedule Name
                 <input
                   name="scheduleName"
-                  placeholder="My recurring task"
+                  placeholder="My recurring workflow"
                   value={scheduleName}
                   onChange={(event) => setScheduleName(event.target.value)}
                 />
@@ -11971,7 +11978,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
                 {dependencyOptionsQuery.isLoading
                   ? "Loading recent runs..."
                   : dependencyOptionsQuery.isError
-                    ? "Failed to load recent runs. You can still create the task without dependencies, or try refreshing."
+                    ? "Failed to load recent runs. You can still start the workflow without dependencies, or try refreshing."
                     : `${availableDependencyOptions.length} recent runs available.`}
               </p>
             </div>
@@ -12053,7 +12060,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         <div
           className="queue-floating-bar queue-floating-bar--liquid-glass queue-step-actions queue-step-submit-actions"
           role="group"
-          aria-label="Task submission controls"
+          aria-label="Workflow submission controls"
         >
           {branchStatusMessage ? (
             <p

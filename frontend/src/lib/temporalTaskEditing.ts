@@ -823,7 +823,7 @@ function normalizeLegacyBranchDraft({
     return {
       branch: null,
       warning:
-        "This older task only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
+        "This older workflow only stored a target branch. The new form cannot use targetBranch as the active branch, so choose a branch before saving or rerunning.",
     };
   }
   if (startingBranch && targetBranch && isPrPublishMode(publishMode)) {
@@ -833,7 +833,7 @@ function normalizeLegacyBranchDraft({
     return {
       branch: startingBranch,
       warning:
-        "This older task used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.",
+        "This older workflow used separate starting and target branches. The new form submits one branch, so review it before saving or rerunning.",
     };
   }
   return { branch: null, warning: null };
@@ -1018,7 +1018,7 @@ export function buildTemporalSubmissionDraftFromExecution(
   );
   if (!draft.taskInstructions && !draft.primarySkill && !hasStepContent) {
     throw new Error(
-      'Task instructions could not be reconstructed from this execution.',
+      'Workflow instructions could not be reconstructed from this execution.',
     );
   }
 
