@@ -1757,7 +1757,7 @@ export function ProviderProfilesManager({
                   }}
                   disabled={finalizeOAuthMutation.isPending}
                 >
-                  Finalize Provider Profile
+                  Finalize
                 </button>
               ) : null}
             </div>

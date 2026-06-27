@@ -647,7 +647,7 @@ export function OAuthTerminalPage({ payload }: { payload: BootPayload }) {
                 onClick={() => runSessionAction('finalize', 'Failed to finalize OAuth session.')}
                 disabled={actionPending !== null}
               >
-                Finalize Provider Profile
+                Finalize
               </button>
             ) : null}
             {['pending', 'starting', 'bridge_ready', 'awaiting_user', 'verifying'].includes(

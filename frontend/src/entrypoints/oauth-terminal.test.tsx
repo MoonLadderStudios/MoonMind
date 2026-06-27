@@ -240,7 +240,7 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     renderPage();
     await waitForSocket();
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Finalize Provider Profile' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Finalize' }));
 
     expect((await screen.findAllByText('Succeeded')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Provider profile registered successfully.')).toBeTruthy();
@@ -317,7 +317,7 @@ describe('OAuthTerminalPage clipboard behavior', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Finalize Provider Profile' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Finalize' })).toBeNull();
   });
 
   it('navigates to the replacement session returned by reconnect', async () => {
