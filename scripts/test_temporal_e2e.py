@@ -4,7 +4,7 @@ import time
 
 import requests
 
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+API_URL = os.getenv("API_URL", "http://localhost:7000")
 
 def wait_for_api():
     print(f"Waiting for API at {API_URL}/health ...")

@@ -25,6 +25,15 @@ def _env_map(environment: object) -> dict[str, str]:
         mapped[key] = value
     return mapped
 
+def _healthcheck_text(service_config: dict) -> str:
+    healthcheck = service_config.get("healthcheck", {})
+    if not isinstance(healthcheck, dict):
+        return ""
+    test = healthcheck.get("test", [])
+    if isinstance(test, list):
+        return " ".join(str(part) for part in test)
+    return str(test)
+
 def _network_names(service_config: dict) -> set[str]:
     networks = service_config.get("networks", {})
     if isinstance(networks, list):
@@ -41,6 +50,65 @@ def _network_aliases(service_config: dict, network_name: str) -> set[str]:
     if not isinstance(network_config, dict):
         return set()
     return {str(alias) for alias in network_config.get("aliases", [])}
+
+def test_api_host_port_scaffolding_for_mm_969():
+    # MM-969 carries the MM-968 Omnigent compose host-port split.
+    compose = _load_compose()
+    services = compose["services"]
+
+    api_service = services["api"]
+    assert api_service["ports"] == ["${MOONMIND_API_HOST_PORT:-7000}:8000"]
+    assert "http://localhost:8000/healthz" in _healthcheck_text(api_service)
+
+    env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
+    assert any(
+        line.strip() == "MOONMIND_API_HOST_PORT=7000"
+        for line in env_template.splitlines()
+    )
+
+    for service_name in (
+        "temporal-worker-workflow",
+        "temporal-worker-workflow-merge-automation",
+        "temporal-worker-agent-runtime",
+    ):
+        service_env = _env_map(services[service_name]["environment"])
+        assert service_env["MOONMIND_URL"] == "${MOONMIND_URL:-http://api:8000}"
+
+def test_compose_env_file_is_optional_for_default_startup():
+    compose = _load_compose()
+    services = compose["services"]
+
+    services_with_env_file = [
+        service_name
+        for service_name, service_config in services.items()
+        if isinstance(service_config, dict) and service_config.get("env_file")
+    ]
+    assert services_with_env_file
+
+    for service_name in services_with_env_file:
+        assert services[service_name]["env_file"] == [
+            {"path": ".env", "required": False}
+        ]
+
+def test_host_facing_developer_references_use_api_host_port_for_mm_969():
+    host_facing_paths = (
+        "README.md",
+        "docs/Development/FrontendDevelopment.md",
+        "docs/ExternalAgents/ModelContextProtocol.md",
+        "docs/ManagedAgents/ClaudeCodeMiniMax.md",
+        "docs/Temporal/WorkflowSchedulingGuide.md",
+        "examples/context_protocol_client.py",
+        "scripts/temporal_e2e_test.py",
+        "scripts/test_temporal_e2e.py",
+        "tools/auth-claude-volume.sh",
+        "tools/auth-codex-volume.sh",
+        "tools/auth-gemini-volume.sh",
+    )
+
+    for relative_path in host_facing_paths:
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "localhost:7000" in text
+        assert "localhost:8000" not in text
 
 def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()

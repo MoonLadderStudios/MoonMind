@@ -26,15 +26,15 @@ docker compose up -d api
 Then open the dashboard through the normal FastAPI route:
 
 ```text
-http://localhost:8000/workflows
+http://localhost:7000/workflows
 ```
 
 For network demos, replace `localhost` with the host name or IP address that the
 reviewer can reach, for example:
 
 ```text
-http://asus-laptop:8000/workflows
-http://192.168.0.20:8000/workflows
+http://asus-laptop:7000/workflows
+http://192.168.0.20:7000/workflows
 ```
 
 In this mode, FastAPI serves the built `dist/` bundle through the Vite manifest.

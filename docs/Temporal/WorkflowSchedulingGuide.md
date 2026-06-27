@@ -439,7 +439,7 @@ The cron field uses standard 5-field POSIX cron syntax:
 ### Start a workflow immediately
 
 ```bash
-curl -X POST http://localhost:8000/api/executions \
+curl -X POST http://localhost:7000/api/executions \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $TOKEN" \
  -d '{
@@ -456,7 +456,7 @@ curl -X POST http://localhost:8000/api/executions \
 ### Start a deferred one-time workflow
 
 ```bash
-curl -X POST http://localhost:8000/api/executions \
+curl -X POST http://localhost:7000/api/executions \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $TOKEN" \
  -d '{
@@ -477,7 +477,7 @@ curl -X POST http://localhost:8000/api/executions \
 ### Create a recurring schedule
 
 ```bash
-curl -X POST http://localhost:8000/api/recurring-workflows \
+curl -X POST http://localhost:7000/api/recurring-workflows \
  -H "Content-Type: application/json" \
  -H "Authorization: Bearer $TOKEN" \
  -d '{
@@ -497,14 +497,14 @@ curl -X POST http://localhost:8000/api/recurring-workflows \
 ### Trigger manual run
 
 ```bash
-curl -X POST http://localhost:8000/api/recurring-workflows/$SCHEDULE_ID/run \
+curl -X POST http://localhost:7000/api/recurring-workflows/$SCHEDULE_ID/run \
  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### List run history
 
 ```bash
-curl http://localhost:8000/api/recurring-workflows/$SCHEDULE_ID/runs?limit=50 \
+curl http://localhost:7000/api/recurring-workflows/$SCHEDULE_ID/runs?limit=50 \
  -H "Authorization: Bearer $TOKEN"
 ```
 

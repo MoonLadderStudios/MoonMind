@@ -29,7 +29,7 @@ The simplest path: add one line to your `.env` and `docker compose up`.
    MINIMAX_API_KEY=your-minimax-api-key-here
    ```
 
-   Both the `api` and worker services (`temporal-worker-sandbox`, `temporal-worker-agent-runtime`) include `env_file: .env` in `docker-compose.yaml`, so the key is automatically available in every container that needs it.
+   Both the `api` and worker services (`temporal-worker-sandbox`, `temporal-worker-agent-runtime`) include the optional `.env` file in `docker-compose.yaml`, so the key is automatically available in every container that needs it when the file exists.
 
 2. Run `docker compose up` (or restart if already running). On startup, the API service calls `_auto_seed_provider_profiles()` which checks for `MINIMAX_API_KEY` in the environment. If present, it seeds a `claude_minimax` profile alongside the default profiles:
 
@@ -86,7 +86,7 @@ If auto-seeding has already run, create the profile through the dashboard or the
 ### REST API
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/provider-profiles \
+curl -X POST http://localhost:7000/api/v1/provider-profiles \
   -H 'Content-Type: application/json' \
   -d '{
     "profile_id": "claude_minimax",
