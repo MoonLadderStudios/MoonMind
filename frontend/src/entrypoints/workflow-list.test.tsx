@@ -1343,28 +1343,26 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('21 total entries')).toBeTruthy();
   });
 
-  it('uses the dashboard control deck and data slab composition', async () => {
+  it('places filters in the Workflows header and uses the data slab composition', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
     const controlDeck = document.querySelector<HTMLElement>('.workflow-list-control-deck');
     const dataSlab = document.querySelector<HTMLElement>('.workflow-list-data-slab.panel--data');
+    const resultsHeader = dataSlab?.querySelector<HTMLElement>('.workflow-list-results-header');
     const tableWrapper = dataSlab?.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
     const table = tableWrapper?.querySelector<HTMLElement>('table');
     const tableHead = tableWrapper?.querySelector<HTMLElement>('thead');
     const firstHeader = tableWrapper?.querySelector<HTMLElement>('th');
 
-    expect(controlDeck).toBeTruthy();
-    expect(controlDeck?.querySelector('form.workflow-list-control-grid')).toBeNull();
-    // The advanced filter trigger lives in the control deck, not the headers.
-    expect(controlDeck?.querySelector('.workflow-list-filter-trigger')).toBeTruthy();
+    expect(controlDeck).toBeNull();
+    expect(resultsHeader?.querySelector('.workflow-list-filter-trigger')).toBeTruthy();
+    expect(resultsHeader?.textContent).toContain('Workflows');
     expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
 
-    expect(controlDeck?.classList.contains('panel--controls')).toBe(false);
-    expect(controlDeck?.querySelector('.workflow-list-utility-cluster')).toBeNull();
     expect(dataSlab?.querySelector('.workflow-list-results-footer')?.textContent).toContain(
       'Live updates enabled. Polling every 5s',
     );
@@ -1391,7 +1389,7 @@ describe('Workflows Entrypoint', () => {
     expect(Number(getComputedStyle(firstHeader as HTMLElement).zIndex)).toBeGreaterThan(1);
   });
 
-  it('keeps the workflow list surfaces to one control deck and one data slab', async () => {
+  it('keeps the workflow list surfaces to one data slab without an empty control deck', async () => {
     renderWithClient(
       <section className="panel" aria-live="polite">
         <WorkflowListPage payload={mockPayload} />
@@ -1404,15 +1402,12 @@ describe('Workflows Entrypoint', () => {
     const controlDecks = document.querySelectorAll<HTMLElement>('.workflow-list-control-deck');
     const dataSlabs = document.querySelectorAll<HTMLElement>('.workflow-list-data-slab.panel--data');
 
-    expect(controlDecks).toHaveLength(1);
+    expect(controlDecks).toHaveLength(0);
     expect(dataSlabs).toHaveLength(1);
 
-    const controlDeck = controlDecks[0] as HTMLElement;
     const dataSlab = dataSlabs[0] as HTMLElement;
-    const controlGrid = controlDeck.querySelector<HTMLElement>('.workflow-list-control-grid');
     const tableWrapper = dataSlab.querySelector<HTMLElement>('.queue-table-wrapper[data-layout="table"]');
 
-    expect(controlGrid).toBeNull();
     expect(tableWrapper).toBeTruthy();
 
     const shellPanelStyles = getComputedStyle(shellPanel as HTMLElement);

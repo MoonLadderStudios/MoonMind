@@ -4854,7 +4854,6 @@ function StepAddMenu({
         onClick={() => setOpen((value) => !value)}
       >
         <span aria-hidden="true">+</span>
-        <span className="queue-step-context-menu-button-text">Add to step</span>
       </button>
       {open ? (
         <div
