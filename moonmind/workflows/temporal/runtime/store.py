@@ -95,24 +95,25 @@ class ManagedRunStore:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 record = ManagedRunRecord(**data)
-                if record.status not in TERMINAL_AGENT_RUN_STATES:
-                    records.append(record)
             except (json.JSONDecodeError, ValueError):
                 continue
+            if record.status not in TERMINAL_AGENT_RUN_STATES:
+                records.append(record)
         return records
 
     def iter_all(self) -> Iterable[ManagedRunRecord]:
-        """Yield every readable run record without applying active filters."""
+        """Return all run records, including terminal records.
+
+        Unlike active reconciliation, retained-state cleanup must fail closed
+        when any durable owner record is unreadable.
+        """
         self.store_root.mkdir(parents=True, exist_ok=True)
         for path in self.store_root.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                yield ManagedRunRecord(**data)
-            except (json.JSONDecodeError, ValueError):
-                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            yield ManagedRunRecord(**data)
 
     def delete(self, run_id: str) -> None:
-        """Delete a run record file if it still exists."""
+        """Delete one run record by explicit run id."""
         path = self._resolve_path(run_id)
         try:
             path.unlink()

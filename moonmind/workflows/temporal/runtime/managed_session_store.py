@@ -104,17 +104,18 @@ class ManagedSessionStore:
         return records
 
     def iter_all(self) -> Iterable[CodexManagedSessionRecord]:
-        """Yield every readable session record without applying active filters."""
+        """Return all session records, including terminal records.
+
+        Unlike active reconciliation, retained-state cleanup must fail closed
+        when any durable owner record is unreadable.
+        """
         self.store_root.mkdir(parents=True, exist_ok=True)
         for path in self.store_root.glob("*.json"):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                yield CodexManagedSessionRecord(**data)
-            except (json.JSONDecodeError, ValueError):
-                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            yield CodexManagedSessionRecord(**data)
 
     def delete(self, session_id: str) -> None:
-        """Delete a session record file if it still exists."""
+        """Delete one session record by explicit session id."""
         path = self._resolve_path(session_id)
         try:
             path.unlink()
