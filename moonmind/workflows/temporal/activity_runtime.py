@@ -5994,6 +5994,7 @@ class TemporalAgentRuntimeActivities:
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
         session_controller: ManagedSessionController | None = None,
+        session_store: "ManagedSessionStore | None" = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
         workflow_docker_mode: str = "profiles",
@@ -6005,6 +6006,7 @@ class TemporalAgentRuntimeActivities:
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
         self._session_controller = session_controller
+        self._session_store = session_store
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
