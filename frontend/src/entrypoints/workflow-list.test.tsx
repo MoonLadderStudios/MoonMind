@@ -184,12 +184,12 @@ describe('Workflows Entrypoint', () => {
     );
 
     const scheduledHeaderButton = await screen.findByRole('button', {
-      name: /Updated\. Sorted descending\. Activate to sort ascending\./i,
+      name: /Updated\. Sorted descending, current page only\. Activate to sort ascending\./i,
     });
     expect(scheduledHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('descending');
 
     const runtimeHeaderButton = screen.getByRole('button', {
-      name: /Runtime\. Not sorted\. Activate to sort ascending\./i,
+      name: /Runtime\. Not sorted\. Activate to sort the current page ascending\./i,
     });
     expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('none');
 
@@ -198,9 +198,62 @@ describe('Workflows Entrypoint', () => {
     await waitFor(() => {
       expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
       expect(runtimeHeaderButton.getAttribute('aria-label')).toBe(
-        'Runtime. Sorted ascending. Activate to sort descending.',
+        'Runtime. Sorted ascending, current page only. Activate to sort descending.',
       );
     });
+  });
+
+  it('labels sorting as current-page-only and keeps it out of the URL and API request (MM-954)', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    // Visible explanatory text near pagination.
+    expect(screen.getByText('Sorting applies to the current page only.')).toBeTruthy();
+
+    const runtimeHeaderButton = screen.getByRole('button', {
+      name: /Runtime\. Not sorted\. Activate to sort the current page ascending\./i,
+    });
+    // Tooltip text reinforces the current-page-only scope.
+    expect(runtimeHeaderButton.getAttribute('title')).toBe('Sorting applies to the current page only.');
+
+    fireEvent.click(runtimeHeaderButton);
+
+    await waitFor(() => {
+      expect(runtimeHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+    });
+
+    // URL state must not imply a global server-side sort.
+    expect(window.location.search).not.toContain('sort=');
+    expect(window.location.search).not.toContain('sortDir=');
+
+    // The API request must not send sort/sortDir; sorting is purely client-side
+    // over the currently loaded page.
+    const requestedUrls = executionListCalls().map(([url]) => String(url));
+    expect(requestedUrls.length).toBeGreaterThan(0);
+    for (const url of requestedUrls) {
+      expect(url).not.toContain('sort=');
+      expect(url).not.toContain('sortDir=');
+    }
+  });
+
+  it('ignores sort/sortDir present in the initial URL so deep links never imply a global sort (MM-954)', async () => {
+    window.history.pushState({}, 'Seeded sort', '/workflows?sort=status&sortDir=asc');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    // The default current-page sort (Updated, descending) is used regardless of
+    // the URL, and the misleading sort params are dropped from the URL.
+    expect(
+      screen.getByRole('button', {
+        name: /Updated\. Sorted descending, current page only\. Activate to sort ascending\./i,
+      }),
+    ).toBeTruthy();
+    expect(window.location.search).not.toContain('sort=');
+    expect(window.location.search).not.toContain('sortDir=');
+    expect(String(lastExecutionListUrl())).not.toContain('sort=');
   });
 
   it('exposes the exact updated timestamp with a two-digit year on hover', async () => {
@@ -342,7 +395,7 @@ describe('Workflows Entrypoint', () => {
     await screen.findAllByText('Example task');
 
     const updatedHeaderButton = await screen.findByRole('button', {
-      name: /Updated\. Sorted descending\. Activate to sort ascending\./i,
+      name: /Updated\. Sorted descending, current page only\. Activate to sort ascending\./i,
     });
 
     openFilterDrawer();

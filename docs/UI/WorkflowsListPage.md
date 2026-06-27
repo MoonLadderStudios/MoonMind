@@ -163,16 +163,14 @@ Current URL parameters:
 | `repo` | Repository filter. |
 | `limit` | Page size. |
 | `nextPageToken` | Current opaque pagination cursor. |
-| `sort` | Selected table sort field when non-default. |
-| `sortDir` | `asc` or `desc` when non-default. |
 
 Rules:
 
 1. Query-string state is synchronized with `history.replaceState`.
 2. Filter changes reset pagination to the first page.
 3. Page-size changes reset pagination to the first page.
-4. Sort state is persisted in the URL.
-5. The current list request does not send sort parameters to the API; rows are sorted in the browser after the current page is fetched.
+4. Sort state is **not** persisted in the URL. Sorting is current-page-only client state (MM-954): the table reorders only the rows on the currently loaded page, so the sort field/direction live in component state and are intentionally neither seeded from nor written to the URL. This avoids implying a global server-side sort across the full filtered result set in shared links.
+5. The current list request does not send sort parameters to the API; rows are sorted in the browser after the current page is fetched. The UI labels this scope explicitly through a footer notice, header tooltip, and screen-reader hints.
 
 ### 5.4 Current API request
 

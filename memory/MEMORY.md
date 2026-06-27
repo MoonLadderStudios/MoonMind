@@ -1,1 +1,2 @@
 - [Pre-existing test_executions failures](pre-existing-test-executions-failures.md) — describe_execution IllegalStateChangeError reproduces on main; not a regression
+- [MM-954 workflow-list current-page sort](mm954-workflow-list-current-page-sort.md) — why list sorting is intentionally page-only, not global server-side

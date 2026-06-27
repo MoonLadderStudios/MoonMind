@@ -10,6 +10,11 @@ import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 
 const POLL_MS_DEFAULT = 5000;
 
+// MM-954: the workflow list uses cursor pagination and sorts only the rows on the
+// currently loaded page (client-side). This notice keeps the UI honest about that
+// scope instead of implying a global server-side sort across the full result set.
+const CURRENT_PAGE_SORT_NOTICE = 'Sorting applies to the current page only.';
+
 type ListDashboardConfig = {
   pollIntervalsMs?: { list?: number };
   features?: {
@@ -100,7 +105,6 @@ const FILTER_FIELDS = [
   ['closedAt', 'Finished'],
 ] as const;
 type FilterColumn = (typeof FILTER_FIELDS)[number];
-const VALID_TABLE_SORT_FIELDS = new Set<string>([...FILTER_FIELDS.map((column) => column[0]), 'integration', 'updatedAt']);
 const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'workflowId',
   'status',
@@ -206,11 +210,6 @@ type ExecutionFacetResponse = z.infer<typeof ExecutionFacetResponseSchema>;
 function readListDashboardConfig(payload: BootPayload): ListDashboardConfig | undefined {
   const raw = payload.initialData as { dashboardConfig?: ListDashboardConfig } | undefined;
   return raw?.dashboardConfig;
-}
-
-function normalizeTableSortField(raw: string | null): string {
-  const candidate = (raw || '').trim();
-  return VALID_TABLE_SORT_FIELDS.has(candidate) ? candidate : 'updatedAt';
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -732,12 +731,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
   );
   const [cursorStack, setCursorStack] = useState<string[]>([]);
-  const [sortField, setSortField] = useState<string>(() => normalizeTableSortField(initial.get('sort')));
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>(() => {
-    const initialSortDir = initial.get('sortDir');
-    if (initialSortDir === 'asc' || initialSortDir === 'desc') return initialSortDir;
-    return 'desc';
-  });
+  // MM-954: sorting is current-page-only. The sort field/direction live in
+  // component state only — they are intentionally neither seeded from nor written
+  // to the URL, so a shared link never implies a global server-side sort across
+  // the full filtered result set.
+  const [sortField, setSortField] = useState<string>('updatedAt');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const filterValidationErrors = useMemo(() => {
     if (!hasEditedFilters) return initialFilterValidationErrors;
     const params = new URLSearchParams();
@@ -751,18 +750,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
-    if (sortField !== 'updatedAt' || sortDir !== 'desc') {
-      params.set('sort', sortField);
-      params.set('sortDir', sortDir);
-    }
+    // MM-954: do not persist sort/sortDir to the URL. Sorting only reorders the
+    // currently loaded page, so writing it to the URL would falsely imply a
+    // global server-side sort across the full filtered result set.
     replaceUrlQuery(params);
   }, [
     filters,
     filterValidationErrors.length,
     pageSize,
     listCursor,
-    sortField,
-    sortDir,
   ]);
 
   useEffect(() => {
@@ -944,10 +940,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         ? 'ascending'
         : 'descending';
     const sortHint = !isSorted
-      ? 'Not sorted. Activate to sort ascending.'
+      ? 'Not sorted. Activate to sort the current page ascending.'
       : sortDir === 'asc'
-        ? 'Sorted ascending. Activate to sort descending.'
-        : 'Sorted descending. Activate to sort ascending.';
+        ? 'Sorted ascending, current page only. Activate to sort descending.'
+        : 'Sorted descending, current page only. Activate to sort ascending.';
     return {
       ariaSort,
       ariaLabel: `${label}. ${sortHint}`,
@@ -980,6 +976,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             ? `Live updates enabled. Polling every ${Math.round(listPollMs / 1000)}s`
             : 'Live updates unavailable while the list is disabled.'}
         </span>
+        {sortedItems.length > 0 ? (
+          <span className="small workflow-list-sort-scope-note">{CURRENT_PAGE_SORT_NOTICE}</span>
+        ) : null}
       </div>
       <div className="queue-pagination workflow-list-footer-pagination">
         <PageSizeSelector
@@ -1577,6 +1576,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                 className="table-sort-button"
                                 onClick={() => onHeaderClick(field)}
                                 aria-label={ariaLabel}
+                                title={CURRENT_PAGE_SORT_NOTICE}
                               >
                                 {label}
                                 {sortIndicator(field)}
