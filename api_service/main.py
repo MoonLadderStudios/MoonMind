@@ -1241,13 +1241,13 @@ async def ensure_managed_session_reconcile_schedule_started() -> None:
     )
 
 async def ensure_managed_runtime_workspace_cleanup_schedule_started() -> None:
-    """Best-effort startup install for the disabled retained-state janitor schedule."""
+    """Best-effort startup install for the retained-state janitor schedule."""
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
     try:
         schedule_id = (
             await TemporalClientAdapter().ensure_managed_runtime_workspace_cleanup_schedule(
-                enabled=False
+                enabled=None
             )
         )
     except Exception:

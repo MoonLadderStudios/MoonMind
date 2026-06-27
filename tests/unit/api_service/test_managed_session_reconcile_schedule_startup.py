@@ -58,16 +58,16 @@ async def test_mm870_api_startup_schedule_failure_is_best_effort(
 
 
 @pytest.mark.asyncio
-async def test_mm948_api_startup_ensures_workspace_cleanup_schedule_disabled(
+async def test_mm948_api_startup_preserves_workspace_cleanup_schedule_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[bool] = []
+    calls: list[bool | None] = []
 
     class _Adapter:
         async def ensure_managed_runtime_workspace_cleanup_schedule(
             self,
             *,
-            enabled: bool,
+            enabled: bool | None,
         ) -> str:
             calls.append(enabled)
             return "mm-operational:managed-runtime-workspace-cleanup"
@@ -79,7 +79,7 @@ async def test_mm948_api_startup_ensures_workspace_cleanup_schedule_disabled(
 
     await api_main.ensure_managed_runtime_workspace_cleanup_schedule_started()
 
-    assert calls == [False]
+    assert calls == [None]
 
 
 @pytest.mark.asyncio
