@@ -57,14 +57,14 @@ Reasoning:
 - MoonMind is delegating a run to an Omnigent server, which then provisions or uses an Omnigent host/runner.
 - Omnigent's primary unit is a long-running session/conversation, not a MoonMind-managed runtime process.
 
-Therefore the v1 provider should register as:
+Therefore the v1 provider must register as a single canonical provider identity:
 
 ```text
 agentKind = external
 agentId   = omnigent
 ```
 
-Runtime selection, such as Claude vs Codex, must be declared in `parameters.omnigent`, not by changing the top-level MoonMind `agentId`.
+Runtime selection, session mode, harness choice, Claude-vs-Codex choice, and built-in Omnigent agent selection must be declared in `parameters.omnigent`, not by changing the top-level MoonMind `agentId`.
 
 ### 2.2 Use streaming-gateway execution first
 
@@ -119,7 +119,8 @@ The v1 adapter does not attempt to:
 - make Omnigent's internal `ArtifactStore` the MoonMind artifact system;
 - automatically capture native runtime private state not exposed by Omnigent APIs;
 - guarantee perfect replay of transient Omnigent SSE events after the stream is disconnected;
-- implement multi-step, long-lived Omnigent session reuse across MoonMind steps in v1.
+- implement multi-step, long-lived Omnigent session reuse across MoonMind steps in v1;
+- introduce provider-specific top-level MoonMind agent-id aliases such as `omnigent_session`, `omnigent_claude`, or `omnigent_codex`.
 
 ---
 
@@ -157,22 +158,24 @@ Security rule: `OMNIGENT_API_TOKEN` is resolved only at the activity boundary. I
 
 Register the adapter only when the runtime gate is enabled.
 
-Canonical registrations:
+Canonical registration:
 
 ```text
 omnigent
-omnigent_session
 ```
 
-Optional convenience aliases may be registered later, but they should still resolve to the same adapter:
+Do not register a second top-level `agentId` for the same provider. In particular, do not register:
 
 ```text
+omnigent_session
 omnigent_claude
 omnigent_codex
 omnigent_polly
 ```
 
-The preferred top-level `AgentExecutionRequest` remains:
+Those values would split routing, policy, metrics, tests, and provider identity. Session mode, runtime selection, built-in agent choice, and harness overrides belong under `parameters.omnigent`.
+
+The top-level `AgentExecutionRequest` remains:
 
 ```json
 {
@@ -280,7 +283,8 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
         "mode": "message",
         "text": null,
         "instructionRef": null,
-        "includeInputRefs": true
+        "includeInputRefs": true,
+        "includeIdempotencyMarker": true
       },
       "capture": {
         "stream": true,
@@ -312,6 +316,7 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
 | `session.terminalLaunchArgs` | Native Claude/Codex launch flags | Must be bounded and non-secret. |
 | `prompt.text` | Inline prompt | Prefer artifact-backed prompt for large inputs. |
 | `prompt.instructionRef` | MoonMind artifact ref with prompt/instructions | Activity reads artifact and posts text. |
+| `prompt.includeIdempotencyMarker` | Whether to include a compact non-secret retry marker in the first message | Defaults to true for retry reconciliation. |
 | `capture.*` | Artifact capture policy | Controls MoonMind harvesting, not Omnigent storage. |
 
 ### 7.4 Target resolution order
@@ -394,15 +399,18 @@ AgentRunResult
 1. Validate AgentExecutionRequest.
 2. Resolve Omnigent endpoint and agent target.
 3. Create or reuse idempotent Omnigent session mapping.
-4. Open SSE stream.
-5. Fetch initial snapshot.
-6. Post first message event.
-7. Mirror SSE stream into MoonMind artifacts.
-8. Wait for terminal response/session status.
-9. Fetch final snapshot.
-10. Harvest workspace/session resources.
-11. Optionally discover GitHub PR metadata.
-12. Return canonical AgentRunResult.
+4. Build canonical first-message payload and digest.
+5. Determine whether the first message was already posted or can be reconciled.
+6. Open SSE stream.
+7. Fetch initial snapshot.
+8. Post first message event only if durable state proves it has not already been posted.
+9. Persist first-message sent marker immediately after successful POST.
+10. Mirror SSE stream into MoonMind artifacts.
+11. Wait for terminal response/session status.
+12. Fetch final snapshot.
+13. Harvest workspace/session resources.
+14. Optionally discover GitHub PR metadata.
+15. Return canonical AgentRunResult.
 ```
 
 ### 9.3 Session creation
@@ -431,9 +439,61 @@ Representative payload:
 
 For `hostType=managed`, Omnigent server chooses/provisions the host and workspace. For `hostType=external`, the caller must provide an Omnigent host/workspace model that is already valid for that server.
 
-### 9.4 First message
+### 9.4 First message construction
 
-After stream attachment and initial snapshot, post:
+The message text is assembled from:
+
+1. `parameters.omnigent.prompt.text`, if present.
+2. `parameters.omnigent.prompt.instructionRef`, if present.
+3. `AgentExecutionRequest.instructionRef`, if present.
+4. `parameters.description`, if present.
+5. a generated prompt from title, workspace spec, and input refs.
+
+Large prompt bodies should be artifact-backed and read at the activity boundary.
+
+Before sending the first message, the activity computes:
+
+```text
+first_message_digest = sha256(canonical_json(first_message_event.data))
+```
+
+When `prompt.includeIdempotencyMarker` is true, the activity appends or includes a compact non-secret marker in the first message body:
+
+```text
+MoonMind-Omnigent-Run:
+  correlation_id: <correlationId>
+  idempotency_key: <idempotencyKey>
+  first_message_digest: <sha256>
+```
+
+The marker is intentionally non-secret and exists to support retry reconciliation against Omnigent snapshots, pending inputs, and transcripts if a Temporal activity retry occurs after the first POST reached Omnigent.
+
+### 9.5 First message idempotency
+
+The first message must be durable-idempotent across Temporal activity retries.
+
+The adapter must not unconditionally post the first message when reusing an existing Omnigent session for the same `idempotencyKey`.
+
+Required durable states:
+
+```text
+not_prepared -> prepared -> posting -> posted -> terminal
+```
+
+Rules:
+
+1. `prepared` records the canonical message digest before any HTTP POST.
+2. `posting` is persisted immediately before the `POST /events` call.
+3. `posted` is persisted immediately after Omnigent returns a successful response.
+4. If Omnigent returns a native-terminal `pending_id`, store it.
+5. If a retry finds `posted`, it must skip the first POST.
+6. If a retry finds `posting`, it must reconcile before deciding whether to repost.
+7. Reconciliation checks Omnigent snapshot `items`, native `pending_inputs`, and any captured `session.input.consumed` events for the stored digest or idempotency marker.
+8. If reconciliation finds the first message, mark it `posted` and skip posting.
+9. If reconciliation cannot prove absence, do not blindly repost. Wait within the configured reconciliation grace period or surface `intervention_requested` / `integration_error` rather than duplicating work.
+10. If the same `idempotencyKey` is reused with a different first-message digest, fail fast and require an explicit operator reset.
+
+Representative event:
 
 ```json
 {
@@ -446,16 +506,6 @@ After stream attachment and initial snapshot, post:
   }
 }
 ```
-
-The message text is assembled from:
-
-1. `parameters.omnigent.prompt.text`, if present.
-2. `parameters.omnigent.prompt.instructionRef`, if present.
-3. `AgentExecutionRequest.instructionRef`, if present.
-4. `parameters.description`, if present.
-5. a generated prompt from title, workspace spec, and input refs.
-
-Large prompt bodies should be artifact-backed and read at the activity boundary.
 
 ---
 
@@ -476,6 +526,15 @@ omnigent_external_runs
   omnigent_agent_id text null
   omnigent_agent_name text null
   status text not null
+  first_message_state text not null default 'not_prepared'
+  first_message_digest text null
+  first_message_marker text null
+  first_message_post_attempted_at timestamptz null
+  first_message_posted_at timestamptz null
+  first_message_pending_id text null
+  first_message_item_id text null
+  first_message_request_ref text null
+  first_message_response_ref text null
   created_at timestamptz not null
   updated_at timestamptz not null
   final_snapshot_ref text null
@@ -487,8 +546,11 @@ omnigent_external_runs
 Rules:
 
 - If a record exists for `idempotencyKey`, reuse its Omnigent session.
-- If session creation succeeds, persist the `session_id` before posting the first message.
+- If session creation succeeds, persist the `session_id` before preparing or posting the first message.
+- If first-message state is `posted`, skip the first message and continue stream/snapshot reconciliation.
+- If first-message state is `posting`, reconcile against Omnigent snapshot/pending inputs/transcript before deciding whether any retry may post.
 - Never create a second Omnigent session for the same idempotency key unless an operator explicitly resets the mapping.
+- Never post a second first message for the same idempotency key and digest unless reconciliation has positively proved the prior POST did not reach Omnigent.
 - Store only non-secret endpoint refs, not raw tokens or headers.
 
 ---
@@ -520,6 +582,8 @@ Unsupported or unknown provider states must be treated as adapter contract error
 ### 12.1 Capture principle
 
 Omnigent's stream is a live tail. It is not a replay log. Therefore the execute activity must open the stream before posting the first message whenever possible.
+
+On retry, opening the stream before reconciliation is still preferred, but the first-message idempotency rules take precedence. A retry must never post the first message merely because it has successfully reattached to the stream.
 
 ### 12.2 Required artifacts
 
@@ -645,6 +709,11 @@ Suggested contents:
     "sseEndedNormally": true,
     "eventsCaptured": 231
   },
+  "idempotency": {
+    "firstMessageState": "posted",
+    "firstMessageDigest": "sha256:...",
+    "firstMessagePendingId": "pending_..."
+  },
   "capture": {
     "changedFiles": 4,
     "sessionFiles": 0,
@@ -733,6 +802,7 @@ Rules:
 6. Runtime credentials for Claude/Codex remain Omnigent server/host configuration concerns in this topology.
 7. Artifact capture must prefer redacted raw event records plus normalized views.
 8. Host-side capture helpers, if added later, must authenticate to MoonMind artifact APIs using scoped, short-lived credentials.
+9. First-message idempotency markers may include correlation ids and digests, but must not include raw prompts from private artifacts beyond the actual prompt body that is already being sent to Omnigent.
 
 ---
 
@@ -750,6 +820,8 @@ Rules:
 | Activity timeout | `system_error` or `execution_error` | Depends on timeout policy. |
 | Artifact harvest partial failure | completed with diagnostics or `system_error` | Policy-controlled. |
 | Unknown Omnigent stream event schema | `integration_error` | Contract drift. |
+| Idempotency key reused with different first-message digest | `user_error` | Caller attempted conflicting replay. |
+| Retry cannot prove whether first message was accepted | `intervention_requested` or `integration_error` | Do not blindly duplicate the first message. |
 
 ---
 
@@ -808,7 +880,64 @@ Host-side stdout/stderr capture is explicitly out of scope for v1 unless a MoonM
 
 ---
 
-## 20. v2 polling/session mode
+## 20. v1 adapter and registry sketch
+
+```python
+# moonmind/workflows/adapters/omnigent_agent_adapter.py
+
+from moonmind.schemas.agent_runtime_models import ProviderCapabilityDescriptor
+from moonmind.workflows.adapters.base_external_agent_adapter import BaseExternalAgentAdapter
+
+_OMNIGENT_CAPABILITY = ProviderCapabilityDescriptor(
+    providerName="omnigent",
+    supportsCallbacks=False,
+    supportsCancel=True,
+    supportsResultFetch=False,
+    defaultPollHintSeconds=10,
+    execution_style="streaming_gateway",
+)
+
+class OmnigentExternalAdapter(BaseExternalAgentAdapter):
+    """Registry/capability adapter for Omnigent-backed external agent runs."""
+
+    def __init__(self) -> None:
+        super().__init__(accepted_agent_ids=frozenset({"omnigent"}))
+
+    @property
+    def provider_capability(self) -> ProviderCapabilityDescriptor:
+        return _OMNIGENT_CAPABILITY
+
+    async def do_start(self, request, title, description, metadata):
+        raise RuntimeError("Omnigent v1 uses integration.omnigent.execute")
+
+    async def do_status(self, run_id: str):
+        raise RuntimeError("Omnigent v1 uses streaming execution")
+
+    async def do_fetch_result(self, run_id: str):
+        raise RuntimeError("Omnigent v1 uses streaming execution")
+
+    async def do_cancel(self, run_id: str):
+        raise RuntimeError("Omnigent v1 cancels via execute activity cancellation")
+```
+
+```python
+# moonmind/workflows/adapters/external_adapter_registry.py
+
+from moonmind.omnigent.settings import build_omnigent_gate
+
+gate = build_omnigent_gate(env=env)
+if gate.enabled:
+    from moonmind.workflows.adapters.omnigent_agent_adapter import OmnigentExternalAdapter
+
+    def _omnigent_factory() -> AgentAdapter:
+        return OmnigentExternalAdapter()
+
+    registry.register("omnigent", _omnigent_factory)
+```
+
+---
+
+## 21. v2 polling/session mode
 
 A future polling/session adapter can support multi-step continuation against one Omnigent session.
 
@@ -836,11 +965,12 @@ Additional requirements:
 - explicit `externalProviderContinuation` payload support;
 - session epoch tracking for clear/reset semantics;
 - stricter ownership and cleanup policies;
-- child-session mapping in MoonMind run ledger.
+- child-session mapping in MoonMind run ledger;
+- per-message idempotency records, not only first-message records.
 
 ---
 
-## 21. Host-side capture helper
+## 22. Host-side capture helper
 
 API-only capture is enough for v1. A host-side helper should be added only when MoonMind needs artifacts not exposed by Omnigent APIs.
 
@@ -865,29 +995,36 @@ This helper must write to MoonMind's artifact API or artifact worker surface, no
 
 ---
 
-## 22. Testing strategy
+## 23. Testing strategy
 
-### 22.1 Unit tests
+### 23.1 Unit tests
 
 - target block validation;
 - endpoint config resolution;
+- single canonical `agentId=omnigent` registration;
+- rejection of provider-specific top-level aliases;
 - Omnigent status normalization;
 - SSE event parsing;
 - redaction rules;
 - artifact manifest generation;
 - cancellation event sequence;
-- idempotency mapping reuse.
+- idempotency mapping reuse;
+- first-message digest computation;
+- first-message skip-on-reuse behavior;
+- `posting` state reconciliation behavior;
+- digest mismatch fail-fast behavior.
 
-### 22.2 Adapter contract tests
+### 23.2 Adapter contract tests
 
 - provider registers only when enabled;
 - `agentKind=external` is required;
 - `agentId=omnigent` is accepted;
 - unknown `agentId` is rejected;
+- `agentId=omnigent_session` is rejected;
 - streaming capability is declared;
 - polling hooks fail loudly in v1.
 
-### 22.3 Integration tests with fake Omnigent server
+### 23.3 Integration tests with fake Omnigent server
 
 The fake server should support:
 
@@ -908,23 +1045,27 @@ Scenarios:
 6. changed files and diff harvest;
 7. child session event capture;
 8. cancellation before completion;
-9. idempotent retry after session create.
+9. idempotent retry after session create but before first message;
+10. idempotent retry after first message response but before terminal result;
+11. crash-window retry with `posting` state and snapshot reconciliation;
+12. conflicting first-message digest under the same idempotency key.
 
-### 22.4 Live smoke tests
+### 23.4 Live smoke tests
 
 Run against a real Omnigent server with a disposable repository and a sandbox host. Validate:
 
 - session creation;
 - host provisioning;
-- Claude or Codex launch;
+- Claude or Codex launch selected through `parameters.omnigent`;
 - stream capture;
 - final snapshot capture;
 - changed-file harvest;
-- optional PR detection.
+- optional PR detection;
+- activity retry does not duplicate the first prompt.
 
 ---
 
-## 23. Rollout phases
+## 24. Rollout phases
 
 ### Phase 0: design and fake-client tests
 
@@ -939,6 +1080,8 @@ Run against a real Omnigent server with a disposable repository and a sandbox ho
 - Add `integration.omnigent.execute` activity.
 - Capture requests, stream, snapshots, and final result.
 - Return canonical `AgentRunResult` with artifact refs.
+- Enforce one canonical top-level `agentId=omnigent`.
+- Enforce first-message durable idempotency.
 
 ### Phase 2: resource harvesting
 
@@ -957,6 +1100,7 @@ Run against a real Omnigent server with a disposable repository and a sandbox ho
 - Add polling/session activity family.
 - Support continuation across workflow steps.
 - Add durable stream mirror or session event polling.
+- Add idempotency records for each follow-up message.
 
 ### Phase 5: host-side capture helper
 
@@ -965,19 +1109,19 @@ Run against a real Omnigent server with a disposable repository and a sandbox ho
 
 ---
 
-## 24. Open questions
+## 25. Open questions
 
 1. Should Omnigent endpoint selection be global config only, or should MoonMind support named endpoint refs per tenant/project?
-2. Should `omnigent_claude` and `omnigent_codex` be registered as aliases, or should all runtime selection remain inside `parameters.omnigent.agent`?
-3. Should v1 require `hostType=managed`, or should external-host sessions be allowed immediately?
-4. Should the adapter delete Omnigent sessions after successful harvest in CI-style workflows?
-5. Should MoonMind patch Omnigent to emit webhooks or artifact callbacks instead of relying on SSE capture?
-6. How should clear/context-reset semantics map onto MoonMind step epochs in v2?
-7. Should MoonMind add a first-class `externalSession` table shared by Jules, Codex Cloud, OpenClaw, and Omnigent?
+2. Should v1 require `hostType=managed`, or should external-host sessions be allowed immediately?
+3. Should the adapter delete Omnigent sessions after successful harvest in CI-style workflows?
+4. Should MoonMind patch Omnigent to emit webhooks or artifact callbacks instead of relying on SSE capture?
+5. How should clear/context-reset semantics map onto MoonMind step epochs in v2?
+6. Should MoonMind add a first-class `externalSession` table shared by Jules, Codex Cloud, OpenClaw, and Omnigent?
+7. Should ambiguous `posting` retry reconciliation fail closed as `intervention_requested` by default, or can specific CI workflows opt into repost-after-positive-absence?
 
 ---
 
-## 25. Design invariant
+## 26. Design invariant
 
 The core invariant is:
 
