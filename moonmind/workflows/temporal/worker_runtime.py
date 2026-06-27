@@ -763,23 +763,26 @@ def _pr_resolver_structured_selector(
     selected_skill_inputs: Mapping[str, Any],
 ) -> str:
     git_payload = _coerce_mapping(task_payload.get("git"))
-    selected_skill_payload = (
-        _coerce_mapping(task_payload.get("tool"))
-        or _coerce_mapping(task_payload.get("skill"))
+    tool_payload = _coerce_mapping(task_payload.get("tool"))
+    skill_payload = _coerce_mapping(task_payload.get("skill"))
+    tool_inputs = _coerce_mapping(
+        tool_payload.get("inputs") or tool_payload.get("args")
     )
-    selected_skill_payload_inputs = _coerce_mapping(
-        selected_skill_payload.get("inputs")
-        or selected_skill_payload.get("args")
+    skill_inputs = _coerce_mapping(
+        skill_payload.get("inputs") or skill_payload.get("args")
     )
     return _first_non_empty_text(
-        selected_skill_inputs.get("pr"),
-        selected_skill_payload_inputs.get("pr"),
-        selected_skill_inputs.get("startingBranch"),
-        selected_skill_payload_inputs.get("startingBranch"),
-        git_payload.get("startingBranch"),
-        task_payload.get("startingBranch"),
-        selected_skill_inputs.get("branch"),
-        selected_skill_payload_inputs.get("branch"),
+        str(selected_skill_inputs.get("pr") or "").strip(),
+        str(tool_inputs.get("pr") or "").strip(),
+        str(skill_inputs.get("pr") or "").strip(),
+        str(selected_skill_inputs.get("startingBranch") or "").strip(),
+        str(tool_inputs.get("startingBranch") or "").strip(),
+        str(skill_inputs.get("startingBranch") or "").strip(),
+        str(git_payload.get("startingBranch") or "").strip(),
+        str(task_payload.get("startingBranch") or "").strip(),
+        str(selected_skill_inputs.get("branch") or "").strip(),
+        str(tool_inputs.get("branch") or "").strip(),
+        str(skill_inputs.get("branch") or "").strip(),
     )
 
 

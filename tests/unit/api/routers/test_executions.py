@@ -4860,6 +4860,37 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
         "startingBranch": "feature/resolve-pr"
     }
 
+
+def test_create_task_shaped_execution_allows_pr_resolver_with_numeric_pr_selector(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "runtime": {"mode": "gemini_cli"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                    },
+                    "inputs": {"pr": 2733},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["workflow"]["inputs"] == {"pr": 2733}
+
+
 def _pentest_workflow_payload(
     *,
     tool_inputs: dict[str, object] | None = None,

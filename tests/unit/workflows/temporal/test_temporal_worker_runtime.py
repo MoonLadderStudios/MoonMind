@@ -2576,6 +2576,38 @@ def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
     assert '"pr": "fix/from-tool-inputs"' in node_inputs["instructions"]
     assert plan["metadata"]["title"] == "fix/from-tool-inputs"
 
+
+def test_runtime_planner_pr_resolver_reads_skill_args_when_tool_is_present():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Resolve and merge pull request 2733.",
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                },
+                "skill": {
+                    "id": "pr-resolver",
+                    "args": {"pr": 2733, "branch": "codex/pr-resolver-selector-guard"},
+                },
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["selectedSkill"] == "pr-resolver"
+    assert plan["metadata"]["title"] == "2733"
+
+
 def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

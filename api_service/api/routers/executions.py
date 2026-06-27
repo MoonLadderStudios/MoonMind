@@ -6290,41 +6290,49 @@ _PR_RESOLVER_SELECTOR_ERROR = (
 
 def _pr_resolver_structured_selector(
     *,
-    task_payload: Mapping[str, Any],
-    normalized_task_for_planner: Mapping[str, Any] | None = None,
+    task_payload: dict[str, Any],
+    normalized_task_for_planner: dict[str, Any] | None = None,
 ) -> str:
     normalized_task = (
         normalized_task_for_planner
-        if isinstance(normalized_task_for_planner, Mapping)
+        if isinstance(normalized_task_for_planner, dict)
         else {}
     )
     task_inputs = _coerce_mapping(task_payload.get("inputs"))
     normalized_inputs = _coerce_mapping(normalized_task.get("inputs"))
     task_git = _coerce_mapping(task_payload.get("git"))
     normalized_git = _coerce_mapping(normalized_task.get("git"))
-    tool_payload = _coerce_mapping(task_payload.get("tool")) or _coerce_mapping(
-        task_payload.get("skill")
-    )
+    tool_payload = _coerce_mapping(task_payload.get("tool"))
+    skill_payload = _coerce_mapping(task_payload.get("skill"))
     tool_inputs = _coerce_mapping(
         tool_payload.get("inputs") or tool_payload.get("args")
     )
+    skill_inputs = _coerce_mapping(
+        skill_payload.get("inputs") or skill_payload.get("args")
+    )
 
-    return str(
-        task_inputs.get("pr")
-        or normalized_inputs.get("pr")
-        or tool_inputs.get("pr")
-        or task_inputs.get("startingBranch")
-        or normalized_inputs.get("startingBranch")
-        or tool_inputs.get("startingBranch")
-        or task_git.get("startingBranch")
-        or normalized_git.get("startingBranch")
-        or task_payload.get("startingBranch")
-        or normalized_task.get("startingBranch")
-        or task_inputs.get("branch")
-        or normalized_inputs.get("branch")
-        or tool_inputs.get("branch")
-        or ""
-    ).strip()
+    for value in (
+        task_inputs.get("pr"),
+        normalized_inputs.get("pr"),
+        tool_inputs.get("pr"),
+        skill_inputs.get("pr"),
+        task_inputs.get("startingBranch"),
+        normalized_inputs.get("startingBranch"),
+        tool_inputs.get("startingBranch"),
+        skill_inputs.get("startingBranch"),
+        task_git.get("startingBranch"),
+        normalized_git.get("startingBranch"),
+        task_payload.get("startingBranch"),
+        normalized_task.get("startingBranch"),
+        task_inputs.get("branch"),
+        normalized_inputs.get("branch"),
+        tool_inputs.get("branch"),
+        skill_inputs.get("branch"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 def _validate_workflow_runtime_requirements(
