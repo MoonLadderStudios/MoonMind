@@ -2049,7 +2049,7 @@ function capabilityCatalogEntry(token: string): CapabilityCatalogEntry {
   };
 }
 
-type CapabilitySourceKind =
+export type CapabilitySourceKind =
   | "explicit"
   | "preset"
   | "skill"
@@ -2068,19 +2068,30 @@ const CAPABILITY_SOURCE_LABELS: Record<CapabilitySourceKind, string> = {
   template: "from template",
 };
 
-interface CapabilityContribution {
+export interface CapabilityContribution {
   token: string;
   sourceKind: CapabilitySourceKind;
   sourceLabel: string;
   removable: boolean;
 }
 
-interface StepCapabilityChip {
+export type CapabilityReadinessState = "requested" | "required_before_launch";
+
+export interface CapabilityReadiness {
+  state: CapabilityReadinessState;
+  label: string;
+  description: string;
+  sourceLabels: string[];
+  grantsAccess: false;
+}
+
+export interface StepCapabilityChip {
   token: string;
   label: string;
   description: string;
   icon: string;
   sources: CapabilityContribution[];
+  readiness: CapabilityReadiness;
   removable: boolean;
 }
 
@@ -2099,7 +2110,8 @@ interface BuildCapabilityChipsArgs {
 // additive and backend normalization is authoritative, so a capability chip is
 // only removable when the sole contribution is the explicit step authoring
 // field. Derived contributions (preset, skill, tool, runtime, publish mode,
-// template) keep the chip non-removable and carry provenance for display.
+// template) keep the chip non-removable and carry provenance plus readiness
+// semantics for display without implying the UI grants backend access.
 export function buildCapabilityChips(
   args: BuildCapabilityChipsArgs,
 ): StepCapabilityChip[] {
@@ -2135,6 +2147,7 @@ export function buildCapabilityChips(
           description: entry.description,
           icon: entry.icon,
           sources: [],
+          readiness: explicitCapabilityReadiness([]),
           removable: false,
         };
         chipsByToken.set(token, chip);
@@ -2157,8 +2170,42 @@ export function buildCapabilityChips(
     const removable =
       chip.sources.length > 0 &&
       chip.sources.every((source) => source.sourceKind === "explicit");
-    return { ...chip, removable };
+    const derivedSourceLabels = chip.sources
+      .filter((source) => source.sourceKind !== "explicit")
+      .map((source) => source.sourceLabel);
+    return {
+      ...chip,
+      readiness:
+        derivedSourceLabels.length > 0
+          ? derivedCapabilityReadiness(derivedSourceLabels)
+          : explicitCapabilityReadiness(
+              chip.sources.map((source) => source.sourceLabel),
+            ),
+      removable,
+    };
   });
+}
+
+function explicitCapabilityReadiness(sourceLabels: string[]): CapabilityReadiness {
+  return {
+    state: "requested",
+    label: "Requested capability",
+    description:
+      "This capability token is requested for the step. Runtime policy and credentials still decide whether access is available.",
+    sourceLabels,
+    grantsAccess: false,
+  };
+}
+
+function derivedCapabilityReadiness(sourceLabels: string[]): CapabilityReadiness {
+  return {
+    state: "required_before_launch",
+    label: "Required before launch",
+    description:
+      "This derived capability is required by step configuration before launch. The chip records the requirement; it does not grant access by itself.",
+    sourceLabels,
+    grantsAccess: false,
+  };
 }
 
 // The provenance label rendered on a derived (non-removable) chip, e.g.
