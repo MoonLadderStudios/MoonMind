@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. api_service/services/secrets.py (score: 1.000, trust: canonical)\n    line 200: \"code\": \"secret_ref_unresolved\",\n2. docs/ExternalAgents/ModelContextProtocol.md (score: 1.000, trust: canonical)\n    line 3: This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: the 2025 **MCP Streamable HTTP** endpoint, a legacy **context-style chat completion** endpoint, and a small JSON helper API for resource discovery, tool discovery, and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).\n3. docs/Rag/LlamaIndexManifestSystem.md (score: 1.000, trust: canonical)\n    line 39: We need repeatable, auditable, **declarative** pipelines for bringing text/code from heterogeneous sources into MoonMind’s retrieval‑augmented generation (RAG):\n4. docs/Artifacts/ArtifactPresentationContract.md (score: 1.000, trust: canonical)\n    line 29: - `docs/ManagedAgents/CodexCliManagedSessions.md`\n5. docs/ManagedAgents/ClaudeCodeManagedSessions.md (score: 1.000, trust: canonical)\n    line 1: # Claude Code Managed Sessions\n6. docs/ManagedAgents/OAuthTerminal.md (score: 1.000, trust: canonical)\n    line 4: **Status:** Desired state, Codex CLI and Claude Code session target\n7. docs/ExternalAgents/JulesAdapter.md (score: 1.000, trust: canonical)\n    line 112: Jules execution is orchestrated by generic workflow code, not by provider-specific orchestration.\n8. docs/ManagedAgents/SharedManagedAgentAbstractions.md (score: 1.000, trust: canonical)\n    line 10: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "api_service/services/secrets.py",
+      "text": "line 200: \"code\": \"secret_ref_unresolved\",",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 200,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ExternalAgents/ModelContextProtocol.md",
+      "text": "line 3: This document describes how MoonMind exposes **agent-facing HTTP surfaces** related to the Model Context Protocol (MCP) ecosystem: the 2025 **MCP Streamable HTTP** endpoint, a legacy **context-style chat completion** endpoint, and a small JSON helper API for resource discovery, tool discovery, and invocation. Together they replace the older standalone `docs/CodexMcpToolsAdapter.md` guide; operational detail for Jules-specific behavior lives in [`docs/ExternalAgents/JulesAdapter.md`](JulesAdapter.md) (§ MCP tooling posture).",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Rag/LlamaIndexManifestSystem.md",
+      "text": "line 39: We need repeatable, auditable, **declarative** pipelines for bringing text/code from heterogeneous sources into MoonMind’s retrieval‑augmented generation (RAG):",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 39,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Artifacts/ArtifactPresentationContract.md",
+      "text": "line 29: - `docs/ManagedAgents/CodexCliManagedSessions.md`",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 29,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/ClaudeCodeManagedSessions.md",
+      "text": "line 1: # Claude Code Managed Sessions",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 1,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/OAuthTerminal.md",
+      "text": "line 4: **Status:** Desired state, Codex CLI and Claude Code session target",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 4,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ExternalAgents/JulesAdapter.md",
+      "text": "line 112: Jules execution is orchestrated by generic workflow code, not by provider-specific orchestration.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 112,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/ManagedAgents/SharedManagedAgentAbstractions.md",
+      "text": "line 10: - [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 10,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-27T06:39:50Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
