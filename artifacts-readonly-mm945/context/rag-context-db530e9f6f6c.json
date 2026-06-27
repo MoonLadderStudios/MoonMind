@@ -1,0 +1,121 @@
+{
+  "context_text": "### Retrieved Context\n1. moonmind/memory/context_pack.py (score: 1.000, trust: canonical)\n    line 3: from __future__ import annotations\n2. docs/Api/ExecutionsApiContract.md (score: 1.000, trust: canonical)\n    line 56: - This contract should remain stable even if backing reads move closer to Temporal Visibility.\n3. docs/MoonMindArchitecture.md (score: 1.000, trust: canonical)\n    line 17: This document describes the current architecture and target direction. It separates **managed runtime runs** from **managed sessions** because `gemini_cli` and future runtimes may be managed-run capable before they are session-capable.\n4. docs/Workflows/WorkflowPresetsSystem.md (score: 1.000, trust: canonical)\n    line 7: This document defines MoonMind's Workflow preset system as a declarative, schema-driven composition layer. Presets are reusable step plans that may request typed inputs from the user, expand into one or more executable steps, and preserve provenance so Workflow runs remain understandable after expansion.\n5. docs/Workflows/WorkflowFinishSummarySystem.md (score: 1.000, trust: canonical)\n    line 17: * **No changes** (publish skipped because the repository was already correct) vs\n6. docs/UI/TypeScriptSystem.md (score: 1.000, trust: canonical)\n    line 6: Related: `README.md`, `api_service/static/workflow_console/`, `docs/Workflows/WorkflowArchitecture.md`\n7. docs/Workflows/WorkflowPublishing.md (score: 1.000, trust: canonical)\n    line 15: The agent runs in its workspace but no git operations occur after completion. Useful for read-only Workflow Executions (analysis, diagnostics, research) or for Workflow Executions with side effects other than a final publish action.\n8. docs/UI/RecurringScheduleDetailsPage.md (score: 1.000, trust: canonical)\n    line 10: This document defines the dashboard detail page for recurring schedules. It complements the canonical scheduling docs by specifying what happens after a user selects a schedule from the recurring schedule list.",
+  "items": [
+    {
+      "score": 1.0,
+      "source": "moonmind/memory/context_pack.py",
+      "text": "line 3: from __future__ import annotations",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 3,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Api/ExecutionsApiContract.md",
+      "text": "line 56: - This contract should remain stable even if backing reads move closer to Temporal Visibility.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 56,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/MoonMindArchitecture.md",
+      "text": "line 17: This document describes the current architecture and target direction. It separates **managed runtime runs** from **managed sessions** because `gemini_cli` and future runtimes may be managed-run capable before they are session-capable.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 17,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowPresetsSystem.md",
+      "text": "line 7: This document defines MoonMind's Workflow preset system as a declarative, schema-driven composition layer. Presets are reusable step plans that may request typed inputs from the user, expand into one or more executable steps, and preserve provenance so Workflow runs remain understandable after expansion.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 7,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowFinishSummarySystem.md",
+      "text": "line 17: * **No changes** (publish skipped because the repository was already correct) vs",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 17,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/TypeScriptSystem.md",
+      "text": "line 6: Related: `README.md`, `api_service/static/workflow_console/`, `docs/Workflows/WorkflowArchitecture.md`",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 6,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/Workflows/WorkflowPublishing.md",
+      "text": "line 15: The agent runs in its workspace but no git operations occur after completion. Useful for read-only Workflow Executions (analysis, diagnostics, research) or for Workflow Executions with side effects other than a final publish action.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 15,
+        "mode": "local_fallback"
+      }
+    },
+    {
+      "score": 1.0,
+      "source": "docs/UI/RecurringScheduleDetailsPage.md",
+      "text": "line 10: This document defines the dashboard detail page for recurring schedules. It complements the canonical scheduling docs by specifying what happens after a user selects a schedule from the recurring schedule list.",
+      "offset_start": null,
+      "offset_end": null,
+      "trust_class": "canonical",
+      "chunk_hash": null,
+      "payload": {
+        "line": 10,
+        "mode": "local_fallback"
+      }
+    }
+  ],
+  "filters": {
+    "mode": "local_fallback"
+  },
+  "budgets": {},
+  "usage": {
+    "matches": 8
+  },
+  "transport": "local_fallback",
+  "retrieved_at": "2026-06-27T08:32:07Z",
+  "telemetry_id": "local-fallback",
+  "initiation_mode": "automatic",
+  "truncated": false
+}
