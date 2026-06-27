@@ -4741,6 +4741,7 @@ async def test_build_activity_bindings_resolves_agent_runtime_fleet(
             assert "agent_runtime.terminate_session" in bound_types
             assert "agent_runtime.fetch_session_summary" in bound_types
             assert "agent_runtime.publish_session_artifacts" in bound_types
+            assert "agent_runtime.cleanup_managed_runtime_files" in bound_types
             assert "agent_runtime.status" in bound_types
             assert "agent_runtime.fetch_result" in bound_types
             assert "agent_runtime.cancel" in bound_types

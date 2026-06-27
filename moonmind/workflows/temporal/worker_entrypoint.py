@@ -19,6 +19,9 @@ from moonmind.workflows.temporal.workflows.agent_session import (
 from moonmind.workflows.temporal.workflows.managed_session_reconcile import (
     MoonMindManagedSessionReconcileWorkflow,
 )
+from moonmind.workflows.temporal.workflows.managed_runtime_workspace_cleanup import (
+    MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
+)
 from moonmind.workflows.temporal.workflows.oauth_session import (
     MoonMindOAuthSessionWorkflow,
 )
@@ -52,6 +55,7 @@ async def main():
                 MoonMindProviderProfileManagerWorkflow,
                 MoonMindAgentSessionWorkflow,
                 MoonMindManagedSessionReconcileWorkflow,
+                MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
                 MoonMindAgentRun,
                 MoonMindOAuthSessionWorkflow,
                 MoonMindMergeAutomationWorkflow,

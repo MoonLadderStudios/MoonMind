@@ -1307,6 +1307,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_reconcile_managed_sessions",
     ),
+    "agent_runtime.cleanup_managed_runtime_files": (
+        "agent_runtime",
+        "agent_runtime_cleanup_managed_runtime_files",
+    ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
@@ -8366,6 +8370,24 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+
+    async def agent_runtime_cleanup_managed_runtime_files(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        del payload
+        from moonmind.workflows.temporal.runtime.managed_runtime_cleanup import (
+            ManagedRuntimeWorkspaceJanitor,
+        )
+
+        result = await _await_with_activity_heartbeats(
+            asyncio.to_thread(ManagedRuntimeWorkspaceJanitor().run),
+            heartbeat_payload={
+                "activityType": "agent_runtime.cleanup_managed_runtime_files",
+            },
+        )
+        return result.as_dict()
 
     @staticmethod
     def _agent_runtime_request_identifiers(
