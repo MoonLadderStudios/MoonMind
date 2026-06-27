@@ -111,6 +111,28 @@ describe('Workflows Entrypoint', () => {
     });
   });
 
+  it('traps Tab focus inside the open advanced filter drawer', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+
+    const drawer = screen.getByRole('dialog', { name: 'Advanced filters' });
+    const closeButton = screen.getByRole('button', { name: 'Close filters' });
+    const applyButton = screen.getByRole('button', { name: 'Apply filters' });
+
+    // Shift+Tab from the first focusable control wraps to the last one instead
+    // of escaping into the inert background.
+    closeButton.focus();
+    fireEvent.keyDown(drawer, { key: 'Tab', shiftKey: true });
+    expect(document.activeElement).toBe(applyButton);
+
+    // Tab from the last focusable control wraps back to the first.
+    applyButton.focus();
+    fireEvent.keyDown(drawer, { key: 'Tab' });
+    expect(document.activeElement).toBe(closeButton);
+  });
+
   it('keeps active filter chips visible on an empty first page with active filters', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

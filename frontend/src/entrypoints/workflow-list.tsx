@@ -733,31 +733,30 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   // field at once, so we fetch each field's facet values while the drawer is
   // open. This reuses the existing single-facet backend contract (one request
   // per facet) without any API changes.
-  const useExecutionFacet = (facet: ExecutionFacetResponse['facet']) =>
-    useQuery({
-      queryKey: ['workflow-list-facet', facet, filters] as const,
-      enabled: listEnabled && filterValidationErrors.length === 0 && drawerOpen,
-      queryFn: async () => {
-        const params = new URLSearchParams();
-        params.set('source', 'temporal');
-        params.set('facet', facet);
-        params.set('pageSize', '50');
-        appendFilterParams(params, filters);
-        const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch facets: ${response.statusText}`);
-        }
-        return ExecutionFacetResponseSchema.parse(await response.json());
-      },
-      staleTime: listPollMs,
-      retry: false,
-    });
+  const getFacetQueryOptions = (facet: ExecutionFacetResponse['facet']) => ({
+    queryKey: ['workflow-list-facet', facet, filters] as const,
+    enabled: listEnabled && filterValidationErrors.length === 0 && drawerOpen,
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set('source', 'temporal');
+      params.set('facet', facet);
+      params.set('pageSize', '50');
+      appendFilterParams(params, filters);
+      const response = await fetch(`${payload.apiBase}/executions/facets?${params}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch facets: ${response.statusText}`);
+      }
+      return ExecutionFacetResponseSchema.parse(await response.json());
+    },
+    staleTime: listPollMs,
+    retry: false,
+  });
 
   const facetByField = {
-    status: useExecutionFacet('status'),
-    targetRuntime: useExecutionFacet('targetRuntime'),
-    targetSkill: useExecutionFacet('targetSkill'),
-    repository: useExecutionFacet('repository'),
+    status: useQuery(getFacetQueryOptions('status')),
+    targetRuntime: useQuery(getFacetQueryOptions('targetRuntime')),
+    targetSkill: useQuery(getFacetQueryOptions('targetSkill')),
+    repository: useQuery(getFacetQueryOptions('repository')),
   } as const;
 
   const resetToFirstPage = useCallback(() => {
@@ -1369,6 +1368,34 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               if (event.key === 'Escape') {
                 event.stopPropagation();
                 closeDrawer();
+                return;
+              }
+              if (event.key === 'Tab') {
+                // Trap focus inside the modal drawer so keyboard users cannot
+                // Tab/Shift+Tab into the inert background while it is open.
+                const root = drawerRef.current;
+                if (!root) return;
+                const focusable = Array.from(
+                  root.querySelectorAll<HTMLElement>(
+                    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+                  ),
+                );
+                if (focusable.length === 0) {
+                  event.preventDefault();
+                  return;
+                }
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                const active = document.activeElement as HTMLElement | null;
+                if (event.shiftKey) {
+                  if (active === first || !root.contains(active)) {
+                    event.preventDefault();
+                    last.focus();
+                  }
+                } else if (active === last || !root.contains(active)) {
+                  event.preventDefault();
+                  first.focus();
+                }
                 return;
               }
               if (
