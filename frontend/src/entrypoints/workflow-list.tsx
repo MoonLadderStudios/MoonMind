@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 
 import { BootPayload } from '../boot/parseBootPayload';
-import { formatRuntimeLabel, formatStatusLabel, formatTaskSkills } from '../utils/formatters';
+import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
@@ -54,19 +54,7 @@ const RUNTIME_FILTER_VALUE_ALIASES: Record<string, string> = {
 const TASK_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
 
-const TIMESTAMP_SORT_FIELDS = new Set(['scheduledFor', 'createdAt', 'closedAt']);
-const TABLE_COLUMNS = [
-  ['workflowId', 'ID'],
-  ['targetRuntime', 'Runtime'],
-  ['targetSkill', 'Skill'],
-  ['repository', 'Repository'],
-  ['status', 'Status'],
-  ['title', 'Title'],
-  ['scheduledFor', 'Scheduled'],
-  ['createdAt', 'Created'],
-  ['closedAt', 'Finished'],
-] as const;
-type TableColumn = (typeof TABLE_COLUMNS)[number];
+const TIMESTAMP_SORT_FIELDS = new Set(['updatedAt', 'scheduledFor', 'createdAt', 'closedAt']);
 type FilterField =
   | 'workflowId'
   | 'status'
@@ -77,7 +65,43 @@ type FilterField =
   | 'scheduledFor'
   | 'createdAt'
   | 'closedAt';
-const VALID_TABLE_SORT_FIELDS = new Set<string>([...TABLE_COLUMNS.map((column) => column[0]), 'integration']);
+
+// Scan-first desktop columns, ordered left-to-right. `field` is the sort/identity
+// key, `filterField` ties an inline header filter button to the preserved column
+// filter data model (null = no inline header filter). Workflow title leads as the
+// primary anchor; raw/debug identifiers move out of the default table.
+type TableColumnDef = {
+  field: string;
+  label: string;
+  sortable: boolean;
+  filterField: FilterField | null;
+  colClassName: string;
+};
+const TABLE_COLUMNS: TableColumnDef[] = [
+  { field: 'title', label: 'Workflow', sortable: true, filterField: 'title', colClassName: 'queue-table-column-workflow' },
+  { field: 'status', label: 'Status', sortable: true, filterField: 'status', colClassName: 'queue-table-column-status' },
+  { field: 'nextAction', label: 'Next action', sortable: false, filterField: null, colClassName: 'queue-table-column-next-action' },
+  { field: 'repository', label: 'Repository', sortable: true, filterField: 'repository', colClassName: 'queue-table-column-repository' },
+  { field: 'targetRuntime', label: 'Runtime', sortable: true, filterField: 'targetRuntime', colClassName: 'queue-table-column-runtime' },
+  { field: 'updatedAt', label: 'Updated', sortable: true, filterField: null, colClassName: 'queue-table-column-date' },
+];
+
+// All filterable columns. This is the durable filter data model and stays complete
+// even when a column no longer has a dedicated desktop header filter button; those
+// filters remain reachable through the secondary filter panel and active chips.
+const FILTER_FIELDS = [
+  ['workflowId', 'ID'],
+  ['title', 'Title'],
+  ['status', 'Status'],
+  ['repository', 'Repository'],
+  ['targetRuntime', 'Runtime'],
+  ['targetSkill', 'Skill'],
+  ['scheduledFor', 'Scheduled'],
+  ['createdAt', 'Created'],
+  ['closedAt', 'Finished'],
+] as const;
+type FilterColumn = (typeof FILTER_FIELDS)[number];
+const VALID_TABLE_SORT_FIELDS = new Set<string>([...FILTER_FIELDS.map((column) => column[0]), 'integration', 'updatedAt']);
 const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'workflowId',
   'status',
@@ -172,7 +196,7 @@ function readListDashboardConfig(payload: BootPayload): ListDashboardConfig | un
 
 function normalizeTableSortField(raw: string | null): string {
   const candidate = (raw || '').trim();
-  return VALID_TABLE_SORT_FIELDS.has(candidate) ? candidate : 'scheduledFor';
+  return VALID_TABLE_SORT_FIELDS.has(candidate) ? candidate : 'updatedAt';
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -187,11 +211,6 @@ function formatWhen(iso: string | null | undefined): string {
     minute: '2-digit',
     second: '2-digit',
   });
-}
-
-function summarizeRuntime(runtime: string | null | undefined): string {
-  const label = formatRuntimeLabel(runtime);
-  return label === '—' ? '' : label;
 }
 
 function hasUnsupportedWorkflowScopeState(params: URLSearchParams): boolean {
@@ -224,6 +243,53 @@ function interventionListSummary(row: ExecutionRow): string {
   return '';
 }
 
+// Next-action signals for the scan-first status area. Reuses the dependency and
+// intervention summaries and falls back to a terminal/waiting reason so operators
+// can see what needs attention without opening the workflow.
+function nextActionItems(row: ExecutionRow): string[] {
+  const items: string[] = [];
+  const intervention = interventionListSummary(row);
+  if (intervention) items.push(intervention);
+  const deps = dependencyListSummary(row);
+  if (deps) items.push(deps);
+  if (items.length === 0) {
+    const state = String(row.rawState || row.state || row.status || '').toLowerCase();
+    if (state === 'failed') items.push('Failed — needs review');
+    else if (state === 'awaiting_external') items.push('Waiting on external response');
+  }
+  return items;
+}
+
+function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
+  return row.closedAt || row.scheduledFor || row.createdAt;
+}
+
+const RELATIVE_TIME_UNITS: Array<[string, number]> = [
+  ['y', 31536000],
+  ['mo', 2592000],
+  ['w', 604800],
+  ['d', 86400],
+  ['h', 3600],
+  ['m', 60],
+];
+
+function formatRelative(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  const ms = date.getTime();
+  if (Number.isNaN(ms)) return iso;
+  const diffSeconds = Math.round((Date.now() - ms) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 45) return 'just now';
+  const suffix = diffSeconds >= 0 ? 'ago' : 'from now';
+  for (const [label, unitSeconds] of RELATIVE_TIME_UNITS) {
+    if (absSeconds >= unitSeconds) {
+      return `${Math.floor(absSeconds / unitSeconds)}${label} ${suffix}`;
+    }
+  }
+  return `${absSeconds}s ${suffix}`;
+}
+
 function displayTemporalCount(count: number | null | undefined, countMode: string | undefined): string {
   if (typeof count !== 'number') {
     return '';
@@ -239,6 +305,7 @@ function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'
     let rightVal: string | number;
     if (TIMESTAMP_SORT_FIELDS.has(field)) {
       const getTimestamp = (row: ExecutionRow) => {
+        if (field === 'updatedAt') return rowUpdatedAt(row);
         if (field === 'scheduledFor') return row.scheduledFor || row.createdAt;
         return (row as Record<string, unknown>)[field] as string | undefined;
       };
@@ -623,7 +690,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [hasEditedFilters, setHasEditedFilters] = useState(false);
   const [openFilter, setOpenFilter] = useState<FilterField | null>(null);
-  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
+  const [secondaryFiltersOpen, setSecondaryFiltersOpen] = useState(false);
   const [pendingFocusField, setPendingFocusField] = useState<FilterField | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const filterTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -651,7 +718,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
-    if (sortField !== 'scheduledFor' || sortDir !== 'desc') {
+    if (sortField !== 'updatedAt' || sortDir !== 'desc') {
       params.set('sort', sortField);
       params.set('sortDir', sortDir);
     }
@@ -888,12 +955,12 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   );
   const activeFilters = useMemo(
     () =>
-      TABLE_COLUMNS.map(([field, label]) => {
+      FILTER_FIELDS.map(([field, label]) => {
         if (!isFilterField(field)) return null;
         const value = filterSummary(field, filters);
         return value ? { field, label, value } : null;
       }).filter(
-        (filter): filter is { field: FilterField; label: TableColumn[1]; value: string } => Boolean(filter),
+        (filter): filter is { field: FilterField; label: FilterColumn[1]; value: string } => Boolean(filter),
       ),
     [filters],
   );
@@ -957,7 +1024,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
   };
 
-  const applyMobileValues = (
+  const applySecondaryValues = (
     field: 'status' | 'targetRuntime' | 'targetSkill',
     values: string[],
   ) => {
@@ -972,14 +1039,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     });
   };
 
-  const applyMobileRepository = (value: string) => {
+  const applySecondaryRepository = (value: string) => {
     applyFilters({
       ...filters,
       repository: { ...filters.repository, mode: 'include', values: [], exactText: value },
     });
   };
 
-  const applyMobileDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+  const applySecondaryDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
     applyFilters({
       ...filters,
       [field]: { ...filters[field], ...patch },
@@ -1045,10 +1112,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   };
 
   const renderFilterControl = (field: FilterField, labelPrefix = '') => {
-    const isMobile = Boolean(labelPrefix);
+    const isSecondary = Boolean(labelPrefix);
     if (field === 'workflowId' || field === 'title') {
       const label = field === 'workflowId' ? 'ID' : 'Title';
-      const draft = isMobile ? filters[field] : draftFilters[field];
+      const draft = isSecondary ? filters[field] : draftFilters[field];
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1064,7 +1131,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   : 'Word match: finds titles containing this whole word.'
               }
               onChange={(event) => {
-              if (isMobile) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
+              if (isSecondary) applyFilters({ ...filters, [field]: { contains: event.target.value } }, null);
                 else updateDraftText(field, event.target.value);
               }}
             />
@@ -1074,7 +1141,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }
 
     if (field === 'status') {
-      const draft = isMobile ? filters.status : draftFilters.status;
+      const draft = isSecondary ? filters.status : draftFilters.status;
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1084,7 +1151,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) {
+                if (isSecondary) {
                   applyFilters({ ...filters, status: { ...filters.status, mode } });
                 } else {
                   updateDraftValueMode('status', mode);
@@ -1106,7 +1173,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             emptyMessage="No status filters selected"
             onChange={(next) => {
               const normalized = next.map((value) => value.toLowerCase());
-              if (isMobile) applyMobileValues('status', normalized);
+              if (isSecondary) applySecondaryValues('status', normalized);
               else updateDraftValues('status', normalized);
             }}
           />
@@ -1122,17 +1189,17 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             {labelPrefix}Repository filter value
             <input
               type="text"
-              value={isMobile ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
+              value={isSecondary ? filters.repository.exactText || '' : draftFilters.repository.exactText || ''}
               disabled={!listEnabled}
               placeholder="repo starts with…"
               title="Prefix match: finds repository names that start with this text."
               onChange={(event) => {
-                if (isMobile) applyMobileRepository(event.target.value);
+                if (isSecondary) applySecondaryRepository(event.target.value);
                 else updateDraftRepository(event.target.value);
               }}
             />
           </label>
-          {!isMobile && valueOptionsForField('repository').length > 0 ? (
+          {!isSecondary && valueOptionsForField('repository').length > 0 ? (
             <label>
               Repository values
               <select
@@ -1167,7 +1234,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'targetRuntime') {
       const runtimeOptions = valueOptionsForField('targetRuntime');
-      const draft = isMobile ? filters.targetRuntime : draftFilters.targetRuntime;
+      const draft = isSecondary ? filters.targetRuntime : draftFilters.targetRuntime;
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1177,7 +1244,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } }, null);
+                if (isSecondary) applyFilters({ ...filters, targetRuntime: { ...filters.targetRuntime, mode } }, null);
                 else updateDraftValueMode('targetRuntime', mode);
               }}
             >
@@ -1195,7 +1262,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             addPlaceholder="Add runtime"
             emptyMessage="No runtime filters selected"
             onChange={(next) => {
-              if (isMobile) applyMobileValues('targetRuntime', next);
+              if (isSecondary) applySecondaryValues('targetRuntime', next);
               else updateDraftValues('targetRuntime', next);
             }}
           />
@@ -1206,7 +1273,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'targetSkill') {
       const skillOptions = valueOptionsForField('targetSkill');
-      const draft = isMobile ? filters.targetSkill : draftFilters.targetSkill;
+      const draft = isSecondary ? filters.targetSkill : draftFilters.targetSkill;
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1216,7 +1283,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               disabled={!listEnabled}
               onChange={(event) => {
                 const mode = event.target.value as ValueFilter['mode'];
-                if (isMobile) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } }, null);
+                if (isSecondary) applyFilters({ ...filters, targetSkill: { ...filters.targetSkill, mode } }, null);
                 else updateDraftValueMode('targetSkill', mode);
               }}
             >
@@ -1233,7 +1300,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             addPlaceholder="Add skill"
             emptyMessage="No skill filters selected"
             onChange={(next) => {
-              if (isMobile) applyMobileValues('targetSkill', next);
+              if (isSecondary) applySecondaryValues('targetSkill', next);
               else updateDraftValues('targetSkill', next);
             }}
           />
@@ -1244,7 +1311,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
     if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') {
       const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
-      const draft = isMobile ? filters[field] : draftFilters[field];
+      const draft = isSecondary ? filters[field] : draftFilters[field];
       return (
         <div className="queue-inline-filter workflow-list-header-filter-control">
           <label>
@@ -1254,7 +1321,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               value={draft.from || ''}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (isMobile) applyMobileDate(field, { from: event.target.value });
+                if (isSecondary) applySecondaryDate(field, { from: event.target.value });
                 else updateDraftDate(field, { from: event.target.value });
               }}
             />
@@ -1266,7 +1333,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               value={draft.to || ''}
               disabled={!listEnabled}
               onChange={(event) => {
-                if (isMobile) applyMobileDate(field, { to: event.target.value });
+                if (isSecondary) applySecondaryDate(field, { to: event.target.value });
                 else updateDraftDate(field, { to: event.target.value });
               }}
             />
@@ -1279,7 +1346,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 disabled={!listEnabled}
                 onChange={(event) => {
                   const blank = event.target.value as NonNullable<DateFilter['blank']>;
-                  if (isMobile) applyMobileDate(field, { blank });
+                  if (isSecondary) applySecondaryDate(field, { blank });
                   else updateDraftDate(field, { blank });
                 }}
               >
@@ -1423,24 +1490,24 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             </div>
           </div>
         ) : null}
-        <div className="workflow-list-mobile-filter-disclosure">
+        <div className="workflow-list-secondary-filter-disclosure">
           <button
             type="button"
-            className="workflow-list-mobile-filter-toggle"
-            aria-expanded={mobileFiltersOpen}
-            aria-controls="workflow-list-mobile-filter-panel"
-            onClick={() => setMobileFiltersOpen((open) => !open)}
+            className="workflow-list-secondary-filter-toggle"
+            aria-expanded={secondaryFiltersOpen}
+            aria-controls="workflow-list-secondary-filter-panel"
+            onClick={() => setSecondaryFiltersOpen((open) => !open)}
           >
-            {mobileFiltersOpen ? 'Hide filters' : 'Show filters'}
+            {secondaryFiltersOpen ? 'Hide filters' : 'Show filters'}
             {hasActiveFilters ? ` (${activeFilters.length})` : ''}
           </button>
           <div
-            id="workflow-list-mobile-filter-panel"
-            className={`workflow-list-mobile-filter-controls${mobileFiltersOpen ? ' is-open' : ''}`}
-            aria-label="Mobile workflow filters"
+            id="workflow-list-secondary-filter-panel"
+            className={`workflow-list-secondary-filter-controls${secondaryFiltersOpen ? ' is-open' : ''}`}
+            aria-label="Secondary workflow filters"
           >
-            {TABLE_COLUMNS.map(([field]) =>
-              isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Mobile ')}</div> : null,
+            {FILTER_FIELDS.map(([field]) =>
+              isFilterField(field) ? <div key={field}>{renderFilterControl(field, 'Secondary ')}</div> : null,
             )}
           </div>
         </div>
@@ -1474,70 +1541,67 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             <div className="queue-table-wrapper" data-layout="table">
                 <table>
                   <colgroup>
-                    <col className="queue-table-column-id" />
-                    <col className="queue-table-column-runtime" />
-                    <col className="queue-table-column-skill" />
-                    <col className="queue-table-column-repository" />
-                    <col className="queue-table-column-status" />
-                    <col className="queue-table-column-title" />
-                    <col className="queue-table-column-date" />
-                    <col className="queue-table-column-date" />
-                    <col className="queue-table-column-date" />
+                    {TABLE_COLUMNS.map((column) => (
+                      <col key={column.field} className={column.colClassName} />
+                    ))}
                     {actionsEnabled ? <col className="queue-table-column-actions" /> : null}
                   </colgroup>
                   <thead>
                     <tr>
-                      {TABLE_COLUMNS.map(([field, label]) => {
+                      {TABLE_COLUMNS.map(({ field, label, sortable, filterField }) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
-                        const filterField = isFilterField(field) ? field : null;
                         return (
                           <th
                             key={field}
-                            aria-sort={ariaSort}
+                            aria-sort={sortable ? ariaSort : undefined}
                             className={`workflow-list-compound-header-cell${filterField && openFilter === filterField ? " is-filter-open" : ""}`}
                           >
                             <div className="workflow-list-compound-header">
-                              <button
-                                type="button"
-                                className="table-sort-button"
-                                onClick={() => onHeaderClick(field)}
-                                aria-label={ariaLabel}
-                              >
-                                {label}
-                                {sortIndicator(field)}
-                                <span className="sr-only">{sortHint}</span>
-                              </button>
-                              <button
-                                type="button"
-                                className={`workflow-list-column-filter-button${
-                                  filterValueForField(field) ? ' is-active' : ''
-                                }`}
-                                data-filter-field={field}
-                                ref={
-                                  filterField && pendingFocusField === filterField
-                                    ? (node) => node?.focus()
-                                    : undefined
-                                }
-                                onMouseDown={(event) => event.stopPropagation()}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  if (filterField) {
+                              {sortable ? (
+                                <button
+                                  type="button"
+                                  className="table-sort-button"
+                                  onClick={() => onHeaderClick(field)}
+                                  aria-label={ariaLabel}
+                                >
+                                  {label}
+                                  {sortIndicator(field)}
+                                  <span className="sr-only">{sortHint}</span>
+                                </button>
+                              ) : (
+                                <span className="workflow-list-static-header">{label}</span>
+                              )}
+                              {filterField ? (
+                                <button
+                                  type="button"
+                                  className={`workflow-list-column-filter-button${
+                                    filterValueForField(field) ? ' is-active' : ''
+                                  }`}
+                                  data-filter-field={field}
+                                  ref={
+                                    pendingFocusField === filterField
+                                      ? (node) => node?.focus()
+                                      : undefined
+                                  }
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
                                     filterTriggerRef.current = event.currentTarget;
                                     toggleFilter(filterField);
-                                  }
-                                }}
-                                aria-label={filterAccessibilityLabel(field, label)}
-                                aria-expanded={filterField ? openFilter === filterField : false}
-                              >
-                                <svg
-                                  aria-hidden="true"
-                                  className="workflow-list-column-filter-icon"
-                                  viewBox="0 0 16 16"
-                                  focusable="false"
+                                  }}
+                                  aria-label={filterAccessibilityLabel(field, label)}
+                                  aria-expanded={openFilter === filterField}
                                 >
-                                  <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
-                                </svg>
-                              </button>
+                                  <svg
+                                    aria-hidden="true"
+                                    className="workflow-list-column-filter-icon"
+                                    viewBox="0 0 16 16"
+                                    focusable="false"
+                                  >
+                                    <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                                  </svg>
+                                </button>
+                              ) : null}
                             </div>
                             {filterField ? renderFilterPopover(filterField, label) : null}
                           </th>
@@ -1552,35 +1616,38 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   </thead>
                   <tbody>
                     {sortedItems.map((row) => {
-                      const depsSummary = dependencyListSummary(row);
-                      const interventionSummary = interventionListSummary(row);
+                      const actionItems = nextActionItems(row);
+                      const updatedAt = rowUpdatedAt(row);
                       return (
                         <tr key={rowWorkflowId(row)}>
-                          <td className="queue-table-cell-id">
-                            <a href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}>
-                              <code>{rowWorkflowId(row)}</code>
+                          <td className="queue-table-cell-workflow">
+                            <a
+                              href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                              className="workflow-list-row-title"
+                            >
+                              {row.title}
                             </a>
+                            <code className="workflow-list-row-id">{rowWorkflowId(row)}</code>
                           </td>
-                          <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
-                          <td className="queue-table-cell-compact">
-                            {formatTaskSkills(row.taskSkills, row.targetSkill)}
-                          </td>
-                          <td className="queue-table-cell-compact">{row.repository || '—'}</td>
                           <td className="queue-table-cell-status">
                             <ExecutionStatusPill status={row.rawState || row.state || row.status} />
                           </td>
-                          <td className="queue-table-cell-title">
-                            <div>{row.title}</div>
-                            {interventionSummary ? (
-                              <div className="small">{interventionSummary}</div>
-                            ) : null}
-                            {depsSummary ? (
-                              <div className="small">{depsSummary}</div>
-                            ) : null}
+                          <td className="queue-table-cell-next-action">
+                            {actionItems.length > 0 ? (
+                              actionItems.map((item) => (
+                                <div key={item} className="workflow-list-next-action-item small">
+                                  {item}
+                                </div>
+                              ))
+                            ) : (
+                              <span className="workflow-list-next-action-empty">—</span>
+                            )}
                           </td>
-                          <td className="queue-table-cell-date">{formatWhen(row.scheduledFor)}</td>
-                          <td className="queue-table-cell-date">{formatWhen(row.createdAt)}</td>
-                          <td className="queue-table-cell-date">{formatWhen(row.closedAt)}</td>
+                          <td className="queue-table-cell-compact">{row.repository || '—'}</td>
+                          <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
+                          <td className="queue-table-cell-date" title={formatWhen(updatedAt)}>
+                            {formatRelative(updatedAt)}
+                          </td>
                           {actionsEnabled ? (
                             <td className="queue-table-cell-actions">
                               <WorkflowRowActionsMenu
@@ -1599,8 +1666,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
-                      const depsSummary = dependencyListSummary(row);
-                      const interventionSummary = interventionListSummary(row);
+                      const actionItems = nextActionItems(row);
+                      const updatedAt = rowUpdatedAt(row);
                       return (
                   <li key={rowWorkflowId(row)} className="queue-card">
                     <div className="queue-card-header">
@@ -1611,19 +1678,21 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         >
                           {row.title}
                         </a>
-                        <p className="queue-card-meta">
-                          <code>{rowWorkflowId(row)}</code>
-                          {` · ${
-                            [summarizeRuntime(row.targetRuntime), row.targetSkill, row.workflowType]
-                              .filter(Boolean)
-                              .join(' · ') || 'Temporal workflow'
-                          }`}
-                        </p>
                       </div>
                       <div className="queue-card-status">
                         <ExecutionStatusPill status={row.rawState || row.state || row.status} />
                       </div>
                     </div>
+                    {actionItems.length > 0 ? (
+                      <div className="queue-card-next-action">
+                        <span className="queue-card-next-action-label small">Next action</span>
+                        {actionItems.map((item) => (
+                          <p key={item} className="queue-card-next-action-item">
+                            {item}
+                          </p>
+                        ))}
+                      </div>
+                    ) : null}
                     <dl className="queue-card-fields">
                       <div>
                         <dt>ID</dt>
@@ -1636,37 +1705,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <dd>{formatRuntimeLabel(row.targetRuntime)}</dd>
                       </div>
                       <div>
-                        <dt>Skill</dt>
-                        <dd>{formatTaskSkills(row.taskSkills, row.targetSkill)}</dd>
-                      </div>
-                      <div>
                         <dt>Repository</dt>
                         <dd>{row.repository || '—'}</dd>
                       </div>
                       <div>
-                        <dt>Scheduled</dt>
-                        <dd>{formatWhen(row.scheduledFor)}</dd>
+                        <dt>Updated</dt>
+                        <dd title={formatWhen(updatedAt)}>{formatRelative(updatedAt)}</dd>
                       </div>
-                      <div>
-                        <dt>Created</dt>
-                        <dd>{formatWhen(row.createdAt)}</dd>
-                      </div>
-                      <div>
-                        <dt>Finished</dt>
-                        <dd>{formatWhen(row.closedAt)}</dd>
-                      </div>
-                      {depsSummary ? (
-                        <div>
-                          <dt>Dependencies</dt>
-                          <dd>{depsSummary}</dd>
-                        </div>
-                      ) : null}
-                      {interventionSummary ? (
-                        <div>
-                          <dt>Intervention</dt>
-                          <dd>{interventionSummary}</dd>
-                        </div>
-                      ) : null}
                     </dl>
                     <div className="queue-card-actions">
                       <a
