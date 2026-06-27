@@ -1307,6 +1307,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "agent_runtime_reconcile_managed_sessions",
     ),
+    "agent_runtime.cleanup_managed_runtime_files": (
+        "agent_runtime",
+        "agent_runtime_cleanup_managed_runtime_files",
+    ),
     "agent_runtime.status": ("agent_runtime", "agent_runtime_status"),
     "agent_runtime.fetch_result": ("agent_runtime", "agent_runtime_fetch_result"),
     "agent_runtime.cancel": ("agent_runtime", "agent_runtime_cancel"),
@@ -5987,6 +5991,7 @@ class TemporalAgentRuntimeActivities:
         run_supervisor: "ManagedRunSupervisor | None" = None,
         run_launcher: "ManagedRuntimeLauncher | None" = None,
         session_controller: ManagedSessionController | None = None,
+        session_store: "ManagedSessionStore | None" = None,
         workload_launcher: Any | None = None,
         workload_registry: Any | None = None,
         workflow_docker_mode: str = "profiles",
@@ -5998,6 +6003,7 @@ class TemporalAgentRuntimeActivities:
         self._run_supervisor = run_supervisor
         self._run_launcher = run_launcher
         self._session_controller = session_controller
+        self._session_store = session_store
         self._workload_launcher = workload_launcher
         self._workload_registry = workload_registry
         self._workflow_docker_mode = normalize_workflow_docker_mode(workflow_docker_mode)
@@ -8366,6 +8372,38 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+
+    async def agent_runtime_cleanup_managed_runtime_files(
+        self,
+        payload: Mapping[str, Any] | None = None,
+        /,
+    ) -> dict[str, Any]:
+        del payload
+        if self._run_store is None:
+            raise TemporalActivityRuntimeError(
+                "agent_runtime.cleanup_managed_runtime_files requires a run store"
+            )
+        if self._session_store is None:
+            raise TemporalActivityRuntimeError(
+                "agent_runtime.cleanup_managed_runtime_files requires a session store"
+            )
+        from moonmind.workflows.temporal.runtime.workspace_janitor import (
+            ManagedRuntimeJanitorConfig,
+            cleanup_managed_runtime_files,
+        )
+
+        result = await _await_with_activity_heartbeats(
+            asyncio.to_thread(
+                cleanup_managed_runtime_files,
+                run_store=self._run_store,
+                session_store=self._session_store,
+                config=ManagedRuntimeJanitorConfig.from_env(),
+            ),
+            heartbeat_payload={
+                "activityType": "agent_runtime.cleanup_managed_runtime_files",
+            },
+        )
+        return result.to_payload()
 
     @staticmethod
     def _agent_runtime_request_identifiers(

@@ -101,6 +101,24 @@ class ManagedRunStore:
                 continue
         return records
 
+    def iter_all(self) -> Iterable[ManagedRunRecord]:
+        """Yield every readable run record without applying active filters."""
+        self.store_root.mkdir(parents=True, exist_ok=True)
+        for path in self.store_root.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                yield ManagedRunRecord(**data)
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+    def delete(self, run_id: str) -> None:
+        """Delete a run record file if it still exists."""
+        path = self._resolve_path(run_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+
     def find_latest_for_workflow(self, workflow_id: str) -> ManagedRunRecord | None:
         """Return the newest managed run bound to one logical workflow.
 

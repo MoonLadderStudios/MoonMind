@@ -38,6 +38,25 @@ def test_store_round_trips_phase6_session_record(tmp_path) -> None:
     assert loaded.agent_run_id == "task-1"
     assert loaded.container_id == "ctr-1"
 
+def test_iter_all_returns_terminal_and_active_session_records(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+    store.save(
+        _record().model_copy(update={"session_id": "sess-2", "status": "terminated"})
+    )
+
+    all_ids = {record.session_id for record in store.iter_all()}
+
+    assert all_ids == {"sess-1", "sess-2"}
+
+def test_delete_removes_session_record_file(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+
+    store.delete("sess-1")
+
+    assert store.load("sess-1") is None
+
 @pytest.mark.asyncio
 async def test_store_update_status_persists_artifact_refs_and_offsets(tmp_path) -> None:
     store = ManagedSessionStore(tmp_path)

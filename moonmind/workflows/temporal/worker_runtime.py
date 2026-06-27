@@ -2045,6 +2045,7 @@ def _build_agent_runtime_deps(
     DockerCodexManagedSessionController,
     "RunnerProfileRegistry",
     "DockerWorkloadLauncher",
+    ManagedSessionStore,
 ]:
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os
@@ -2182,6 +2183,7 @@ def _build_agent_runtime_deps(
         session_controller,
         workload_registry,
         workload_launcher,
+        session_store,
     )
 
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
@@ -2228,6 +2230,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         session_controller = None
         workload_registry = None
         workload_launcher = None
+        session_store = None
         agent_runtime_activities = None
         if topology.fleet == AGENT_RUNTIME_FLEET:
             # Docker-backed managed-session reconciliation only belongs on the
@@ -2239,6 +2242,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 session_controller,
                 workload_registry,
                 workload_launcher,
+                session_store,
             ) = _build_agent_runtime_deps(artifact_service=artifact_service)
             reconciled = await run_supervisor.reconcile()
             if reconciled:
@@ -2277,6 +2281,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 run_supervisor=run_supervisor,
                 run_launcher=run_launcher,
                 session_controller=session_controller,
+                session_store=session_store,
                 workload_registry=workload_registry,
                 workload_launcher=workload_launcher,
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
