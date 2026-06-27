@@ -76,3 +76,24 @@ async def test_store_update_revalidates_and_normalizes_mutations(tmp_path) -> No
     assert updated.runtime_id == "codex_cli"
     assert updated.error_message == "temporary failure"
     assert updated.updated_at == datetime(2026, 4, 6, 12, 6, tzinfo=UTC)
+
+def test_iter_all_and_delete_are_explicit_retained_state_apis(tmp_path) -> None:
+    store = ManagedSessionStore(tmp_path)
+    store.save(_record())
+    store.save(
+        _record().model_copy(
+            update={
+                "session_id": "sess-2",
+                "agent_run_id": "task-2",
+                "status": "terminated",
+            }
+        )
+    )
+
+    assert {record.session_id for record in store.iter_all()} == {"sess-1", "sess-2"}
+    assert {record.session_id for record in store.list_active()} == {"sess-1"}
+
+    store.delete("sess-2")
+
+    assert store.load("sess-2") is None
+    assert {record.session_id for record in store.iter_all()} == {"sess-1"}

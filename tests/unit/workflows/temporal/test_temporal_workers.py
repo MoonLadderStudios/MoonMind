@@ -100,6 +100,7 @@ def test_registered_workflow_types_include_manifest_ingest():
         "MoonMind.ProviderProfileManager",
         "MoonMind.AgentSession",
         "MoonMind.ManagedSessionReconcile",
+        "MoonMind.ManagedRuntimeWorkspaceCleanup",
         "MoonMind.AgentRun",
         "MoonMind.OAuthSession",
         "MoonMind.MergeAutomation",
@@ -275,6 +276,11 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
                 for binding in bindings
                 if binding.activity_type == "agent_runtime.reconcile_managed_sessions"
             ]
+            cleanup_bindings = [
+                binding
+                for binding in bindings
+                if binding.activity_type == "agent_runtime.cleanup_managed_runtime_files"
+            ]
             oauth_runner_bindings = [
                 binding
                 for binding in bindings
@@ -282,6 +288,7 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
             ]
             assert len(workload_bindings) == 1
             assert len(reconcile_bindings) == 1
+            assert len(cleanup_bindings) == 1
             assert len(oauth_runner_bindings) == 1
             assert (
                 workload_bindings[0].task_queue
@@ -289,6 +296,10 @@ def test_build_worker_activity_bindings_registers_workload_run_on_agent_runtime_
             )
             assert (
                 reconcile_bindings[0].task_queue
+                == settings.temporal.activity_agent_runtime_task_queue
+            )
+            assert (
+                cleanup_bindings[0].task_queue
                 == settings.temporal.activity_agent_runtime_task_queue
             )
             assert (

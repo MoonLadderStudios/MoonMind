@@ -52,6 +52,12 @@ MANAGED_SESSION_RECONCILE_SCHEDULE_ID = "mm-operational:managed-session-reconcil
 MANAGED_SESSION_RECONCILE_WORKFLOW_ID_TEMPLATE = (
     "mm-operational:managed-session-reconcile:{{.ScheduleTime}}"
 )
+MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID = (
+    "mm-operational:managed-runtime-workspace-cleanup"
+)
+MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE = (
+    "mm-operational:managed-runtime-workspace-cleanup:{{.ScheduleTime}}"
+)
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
@@ -636,6 +642,91 @@ class TemporalClientAdapter:
         except Exception as create_exc:
             raise ScheduleOperationError(
                 "Failed to create managed session reconcile schedule: "
+                f"{create_exc}"
+            ) from create_exc
+
+    async def ensure_managed_runtime_workspace_cleanup_schedule(
+        self,
+        *,
+        cron_expression: str = "0 3 * * *",
+        timezone: str = "UTC",
+        enabled: bool = False,
+    ) -> str:
+        """Create or replace the retained managed-runtime cleanup Schedule."""
+
+        from temporalio.client import (
+            Schedule,
+            ScheduleActionStartWorkflow,
+            ScheduleUpdate,
+        )
+
+        from moonmind.workflows.temporal.schedule_errors import ScheduleOperationError
+        from moonmind.workflows.temporal.schedule_mapping import (
+            build_schedule_policy,
+            build_schedule_spec,
+            build_schedule_state,
+        )
+
+        client = await self.get_client()
+        schedule = Schedule(
+            action=ScheduleActionStartWorkflow(
+                "MoonMind.ManagedRuntimeWorkspaceCleanup",
+                {},
+                id=MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_TEMPLATE,
+                task_queue=self._get_task_queue(),
+                typed_search_attributes=_build_typed_search_attributes(
+                    {
+                        "mm_entry": ["operational"],
+                        "mm_state": ["scheduled"],
+                    }
+                ),
+                static_summary="Managed runtime workspace cleanup",
+                static_details=(
+                    "Recurring dry-run retained-state janitor for managed runtime files"
+                ),
+            ),
+            spec=build_schedule_spec(
+                cron=cron_expression,
+                timezone=timezone,
+                jitter_seconds=0,
+            ),
+            policy=build_schedule_policy(
+                overlap_mode="skip",
+                catchup_mode="last",
+            ),
+            state=build_schedule_state(
+                enabled=enabled,
+                note="Managed runtime retained-state workspace cleanup",
+            ),
+        )
+        try:
+            handle = client.get_schedule_handle(
+                MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+            )
+
+            async def _replace_schedule(input: Any) -> ScheduleUpdate:  # noqa: A002
+                del input
+                return ScheduleUpdate(schedule=schedule)
+
+            await handle.update(_replace_schedule)
+            return MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID
+        except Exception as update_exc:
+            if not _is_rpc_status(update_exc, "NOT_FOUND") and "not found" not in str(
+                update_exc
+            ).lower():
+                raise ScheduleOperationError(
+                    "Failed to update managed runtime workspace cleanup schedule: "
+                    f"{update_exc}"
+                ) from update_exc
+        try:
+            handle = await client.create_schedule(
+                MANAGED_RUNTIME_WORKSPACE_CLEANUP_SCHEDULE_ID,
+                schedule,
+            )
+            return handle.id
+        except Exception as create_exc:
+            raise ScheduleOperationError(
+                "Failed to create managed runtime workspace cleanup schedule: "
                 f"{create_exc}"
             ) from create_exc
 

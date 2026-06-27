@@ -90,6 +90,14 @@ class ManagedSessionStore:
             return updated
 
     def list_active(self) -> list[CodexManagedSessionRecord]:
+        return [
+            record
+            for record in self.iter_all()
+            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES
+        ]
+
+    def iter_all(self) -> list[CodexManagedSessionRecord]:
+        """Return all readable session records, including terminal records."""
         self.store_root.mkdir(parents=True, exist_ok=True)
         records: list[CodexManagedSessionRecord] = []
         for path in self.store_root.glob("*.json"):
@@ -98,6 +106,13 @@ class ManagedSessionStore:
                 record = CodexManagedSessionRecord(**data)
             except (json.JSONDecodeError, ValueError):
                 continue
-            if record.status not in TERMINAL_MANAGED_SESSION_STATUSES:
-                records.append(record)
+            records.append(record)
         return records
+
+    def delete(self, session_id: str) -> None:
+        """Delete one session record by explicit session id."""
+        path = self._resolve_path(session_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return

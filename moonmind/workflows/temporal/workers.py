@@ -120,6 +120,7 @@ STATIC_TEMPORAL_WORKFLOW_TYPES = (
     "MoonMind.ProviderProfileManager",
     "MoonMind.AgentSession",
     "MoonMind.ManagedSessionReconcile",
+    "MoonMind.ManagedRuntimeWorkspaceCleanup",
     "MoonMind.AgentRun",
     "MoonMind.OAuthSession",
     "MoonMind.MergeAutomation",

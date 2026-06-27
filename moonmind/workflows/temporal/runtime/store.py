@@ -89,17 +89,30 @@ class ManagedRunStore:
 
     def list_active(self) -> list[ManagedRunRecord]:
         """Return all non-terminal run records."""
+        return [
+            record
+            for record in self.iter_all()
+            if record.status not in TERMINAL_AGENT_RUN_STATES
+        ]
+
+    def iter_all(self) -> Iterable[ManagedRunRecord]:
+        """Yield all readable run records, including terminal records."""
         self.store_root.mkdir(parents=True, exist_ok=True)
-        records: list[ManagedRunRecord] = []
         for path in self.store_root.glob("*.json"):
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 record = ManagedRunRecord(**data)
-                if record.status not in TERMINAL_AGENT_RUN_STATES:
-                    records.append(record)
             except (json.JSONDecodeError, ValueError):
                 continue
-        return records
+            yield record
+
+    def delete(self, run_id: str) -> None:
+        """Delete one run record by explicit run id."""
+        path = self._resolve_path(run_id)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
 
     def find_latest_for_workflow(self, workflow_id: str) -> ManagedRunRecord | None:
         """Return the newest managed run bound to one logical workflow.
