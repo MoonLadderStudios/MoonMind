@@ -1,0 +1,572 @@
+{
+  "sourceDocumentClass": "canonical-declarative",
+  "source": {
+    "title": "Managed Runtime Cleanup Model",
+    "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+    "referencePath": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+    "sourceDocumentClass": "canonical-declarative",
+    "originalDesignText": "# Managed Runtime Cleanup Model\n\n- **Status:** Proposed desired state\n- **Owners:** MoonMind Platform\n- **Last updated:** 2026-06-26\n- **Audience:** Contributors, operators, runtime authors, and infrastructure maintainers\n- **Purpose:** Declarative cleanup design for managed-runtime resources, including existing managed-session orphan reaping and the proposed old workspace/artifact janitor.\n\n**Related:**\n\n- [`docs/ManagedAgents/ManagedAgentArchitecture.md`](./ManagedAgentArchitecture.md)\n- [`docs/ManagedAgents/DockerSidecarRuntime.md`](./DockerSidecarRuntime.md)\n- [`docs/ManagedAgents/CodexManagedSessionPlane.md`](./CodexManagedSessionPlane.md)\n- [`docs/ManagedAgents/CodexCliManagedSessions.md`](./CodexCliManagedSessions.md)\n- [`docs/ManagedAgents/LiveLogs.md`](./LiveLogs.md)\n- [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)\n\n---\n\n## 1. Summary\n\nMoonMind has several cleanup paths today, but they do not share one declarative model:\n\n- managed-session termination removes live runtime resources for one session;\n- managed-run supervision cleans short-lived launcher support files;\n- managed-session reconciliation reaps orphaned Docker containers and sidecar volumes;\n- run and session stores keep JSON records and expose active-record views;\n- managed-runtime workspaces and artifact directories under `/work/agent_jobs` are retained indefinitely unless an operator deletes them out of band.\n\nThe desired model is a **declarative cleanup catalog**: each resource class declares its owner, durable truth source, terminal states, retention policy, safety gates, deletion authority, and observability. Cleanup implementations reconcile that catalog instead of embedding unrelated deletion rules in hot lifecycle paths.\n\nThe immediate new feature is a **managed runtime workspace janitor**. It should remove old terminal workspaces, session roots, artifact directories, and optionally old JSON records after configurable retention windows, while preserving active sessions, active runs, and recent workflow-shared checkouts.\n\n---\n\n## 2. Scope and non-goals\n\n### 2.1 In scope\n\nThis document covers managed-runtime cleanup resources under the managed-agent subsystem:\n\n- managed run process launcher support files,\n- managed session containers,\n- managed session Docker sidecar containers,\n- managed session Docker socket and graph volumes,\n- managed session Docker config files,\n- workspace-local skill projections,\n- managed runtime workspace roots,\n- managed runtime session roots,\n- managed runtime artifact directories,\n- managed run JSON records,\n- managed session JSON records.\n\n### 2.2 Out of scope\n\nThis document does not define retention for unrelated MoonMind state, such as:\n\n- database execution records,\n- Temporal workflow histories,\n- long-term artifact service retention outside the managed runtime local filesystem,\n- provider-profile credentials and OAuth auth volumes,\n- memory indexes,\n- deployment desired-state files,\n- application logs outside the managed-runtime workspace root.\n\nThose systems may adopt the same cleanup-catalog shape later, but they remain separate ownership domains.\n\n---\n\n## 3. Design goals\n\n1. **Declarative resource ownership.** Every cleanable resource class must state who owns it and what durable truth determines whether it is live.\n2. **Terminal-state awareness.** Durable workspaces and artifacts are never deleted solely because their filesystem mtime is old.\n3. **Shared-checkout safety.** A workflow/correlation-key workspace can be shared by multiple child runs; it must survive until every owner is terminal and past retention.\n4. **Hot-path restraint.** Session termination and run completion should clean live runtime resources, not perform broad retained-state garbage collection.\n5. **Dry-run first.** Any retained-state cleanup must support a dry-run mode with actionable skip reasons.\n6. **Fail closed.** Missing stores, corrupt records, unsafe paths, symlinks, and ambiguous ownership must prevent deletion.\n7. **Idempotent operations.** Cleanup may run repeatedly and concurrently with lifecycle reconciliation without corrupting active execution state.\n8. **Operator visibility.** Each cleanup pass should report scanned, eligible, skipped, deleted, errored, and dry-run counts.\n\n---\n\n## 4. Durable truth sources\n\nCleanup decisions must be derived from durable truth sources in this priority order:\n\n1. **Temporal workflow ownership** when deciding whether a non-terminal session record is stale.\n2. **ManagedSessionStore JSON records** for managed session status and session-level paths.\n3. **ManagedRunStore JSON records** for managed run status, workflow ownership, workspace paths, and artifact refs.\n4. **Docker labels and active mounts** for live container and volume safety gates.\n5. **Canonical filesystem layout** for candidate discovery and path safety.\n6. **Filesystem timestamps** only as an age signal after ownership has been resolved.\n\nFilesystem age alone is never enough to delete a workspace, artifact directory, or record.\n\n---\n\n## 5. Cleanup systems present today\n\n| System | Trigger | Resources cleaned | Durable truth | Current boundary |\n|---|---|---|---|---|\n| Managed session termination | Explicit session control action | Session container, Docker sidecar resources, Docker config, GitHub auth broker, skill projections | Session locator and `ManagedSessionStore` record | Per-session live resource cleanup only |\n| Managed run supervisor cleanup | Run cancel, process exit, startup reconciliation | Launcher support files and deferred runtime files | `ManagedRunStore` active records plus supervised process state | Does not remove durable workspace roots |\n| Managed-session orphan reaping | `MoonMind.ManagedSessionReconcile` schedule | Orphaned session containers and sidecar graph/socket volumes | Active session records, Docker labels, Temporal owner status, grace windows | Does not remove `/work/agent_jobs` workspaces or artifact directories |\n| Run/session store active reconciliation | Store list-active calls | Active-record discovery and stale-process/session marking | JSON record status fields | No retention delete pass |\n| Proposed workspace janitor | New scheduled operational workflow | Old terminal workspace roots, session roots, artifact dirs, and optionally old JSON records | All run/session records plus canonical paths and live Docker safety gates | New retained-state cleanup system |\n\n---\n\n## 6. Declarative cleanup catalog\n\nMoonMind should model cleanup as resource classes. The examples below are normative for ownership and safety semantics; implementation may use Python dataclasses or plain configuration instead of literal YAML.\n\n### 6.1 Managed session container\n\n```yaml\nkind: CleanupResourceClass\nname: managed-session.container\nownerPlane: managed-session-controller\nlifecycle: live-runtime\ncandidateSource:\n  dockerLabels:\n    moonmind.session_id: required\ntruthSource:\n  store: ManagedSessionStore\n  activePredicate: status not in [terminated, degraded, failed]\neligibility:\n  deleteWhen:\n    - session record is absent or terminal\n    - container age >= MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS\n  forceTerminalWhen:\n    - session record is active\n    - Temporal owner workflow is terminal\n    - or ready session has no activeTurnId beyond max age\nsafety:\n  failClosedWhenStoreUnavailable: true\n  skipWhenSessionActive: true\n  skipWhenYoungerThanGrace: true\ndeletionAuthority: DockerCodexManagedSessionController.reap_orphan_session_containers\nschedule: MoonMind.ManagedSessionReconcile\nobservability:\n  counters:\n    - scanned_containers\n    - reaped_containers\n    - skipped_active\n    - skipped_recent\n    - forced_stale\n```\n\n### 6.2 Managed session Docker sidecar volumes\n\n```yaml\nkind: CleanupResourceClass\nname: managed-session.sidecar-volume\nownerPlane: managed-session-controller\nlifecycle: live-runtime\ncandidateSource:\n  dockerVolumes:\n    names: session socket/graph volume names\ntruthSource:\n  store: ManagedSessionStore\n  dockerActiveMounts: true\neligibility:\n  deleteWhen:\n    - volume session id is not active\n    - volume is not mounted by an active container\n    - volume age >= MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS\nsafety:\n  skipWhenActiveMountExists: true\n  skipWhenSessionActive: true\n  skipWhenCreatedAtUnknown: true\n  skipWhenYoungerThanGrace: true\ndeletionAuthority: DockerCodexManagedSessionController._reap_orphan_sidecar_volumes\nschedule: MoonMind.ManagedSessionReconcile\nobservability:\n  counters:\n    - scanned_volumes\n    - reaped_volumes\n    - skipped_active_volumes\n    - skipped_recent_volumes\n```\n\n### 6.3 Managed run launcher support files\n\n```yaml\nkind: CleanupResourceClass\nname: managed-run.launcher-support-file\nownerPlane: managed-run-supervisor\nlifecycle: process-runtime\ncandidateSource:\n  supervisorMemory:\n    cleanupPaths: true\n    deferredCleanupPaths: true\ntruthSource:\n  processSupervisor: true\n  store: ManagedRunStore\neligibility:\n  deleteWhen:\n    - run process is canceled, exited, or lost during reconcile\nsafety:\n  bestEffort: true\n  ignoreMissingPaths: true\n  scopeToRegisteredCleanupPathsOnly: true\ndeletionAuthority: ManagedRunSupervisor._cleanup_runtime_files\nschedule: run lifecycle and supervisor startup reconcile\n```\n\n### 6.4 Workspace-local skill projections\n\n```yaml\nkind: CleanupResourceClass\nname: managed-session.skill-projection\nownerPlane: managed-session-controller\nlifecycle: session-runtime\ncandidateSource:\n  sessionRecord:\n    workspacePath: required\ntruthSource:\n  store: ManagedSessionStore\neligibility:\n  deleteWhen:\n    - terminate_session runs\n    - session record is terminal or being terminated\nsafety:\n  scopeToOwnedRootsOnly: true\n  bestEffort: true\ndeletionAuthority: DockerCodexManagedSessionController._cleanup_skill_projections_for_session\nschedule: terminate_session\n```\n\n### 6.5 Managed runtime workspace root\n\n```yaml\nkind: CleanupResourceClass\nname: managed-runtime.workspace-root\nownerPlane: managed-runtime-workspace-janitor\nlifecycle: retained-state\ncandidateSource:\n  filesystem:\n    roots:\n      - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/workspaces/*\n      - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/${agent_run_id}\ntruthSource:\n  stores:\n    - ManagedRunStore\n    - ManagedSessionStore\n  dockerActiveContainers: true\neligibility:\n  deleteWhen:\n    - every referencing run is terminal\n    - every referencing session is terminal\n    - no referencing record has activeTurnId\n    - newest owner activity is older than workspace retention\n    - no live Docker container or volume references the session/workspace\nsafety:\n  dryRunDefault: true\n  canonicalPathOnly: true\n  skipSymlinks: true\n  skipWhenAnyOwnerActive: true\n  skipWhenAnyOwnerRecent: true\n  skipWhenOwnershipAmbiguous: true\n  rescanBeforeDelete: true\n  deletionLockRequired: true\ndeletionAuthority: ManagedRuntimeWorkspaceJanitor\nschedule: MoonMind.ManagedRuntimeWorkspaceCleanup\n```\n\n### 6.6 Managed runtime artifact directory\n\n```yaml\nkind: CleanupResourceClass\nname: managed-runtime.artifact-dir\nownerPlane: managed-runtime-workspace-janitor\nlifecycle: retained-state\ncandidateSource:\n  filesystem:\n    root: normalized_managed_runtime_artifact_root()/*\ntruthSource:\n  stores:\n    - ManagedRunStore artifact refs\n    - ManagedSessionStore artifact refs\neligibility:\n  deleteWhen:\n    - all referencing runs/sessions are terminal\n    - artifact retention window has elapsed\n    - no retained record still needs the artifact directory for UI/log/audit lookup\nsafety:\n  retainLongerThanWorkspaces: true\n  skipWhenReferencedByRetainedRecord: true\n  dryRunDefault: true\ndeletionAuthority: ManagedRuntimeWorkspaceJanitor\nschedule: MoonMind.ManagedRuntimeWorkspaceCleanup\n```\n\n### 6.7 Managed run/session JSON records\n\n```yaml\nkind: CleanupResourceClass\nname: managed-runtime.record\nownerPlane: managed-runtime-workspace-janitor\nlifecycle: retained-metadata\ncandidateSource:\n  filesystem:\n    roots:\n      - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_runs/*.json\n      - ${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_sessions/*.json\ntruthSource:\n  self: JSON status and timestamps\neligibility:\n  deleteWhen:\n    - record is terminal\n    - record retention window has elapsed\n    - referenced workspace/artifacts were already deleted or intentionally retained elsewhere\nsafety:\n  deleteAfterWorkspaceAndArtifactPasses: true\n  optionalFeature: true\n  dryRunDefault: true\ndeletionAuthority: ManagedRuntimeWorkspaceJanitor\nschedule: MoonMind.ManagedRuntimeWorkspaceCleanup\n```\n\n---\n\n## 7. Existing managed-session orphan reaping\n\nManaged-session orphan reaping is a **live-runtime cleanup** path. It must stay focused on leaked Docker resources, not retained workspace deletion.\n\n### 7.1 Schedule\n\nThe recurring workflow is:\n\n```text\nMoonMind.ManagedSessionReconcile\n```\n\nThe schedule should continue to run every 10 minutes by default. Its activity resolves to `agent_runtime.reconcile_managed_sessions` and performs bounded reconciliation work.\n\n### 7.2 Eligibility model\n\nA managed-session container is eligible for orphan reaping when:\n\n1. it carries the managed-session Docker labels required for ownership discovery;\n2. its session is not active in `ManagedSessionStore`, or its active record was proven stale;\n3. it is older than the configured grace window unless it is being force-reaped as stale;\n4. the session store was readable for the pass.\n\nA sidecar volume is eligible when:\n\n1. it is a managed-session sidecar graph/socket volume;\n2. its session id is not active;\n3. the volume is not mounted by any active Docker container;\n4. its create timestamp is known;\n5. it is older than the configured grace window.\n\n### 7.3 Stale active record handling\n\nIf a non-terminal session record points at an owning workflow that has reached a terminal Temporal status, reconcile may mark the session terminated and then reap its containers/sidecar volumes.\n\nAs a final guardrail, an old `ready` session without `activeTurnId` may be force-marked terminal after the max-age window. This is a live-runtime leak guard, not a workspace retention policy.\n\n### 7.4 Existing reaper configuration\n\n| Env var | Default | Meaning |\n|---|---:|---|\n| `MOONMIND_MANAGED_SESSION_REAP_ENABLED` | `1` | Enables orphan reaping. Falsey values disable it. |\n| `MOONMIND_MANAGED_SESSION_REAP_GRACE_SECONDS` | `900` | Minimum age before an orphan container or sidecar volume is eligible. |\n| `MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS` | `172800` | Maximum age for stale `ready` active-store sessions with no active turn. Falsey disables this guardrail. |\n\n### 7.5 Non-goal\n\nThe orphan reaper must not delete:\n\n- `/work/agent_jobs/workspaces/*`,\n- `/work/agent_jobs/<agent_run_id>` session roots,\n- `/work/agent_jobs/artifacts/*`,\n- managed run JSON records,\n- managed session JSON records.\n\nThose are retained-state cleanup resources and belong to the workspace janitor.\n\n---\n\n## 8. New feature: managed runtime workspace janitor\n\nThe workspace janitor is a **retained-state cleanup** system. It removes old durable local runtime state after every known owner is terminal and after retention windows have elapsed.\n\n### 8.1 Workflow and activity\n\nRecommended workflow:\n\n```text\nMoonMind.ManagedRuntimeWorkspaceCleanup\n```\n\nRecommended activity:\n\n```text\nagent_runtime.cleanup_managed_runtime_files\n```\n\nRecommended schedule:\n\n- daily by default, or hourly for high-churn deployments;\n- overlap mode `skip`;\n- catchup mode `last`;\n- dry-run by default until deletion is explicitly enabled.\n\nThis should be separate from `MoonMind.ManagedSessionReconcile` so broad filesystem deletion cannot slow or destabilize live session leak cleanup.\n\n### 8.2 Required store APIs\n\nThe janitor needs complete terminal-state visibility. Add store methods rather than overloading active-only reconciliation APIs:\n\n```python\nclass ManagedRunStore:\n    def iter_all(self) -> Iterable[ManagedRunRecord]: ...\n    def delete(self, run_id: str) -> None: ...\n\nclass ManagedSessionStore:\n    def iter_all(self) -> Iterable[CodexManagedSessionRecord]: ...\n    def delete(self, session_id: str) -> None: ...\n```\n\n`list_active()` should remain active-reconciliation focused.\n\n### 8.3 Candidate roots\n\nThe janitor may discover candidates only under canonical managed-runtime roots:\n\n```text\n${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/workspaces/<workspace_key>\n${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/<agent_run_id>\nnormalized_managed_runtime_artifact_root()/<job_id>\n${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_runs/<run_id>.json\n${MOONMIND_AGENT_RUNTIME_STORE:-/work/agent_jobs}/managed_sessions/<session_id>.json\n```\n\nA candidate path outside those roots is unsafe and must be skipped.\n\nArtifact roots must be normalized before scanning. The janitor must use the same normalization semantics as `managed_runtime_artifact_root()`: when `MOONMIND_AGENT_RUNTIME_ARTIFACTS` is unset, blank, or set to the agent-jobs root such as `/work/agent_jobs`, the artifact candidate root is `/work/agent_jobs/artifacts`. The janitor must never scan `/work/agent_jobs/*` as artifact directories.\n\n### 8.4 Ownership grouping\n\nThe janitor must group records by **ownership root**, not only by run id.\n\nExamples:\n\n- `/work/agent_jobs/workspaces/mm:workflow-123/repo` belongs to `/work/agent_jobs/workspaces/mm:workflow-123`.\n- `/work/agent_jobs/workspaces/resolver:abc/repo` belongs to `/work/agent_jobs/workspaces/resolver:abc`.\n- `/work/agent_jobs/<agent_run_id>/repo` belongs to `/work/agent_jobs/<agent_run_id>`.\n- `/work/agent_jobs/<agent_run_id>/session` belongs to `/work/agent_jobs/<agent_run_id>`.\n- `/work/agent_jobs/<agent_run_id>/artifacts` belongs to `/work/agent_jobs/<agent_run_id>`.\n\nThe workspace root is eligible only when every run/session that maps to that ownership root is terminal and past retention.\n\n### 8.5 Terminal states\n\nManaged run terminal states:\n\n```text\ncompleted\nfailed\ncanceled\ntimed_out\n```\n\nManaged session terminal states:\n\n```text\nterminated\ndegraded\nfailed\n```\n\nAll other states are active or ambiguous for deletion purposes.\n\n### 8.6 Retention windows\n\nRecommended defaults:\n\n| Resource | Default retention | Reason |\n|---|---:|---|\n| Workspace/session roots | 30 days | Main disk-pressure target while keeping recent debugging state. |\n| Artifact directories | 90 days | Logs, diagnostics, summaries, and continuity artifacts are more operator-visible than checkouts. |\n| Run/session JSON records | 180 days or disabled | Records are small and useful for audit/debugging; delete only after artifact retention is settled. |\n| Grace window | 1 hour | Avoid racing newly completed runs or just-written records. |\n\n### 8.7 Configuration\n\nRecommended env vars:\n\n| Env var | Default | Meaning |\n|---|---:|---|\n| `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED` | `0` | Enables the retained-state janitor. |\n| `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN` | `1` | Reports eligible deletes without deleting. |\n| `MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS` | `30` | Workspace/session-root retention. |\n| `MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS` | `90` | Local managed-runtime artifact retention. |\n| `MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS` | unset | Optional run/session JSON record retention; unset means no record deletion. |\n| `MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS` | `3600` | Minimum delay after newest owner activity before deletion. |\n| `MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_PATHS` | `25` | Per-pass deletion cap. |\n| `MOONMIND_MANAGED_RUNTIME_JANITOR_MAX_DELETE_BYTES` | unset | Optional per-pass estimated byte cap. |\n| `MOONMIND_MANAGED_RUNTIME_JANITOR_LOCK_PATH` | `/work/agent_jobs/.janitor.lock` | Process-level janitor lock. |\n\n### 8.8 Safety gates\n\nBefore deleting a workspace or artifact root, the janitor must verify all of the following:\n\n1. The janitor is enabled.\n2. The candidate path resolves under an allowed canonical root.\n3. The candidate path is not a symlink.\n4. Both run and session stores were readable.\n5. All referencing run records are terminal.\n6. All referencing session records are terminal.\n7. No referencing record has `activeTurnId`.\n8. No live Docker container or active volume mount references the session/workspace.\n9. The newest relevant timestamp is older than both retention and grace windows.\n10. The candidate is still eligible after a second just-before-delete scan.\n11. The per-pass path and byte budgets allow deletion.\n12. Dry-run mode is disabled.\n\nIf any gate fails, the candidate must be skipped with a reason.\n\n### 8.9 Delete protocol\n\nUse a two-phase filesystem protocol:\n\n1. Acquire the janitor lock.\n2. Scan stores and filesystem candidates.\n3. Build ownership groups.\n4. Classify candidates as protected, eligible, skipped, or errored.\n5. Re-load records and re-check live Docker state immediately before delete.\n6. Rename the candidate to a quarantine path such as `.gc-<uuid>-<name>` in the same parent.\n7. Delete the quarantine path best-effort.\n8. Emit structured pass results.\n\nThe rename step narrows races: a newly launched run will recreate or use the canonical path, not a partially deleted tree.\n\n### 8.10 Result shape\n\nThe activity should return a compact structured result:\n\n```python\n@dataclass(frozen=True)\nclass ManagedRuntimeCleanupResult:\n    disabled: bool\n    dry_run: bool\n    scanned_run_records: int\n    scanned_session_records: int\n    scanned_workspace_roots: int\n    scanned_artifact_dirs: int\n    protected_roots: int\n    eligible_roots: int\n    deleted_roots: int\n    deleted_artifact_dirs: int\n    deleted_record_files: int\n    estimated_deleted_bytes: int\n    skipped_active: int\n    skipped_recent: int\n    skipped_unsafe_path: int\n    skipped_ambiguous_owner: int\n    errors: tuple[str, ...]\n```\n\n---\n\n## 9. State and path classification\n\n### 9.1 Candidate classification\n\nEach candidate should receive exactly one final classification:\n\n| Classification | Meaning |\n|---|---|\n| `protected_active` | At least one owner is active or has `activeTurnId`. |\n| `protected_recent` | All owners are terminal, but retention/grace has not elapsed. |\n| `protected_shared` | A shared workspace has at least one recent or active owner. |\n| `eligible` | All safety gates pass, but dry-run may prevent deletion. |\n| `deleted` | Candidate was renamed and removed. |\n| `skipped_unsafe_path` | Path is outside canonical roots, symlinked, or traversal-like. |\n| `skipped_ambiguous_owner` | Ownership cannot be derived safely. |\n| `error` | Candidate was safe to consider, but an unexpected error occurred. |\n\n### 9.2 Activity timestamp\n\nUse the newest available timestamp from all owners and the filesystem:\n\n1. run `finished_at`,\n2. run `last_heartbeat_at`,\n3. run `last_log_at`,\n4. run `started_at`,\n5. session `updated_at`,\n6. session `last_log_at`,\n7. session `started_at`,\n8. candidate path mtime.\n\nA missing timestamp should make a candidate more conservative, not less.\n\n---\n\n## 10. Observability and operator controls\n\nThe cleanup systems should expose:\n\n- per-pass structured logs,\n- count metrics by resource class and skip reason,\n- dry-run candidate samples,\n- delete budget exhaustion counters,\n- error counters with safe path identifiers,\n- current schedule state in Temporal,\n- a way to disable each cleanup system independently.\n\nOperators should be able to answer:\n\n- How many managed-session containers were reaped?\n- How many sidecar volumes were reaped?\n- How many workspaces are eligible for deletion?\n- Why was a specific workspace skipped?\n- How much disk would dry-run delete?\n- What was actually deleted in the last pass?\n\n---\n\n## 11. Acceptance tests\n\nThe implementation should include tests for:\n\n1. old terminal unique workspace is eligible;\n2. old terminal workspace is protected when another active run shares it;\n3. old terminal workspace is protected when another recent terminal run shares it;\n4. active managed session protects its session root;\n5. terminal managed session becomes eligible only after retention and grace;\n6. orphan reaper continues to delete containers and sidecar volumes but never workspaces;\n7. dry-run reports candidates without deleting;\n8. corrupt run/session JSON records fail closed;\n9. paths outside `/work/agent_jobs` are skipped;\n10. symlink candidates are skipped;\n11. live Docker references protect otherwise eligible roots;\n12. second scan prevents deletion if a new active owner appears;\n13. delete path and byte budgets stop a pass cleanly;\n14. artifact directories are retained longer than workspace roots;\n15. record deletion is disabled when record retention is unset.\n\n---\n\n## 12. Desired-state statement\n\nMoonMind cleanup should converge on this rule:\n\n> Live-runtime cleanup removes leaked containers, volumes, sockets, config, and short-lived support files as soon as they are no longer active. Retained-state cleanup removes workspaces, artifacts, and records only after all durable owners are terminal, retention has elapsed, and canonical path safety gates pass.\n\nThis preserves fast leak cleanup without turning lifecycle paths into broad filesystem garbage collectors, and it gives operators a clear, dry-run-first mechanism for controlling `/work/agent_jobs` growth.\n"
+  },
+  "extractedAt": "2026-06-27T00:48:13Z",
+  "designSummary": "The design defines a declarative managed-runtime cleanup model that separates live-runtime leak cleanup from retained-state garbage collection. It introduces a dry-run-first workspace janitor that relies on run/session stores, Temporal ownership, Docker state, canonical paths, retention windows, and conservative timestamps before deleting old workspaces, session roots, artifacts, and optional JSON records. The design emphasizes fail-closed safety gates, shared-checkout protection, quarantine-style deletion, structured results, and operator observability.",
+  "canonicalClaims": [
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-summary-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "1. Summary"
+      ],
+      "summary": "Managed-runtime cleanup uses a declarative cleanup catalog where each resource class declares ownership, durable truth, terminal states, retention, safety, deletion authority, and observability."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-scope-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "2. Scope and non-goals"
+      ],
+      "summary": "Cleanup scope is limited to managed-runtime resources; unrelated database, Temporal history, artifact-service, credential, memory, deployment, and application-log retention stay outside this design."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-goals-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "3. Design goals"
+      ],
+      "summary": "Cleanup must be ownership-aware, terminal-state-aware, shared-checkout safe, dry-run first, fail closed, idempotent, and operator-visible."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-truth-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "4. Durable truth sources"
+      ],
+      "summary": "Cleanup decisions use Temporal ownership, run/session stores, Docker labels and mounts, canonical filesystem layout, and timestamps in priority order; filesystem age alone is never sufficient."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-existing-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "5. Cleanup systems present today",
+        "7. Existing managed-session orphan reaping"
+      ],
+      "summary": "Existing live-runtime cleanup paths remain focused on session termination, run-supervisor support files, orphan Docker resources, and active-record reconciliation, not retained workspace deletion."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-catalog-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "6. Declarative cleanup catalog"
+      ],
+      "summary": "The catalog defines resource classes for session containers, sidecar volumes, launcher support files, skill projections, workspace roots, artifact directories, and optional JSON records with their respective owners and safety semantics."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-janitor-workflow-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "8.1 Workflow and activity",
+        "8.2 Required store APIs"
+      ],
+      "summary": "The retained-state janitor runs through a separate workflow/activity, defaults to dry-run, does not overload active-only store APIs, and requires complete iter/delete store methods."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-candidates-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "8.3 Candidate roots",
+        "8.4 Ownership grouping"
+      ],
+      "summary": "The janitor only discovers candidates under canonical managed-runtime roots, normalizes artifact roots safely, and groups ownership by workspace/session root rather than only run id."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-terminal-retention-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "8.5 Terminal states",
+        "8.6 Retention windows",
+        "8.7 Configuration"
+      ],
+      "summary": "Eligibility is based on explicit terminal run/session states, configurable retention windows, janitor enablement, dry-run behavior, grace windows, delete budgets, and lock configuration."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-safety-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "8.8 Safety gates"
+      ],
+      "summary": "Before deletion, every safety gate must pass, including enabled state, canonical non-symlink path, readable stores, terminal owners, no active turn, no live Docker reference, elapsed retention/grace, rescan, budgets, and dry-run disabled."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-delete-protocol-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "8.9 Delete protocol",
+        "8.10 Result shape"
+      ],
+      "summary": "Deletion uses a locked two-phase protocol with just-before-delete rechecks, same-parent quarantine rename, best-effort removal, and compact structured results."
+    },
+    {
+      "id": "CLAIM-docs-managed-runtime-cleanup-classification-observability-001",
+      "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+      "sections": [
+        "9. State and path classification",
+        "10. Observability and operator controls"
+      ],
+      "summary": "Each candidate receives a final classification, uses conservative activity timestamps, and exposes logs, metrics, samples, budget/error counters, schedule state, and skip/delete answers for operators."
+    }
+  ],
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Declarative cleanup catalog",
+      "type": "requirement",
+      "source_section": "1. Summary; 6. Declarative cleanup catalog",
+      "explanation": "Model managed-runtime cleanup as resource classes that define ownership, truth sources, eligibility, safety, authority, schedule, and observability."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Managed-runtime scope boundaries",
+      "type": "constraint",
+      "source_section": "2. Scope and non-goals",
+      "explanation": "Limit this model to managed-runtime resources and preserve separate ownership for database, Temporal history, credential, memory, deployment, and unrelated logging retention."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Durable truth priority",
+      "type": "state-model",
+      "source_section": "3. Design goals; 4. Durable truth sources",
+      "explanation": "Base deletion decisions on durable ownership and terminal state, not filesystem age alone."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Live-runtime cleanup stays narrow",
+      "type": "constraint",
+      "source_section": "5. Cleanup systems present today; 7. Existing managed-session orphan reaping",
+      "explanation": "Keep session termination, run-supervisor cleanup, and orphan reaping focused on live runtime resources rather than retained workspace garbage collection."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Separate workspace janitor workflow",
+      "type": "integration",
+      "source_section": "8.1 Workflow and activity",
+      "explanation": "Introduce a retained-state cleanup workflow/activity with independent schedule, dry-run default, and no coupling to session reconcile."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Complete store visibility",
+      "type": "integration",
+      "source_section": "8.2 Required store APIs",
+      "explanation": "Add all-record iteration and optional delete APIs for run/session stores while keeping list_active active-reconciliation focused."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Canonical candidate discovery",
+      "type": "security",
+      "source_section": "8.3 Candidate roots",
+      "explanation": "Only scan canonical managed-runtime roots and normalize artifact roots so broad agent-job directories are never treated as artifact candidates."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Ownership-root grouping",
+      "type": "state-model",
+      "source_section": "8.4 Ownership grouping",
+      "explanation": "Group candidate ownership by workspace/session root so shared checkouts survive until every owner is terminal and past retention."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Terminal state and retention rules",
+      "type": "requirement",
+      "source_section": "8.5 Terminal states; 8.6 Retention windows; 8.7 Configuration",
+      "explanation": "Use explicit terminal states, retention/grace windows, janitor enablement, dry-run settings, and deletion budgets to decide eligibility."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Fail-closed safety gates",
+      "type": "security",
+      "source_section": "8.8 Safety gates",
+      "explanation": "Skip deletion when stores, paths, ownership, activity, Docker references, age checks, rescan, budgets, or dry-run state make deletion unsafe."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Two-phase delete protocol",
+      "type": "requirement",
+      "source_section": "8.9 Delete protocol",
+      "explanation": "Acquire a lock, classify, recheck, quarantine-rename in the same parent, remove best-effort, and emit structured results."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Structured cleanup result",
+      "type": "artifact",
+      "source_section": "8.10 Result shape",
+      "explanation": "Return compact counts for scanned records, scanned paths, protected/eligible/deleted resources, bytes, skip reasons, and errors."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Candidate classification and timestamps",
+      "type": "state-model",
+      "source_section": "9. State and path classification",
+      "explanation": "Assign exactly one final classification and use the newest conservative owner/filesystem timestamp for age decisions."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Operator observability and controls",
+      "type": "observability",
+      "source_section": "10. Observability and operator controls",
+      "explanation": "Expose pass logs, metrics, dry-run samples, budget/error counters, schedule state, independent disablement, and answers for why resources were skipped or deleted."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Define managed-runtime cleanup catalog boundaries",
+      "shortName": "cleanup-catalog",
+      "description": "As a MoonMind platform maintainer, I need managed-runtime cleanup resources modeled through one declarative catalog so each cleanup path has explicit ownership, truth sources, safety rules, and boundaries.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+        "title": "Managed Runtime Cleanup Model",
+        "sections": [
+          "1. Summary",
+          "2. Scope and non-goals",
+          "5. Cleanup systems present today",
+          "6. Declarative cleanup catalog",
+          "7. Existing managed-session orphan reaping"
+        ],
+        "claimIds": [
+          "CLAIM-docs-managed-runtime-cleanup-summary-001",
+          "CLAIM-docs-managed-runtime-cleanup-scope-001",
+          "CLAIM-docs-managed-runtime-cleanup-existing-001",
+          "CLAIM-docs-managed-runtime-cleanup-catalog-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-004"
+        ]
+      },
+      "independentTest": "Unit-test the catalog/resource-class model or equivalent configuration to prove each declared managed-runtime resource has an owner, truth source, eligibility rule, safety rule, deletion authority, and schedule, and that live-runtime orphan reaping excludes retained workspace and artifact roots.",
+      "acceptanceCriteria": [
+        "The cleanup model enumerates managed-session containers, sidecar volumes, launcher support files, skill projections, workspace roots, artifact directories, and optional JSON records.",
+        "Each resource class records owner plane, lifecycle, candidate source, truth source, eligibility, safety behavior, deletion authority, schedule, and observability where applicable.",
+        "The implementation keeps retained-state workspace/artifact cleanup out of managed-session termination, managed-run supervisor cleanup, and managed-session orphan reaping.",
+        "Out-of-scope retention domains are not scanned or deleted by this managed-runtime cleanup model."
+      ],
+      "requirements": [
+        "Expose a single explicit cleanup-catalog representation for managed-runtime resource classes.",
+        "Preserve the live-runtime versus retained-state boundary in code and tests.",
+        "Document or encode non-goal domains as excluded from this cleanup system."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the core catalog structure and resource-class declarations.",
+        "DESIGN-REQ-002": "Owns scope and non-goal enforcement for managed-runtime cleanup.",
+        "DESIGN-REQ-004": "Owns the boundary that existing live cleanup must not delete retained workspaces, artifacts, or records."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "The catalog may be implemented as dataclasses, constants, or typed configuration as long as the resource semantics are explicit and testable."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Run a separate dry-run workspace janitor",
+      "shortName": "workspace-janitor",
+      "description": "As an operator, I need a separate retained-state cleanup workflow that scans only canonical managed-runtime roots in dry-run mode by default so disk-pressure cleanup can be evaluated without destabilizing live sessions.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+        "title": "Managed Runtime Cleanup Model",
+        "sections": [
+          "8.1 Workflow and activity",
+          "8.2 Required store APIs",
+          "8.3 Candidate roots"
+        ],
+        "claimIds": [
+          "CLAIM-docs-managed-runtime-cleanup-janitor-workflow-001",
+          "CLAIM-docs-managed-runtime-cleanup-candidates-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "independentTest": "Exercise the scheduled workflow/activity entry point with temporary managed-runtime roots and fake stores, verifying dry-run is the default, list_active is not used for full retention visibility, and paths outside canonical roots are skipped.",
+      "acceptanceCriteria": [
+        "A `MoonMind.ManagedRuntimeWorkspaceCleanup` workflow or equivalent scheduleable workflow invokes an `agent_runtime.cleanup_managed_runtime_files` activity or equivalent retained-state activity.",
+        "The janitor defaults to disabled or dry-run behavior until explicit configuration enables deletion.",
+        "Run and session stores provide all-record iteration, and optional record deletion uses explicit delete APIs rather than overloading active-only reconciliation APIs.",
+        "Candidate discovery is limited to configured canonical workspace, session, artifact, and record roots, with artifact root normalization preventing scans of `/work/agent_jobs/*` as artifact directories."
+      ],
+      "requirements": [
+        "Add a separate retained-state janitor workflow/activity surface.",
+        "Add or use complete run/session store iteration and deletion APIs.",
+        "Normalize and constrain candidate root discovery to the documented managed-runtime paths."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-005": "Owns the separate workflow/activity and schedule boundary.",
+        "DESIGN-REQ-006": "Owns complete store visibility APIs needed by the janitor.",
+        "DESIGN-REQ-007": "Owns canonical root discovery and artifact-root normalization safety."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Schedule registration may be implemented separately from the activity body if existing scheduler wiring requires a staged rollout."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Classify janitor eligibility from ownership and retention",
+      "shortName": "cleanup-eligibility",
+      "description": "As a maintainer, I need the janitor to group candidates by ownership root and classify eligibility from terminal states, active-turn state, Docker references, retention windows, and conservative timestamps so shared workspaces are never deleted while still in use.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+        "title": "Managed Runtime Cleanup Model",
+        "sections": [
+          "3. Design goals",
+          "4. Durable truth sources",
+          "8.4 Ownership grouping",
+          "8.5 Terminal states",
+          "8.6 Retention windows",
+          "8.7 Configuration",
+          "8.8 Safety gates",
+          "9. State and path classification"
+        ],
+        "claimIds": [
+          "CLAIM-docs-managed-runtime-cleanup-goals-001",
+          "CLAIM-docs-managed-runtime-cleanup-truth-001",
+          "CLAIM-docs-managed-runtime-cleanup-candidates-001",
+          "CLAIM-docs-managed-runtime-cleanup-terminal-retention-001",
+          "CLAIM-docs-managed-runtime-cleanup-safety-001",
+          "CLAIM-docs-managed-runtime-cleanup-classification-observability-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-013"
+        ]
+      },
+      "independentTest": "Run table-driven unit tests over candidate roots with combinations of active, terminal, recent, shared, ambiguous, unsafe, symlinked, and Docker-referenced owners, asserting the expected final classification and skip reason.",
+      "acceptanceCriteria": [
+        "Workspace/session candidates are grouped by ownership root, including shared workflow/correlation-key checkouts and per-run roots.",
+        "Only documented terminal run states (`completed`, `failed`, `canceled`, `timed_out`) and session states (`terminated`, `degraded`, `failed`) are eligible for deletion consideration.",
+        "Any active owner, active turn, unreadable store, ambiguous owner, unsafe path, symlink, live Docker container, active volume mount, recent timestamp, or failed rescan prevents deletion with a specific reason.",
+        "Candidate age uses the newest available run, session, and filesystem timestamp, with missing timestamps handled conservatively.",
+        "Configuration controls enablement, dry-run, workspace retention, artifact retention, optional record retention, grace window, delete path cap, delete byte cap, and lock path."
+      ],
+      "requirements": [
+        "Implement ownership-root grouping for candidate records and paths.",
+        "Implement terminal-state, retention, grace, activity, Docker, and safety-gate eligibility checks.",
+        "Return exactly one final classification per candidate with an actionable skip reason where applicable."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-003": "Owns durable-truth-first decision making and the prohibition on age-only deletion.",
+        "DESIGN-REQ-008": "Owns ownership-root grouping and shared-checkout safety.",
+        "DESIGN-REQ-009": "Owns terminal state, retention window, grace, dry-run, and budget inputs to eligibility.",
+        "DESIGN-REQ-010": "Owns fail-closed deletion gates before any destructive action.",
+        "DESIGN-REQ-013": "Owns final classification and conservative timestamp selection."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Delete eligible runtime state with quarantine protocol",
+      "shortName": "quarantine-delete",
+      "description": "As an operator, I need eligible workspaces, artifact directories, and optional JSON records deleted through a locked two-phase quarantine protocol so cleanup is repeatable, race-resistant, and auditable.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+        "title": "Managed Runtime Cleanup Model",
+        "sections": [
+          "6.5 Managed runtime workspace root",
+          "6.6 Managed runtime artifact directory",
+          "6.7 Managed run/session JSON records",
+          "8.8 Safety gates",
+          "8.9 Delete protocol",
+          "8.10 Result shape"
+        ],
+        "claimIds": [
+          "CLAIM-docs-managed-runtime-cleanup-catalog-001",
+          "CLAIM-docs-managed-runtime-cleanup-safety-001",
+          "CLAIM-docs-managed-runtime-cleanup-delete-protocol-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012"
+        ]
+      },
+      "independentTest": "Use temporary directories to verify that eligible candidates are rechecked, renamed to same-parent quarantine paths, removed best-effort, limited by path/byte budgets, and reported in structured result counts; dry-run must not rename or delete.",
+      "acceptanceCriteria": [
+        "The janitor acquires the configured lock before destructive cleanup and respects per-pass path and byte budgets.",
+        "Immediately before deletion, records and Docker state are reloaded and all safety gates are rechecked.",
+        "Deletion renames each eligible candidate to a `.gc-<uuid>-<name>` quarantine path in the same parent before best-effort removal.",
+        "Artifact directories are retained longer than workspaces and skipped while referenced by retained records.",
+        "Run/session JSON record deletion is optional and occurs only after workspace and artifact cleanup rules are satisfied.",
+        "The activity returns structured counts for scanned, protected, eligible, deleted, skipped, errored, and estimated deleted bytes."
+      ],
+      "requirements": [
+        "Implement lock-protected two-phase delete behavior for eligible retained-state candidates.",
+        "Apply artifact and optional record retention semantics separately from workspace/session root deletion.",
+        "Produce a compact `ManagedRuntimeCleanupResult` or equivalent structured result."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-010": "Owns just-before-delete safety rechecks and dry-run/budget enforcement during destructive cleanup.",
+        "DESIGN-REQ-011": "Owns lock, quarantine rename, and best-effort removal protocol.",
+        "DESIGN-REQ-012": "Owns the structured result shape and cleanup counters."
+      },
+      "dependencies": [
+        "STORY-003"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Expose cleanup observability and operator controls",
+      "shortName": "cleanup-observability",
+      "description": "As an operator, I need cleanup passes to report what they scanned, skipped, would delete, and actually deleted so I can operate retained-state cleanup safely and answer why a specific resource was or was not removed.",
+      "sourceReference": {
+        "path": "docs/ManagedAgents/ManagedRuntimeCleanup.md",
+        "title": "Managed Runtime Cleanup Model",
+        "sections": [
+          "8.10 Result shape",
+          "9. State and path classification",
+          "10. Observability and operator controls"
+        ],
+        "claimIds": [
+          "CLAIM-docs-managed-runtime-cleanup-delete-protocol-001",
+          "CLAIM-docs-managed-runtime-cleanup-classification-observability-001"
+        ],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-014"
+        ]
+      },
+      "independentTest": "Run dry-run and deletion-mode janitor passes against controlled fixtures, then assert structured logs/metrics/result fields expose scanned counts, classifications, skip reasons, dry-run samples, budget exhaustion, errors, schedule state, and independent disablement state without leaking unsafe paths or secrets.",
+      "acceptanceCriteria": [
+        "Each pass emits structured logs and count metrics by resource class and skip reason.",
+        "Dry-run output includes actionable candidate samples and estimated deletion impact without deleting paths.",
+        "Delete budget exhaustion and error counters are visible with safe path identifiers.",
+        "Operators can see schedule state and can disable retained-state janitor cleanup independently from managed-session orphan reaping.",
+        "Operator-facing evidence answers how many session containers or sidecar volumes were reaped, how many workspaces are eligible, why a workspace was skipped, how much dry-run would delete, and what was deleted in the last pass."
+      ],
+      "requirements": [
+        "Expose janitor observability through structured logs, metrics, and activity results.",
+        "Preserve per-candidate classification and skip/delete explanations for operator diagnostics.",
+        "Provide independent controls for cleanup systems."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-012": "Owns operator-visible structured result counts.",
+        "DESIGN-REQ-013": "Owns preserving classification and skip reason evidence.",
+        "DESIGN-REQ-014": "Owns logs, metrics, samples, controls, and operator questions."
+      },
+      "dependencies": [
+        "STORY-003",
+        "STORY-004"
+      ],
+      "assumptions": [],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "CLAIM-docs-managed-runtime-cleanup-summary-001": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-scope-001": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-goals-001": [
+      "STORY-003"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-truth-001": [
+      "STORY-003"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-existing-001": [
+      "STORY-001"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-catalog-001": [
+      "STORY-001",
+      "STORY-004"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-janitor-workflow-001": [
+      "STORY-002"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-candidates-001": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-terminal-retention-001": [
+      "STORY-003"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-safety-001": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-delete-protocol-001": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "CLAIM-docs-managed-runtime-cleanup-classification-observability-001": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-001": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-005"
+    ]
+  },
+  "outOfScope": [
+    "Database execution records, Temporal workflow histories, long-term artifact service retention, provider credentials/OAuth volumes, memory indexes, deployment desired-state files, and application logs outside managed-runtime workspace roots.",
+    "Creating `spec.md`, generating `specs/` directories, implementing the janitor, publishing Jira issues, or transitioning MM-940."
+  ],
+  "requestedOutputMode": "jira"
+}
