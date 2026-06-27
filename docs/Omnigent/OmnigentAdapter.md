@@ -93,6 +93,18 @@ Omnigent's files panel and session resources are observable surfaces, not the au
 
 The adapter must copy observable Omnigent inputs, outputs, streams, snapshots, diffs, and resource files into MoonMind artifacts and return compact refs in `AgentRunResult`.
 
+### 2.4 Durability boundary in v1
+
+The streaming-gateway model runs the entire Omnigent session inside a single `integration.omnigent.execute` activity. Temporal's durability is at the activity boundary, so v1 does **not** provide Temporal-checkpointed progress *within* a run: if the MoonMind worker dies mid-session, Temporal retries the activity from the top.
+
+The honest v1 guarantee is therefore:
+
+- **omnigent-host owns live-execution durability.** The Omnigent session and its workspace survive MoonMind worker death because they live on the Omnigent side, not in the activity attempt.
+- **Temporal durably records delegation and result.** Temporal durably remembers that the run was delegated to Omnigent and what the final canonical result was, and re-attaches on retry (§9.5, §10, §12.5).
+- **Retry re-attaches, it does not recreate.** A retry reconnects to the existing Omnigent session rather than provisioning a second host or reposting the first message.
+
+Out of scope for v1: durable checkpointing of intra-run progress, and Omnigent session continuity across MoonMind steps (a v2 concern — §21). "MoonMind with or without Temporal" is a separate architectural track, not part of this adapter contract.
+
 ---
 
 ## 3. Conceptual mapping
@@ -204,9 +216,9 @@ Declarative capability:
 ProviderCapabilityDescriptor(
     providerName="omnigent",
     supportsCallbacks=False,
-    supportsCancel=True,
+    supportsCancel=False,
     supportsResultFetch=False,
-    defaultPollHintSeconds=10,
+    defaultPollHintSeconds=15,
     execution_style="streaming_gateway",
 )
 ```
@@ -222,6 +234,11 @@ do_cancel       -> unused, raise RuntimeError
 
 Cancellation for v1 is handled by cancellation of the execute activity, which then sends Omnigent `interrupt` / `stop_session` best-effort signals.
 
+These capability values match the only existing streaming-gateway provider, OpenClaw:
+
+- `supportsCancel=False` — in streaming mode, cancellation is delivered by Temporal activity cancellation, not a `do_cancel` hook (the hook raises `RuntimeError`). Advertising `supportsCancel=True` while the hook raises would be internally contradictory.
+- `defaultPollHintSeconds=15` — unused in streaming mode, but kept equal to the other providers rather than introducing a bespoke value.
+
 ### 6.2 Why not `ManagedAgentAdapter`
 
 `ManagedAgentAdapter` is reserved for MoonMind-owned managed runtimes where MoonMind resolves provider profiles, obtains profile leases, shapes credentials/env/files, and launches runtime activities.
@@ -229,6 +246,8 @@ Cancellation for v1 is handled by cancellation of the execute activity, which th
 The Omnigent topology delegates those responsibilities to Omnigent server and `omnigent-host`. Treating Omnigent as a managed runtime would create a misleading ownership boundary unless MoonMind directly provisions and controls the Omnigent host container itself.
 
 A future v2 may add an `OmnigentManagedBridgeAdapter` only if MoonMind directly provisions Omnigent hosts and controls their lifecycle as MoonMind managed workloads.
+
+Host packaging — whether `omnigent-host` runs containers via docker-in-docker, and whether MoonMind co-locates the Omnigent server/host in its own compose — is a Phase-1 compose/host-image concern tracked in `OmnigentIntegrationArchitecture.md`, not part of this adapter contract. If MoonMind ends up provisioning and controlling the host lifecycle, the ownership boundary shifts toward "managed," which is exactly the trigger for the reserved `OmnigentManagedBridgeAdapter`.
 
 ---
 
@@ -513,7 +532,18 @@ Representative event:
 
 The adapter must persist an idempotency mapping outside the Activity attempt.
 
-Suggested table or durable store:
+### 10.1 Why a durable table (Simplicity Gate)
+
+Existing external adapters keep idempotency in `BaseExternalAgentAdapter._starts_by_idempotency`, an in-memory dict scoped to a single Activity attempt. That is sufficient for stateless streaming providers like OpenClaw, where a retry simply re-runs a chat-style completion. It is **not** sufficient for Omnigent: a retry that cannot see the prior attempt's state would create a second Omnigent session — meaning duplicate host provisioning and possibly a duplicate PR.
+
+Per the CLAUDE.md Simplicity Gate, the decision and what it replaces:
+
+- **v1 uses a dedicated `omnigent_external_runs` durable store**, because the in-memory per-attempt dict cannot survive worker death or span Temporal retries — the exact failure mode that produces duplicate sessions.
+- MoonMind does **not** introduce a shared `externalSession` table for Jules / Codex Cloud / OpenClaw / Omnigent in v1. No such table exists today; adding one now would be speculative cross-provider scaffolding outside this task's scope. Promotion to a shared table is deferred until a second provider actually needs durable session mapping (resolves open question #6).
+
+### 10.2 Run-mapping store
+
+The durable store holds:
 
 ```text
 omnigent_external_runs
@@ -567,13 +597,14 @@ Map Omnigent observations into canonical MoonMind states.
 | `session.status = waiting` and active elicitation exists | `awaiting_approval` |
 | `session.status = waiting` without known elicitation | `intervention_requested` |
 | `response.elicitation_request` | `awaiting_approval` |
-| `response.completed` and session returns idle | `completed` |
+| Terminal response received; adapter harvesting snapshot/workspace/session artifacts | `collecting_results` |
+| `response.completed`, session idle, and harvest complete | `completed` |
 | `response.failed` | `failed` |
 | `session.status = failed` | `failed` |
 | Activity timeout | `timed_out` |
 | Activity cancellation after interrupt/stop | `canceled` |
 
-Unsupported or unknown provider states must be treated as adapter contract errors. Do not pass raw Omnigent statuses into workflow code as canonical states.
+Unsupported or unknown provider states must be treated as canonical contract failures and surfaced with the `UnsupportedStatus` `ApplicationError.type` from `ErrorTaxonomy.md` (§5.3), not a bespoke error. Do not pass raw Omnigent statuses into workflow code as canonical states.
 
 ---
 
@@ -629,6 +660,14 @@ Fetch snapshots at least twice:
 2. after terminal state or cancellation.
 
 Optional periodic snapshots may be captured for long runs.
+
+### 12.5 Heartbeating, worker death, and re-attach
+
+Because the whole session runs inside one activity, MoonMind worker death is only detected through Temporal's activity heartbeat — the same mechanism the OpenClaw streaming activity relies on ("heartbeats carry stream progress").
+
+- **Heartbeat on progress.** The activity heartbeats on each captured SSE frame (or at least each snapshot / periodic interval), carrying a compact progress token (last event id / snapshot marker), never raw payloads.
+- **`heartbeat_timeout` ≪ `start_to_close_timeout`.** A long session needs a large start-to-close timeout; without a much smaller heartbeat timeout, worker death surfaces only at start-to-close, delaying recovery. Size the heartbeat timeout from `OMNIGENT_STREAM_HEARTBEAT_TIMEOUT_SECONDS` (§5.1) and mark the activity heartbeat-required in the activity catalog (`ActivityCatalogAndWorkerTopology.md`).
+- **Retry re-attaches, it never recreates.** On retry the activity: (1) looks up `omnigent_session_id` by `idempotencyKey` in `omnigent_external_runs` (§10); (2) reconnects the SSE stream to that session; (3) fetches a fresh snapshot (§12.4) to reconcile the gap missed while disconnected; (4) applies first-message idempotency (§9.5) before any POST; (5) resumes waiting for terminal state. A successful re-attach must never trigger a second session or a duplicate first message.
 
 ---
 
@@ -722,6 +761,27 @@ Suggested contents:
 }
 ```
 
+### 13.6 Canonical `link_type` bindings
+
+Harvested artifacts must be persisted under the stable `artifact_links.link_type` taxonomy from `WorkflowArtifactSystemDesign.md` so existing MoonMind observability surfaces pick them up. The readable filenames in §12.2 and §13 are labels; the `link_type` is the machine-stable binding.
+
+| Harvested artifact | Canonical `link_type` |
+|---|---|
+| `input.omnigent.session_create.request/response.json` | `input.manifest` |
+| `input.omnigent.first_message.request/response.json` | `input.instructions` |
+| `runtime.omnigent.sse.raw.jsonl` | `runtime.merged_logs` |
+| `runtime.omnigent.sse.normalized.jsonl` | `output.logs` |
+| `runtime.omnigent.snapshot.initial.json` | `output.provider_snapshot` |
+| `output.omnigent.snapshot.final.json` | `output.provider_snapshot` |
+| `output.omnigent.transcript.jsonl` | `runtime.merged_logs` |
+| `output.omnigent.final_response.md` | `output.primary` |
+| `output.workspace.diff.full.patch` | `output.patch` |
+| `output.github.pr.diff.patch` | `output.patch` |
+| diagnostics artifact (§13.5) | `runtime.diagnostics` |
+| capture manifest / changed-files index | `output.agent_result` |
+
+Multiple artifacts may share a `link_type` (e.g. both snapshots, both patches); disambiguate with `label` and metadata per `WorkflowArtifactSystemDesign.md`.
+
 ---
 
 ## 14. Child sessions
@@ -811,6 +871,7 @@ Rules:
 | Failure | MoonMind failure class | Notes |
 |---|---|---|
 | Omnigent server unreachable before session create | `integration_error` | Retryable if transport policy allows. |
+| Omnigent server returns `429` / rate limited | `integration_error` (retryable-with-policy) | Classify as `RATE_LIMITED` per `ErrorTaxonomy.md` §8; honor `Retry-After` and use bounded retry, not immediate retry. |
 | Authentication failure to Omnigent | `integration_error` | Non-retryable until config fixed. |
 | Unknown Omnigent agent name | `user_error` | Bad request/target selection. |
 | Session create 4xx | `user_error` or `integration_error` | Depends on validation vs auth/config. |
@@ -866,15 +927,15 @@ The adapter should produce enough data to power existing MoonMind AgentRun obser
 
 Suggested mapping:
 
-| MoonMind observability surface | Omnigent-backed source |
-|---|---|
-| Observability summary | diagnostics + status timeline + final snapshot |
-| Logs stream | normalized SSE JSONL projection |
-| stdout/stderr | not available API-only; use host helper in v2 |
-| merged logs | SSE stream + transcript projection |
-| diagnostics | diagnostics artifact |
-| step evidence | capture manifest + output refs |
-| final summary | final response markdown + result summary |
+| MoonMind observability surface | Canonical `link_type` | Omnigent-backed source |
+|---|---|---|
+| Observability summary | `output.summary` | diagnostics + status timeline + final snapshot |
+| Logs stream | `output.logs` | normalized SSE JSONL projection |
+| stdout/stderr | `runtime.stdout` / `runtime.stderr` | not available API-only; use host helper in v2 |
+| merged logs | `runtime.merged_logs` | raw SSE stream + transcript projection |
+| diagnostics | `runtime.diagnostics` | diagnostics artifact |
+| step evidence | `output.agent_result` | capture manifest + output refs |
+| final summary | `output.primary` | final response markdown + result summary |
 
 Host-side stdout/stderr capture is explicitly out of scope for v1 unless a MoonMind helper is added to the Omnigent host image.
 
@@ -891,9 +952,9 @@ from moonmind.workflows.adapters.base_external_agent_adapter import BaseExternal
 _OMNIGENT_CAPABILITY = ProviderCapabilityDescriptor(
     providerName="omnigent",
     supportsCallbacks=False,
-    supportsCancel=True,
+    supportsCancel=False,
     supportsResultFetch=False,
-    defaultPollHintSeconds=10,
+    defaultPollHintSeconds=15,
     execution_style="streaming_gateway",
 )
 
@@ -1078,6 +1139,8 @@ Run against a real Omnigent server with a disposable repository and a sandbox ho
 
 - Add `OmnigentExternalAdapter` registration.
 - Add `integration.omnigent.execute` activity.
+- Register `integration.omnigent.execute` in the activity catalog under the integration family/fleet, marked heartbeat-required (`ActivityCatalogAndWorkerTopology.md`).
+- Expose the activity through the integration worker handler / task-queue binding so it is discoverable via catalog-driven routing.
 - Capture requests, stream, snapshots, and final result.
 - Return canonical `AgentRunResult` with artifact refs.
 - Enforce one canonical top-level `agentId=omnigent`.
@@ -1116,8 +1179,8 @@ Run against a real Omnigent server with a disposable repository and a sandbox ho
 3. Should the adapter delete Omnigent sessions after successful harvest in CI-style workflows?
 4. Should MoonMind patch Omnigent to emit webhooks or artifact callbacks instead of relying on SSE capture?
 5. How should clear/context-reset semantics map onto MoonMind step epochs in v2?
-6. Should MoonMind add a first-class `externalSession` table shared by Jules, Codex Cloud, OpenClaw, and Omnigent?
-7. Should ambiguous `posting` retry reconciliation fail closed as `intervention_requested` by default, or can specific CI workflows opt into repost-after-positive-absence?
+6. *(Resolved — see §10.1.)* A shared `externalSession` table is not introduced in v1; `omnigent_external_runs` stays dedicated, and promotion to a shared table is deferred until a second provider needs durable session mapping.
+7. *(Resolved — fail closed.)* Ambiguous `posting` retries surface `intervention_requested` rather than reposting (§9.5 rule 9); a CI-only opt-in for repost-after-positive-absence is possible later but out of scope for v1.
 
 ---
 
