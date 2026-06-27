@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type {
-  FocusEvent,
-  KeyboardEvent as ReactKeyboardEvent,
-  ReactElement,
-} from "react";
+import type { ReactElement } from "react";
 import { createPortal } from "react-dom";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
@@ -1914,7 +1910,7 @@ function activeAppliedTemplatesForSteps(
 ): AppliedTemplateState[] {
   const activeStepIds = new Set(
     steps
-      .map((step) => step.id.trim())
+      .map((step) => (step.id || "").trim())
       .filter(Boolean),
   );
   return appliedTemplates.filter((template) => {
@@ -1934,7 +1930,7 @@ function templateCapabilitiesForStep(
   appliedTemplates: AppliedTemplateState[],
   step: StepState,
 ): string[] {
-  const stepId = step.id.trim();
+  const stepId = (step.id || "").trim();
   return activeAppliedTemplatesForSteps(appliedTemplates, [step]).flatMap(
     (template) => {
       const stepIds = Array.isArray(template.stepIds)
@@ -2362,6 +2358,7 @@ function executableGeneratedSkillPayload(
 function manualToolPayload(
   step: StepState | null | undefined,
   inputs: Record<string, unknown>,
+  requiredCapabilities: string[] = [],
 ): PresetStepSkill | null {
   if (step?.stepType !== "tool") {
     return null;
@@ -2374,6 +2371,9 @@ function manualToolPayload(
     type: "tool",
     id: toolId,
     inputs,
+    ...(requiredCapabilities.length > 0
+      ? { requiredCapabilities }
+      : {}),
   };
 }
 
@@ -2785,6 +2785,7 @@ function deriveRequiredCapabilities(args: {
   publishMode: string;
   taskSkillRequiredCapabilities: string[];
   stepSkillRequiredCapabilities: string[];
+  toolRequiredCapabilities: string[];
   explicitStepCapabilities: string[];
   templateCapabilities: string[];
 }): string[] {
@@ -2797,6 +2798,7 @@ function deriveRequiredCapabilities(args: {
         ...(args.publishMode === "pr" ? ["gh"] : []),
         ...args.taskSkillRequiredCapabilities,
         ...args.stepSkillRequiredCapabilities,
+        ...args.toolRequiredCapabilities,
         ...args.explicitStepCapabilities,
         ...args.templateCapabilities
           .map((item) => item.trim().toLowerCase())
@@ -4862,8 +4864,12 @@ interface CapabilityChipProps {
 }
 
 function derivedCapabilityExplanation(chip: StepCapabilityChip): string {
-  const provenance = capabilityChipProvenanceLabel(chip) || "by this step";
-  return `This capability is required ${provenance}. Change the selected ${provenance.replace(/^from /, "")} source or generated step to remove it.`;
+  const provenance = capabilityChipProvenanceLabel(chip);
+  if (!provenance) {
+    return "This capability is required by this step. Change the step configuration to remove it.";
+  }
+  const source = provenance.replace(/^from /, "");
+  return `This capability is required ${provenance}. Change the selected ${source} source or generated step to remove it.`;
 }
 
 function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
@@ -4871,34 +4877,14 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
   const provenance = capabilityChipProvenanceLabel(chip);
   const detailText = chip.removable ? chip.token : provenance || chip.token;
   const explanation = chip.removable ? chip.description : derivedCapabilityExplanation(chip);
-  const handleDerivedBlur = (event: FocusEvent<HTMLLIElement>) => {
-    if (
-      event.relatedTarget instanceof Node &&
-      event.currentTarget.contains(event.relatedTarget)
-    ) {
-      return;
-    }
-    setShowExplanation(false);
-  };
-  const handleDerivedKeyDown = (event: ReactKeyboardEvent<HTMLLIElement>) => {
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-    event.preventDefault();
-    setShowExplanation((value) => !value);
-  };
   return (
     <li
       className={`queue-step-capability-chip${chip.removable ? "" : " is-derived"}`}
-      tabIndex={chip.removable ? undefined : 0}
       onClick={
         chip.removable
           ? undefined
           : () => setShowExplanation((value) => !value)
       }
-      onFocus={chip.removable ? undefined : () => setShowExplanation(true)}
-      onBlur={chip.removable ? undefined : handleDerivedBlur}
-      onKeyDown={chip.removable ? undefined : handleDerivedKeyDown}
     >
       <span className="queue-step-capability-chip-icon" aria-hidden="true">
         {chip.icon}
@@ -4923,6 +4909,8 @@ function CapabilityChip({ chip, stepNumber, onRemove }: CapabilityChipProps) {
           aria-label={`${chip.label} capability provenance`}
           title={explanation}
           aria-expanded={showExplanation}
+          onFocus={() => setShowExplanation(true)}
+          onBlur={() => setShowExplanation(false)}
           onClick={(event) => {
             event.stopPropagation();
             setShowExplanation((value) => !value);
@@ -5781,6 +5769,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             name: String(tool.name || "").trim(),
             description: String(tool.description || "").trim(),
             ...(inputSchema ? { inputSchema } : {}),
+            ...(Array.isArray(tool.requiredCapabilities)
+              ? {
+                  requiredCapabilities: mergeCapabilities(
+                    tool.requiredCapabilities,
+                  ),
+                }
+              : {}),
           };
         })
         .filter((tool) => Boolean(tool.name));
@@ -8749,6 +8744,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     );
 
     const primaryStepIsSkill = primaryStep?.stepType === "skill";
+    const primaryStepIsTool = primaryStep?.stepType === "tool";
     const primarySkillId = primaryStepIsSkill
       ? primaryValidation.value.skillId.trim() || "auto"
       : "auto";
@@ -8820,18 +8816,24 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       primarySkillArgs,
       primarySchemaInputs.values,
     );
+    const primaryToolDefinition =
+      primaryStepIsTool
+        ? (trustedToolsQuery.data || []).find(
+            (tool) => toolDefinitionId(tool) === primaryStep.toolId.trim(),
+          ) || null
+        : null;
+    const primaryToolDetail = detailFromTrustedTool(primaryToolDefinition);
+    const primaryToolRequiredCapabilities =
+      primaryStepIsTool && !executableGeneratedToolPayload(primaryStep)
+        ? mergeCapabilities(primaryToolDetail?.requiredCapabilities)
+        : [];
     let primaryToolInputs: Record<string, unknown> = {};
-    if (primaryStep?.stepType === "tool" && !executableGeneratedToolPayload(primaryStep)) {
+    if (primaryStepIsTool && !executableGeneratedToolPayload(primaryStep)) {
       if (!primaryStep.toolId.trim()) {
         setSubmitMessage("Select a Tool before submitting a Tool step.");
         clearSubmitBusy();
         return;
       }
-      const primaryToolDefinition =
-        (trustedToolsQuery.data || []).find(
-          (tool) => toolDefinitionId(tool) === primaryStep.toolId.trim(),
-        ) || null;
-      const primaryToolDetail = detailFromTrustedTool(primaryToolDefinition);
       if (primaryToolDetail && schemaContractHasFields(primaryToolDetail)) {
         const structuredInputs = schemaToolInputs(
           primaryToolDetail,
@@ -8889,6 +8891,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       skillArgsRaw: string;
       skillArgs: Record<string, unknown>;
       skillCaps: string[];
+      toolCaps: string[];
       toolInputs: Record<string, unknown>;
       hasStepContent: boolean;
     }> = [];
@@ -8926,6 +8929,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             ) || null
           : null;
       const stepToolDetail = detailFromTrustedTool(stepToolDefinition);
+      const stepToolCaps =
+        stepIsTool && !generatedToolPayload
+          ? mergeCapabilities(stepToolDetail?.requiredCapabilities)
+          : [];
       const stepSchemaInputs = schemaSkillInputs(
         stepSkillDetail,
         step.presetInputValues,
@@ -8958,6 +8965,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         Boolean(stepSkillArgsRaw) ||
         Object.keys(stepSchemaInputs.values).length > 0 ||
         stepSkillCaps.length > 0 ||
+        stepToolCaps.length > 0 ||
         Boolean(generatedToolPayload) ||
         Boolean(generatedSkillPayload) ||
         hasRuntimePayload;
@@ -9024,6 +9032,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         skillArgsRaw: stepSkillArgsRaw,
         skillArgs: stepSkillArgs,
         skillCaps: stepSkillCaps,
+        toolCaps: stepToolCaps,
         toolInputs: stepToolInputs,
         hasStepContent,
       });
@@ -9257,6 +9266,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       skillArgsRaw: stepSkillArgsRaw,
       skillArgs: stepSkillArgs,
       skillCaps: stepSkillCaps,
+      toolCaps: stepToolCaps,
       toolInputs: stepToolInputs,
       hasStepContent: hasPreUploadStepContent,
     } of parsedAdditionalStepInputs) {
@@ -9294,7 +9304,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       } else if (generatedSkillPayload) {
         stepPayload.skill = generatedSkillPayload;
       } else if (step.stepType === "tool") {
-        const toolPayload = manualToolPayload(step, stepToolInputs);
+        const toolPayload = manualToolPayload(step, stepToolInputs, stepToolCaps);
         if (toolPayload) {
           stepPayload.tool = toolPayload;
         }
@@ -9326,11 +9336,15 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       ? stepRuntimePayload(primaryStep)
       : null;
     const hasTemplateBoundStep = submissionSteps.some((step) =>
-      Boolean(step.id.trim()),
+      Boolean((step.id || "").trim()),
     );
     const primaryGeneratedToolPayload =
       executableGeneratedToolPayload(primaryStep) ||
-      manualToolPayload(primaryStep, primaryToolInputs);
+      manualToolPayload(
+        primaryStep,
+        primaryToolInputs,
+        primaryToolRequiredCapabilities,
+      );
     const includeExplicitSteps =
       additionalSteps.length > 0 ||
       includePrimaryStepForObjectiveOverride ||
@@ -9414,7 +9428,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           );
           const hasSubmittedStepShape =
             hasPayloadContent ||
-            Boolean(sourceStep.id.trim()) ||
+            Boolean((sourceStep.id || "").trim()) ||
             Boolean(sourceStep.title.trim()) ||
             Boolean(sourceStep.storyOutput) ||
             Boolean(
@@ -9429,8 +9443,8 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             Boolean(submittedPayload?.tool) ||
             Boolean(submittedPayload?.skill);
           const submittedStep = {
-            ...(shouldPreserveStepId && sourceStep.id.trim()
-              ? { id: sourceStep.id.trim() }
+            ...(shouldPreserveStepId && (sourceStep.id || "").trim()
+              ? { id: (sourceStep.id || "").trim() }
               : {}),
             ...(sourceStep.title.trim()
               ? { title: sourceStep.title.trim() }
@@ -9485,6 +9499,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         step ? step.explicitRequiredCapabilities : [],
       ),
     );
+    const toolRequiredCapabilities = mergeCapabilities(
+      primaryToolRequiredCapabilities,
+      ...parsedAdditionalStepInputs.map((entry) => entry.toolCaps),
+    );
     const mergedCapabilities = deriveRequiredCapabilities({
       runtimeMode: normalizedRuntime,
       stepRuntimeModes: normalizedSteps
@@ -9497,6 +9515,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
       publishMode: effectivePublishMode,
       taskSkillRequiredCapabilities,
       stepSkillRequiredCapabilities,
+      toolRequiredCapabilities,
       explicitStepCapabilities,
       templateCapabilities,
     });
