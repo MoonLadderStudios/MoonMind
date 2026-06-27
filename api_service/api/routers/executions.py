@@ -6280,48 +6280,79 @@ def _validate_pentest_submission_boundary(
                 f"that are not user-editable: {', '.join(blocked)}."
             )
 
+_PR_RESOLVER_SELECTOR_ERROR = (
+    "pr-resolver workflow requires a structured PR selector: "
+    "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
+    "payload.workflow.tool.inputs.pr/branch, or "
+    "payload.workflow.git.startingBranch."
+)
+
+
+def _pr_resolver_structured_selector(
+    *,
+    task_payload: dict[str, Any],
+    normalized_task_for_planner: dict[str, Any] | None = None,
+) -> str:
+    normalized_task = (
+        normalized_task_for_planner
+        if isinstance(normalized_task_for_planner, dict)
+        else {}
+    )
+    task_inputs = _coerce_mapping(task_payload.get("inputs"))
+    normalized_inputs = _coerce_mapping(normalized_task.get("inputs"))
+    task_git = _coerce_mapping(task_payload.get("git"))
+    normalized_git = _coerce_mapping(normalized_task.get("git"))
+    tool_payload = _coerce_mapping(task_payload.get("tool"))
+    skill_payload = _coerce_mapping(task_payload.get("skill"))
+    tool_inputs = _coerce_mapping(
+        tool_payload.get("inputs") or tool_payload.get("args")
+    )
+    skill_inputs = _coerce_mapping(
+        skill_payload.get("inputs") or skill_payload.get("args")
+    )
+
+    for value in (
+        task_inputs.get("pr"),
+        normalized_inputs.get("pr"),
+        tool_inputs.get("pr"),
+        skill_inputs.get("pr"),
+        task_inputs.get("startingBranch"),
+        normalized_inputs.get("startingBranch"),
+        tool_inputs.get("startingBranch"),
+        skill_inputs.get("startingBranch"),
+        task_git.get("startingBranch"),
+        normalized_git.get("startingBranch"),
+        task_payload.get("startingBranch"),
+        normalized_task.get("startingBranch"),
+        task_inputs.get("branch"),
+        normalized_inputs.get("branch"),
+        tool_inputs.get("branch"),
+        skill_inputs.get("branch"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
 def _validate_workflow_runtime_requirements(
     *,
     task_payload: dict[str, Any],
     normalized_tool: dict[str, Any] | None,
     normalized_task_for_planner: dict[str, Any],
 ) -> None:
-    instructions = str(task_payload.get("instructions") or "").strip()
-    if instructions:
-        return
-
     tool_name = str((normalized_tool or {}).get("name") or "").strip().lower()
     if tool_name != "pr-resolver":
         return
 
-    task_inputs = (
-        normalized_task_for_planner.get("inputs")
-        if isinstance(normalized_task_for_planner.get("inputs"), dict)
-        else {}
-    )
-    task_git = (
-        normalized_task_for_planner.get("git")
-        if isinstance(normalized_task_for_planner.get("git"), dict)
-        else {}
-    )
-
-    pr_selector = str(task_inputs.get("pr") or "").strip()
-    branch_selector = str(
-        task_git.get("startingBranch")
-        or normalized_task_for_planner.get("startingBranch")
-        or task_git.get("branch")
-        or normalized_task_for_planner.get("branch")
-        or task_inputs.get("startingBranch")
-        or task_inputs.get("branch")
-        or ""
-    ).strip()
-    if pr_selector or branch_selector:
+    if _pr_resolver_structured_selector(
+        task_payload=task_payload,
+        normalized_task_for_planner=normalized_task_for_planner,
+    ):
         return
 
-    raise _invalid_workflow_request(
-        "pr-resolver workflow requires payload.workflow.instructions, payload.workflow.inputs.pr, "
-        "or payload.workflow.git.startingBranch."
-    )
+    raise _invalid_workflow_request(_PR_RESOLVER_SELECTOR_ERROR)
+
 
 def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
     explicit = str(task_payload.get("title") or "").strip()
@@ -6336,22 +6367,9 @@ def _derive_task_title(task_payload: dict[str, Any]) -> str | None:
             tool_payload.get("name") or tool_payload.get("id") or ""
         ).strip()
     if tool_name.lower() == "pr-resolver":
-        git_payload = _coerce_mapping(task_payload.get("git"))
-        inputs_payload = _coerce_mapping(task_payload.get("inputs"))
-        tool_inputs_payload = _coerce_mapping(
-            tool_payload.get("inputs") or tool_payload.get("args")
+        starting_branch = _pr_resolver_structured_selector(
+            task_payload=task_payload,
         )
-        starting_branch = str(
-            git_payload.get("startingBranch")
-            or task_payload.get("startingBranch")
-            or git_payload.get("branch")
-            or task_payload.get("branch")
-            or inputs_payload.get("startingBranch")
-            or inputs_payload.get("branch")
-            or tool_inputs_payload.get("startingBranch")
-            or tool_inputs_payload.get("branch")
-            or ""
-        ).strip()
         if starting_branch:
             return starting_branch[:_MAX_TASK_TITLE_LENGTH]
     raw_steps = task_payload.get("steps")

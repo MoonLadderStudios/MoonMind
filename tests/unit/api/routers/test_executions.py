@@ -4793,7 +4793,7 @@ def test_create_task_shaped_execution_does_not_fabricate_manual_preset_metadata(
     assert "appliedStepTemplates" not in task
     assert "source" not in task["steps"][0]
 
-def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_instructions(
+def test_create_task_shaped_execution_rejects_pr_resolver_without_structured_selector(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
@@ -4804,11 +4804,13 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
             "type": "workflow",
             "payload": {
                 "workflow": {
+                    "instructions": "Verify MM-940 and move to DONE if it is a PASS",
                     "runtime": {"mode": "gemini_cli"},
                     "tool": {
                         "type": "skill",
                         "name": "pr-resolver",
                     },
+                    "git": {"branch": "main"},
                 }
             },
         },
@@ -4817,8 +4819,10 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_selector_or_in
     assert response.status_code == 422
     assert (
         response.json()["detail"]["message"]
-        == "pr-resolver workflow requires payload.workflow.instructions, payload.workflow.inputs.pr, "
-        "or payload.workflow.git.startingBranch."
+        == "pr-resolver workflow requires a structured PR selector: "
+        "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
+        "payload.workflow.tool.inputs.pr/branch, or "
+        "payload.workflow.git.startingBranch."
     )
     service.create_execution.assert_not_awaited()
 
@@ -4855,6 +4859,37 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr"
     }
+
+
+def test_create_task_shaped_execution_allows_pr_resolver_with_numeric_pr_selector(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "runtime": {"mode": "gemini_cli"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                    },
+                    "inputs": {"pr": 2733},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["workflow"]["inputs"] == {"pr": 2733}
+
 
 def _pentest_workflow_payload(
     *,
