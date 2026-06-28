@@ -249,6 +249,52 @@ def test_local_compose_enables_temporal_workflow_editing_readiness():
         for line in env_template.splitlines()
     )
 
+
+def test_omnigent_host_profile_service_is_wired_for_mm_971():
+    # MM-971 carries the optional host-service slice from source issue MM-968.
+    compose = _load_compose()
+    services = compose["services"]
+    volumes = compose["volumes"]
+
+    assert "omnigent" in services
+    assert "omnigent-host" in services
+
+    server_service = services["omnigent"]
+    assert server_service["profiles"] == ["omnigent-host"]
+    assert server_service["command"] == [
+        "omnigent",
+        "server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--no-open",
+    ]
+    assert _network_names(server_service) == {"local-network"}
+
+    host_service = services["omnigent-host"]
+    assert host_service["profiles"] == ["omnigent-host"]
+    assert host_service["command"] == [
+        "omnigent",
+        "host",
+        "--server",
+        "http://omnigent:8000",
+        "--non-interactive",
+    ]
+    assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
+    assert _network_names(host_service) == {"local-network"}
+
+    host_env = _env_map(host_service["environment"])
+    assert host_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY:-}"
+    assert host_env["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
+    assert host_env["GEMINI_API_KEY"] == "${GEMINI_API_KEY:-}"
+    assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
+
+    host_volumes = set(host_service["volumes"])
+    assert "omnigent-host-state:/root/.omnigent" in host_volumes
+    assert "./omnigent_workspaces:/workspaces" in host_volumes
+    assert "omnigent-host-state" in volumes
+
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
     services = compose["services"]

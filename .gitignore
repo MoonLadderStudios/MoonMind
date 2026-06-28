@@ -42,6 +42,7 @@ agent_jobs/
 
 # Runtime / ephemeral data (never commit)
 /var/
+/omnigent_workspaces/
 
 # Runtime / ephemeral artifact output directories
 /artifacts/
