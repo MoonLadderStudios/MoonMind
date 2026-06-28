@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -373,6 +374,15 @@ def _safe_session_resource_metadata(metadata: dict[str, object]) -> dict[str, ob
         safe[str(key)] = value
     return safe
 
+
+def _session_resource_url(session_id: str, artifact_id: str, suffix: str) -> str:
+    encoded_session_id = quote(str(session_id), safe="")
+    encoded_artifact_id = quote(str(artifact_id), safe="")
+    return (
+        f"/api/sessions/{encoded_session_id}/resources/"
+        f"{encoded_artifact_id}/{suffix}"
+    )
+
 def _build_session_resource_list(
     projection: ArtifactSessionProjectionModel,
 ) -> SessionResourceListResponse:
@@ -399,13 +409,15 @@ def _build_session_resource_list(
                     default_read_ref=artifact.default_read_ref,
                     preview_artifact_ref=artifact.preview_artifact_ref,
                     metadata=metadata,
-                    content_url=(
-                        f"/api/sessions/{projection.session_id}/resources/"
-                        f"{artifact.artifact_id}/content"
+                    content_url=_session_resource_url(
+                        projection.session_id,
+                        artifact.artifact_id,
+                        "content",
                     ),
-                    download_url=(
-                        f"/api/sessions/{projection.session_id}/resources/"
-                        f"{artifact.artifact_id}/download"
+                    download_url=_session_resource_url(
+                        projection.session_id,
+                        artifact.artifact_id,
+                        "download",
                     ),
                 )
             )
@@ -433,6 +445,14 @@ def _require_session_resource(
         },
     )
 
+
+def _session_resource_filename(artifact: object) -> str:
+    artifact_id = str(getattr(artifact, "artifact_id", "") or "")
+    content_type = str(getattr(artifact, "content_type", "") or "")
+    is_json = content_type.split(";", 1)[0].strip().lower() == "application/json"
+    return f"{artifact_id}.json" if is_json else artifact_id
+
+
 async def _read_session_resource_artifact(
     *,
     session_id: str,
@@ -440,6 +460,7 @@ async def _read_session_resource_artifact(
     user: User,
     principal: str,
     service: TemporalArtifactService,
+    as_attachment: bool,
 ):
     projection = await _load_session_projection_for_alias(
         session_id=session_id,
@@ -455,15 +476,11 @@ async def _read_session_resource_artifact(
             artifact_id=artifact_id,
             principal=principal,
         )
-        is_json = (
-            (artifact.content_type or "").split(";", 1)[0].strip().lower()
-            == "application/json"
-        )
-        filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
         return FileResponse(
             path,
-            filename=filename,
+            filename=_session_resource_filename(artifact),
             media_type=artifact.content_type or "application/octet-stream",
+            content_disposition_type="attachment" if as_attachment else "inline",
         )
     except Exception as exc:
         if not isinstance(exc, TemporalArtifactValidationError):
@@ -479,15 +496,16 @@ async def _read_session_resource_artifact(
         _raise_temporal_artifact_http(exc)
         raise
 
-    is_json = (
-        (artifact.content_type or "").split(";", 1)[0].strip().lower()
-        == "application/json"
-    )
-    filename = f"{artifact.artifact_id}.json" if is_json else artifact.artifact_id
+    content_disposition_type = "attachment" if as_attachment else "inline"
+    filename = _session_resource_filename(artifact)
     return StreamingResponse(
         chunks,
         media_type=artifact.content_type or "application/octet-stream",
-        headers={"content-disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "content-disposition": (
+                f'{content_disposition_type}; filename="{filename}"'
+            )
+        },
     )
 
 def _agent_run_session_workflow_id(*, agent_run_id: str, runtime_id: str) -> str:
@@ -1500,6 +1518,7 @@ async def get_session_resource_content(
         user=_user,
         principal=principal,
         service=artifact_service,
+        as_attachment=False,
     )
 
 @sessions_router.get(
@@ -1522,6 +1541,7 @@ async def download_session_resource(
         user=_user,
         principal=principal,
         service=artifact_service,
+        as_attachment=True,
     )
 
 @router.post(
