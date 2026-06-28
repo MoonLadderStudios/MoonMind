@@ -62,7 +62,7 @@ def test_combined_stack_doc_covers_required_troubleshooting_topics() -> None:
         "### Built-In Accounts and OIDC",
         "Built-in accounts mode is the documented default",
         "OIDC is a future or operator-provided configuration path",
-        "/data/admin-credentials",
+        "create the first admin account",
         "omnigent-data",
     ):
         assert required in text

@@ -1,32 +1,23 @@
 # Non-secret Omnigent server configuration example for local Docker Compose.
 # Set OMNIGENT_CONFIG to a mounted config path only when overriding defaults.
+# Secrets such as DATABASE_URL and cookie/OIDC secrets stay in environment vars.
 
-server:
-  host: 0.0.0.0
-  port: 8000
-  data_dir: /data
+host: 0.0.0.0
+port: 8000
+artifact_location: /data/artifacts
 
-database:
-  url_env: DATABASE_URL
+# Optional: the compose file provides DATABASE_URL via environment because it
+# carries the database password. Use database_uri here only for a non-secret,
+# self-managed connection string.
+# database_uri: postgresql+psycopg://omnigent:password@postgres:5432/omnigent
 
-accounts:
-  built_in:
-    enabled: true
-    admin_email_env: OMNIGENT_BUILTIN_ADMIN_EMAIL
-    admin_password_env: OMNIGENT_BUILTIN_ADMIN_PASSWORD
-    user_email_env: OMNIGENT_BUILTIN_USER_EMAIL
-    user_password_env: OMNIGENT_BUILTIN_USER_PASSWORD
+admins: []
+allowed_domains: []
 
-oidc:
-  enabled_env: OMNIGENT_OIDC_ENABLED
-  issuer_url_env: OMNIGENT_OIDC_ISSUER_URL
-  client_id_env: OMNIGENT_OIDC_CLIENT_ID
-  client_secret_env: OMNIGENT_OIDC_CLIENT_SECRET
-  scopes_env: OMNIGENT_OIDC_SCOPES
-
-sandbox:
-  enabled: false
-  host_image_env: OMNIGENT_HOST_IMAGE
-  host_image_tag_env: OMNIGENT_HOST_IMAGE_TAG
-  network: local-network
-  workspace_root: /data/workspaces
+# Optional managed-host sandbox config. Omit this section for the default
+# external-host mode. When enabled, provider and server_url are required.
+# sandbox:
+#   provider: modal
+#   server_url: https://omnigent.example.com
+#   modal:
+#     image: ghcr.io/omnigent-ai/omnigent-host:latest

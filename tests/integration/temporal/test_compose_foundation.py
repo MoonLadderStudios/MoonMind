@@ -300,7 +300,7 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     host_service = services["omnigent-host"]
     assert host_service["profiles"] == ["omnigent-host"]
     assert host_service["image"] == (
-        "${OMNIGENT_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:"
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
     )
     assert host_service["command"] == [
@@ -412,14 +412,33 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     assert "omnigent-data" in compose["volumes"]
 
     omnigent_env = _env_map(omnigent_service["environment"])
+    assert omnigent_service["image"] == (
+        "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
+        "${OMNIGENT_IMAGE_TAG:-latest}"
+    )
     assert omnigent_env["DATABASE_URL"] == (
         "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
         "${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/"
         "${OMNIGENT_POSTGRES_DB:-omnigent}"
     )
+    assert omnigent_env["ARTIFACT_DIR"] == "${OMNIGENT_ARTIFACT_DIR:-/data/artifacts}"
+    assert omnigent_env["HOST"] == "0.0.0.0"
+    assert omnigent_env["PORT"] == "8000"
+    assert omnigent_env["OMNIGENT_AUTH_ENABLED"] == "${OMNIGENT_AUTH_ENABLED:-1}"
+    assert omnigent_env["OMNIGENT_AUTH_PROVIDER"] == "${OMNIGENT_AUTH_PROVIDER:-}"
+    assert omnigent_env["OMNIGENT_ACCOUNTS_BASE_URL"] == (
+        "${OMNIGENT_ACCOUNTS_BASE_URL:-http://localhost:8000}"
+    )
+    assert omnigent_env["OMNIGENT_ACCOUNTS_AUTO_OPEN"] == (
+        "${OMNIGENT_ACCOUNTS_AUTO_OPEN:-0}"
+    )
+    assert omnigent_env["OMNIGENT_OIDC_ISSUER"] == "${OMNIGENT_OIDC_ISSUER:-}"
     assert "POSTGRES_USER" not in omnigent_env
     assert "POSTGRES_PASSWORD" not in omnigent_env
     assert "POSTGRES_DB" not in omnigent_env
+    assert "OMNIGENT_BUILTIN_ADMIN_EMAIL" not in omnigent_env
+    assert "OMNIGENT_OIDC_ENABLED" not in omnigent_env
+    assert "OMNIGENT_OIDC_ISSUER_URL" not in omnigent_env
 
 
 def test_omnigent_env_template_and_example_config_for_mm_970():
@@ -431,28 +450,49 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_POSTGRES_USER",
         "OMNIGENT_POSTGRES_PASSWORD",
         "OMNIGENT_POSTGRES_DB",
+        "OMNIGENT_ARTIFACT_DIR",
+        "OMNIGENT_AUTH_ENABLED",
+        "OMNIGENT_AUTH_PROVIDER",
+        "OMNIGENT_ACCOUNTS_COOKIE_SECRET",
+        "OMNIGENT_ACCOUNTS_BASE_URL",
+        "OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD",
+        "OMNIGENT_ACCOUNTS_SESSION_TTL_HOURS",
+        "OMNIGENT_ACCOUNTS_INVITE_TTL_HOURS",
+        "OMNIGENT_ACCOUNTS_MAGIC_TTL_MINUTES",
+        "OMNIGENT_ACCOUNTS_AUTO_OPEN",
+        "OMNIGENT_OIDC_ISSUER",
+        "OMNIGENT_OIDC_CLIENT_ID",
+        "OMNIGENT_OIDC_CLIENT_SECRET",
+        "OMNIGENT_OIDC_COOKIE_SECRET",
+        "OMNIGENT_OIDC_SCOPES",
+        "OMNIGENT_OIDC_SESSION_TTL_HOURS",
+        "OMNIGENT_OIDC_ALLOWED_DOMAINS",
+        "OMNIGENT_OIDC_LOGOUT_REDIRECT_URI",
+        "OMNIGENT_OIDC_ALLOW_INVITES",
+        "OMNIGENT_DOMAIN",
+        "OMNIGENT_CONFIG",
+        "OMNIGENT_HOST_IMAGE",
+        "OMNIGENT_HOST_IMAGE_TAG",
+    ):
+        assert f"{expected_name}=" in env_template
+    for removed_name in (
         "OMNIGENT_BUILTIN_ADMIN_EMAIL",
         "OMNIGENT_BUILTIN_ADMIN_PASSWORD",
         "OMNIGENT_BUILTIN_USER_EMAIL",
         "OMNIGENT_BUILTIN_USER_PASSWORD",
         "OMNIGENT_OIDC_ENABLED",
         "OMNIGENT_OIDC_ISSUER_URL",
-        "OMNIGENT_OIDC_CLIENT_ID",
-        "OMNIGENT_OIDC_CLIENT_SECRET",
-        "OMNIGENT_OIDC_SCOPES",
-        "OMNIGENT_CONFIG",
-        "OMNIGENT_HOST_IMAGE",
-        "OMNIGENT_HOST_IMAGE_TAG",
     ):
-        assert f"{expected_name}=" in env_template
+        assert f"{removed_name}=" not in env_template
 
     config = yaml.safe_load(
         (REPO_ROOT / "deploy" / "omnigent" / "server-config.example.yaml").read_text(
             encoding="utf-8"
         )
     )
-    assert config["database"]["url_env"] == "DATABASE_URL"
-    assert config["accounts"]["built_in"]["admin_email_env"] == (
-        "OMNIGENT_BUILTIN_ADMIN_EMAIL"
-    )
-    assert config["sandbox"]["host_image_env"] == "OMNIGENT_HOST_IMAGE"
+    assert config["host"] == "0.0.0.0"
+    assert config["port"] == 8000
+    assert config["artifact_location"] == "/data/artifacts"
+    assert config["admins"] == []
+    assert config["allowed_domains"] == []
+    assert "sandbox" not in config

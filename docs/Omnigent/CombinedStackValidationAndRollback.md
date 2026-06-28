@@ -83,15 +83,15 @@ curl -fsS http://localhost:8000/health
 
 Both commands should return successfully before treating the combined stack as ready for operator validation.
 
-## DOC-REQ-006 Omnigent First Admin Credentials
+## DOC-REQ-006 Omnigent First Admin Setup
 
-On first startup, read Omnigent's generated first admin credentials from the Omnigent service logs:
+On first startup, open Omnigent at `http://localhost:8000` and create the first admin account in the web UI. The Omnigent service logs should show that no admin exists yet and that the operator should open the server URL to create the first admin account:
 
 ```bash
 docker compose logs omnigent
 ```
 
-Those credentials persist under `/data/admin-credentials` in the `omnigent-data` volume. Restarting or recreating containers should not regenerate them while that volume is retained. If the log output no longer contains the first-start message, inspect the persisted credentials from the retained Omnigent data volume instead of deleting the volume.
+The account state persists in PostgreSQL and Omnigent's local account artifacts persist in the `omnigent-data` volume. Restarting or recreating containers should not reset the first-admin flow while those volumes are retained. If sign-in state looks inconsistent, inspect the retained database and `omnigent-data` volume before deleting data.
 
 ## DOC-REQ-007 Host Profile
 
@@ -115,7 +115,7 @@ After startup, validate the combined stack in this order:
 
 1. Open MoonMind at `http://localhost:7000` and confirm the dashboard loads.
 2. Run `curl -fsS http://localhost:7000/healthz`.
-3. Open Omnigent at `http://localhost:8000` and sign in with the first admin credentials.
+3. Open Omnigent at `http://localhost:8000` and create or sign in as the first admin account.
 4. Run `curl -fsS http://localhost:8000/health`.
 5. Run `docker compose logs omnigent` and confirm there are no repeating startup failures.
 6. If using host registration, run `docker compose --profile omnigent-host up -d omnigent-host`, then inspect `docker compose logs omnigent-host` and confirm the host appears in Omnigent.
@@ -154,7 +154,7 @@ docker volume rm <postgres-volume-name>
 docker volume rm <omnigent-data-volume-name>
 ```
 
-These commands can permanently delete MoonMind workflow state, Omnigent admin credentials, and Omnigent application data. They are not required to roll back a failed combined-stack startup.
+These commands can permanently delete MoonMind workflow state, Omnigent account state, and Omnigent application data. They are not required to roll back a failed combined-stack startup.
 
 ## DOC-REQ-011 Troubleshooting
 
@@ -195,6 +195,6 @@ A file mounted where a directory is expected, or a directory mounted where a fil
 
 ### Built-In Accounts and OIDC
 
-Built-in accounts mode is the documented default for the combined local stack. Operators should use the first admin credentials from `docker compose logs omnigent` unless they have deliberately configured an external OIDC provider.
+Built-in accounts mode is the documented default for the combined local stack. Operators should create the first admin account in the Omnigent web UI unless they have deliberately configured an external OIDC provider.
 
 OIDC is a future or operator-provided configuration path for this combined stack documentation. If sign-in behavior looks inconsistent, confirm whether the running environment is using built-in accounts or an explicit OIDC configuration before resetting credentials or deleting volumes.
