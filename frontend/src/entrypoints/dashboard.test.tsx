@@ -357,7 +357,9 @@ describe('Dashboard shared entry', () => {
   });
 
   it('MM-1020 keeps Workflow Detail segmented tabs count-aware and step toggles contained', async () => {
-    const segmentedNavBlock = cssRuleBlock(dashboardCss, '.segmented-nav');
+    const segmentedNavBlock = cssRuleBlockMatching(dashboardCss, (rule) => (
+      normalizeCssSelector(rule.selector) === '.segmented-nav' && !rule.parent?.parent
+    ));
     const segmentedThumbBlock = cssRuleBlock(dashboardCss, '.segmented-nav::before');
     const stepToggleBlock = cssRuleBlock(dashboardCss, '.step-tl-toggle');
 

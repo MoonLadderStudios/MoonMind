@@ -1930,7 +1930,7 @@ function SegmentedNav<T extends string>({
           }}
         >
           <span>{item.label}</span>
-          {item.badge ? <span className="segmented-nav-badge">{item.badge}</span> : null}
+          {item.badge ? <span className="segmented-nav-badge" aria-hidden="true">{item.badge}</span> : null}
         </a>
       ))}
     </nav>
