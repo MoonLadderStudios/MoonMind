@@ -82,6 +82,10 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     api_env = _env_map(api_service["environment"])
     assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"
 
+    assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == (
+        "${POSTGRES_PASSWORD:-password}"
+    )
+
     runtime_service_names = [
         "temporal-worker-workflow",
         "temporal-worker-workflow-merge-automation",
@@ -102,17 +106,38 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         for line in env_template.splitlines()
     )
 
-def test_documented_compose_startup_config_succeeds_without_env_file():
+def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
     if shutil.which("docker") is None:
         pytest.skip("docker CLI is not available")
 
-    result = subprocess.run(
-        ["docker", "compose", "-f", "docker-compose.yaml", "config"],
+    compose_version = subprocess.run(
+        ["docker", "compose", "version"],
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
         text=True,
     )
+    if compose_version.returncode != 0:
+        pytest.skip("docker compose plugin is not available")
+
+    env_path = REPO_ROOT / ".env"
+    hidden_env_path = tmp_path / ".env"
+    env_was_hidden = False
+    if env_path.exists():
+        shutil.move(str(env_path), str(hidden_env_path))
+        env_was_hidden = True
+
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", "docker-compose.yaml", "config"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        if env_was_hidden:
+            shutil.move(str(hidden_env_path), str(env_path))
 
     assert result.returncode == 0, result.stderr
 
