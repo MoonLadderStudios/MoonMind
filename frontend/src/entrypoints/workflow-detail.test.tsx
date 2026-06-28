@@ -60,6 +60,12 @@ function lastFetchUrl(fetchSpy: MockInstance, prefix: string): string | undefine
     .at(-1);
 }
 
+async function readDashboardCss(): Promise<string> {
+  const { readFileSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  return readFileSync(resolve(__dirname, '../styles/dashboard.css'), 'utf8');
+}
+
 // ---------------------------------------------------------------------------
 // Minimal EventSource mock
 // ---------------------------------------------------------------------------
@@ -677,11 +683,7 @@ describe('Workflow Detail Entrypoint', () => {
       'true',
     );
 
-    const { readFileSync } = await import('node:fs');
-    const dashboardCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/dashboard.css`,
-      'utf8',
-    );
+    const dashboardCss = await readDashboardCss();
     expect(dashboardCss).toMatch(
       /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
     );
@@ -4908,11 +4910,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('keeps remediation panels accessible and contained in dashboard CSS', async () => {
-    const { readFileSync } = await import('node:fs');
-    const dashboardCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/dashboard.css`,
-      'utf8',
-    );
+    const dashboardCss = await readDashboardCss();
 
     expect(dashboardCss).toMatch(/\.td-remediation-region:focus-within\s*\{[^}]*outline:\s*2px solid/s);
     expect(dashboardCss).toMatch(/\.td-remediation-list\s+\.card\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s);
