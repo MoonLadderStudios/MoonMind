@@ -1901,4 +1901,32 @@ describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
     expect(screen.getByRole('button', { name: /Repository\. .*sort/i })).toBeTruthy();
     expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toBeNull();
   });
+
+  it('stops window-focus refetches of the list while live updates are paused', async () => {
+    const executionListCalls = () =>
+      vi.mocked(window.fetch).mock.calls.filter(([url]) =>
+        String(url).startsWith('/api/executions?'),
+      );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    // Live updates default on: returning focus to the tab refetches /executions.
+    const beforeFocusOn = executionListCalls().length;
+    window.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => expect(executionListCalls().length).toBeGreaterThan(beforeFocusOn));
+    const afterFocusOn = executionListCalls().length;
+
+    // Pause live updates, then dispatch another focus event.
+    openViewOptions();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Poll for live updates' }));
+    window.dispatchEvent(new Event('visibilitychange'));
+
+    // Re-enable live updates and dispatch a final focus event. Only this last
+    // focus (with the pref re-enabled) should produce a new request — proving the
+    // paused focus event in between did not refetch the list.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Poll for live updates' }));
+    window.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => expect(executionListCalls().length).toBe(afterFocusOn + 1));
+  });
 });

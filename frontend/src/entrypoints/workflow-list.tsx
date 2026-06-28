@@ -839,6 +839,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       listEnabled && liveUpdatesPref && !drawerOpen && desktopFilterField === null
         ? listPollMs
         : false,
+    // Honour the live-updates pause on tab focus too: without this the shared
+    // dashboard query client falls back to React Query's stale-on-focus default
+    // and would refetch /executions when returning to the tab even while paused.
+    refetchOnWindowFocus: liveUpdatesPref,
   });
 
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
