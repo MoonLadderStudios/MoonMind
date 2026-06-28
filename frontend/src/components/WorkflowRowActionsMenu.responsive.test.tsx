@@ -76,6 +76,17 @@ describe('WorkflowRowActionsMenu responsive layout', () => {
 });
 
 describe('Workflow list table dropdown overflow', () => {
+  it('centers the row actions trigger in the desktop actions column', () => {
+    const headerBlock = cssRuleBlock('.queue-table-actions-header-inner');
+    expect(headerBlock).toContain('justify-content: center;');
+
+    const cellBlock = cssRuleBlock('.queue-table-cell-actions');
+    expect(cellBlock).toContain('text-align: center;');
+
+    const rowActionsBlock = cssRuleBlock('.workflow-row-actions');
+    expect(rowActionsBlock).toContain('align-items: center;');
+  });
+
   it('lets row action popovers overflow the table edges instead of clipping them', () => {
     // `overflow-x: auto` on the wrapper is coerced to `overflow-y: auto` by the
     // browser, so the wrapper clips popovers. A highly restrictive filter leaves
