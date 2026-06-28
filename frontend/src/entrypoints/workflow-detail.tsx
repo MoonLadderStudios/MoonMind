@@ -436,13 +436,13 @@ function WorkflowWorkspaceShell({
   const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
-  const fullListHref = `/workflows${search.toString() ? `?${search.toString()}` : ''}`;
+  const fullListHref = workflowListHrefFromContext(search, { markDetailReturn: true });
 
   return (
     <div
       className="workflow-workspace-shell"
       data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
-      data-jira-issue="MM-997 MM-999 MM-1000"
+      data-jira-issue="MM-997 MM-999 MM-1000 MM-1005"
       data-source-issue="MM-975"
     >
       {sidebarOpen ? (

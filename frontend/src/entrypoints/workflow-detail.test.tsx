@@ -828,7 +828,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState(
       {},
       'Workspace Expand Test',
-      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2',
+      '/workflows/test-123?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=10&nextPageToken=page-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
     );
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
@@ -837,8 +837,28 @@ describe('Workflow Detail Entrypoint', () => {
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     const expand = within(sidebar).getByRole('link', { name: 'Expand to full list' });
-    expect(expand.getAttribute('href')).toBe('/workflows?source=temporal&limit=10&nextPageToken=page-2');
+    expect(expand.getAttribute('href')).toBe(
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=10&returnFromWorkflowDetail=1',
+    );
+    expect(expand.getAttribute('href')).not.toContain('source=');
+    expect(expand.getAttribute('href')).not.toContain('nextPageToken=');
+    expect(expand.getAttribute('href')).not.toContain('sort=');
+    expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
+    expect(expand.getAttribute('href')).not.toContain('unsafe=');
     expect(expand.getAttribute('class') || '').toContain('button');
+  });
+
+  it('MM-1005 expands to the plain workflow list from the desktop workspace when no list context exists', async () => {
+    window.history.pushState({}, 'Workspace Plain Expand Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
+      '/workflows',
+    );
   });
 
   it('MM-1000 uses a single-column collapsed workspace layout and reduced-motion guard', async () => {
