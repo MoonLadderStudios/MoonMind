@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
+import { markWorkflowListReturnFocusIntent } from '../lib/workflowListContext';
 import { WorkflowListPage } from './workflow-list';
 import '../styles/dashboard.css';
 
@@ -1324,6 +1325,19 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
     expect(screen.getByRole('region', { name: 'Workflow list' }).getAttribute('tabindex')).toBeNull();
+  });
+
+  it('MM-1008 focuses the workflow list region on a plain expand return intent', async () => {
+    markWorkflowListReturnFocusIntent();
+    window.history.pushState({}, 'Plain workspace return focus', '/workflows');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const listRegion = screen.getByRole('region', { name: 'Workflow list' });
+    await waitFor(() => expect(document.activeElement).toBe(listRegion));
+    expect(listRegion.getAttribute('tabindex')).toBe('-1');
+    expect(window.sessionStorage.getItem('moonmind.workflowList.returnFocusIntent')).toBeNull();
   });
 
   it('supports skill and date filter chips with blank semantics', async () => {

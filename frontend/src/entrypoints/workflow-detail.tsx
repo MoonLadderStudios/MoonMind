@@ -21,6 +21,7 @@ import {
   taskEditHref,
 } from '../lib/temporalTaskEditing';
 import {
+  markWorkflowListReturnFocusIntent,
   workflowDetailHref,
   workflowListContextParams,
   workflowListHrefFromContext,
@@ -309,7 +310,11 @@ function WorkflowSidebarControls({
       >
         Close sidebar
       </button>
-      <a className="button workflow-workspace-expand-list" href={fullListHref}>
+      <a
+        className="button workflow-workspace-expand-list"
+        href={fullListHref}
+        onClick={markWorkflowListReturnFocusIntent}
+      >
         Expand to full list
       </a>
     </div>
@@ -6157,7 +6162,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         </div>
         <div className="toolbar-controls">
           {showExpandToFullList ? (
-            <a className="button secondary" href={expandToFullListHref}>
+            <a
+              className="button secondary"
+              href={expandToFullListHref}
+              onClick={markWorkflowListReturnFocusIntent}
+            >
               Expand to full list
             </a>
           ) : null}

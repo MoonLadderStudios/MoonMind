@@ -9,6 +9,7 @@ import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector'
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
   WORKFLOW_LIST_CONTEXT_RETURN_PARAM,
+  consumeWorkflowListReturnFocusIntent,
   workflowDetailHref,
 } from '../lib/workflowListContext';
 import {
@@ -789,7 +790,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
   const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
   const focusListOnWorkspaceReturn = useMemo(
-    () => initial.get(WORKFLOW_LIST_CONTEXT_RETURN_PARAM) === '1',
+    () => consumeWorkflowListReturnFocusIntent(initial),
     [initial],
   );
   const [workspaceCursorResetNotice, setWorkspaceCursorResetNotice] = useState(false);
