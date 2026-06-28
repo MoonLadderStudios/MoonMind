@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { DataTable } from '../components/tables/DataTable';
+import { DashboardActionDialog } from '../components/DashboardActionDialog';
 
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
@@ -593,6 +594,7 @@ function isDueSoon(schedule: Schedule, now: number): boolean {
 function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; definitionId: string }) {
   const queryClient = useQueryClient();
   const [isEditing, setIsEditing] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editForm, setEditForm] = useState<ScheduleEditForm | null>(null);
   const [submitErrors, setSubmitErrors] = useState<ScheduleEditErrors>({});
   const isEditingRef = useRef(false);
@@ -819,11 +821,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
             <button
               type="button"
               className="secondary"
-              onClick={() => {
-                if (window.confirm('Delete this recurring schedule? Future runs will stop, but prior workflow executions and artifacts remain available.')) {
-                  deleteMutation.mutate();
-                }
-              }}
+              onClick={() => setDeleteDialogOpen(true)}
               disabled={deleteMutation.isPending}
             >
               {deleteMutation.isPending ? 'Deleting' : 'Delete schedule'}
@@ -842,6 +840,22 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
           </button>
         </div>
       </header>
+
+      <DashboardActionDialog
+        open={deleteDialogOpen}
+        title="Delete schedule"
+        subject={schedule.name}
+        compactId={definitionId}
+        consequence="Delete this recurring schedule. Future runs will stop, but prior workflow executions and artifacts remain available."
+        confirmLabel={deleteMutation.isPending ? 'Deleting' : 'Delete schedule'}
+        danger
+        destructive
+        confirmationText="DELETE"
+        disabledReason={actions?.canDelete ? null : actions?.deleteReason}
+        error={deleteMutation.isError ? errorMessage(deleteMutation.error, 'Failed to delete schedule') : null}
+        onCancel={() => setDeleteDialogOpen(false)}
+        onConfirm={() => deleteMutation.mutate()}
+      />
 
       {actions && (!actions.canEdit || !actions.canRun || (actions.deleteContractAvailable && !actions.canDelete)) ? (
         <div className="schedules-error" role="note">
