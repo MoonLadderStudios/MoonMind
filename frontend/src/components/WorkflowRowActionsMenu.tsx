@@ -78,6 +78,23 @@ const KEBAB_ICON = (
   </svg>
 );
 
+const ACTION_AVAILABILITY_PENDING_REASON = 'Checking availability…';
+
+const PENDING_WORKFLOW_ACTION_CAPABILITIES = {
+  canSetTitle: true,
+  canUpdateInputs: true,
+  canEditForRerun: true,
+  canRerun: true,
+  canApprove: true,
+  canPause: true,
+  canResume: true,
+  canResumeFromFailedStep: true,
+  canCancel: true,
+  canReject: true,
+  canSendMessage: true,
+  canBypassDependencies: true,
+} satisfies RowActionsExecution['actions'];
+
 export type WorkflowRowActionsMenuProps = {
   workflowId: string;
   apiBase: string;
@@ -277,35 +294,42 @@ export function WorkflowRowActionsMenu({
       null;
   const rerunUnavailableReason = actions?.disabledReasons?.canRerun || null;
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
+  const actionAvailabilityPending = actionsEnabled && !actions && !detailQuery.isError;
   const disabledReason = useCallback(
     (key: string): string | null => {
+      if (actionAvailabilityPending) return ACTION_AVAILABILITY_PENDING_REASON;
       const reason = actions?.disabledReasons?.[key];
       return reason ? formatStatusLabel(reason) : null;
     },
-    [actions],
+    [actionAvailabilityPending, actions],
   );
 
   const items: WorkflowActionMenuItem[] = useMemo(() => {
-    if (!actionsEnabled || !actions) return [];
+    const menuActions = actionAvailabilityPending
+      ? PENDING_WORKFLOW_ACTION_CAPABILITIES
+      : actions;
+    if (!actionsEnabled || !menuActions) return [];
+    const pendingReason = actionAvailabilityPending ? ACTION_AVAILABILITY_PENDING_REASON : null;
     return buildWorkflowActionMenuItems({
       actionsOn: actionsEnabled,
-      actions,
-      busy,
+      actions: menuActions,
+      busy: busy || actionAvailabilityPending,
+      ...(pendingReason ? { busyDisabledReason: pendingReason } : {}),
       taskEditingOn: taskEditingEnabled,
       disabledReason,
-      editHref,
-      compareHref,
-      canShowEditWorkflow,
+      editHref: actionAvailabilityPending ? taskEditHref(workflowId) : editHref,
+      compareHref: actionAvailabilityPending ? taskCompareHref(workflowId) : compareHref,
+      canShowEditWorkflow: actionAvailabilityPending ? true : canShowEditWorkflow,
       editTaskDisabledReason: editTaskUnavailableReason
         ? formatStatusLabel(editTaskUnavailableReason)
-        : null,
+        : pendingReason,
       rerunDisabledReason: rerunUnavailableReason
         ? formatStatusLabel(rerunUnavailableReason)
-        : null,
+        : pendingReason,
       selectedRecoveryOptionCount: 0,
       selectedRecoveryStepEligible: false,
       selectedRecoveryStepDisabledReason: null,
-      canCreateRemediation,
+      canCreateRemediation: actionAvailabilityPending ? true : canCreateRemediation,
       handlers: {
         onRename: () => {
           setActionError(null);
@@ -381,6 +405,7 @@ export function WorkflowRowActionsMenu({
       },
     });
   }, [
+    actionAvailabilityPending,
     actions,
     actionsEnabled,
     busy,

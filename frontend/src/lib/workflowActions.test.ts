@@ -154,6 +154,19 @@ describe('buildWorkflowActionMenuItems', () => {
     );
     expect(items.find((item) => item.id === 'pause')?.disabledReason).toBe('action pending');
   });
+
+  it('uses a caller-provided pending reason for temporarily disabled actions', () => {
+    const items = buildWorkflowActionMenuItems(
+      buildParams({
+        busy: true,
+        busyDisabledReason: 'Checking availability…',
+        actions: { canPause: true },
+      }),
+    );
+    expect(items.find((item) => item.id === 'pause')?.disabledReason).toBe(
+      'Checking availability…',
+    );
+  });
 });
 
 describe('buildRemediationRuntimeRequestFields', () => {
