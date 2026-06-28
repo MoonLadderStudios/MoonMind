@@ -1652,6 +1652,35 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
   }, 10000);
 
+  it('MM-1010 keeps desktop workspace sidebar controls out of mobile workflow list accessibility', async () => {
+    renderWithClient(
+      <WorkflowListPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            dashboardConfig: {
+              features: {
+                temporalDashboard: {
+                  workspaceShellEnabled: true,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    await screen.findAllByText('Example task');
+    const cardList = document.querySelector('.queue-card-list') as HTMLElement | null;
+    expect(cardList).toBeTruthy();
+    expect(within(cardList as HTMLElement).getByRole('link', { name: 'Example task' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+  });
+
   it('keeps mobile task cards constrained to the viewport width', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
