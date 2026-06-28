@@ -3858,6 +3858,9 @@ class MoonMindRunWorkflow:
         outputs: Mapping[str, Any],
     ) -> None:
         candidates: list[Mapping[str, Any]] = [outputs]
+        workspace_spec = outputs.get("workspaceSpec") or outputs.get("workspace_spec")
+        if isinstance(workspace_spec, Mapping):
+            candidates.append(workspace_spec)
         workload_metadata = outputs.get("workloadMetadata") or outputs.get(
             "workload_metadata"
         )
@@ -3880,6 +3883,8 @@ class MoonMindRunWorkflow:
                 candidate,
                 "workspacePath",
                 "workspace_path",
+                "workspaceRoot",
+                "workspace_root",
             )
             workspace_root_ref = self._checkpoint_capture_text(
                 candidate,
@@ -6453,6 +6458,7 @@ class MoonMindRunWorkflow:
                     updated_at=workflow.now(),
                     summary=self._summary,
                 )
+                self._record_step_workspace_capture_input(node_id, node_inputs)
                 current_step_execution = self._step_execution_for(node_id) or 1
                 attempt_reason = (
                     "quality_gate_failed"

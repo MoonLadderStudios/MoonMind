@@ -2445,6 +2445,85 @@ async def test_run_records_canonical_boundary_checkpoint_and_manifest_refs(
 
 
 @pytest.mark.asyncio
+async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id == run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 6, 13, 12, 0, tzinfo=UTC)
+    captured: list[dict[str, Any]] = []
+
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+    workflow._record_step_workspace_capture_input(
+        "implement",
+        {
+            "workspaceRoot": "/work/agent_jobs/run-1/repo",
+            "baseCommit": "abc123",
+        },
+    )
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        captured.append({"activity": activity, "payload": payload, "kwargs": kwargs})
+        if activity == "workspace.capture_checkpoint":
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "git_patch",
+                    "baseCommit": payload["baseCommit"],
+                    "patchRef": "artifact://patch/before_execution",
+                    "manifestRef": "artifact://patch-manifest/before_execution",
+                    "createdAt": "2026-06-13T12:00:00+00:00",
+                },
+                "diagnosticRefs": ["artifact://patch-manifest/before_execution"],
+            }
+        assert activity == "step_checkpoint.create"
+        return {
+            "checkpointRef": "artifact://checkpoint/before_execution",
+            "checkpointId": payload["idempotencyKey"],
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": payload["workspace"]["kind"],
+            "diagnosticRefs": [],
+            "idempotencyKey": payload["idempotencyKey"],
+        }
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    result = await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_execution",
+        updated_at=now,
+    )
+
+    assert result == "artifact://checkpoint/before_execution"
+    assert [(call["activity"], call["payload"]["boundary"]) for call in captured] == [
+        ("workspace.capture_checkpoint", "before_execution"),
+        ("step_checkpoint.create", "before_execution"),
+    ]
+    assert captured[0]["payload"]["workspacePath"] == "/work/agent_jobs/run-1/repo"
+    assert captured[1]["payload"]["workspace"]["patchRef"] == (
+        "artifact://patch/before_execution"
+    )
+
+
+@pytest.mark.asyncio
 async def test_run_blocks_canonical_checkpoint_create_when_capture_is_not_durable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
