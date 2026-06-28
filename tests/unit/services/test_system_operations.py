@@ -38,6 +38,7 @@ class FakeTemporalService:
     def __init__(self) -> None:
         self.pause_calls = 0
         self.resume_calls = 0
+        self.metrics = {"queued": 0, "running": 0, "stale_running": 0}
 
     async def send_quiesce_pause_signal(self) -> int:
         self.pause_calls += 1
@@ -46,6 +47,19 @@ class FakeTemporalService:
     async def send_resume_signal(self) -> int:
         self.resume_calls += 1
         return 2
+
+    async def get_drain_metrics(self) -> dict[str, int]:
+        return dict(self.metrics)
+
+
+class FailingMetricsTemporalService(FakeTemporalService):
+    async def get_drain_metrics(self) -> dict[str, int]:
+        raise RuntimeError("visibility unavailable")
+
+
+class MalformedMetricsTemporalService(FakeTemporalService):
+    async def get_drain_metrics(self) -> list[int]:
+        return [1, 2, 3]
 
 
 @pytest.mark.asyncio
@@ -71,11 +85,14 @@ async def test_worker_snapshot_defaults_and_projects_sanitized_audit(
         )
         await session.commit()
 
-        snapshot = await SystemOperationsService(session).snapshot()
+        snapshot = await SystemOperationsService(
+            session, temporal_service=FakeTemporalService()
+        ).snapshot()
 
     assert snapshot.system.workers_paused is False
     assert snapshot.metrics.queued == 0
     assert snapshot.metrics.is_drained is True
+    assert snapshot.metrics.metrics_source == "temporal"
     assert snapshot.audit.latest[0].action == "pause"
     assert snapshot.audit.latest[0].actor_user_id == actor_id
     assert "should-not-render" not in snapshot.model_dump_json()
@@ -180,6 +197,48 @@ async def test_submit_returns_actual_subsystem_signal_status(
 
 
 @pytest.mark.asyncio
+async def test_snapshot_derives_drained_status_from_temporal_metrics(
+    system_operations_session_maker,
+) -> None:
+    """MM-978: worker-pause metrics must not hardcode drained status."""
+    temporal = FakeTemporalService()
+    temporal.metrics = {"queued": 0, "running": 2, "stale_running": 0}
+    async with system_operations_session_maker() as session:
+        snapshot = await SystemOperationsService(
+            session, temporal_service=temporal
+        ).snapshot()
+
+    assert snapshot.metrics.running == 2
+    assert snapshot.metrics.is_drained is False
+    assert snapshot.metrics.metrics_source == "temporal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "temporal_service",
+    [
+        FailingMetricsTemporalService(),
+        MalformedMetricsTemporalService(),
+        object(),
+    ],
+)
+async def test_snapshot_degrades_when_temporal_metrics_are_unavailable(
+    system_operations_session_maker,
+    temporal_service,
+) -> None:
+    async with system_operations_session_maker() as session:
+        snapshot = await SystemOperationsService(
+            session, temporal_service=temporal_service
+        ).snapshot()
+
+    assert snapshot.metrics.queued == 0
+    assert snapshot.metrics.running == 0
+    assert snapshot.metrics.stale_running == 0
+    assert snapshot.metrics.is_drained is False
+    assert snapshot.metrics.metrics_source == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_quiesce_and_resume_fail_fast_when_signal_handler_is_missing(
     system_operations_session_maker,
 ) -> None:
@@ -269,7 +328,9 @@ async def test_snapshot_includes_operations_command_catalog(
     system_operations_session_maker,
 ) -> None:
     async with system_operations_session_maker() as session:
-        snapshot = await SystemOperationsService(session).snapshot()
+        snapshot = await SystemOperationsService(
+            session, temporal_service=FakeTemporalService()
+        ).snapshot()
 
     command_ids = {command.id for command in snapshot.commands}
     assert {

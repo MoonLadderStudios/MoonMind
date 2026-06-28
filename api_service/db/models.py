@@ -343,6 +343,70 @@ class RecurringWorkflowRun(Base):
         back_populates="runs",
     )
 
+
+class OmnigentExternalRun(Base):
+    """Provider-specific retry mapping for one Omnigent delegated run."""
+
+    __tablename__ = "omnigent_external_runs"
+    __table_args__ = (
+        Index("ix_omnigent_external_runs_session", "omnigent_session_id"),
+        Index("ix_omnigent_external_runs_status", "status"),
+    )
+
+    idempotency_key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    moonmind_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    moonmind_agent_run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    omnigent_endpoint_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    omnigent_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_agent_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    omnigent_agent_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    target_metadata: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="active", server_default="active"
+    )
+    first_message_state: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="not_prepared",
+        server_default="not_prepared",
+    )
+    first_message_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    first_message_marker: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    first_message_post_attempted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    first_message_posted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    first_message_pending_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+    first_message_item_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    first_message_request_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    first_message_response_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    artifact_refs: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    terminal_refs: Mapped[dict[str, Any]] = mapped_column(
+        mutable_json_dict(), nullable=False, default=dict
+    )
+    final_snapshot_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    sse_events_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    diagnostics_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    result_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
 __all__ = [
     "Base",
     "User",
@@ -354,6 +418,7 @@ __all__ = [
     "RecurringWorkflowRunTrigger",
     "RecurringWorkflowScheduleType",
     "RecurringWorkflowScopeType",
+    "OmnigentExternalRun",
     "TemporalWorkflowType",
     "MoonMindWorkflowState",
     "TemporalExecutionCloseStatus",

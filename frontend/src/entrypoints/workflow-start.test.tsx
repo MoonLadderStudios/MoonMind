@@ -16495,6 +16495,7 @@ describe("Task Create governed Tool authoring", () => {
     const addToStep = within(step).getByRole("button", {
       name: "Add to Step 1",
     });
+    expect(addToStep.getAttribute("title")).toBe("Add files or capabilities");
 
     fireEvent.click(addToStep);
     const menu = within(step).getByRole("menu", { name: "Add to step" });

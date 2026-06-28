@@ -60,7 +60,6 @@ type RowActionsExecution = z.infer<typeof RowActionsExecutionSchema>;
 type RowActionDialogKind =
   | 'rename'
   | 'resume-from-failed-step'
-  | 'bypass-dependencies'
   | 'cancel'
   | 'force-cancel'
   | 'reject'
@@ -362,7 +361,18 @@ export function WorkflowRowActionsMenu({
         },
         onBypassDependencies: () => {
           setActionError(null);
-          setActiveDialog('bypass-dependencies');
+          setActionNotice(null);
+          signalMutation.mutate(
+            {
+              signalName: 'BypassDependencies',
+              payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
+            },
+            {
+              onSuccess: () => {
+                setActionNotice('Dependency wait bypass was requested.');
+              },
+            },
+          );
         },
         onCreateRemediation: () => {
           setActionError(null);
@@ -409,15 +419,6 @@ export function WorkflowRowActionsMenu({
         break;
       case 'resume-from-failed-step':
         failedStepResumeMutation.mutate(undefined, closeOnSuccess);
-        break;
-      case 'bypass-dependencies':
-        signalMutation.mutate(
-          {
-            signalName: 'BypassDependencies',
-            payload: { reason: value || 'Dependency wait bypassed by operator from the dashboard.' },
-          },
-          closeOnSuccess,
-        );
         break;
       case 'cancel':
         cancelMutation.mutate(
@@ -491,23 +492,6 @@ export function WorkflowRowActionsMenu({
         confirmPending={failedStepResumeMutation.isPending}
         disabledReason={disabledReason('canResumeFromFailedStep')}
         error={activeDialog === 'resume-from-failed-step' ? actionError : null}
-        onCancel={closeDialog}
-        onConfirm={confirmDialog}
-      />
-      <DashboardActionDialog
-        open={activeDialog === 'bypass-dependencies'}
-        title="Bypass dependencies"
-        subject={subject}
-        compactId={workflowId}
-        consequence="Bypass dependency waiting for this workflow. Downstream work may proceed before prerequisites finish."
-        valueLabel="Reason"
-        valuePlaceholder="Dependency wait bypassed by operator from the dashboard."
-        valueMultiline
-        confirmLabel={signalMutation.isPending ? 'Bypassing' : 'Bypass dependencies'}
-        confirmPending={signalMutation.isPending}
-        danger
-        disabledReason={disabledReason('canBypassDependencies')}
-        error={activeDialog === 'bypass-dependencies' ? actionError : null}
         onCancel={closeDialog}
         onConfirm={confirmDialog}
       />

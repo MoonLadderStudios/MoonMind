@@ -97,6 +97,46 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
+  it('bypasses dependencies directly without opening a confirmation dialog', async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...detailResponse,
+            actions: { canBypassDependencies: true },
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
+
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Bypass Dependencies' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Bypass dependencies' })).toBeNull();
+    await waitFor(() => {
+      const signalCall = fetchSpy.mock.calls.find(([url, init]) => {
+        if (String(url) !== '/api/executions/wf-123/signal') return false;
+        const body = (init as RequestInit | undefined)?.body;
+        if (!body) return false;
+        try {
+          return JSON.parse(String(body)).signalName === 'BypassDependencies';
+        } catch {
+          return false;
+        }
+      });
+      expect(signalCall).toBeTruthy();
+      const signalInit = signalCall?.[1] as RequestInit | undefined;
+      expect(signalInit?.body ? JSON.parse(String(signalInit.body)) : null).toMatchObject({
+        signalName: 'BypassDependencies',
+        payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
+      });
+    });
+  });
+
   it('requests a rerun from the row menu without navigating away from the workflow list', async () => {
     renderWithClient(
       <WorkflowRowActionsMenu
