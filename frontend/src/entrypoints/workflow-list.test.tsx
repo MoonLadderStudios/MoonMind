@@ -1611,6 +1611,24 @@ describe('Workflows Entrypoint', () => {
     expect(detailsLink.closest('.queue-card-actions')).toBeTruthy();
   });
 
+  it('MM-1003 keeps mobile cards, filters, and detail navigation separate from workspace sidebar controls', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const card = document.querySelector<HTMLElement>('.queue-card');
+    expect(card).toBeTruthy();
+    const titleLink = within(card as HTMLElement).getByRole('link', { name: 'Example task' });
+    const detailsLink = screen.getByRole('button', { name: 'View details' });
+
+    expect(titleLink.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
+    expect(detailsLink.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+  });
+
   it('keeps mobile task cards constrained to the viewport width', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 

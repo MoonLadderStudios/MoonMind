@@ -7,7 +7,7 @@ Last updated: 2026-06-28
 
 Define the desired-state design system for the MoonMind dashboard: visual language, design tokens, surface hierarchy, layout rules, motion, component behavior, and page composition. This document is declarative. It describes what the dashboard should look and feel like when it is correct.
 
-For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`.
+For route ownership, runtime config, API boundaries, and workflow console architecture, see `docs/UI/WorkflowConsoleArchitecture.md`. For the workflow-specific desktop sidebar/workspace addendum that applies these surface, focus, and motion rules, see `docs/UI/WorkflowWorkspaceSidebar.md`.
 
 ---
 

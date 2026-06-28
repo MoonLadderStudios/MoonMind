@@ -29,6 +29,7 @@ Use related docs for system-level contracts:
 - `docs/Temporal/VisibilityAndUiQueryModel.md` — Temporal Visibility and UI query model.
 - `docs/UI/WorkflowConsoleArchitecture.md` — workflow console shell and shared frontend architecture.
 - `docs/UI/DashboardDesignSystem.md` — shared dashboard visual language.
+- `docs/UI/WorkflowWorkspaceSidebar.md` — addendum for desktop list-to-detail workspace transitions, sidebar list context, and mobile card-to-detail behavior.
 - `docs/UI/CreatePage.md` — Workflow authoring surface that creates many rows shown on this page.
 
 Representative current implementation surfaces:

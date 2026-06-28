@@ -503,6 +503,117 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  function mockWorkflowWorkspaceActionFetches() {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-1003 workspace action workflow',
+      summary: 'Workspace shell action detail',
+      status: 'failed',
+      state: 'failed',
+      rawState: 'failed',
+      temporalStatus: 'failed',
+      attentionRequired: true,
+      blockedOnDependencies: true,
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canSetTitle: true,
+        canUpdateInputs: true,
+        canEditForRerun: true,
+        canRerun: true,
+        canResumeFromFailedStep: true,
+        canPause: true,
+        canResume: true,
+        canApprove: true,
+        canReject: true,
+        canCancel: true,
+        canSendMessage: true,
+        canBypassDependencies: true,
+      },
+      resume: {
+        available: true,
+        checkpointRef: 'artifact://checkpoint/source',
+        failedStepId: 'implement',
+        sourceRunId: '01-run',
+      },
+      stepsHref: '/api/executions/test-123/steps',
+    };
+    const stepLedger = {
+      workflowId: 'test-123',
+      runId: '01-run',
+      runScope: 'latest',
+      steps: [
+        {
+          logicalStepId: 'plan',
+          order: 1,
+          title: 'Plan',
+          status: 'succeeded',
+          executionOrdinal: 1,
+          updatedAt: '2026-03-28T00:00:01Z',
+          refs: {},
+          artifacts: { outputSummary: 'artifact://summary/plan' },
+          recoveryPreservation: {
+            eligible: true,
+            reason: 'complete',
+            message: 'Step has recoverable output refs and state checkpoint evidence.',
+          },
+        },
+      ],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: 'test-123',
+                taskId: 'test-123',
+                source: 'temporal',
+                title: 'MM-1003 workspace action workflow',
+                status: 'failed',
+                state: 'failed',
+                rawState: 'failed',
+                createdAt: '2026-03-28T00:00:00Z',
+              },
+              {
+                workflowId: 'test-456',
+                taskId: 'test-456',
+                source: 'temporal',
+                title: 'Switch target workflow',
+                status: 'running',
+                state: 'executing',
+                rawState: 'executing',
+                createdAt: '2026-03-29T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => stepLedger } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/remediations?direction=')) {
+        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+      }
+      if (init?.method === 'POST') {
+        return Promise.resolve({ ok: true, json: async () => ({ accepted: true }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
+    });
+  }
+
   function mockDesktopViewport(matches = true) {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -537,6 +648,201 @@ describe('Workflow Detail Entrypoint', () => {
       '/workflows/test-456?source=temporal',
     );
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
+  });
+
+  it('MM-1003 switches workflows from the desktop sidebar without duplicating detail actions', async () => {
+    window.history.pushState({}, 'Workspace Switching Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceActionFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={actionsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const active = await within(sidebar).findByRole('link', { name: /MM-1003 workspace action workflow/i });
+    const switchTarget = await within(sidebar).findByRole('link', { name: /Switch target workflow/i });
+
+    expect(active.getAttribute('aria-current')).toBe('page');
+    expect(switchTarget.getAttribute('href')).toBe('/workflows/test-456?source=temporal');
+    expect(within(sidebar).queryByRole('button', { name: 'Workflow actions' })).toBeNull();
+    expect(within(sidebar).queryByRole('menuitem', { name: 'Cancel' })).toBeNull();
+    expect(await within(screen.getByRole('main', { name: 'Workflow detail' })).findByRole('button', { name: 'Workflow actions' })).toBeTruthy();
+  });
+
+  it('MM-1003 keeps sidebar failures isolated from the selected desktop detail', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Failure Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({ ok: false, statusText: 'Service Unavailable' } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({ ok: true, json: async () => latestStepsSnapshot } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          temporalRunId: '02-run',
+          runId: '02-run',
+          stepsHref: '/api/executions/test-123/steps',
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'Detail survives sidebar error',
+          summary: 'Selected detail still renders',
+          status: 'running',
+          state: 'executing',
+          rawState: 'executing',
+          temporalStatus: 'running',
+          actions: {},
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByText('Workflow navigation is unavailable.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+  });
+
+  it('MM-1003 keeps a loaded sidebar visible when the selected detail fails', async () => {
+    window.history.pushState({}, 'Workspace Detail Failure Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: 'test-456',
+                taskId: 'test-456',
+                source: 'temporal',
+                title: 'Sidebar remains usable',
+                status: 'completed',
+                state: 'completed',
+                rawState: 'completed',
+                createdAt: '2026-04-08T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      return Promise.resolve({ ok: false, statusText: 'Not Found', text: async () => 'Not Found' } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByRole('link', { name: /Sidebar remains usable/i })).toBeTruthy();
+    expect(await screen.findByText('Current workflow')).toBeTruthy();
+    expect(await screen.findByText('Failed to fetch workflow: Not Found')).toBeTruthy();
+  });
+
+  it('MM-1003 closes, reopens, focuses, and persists the desktop sidebar without route changes', async () => {
+    window.history.pushState({}, 'Workspace Control Test', '/workflows/test-123?source=temporal&stateIn=running');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    const firstRender = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close sidebar' }));
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    const openButton = screen.getByRole('button', { name: 'Open workflow sidebar' });
+    await waitFor(() => expect(document.activeElement).toBe(openButton));
+    expect(window.location.pathname).toBe('/workflows/test-123');
+    expect(window.location.search).toBe('?source=temporal&stateIn=running');
+
+    firstRender.unmount();
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Open workflow sidebar' }));
+    const closeButton = await screen.findByRole('button', { name: 'Close sidebar' });
+    await waitFor(() => expect(document.activeElement).toBe(closeButton));
+    expect(screen.getByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+  });
+
+  it('MM-1003 preserves workspace query state when expanding to the full list', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Expand Query Test',
+      '/workflows/test-123?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=10',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    const [expandLink] = screen.getAllByRole('link', { name: 'Expand to full list' });
+    expect(expandLink).toBeTruthy();
+    expect(expandLink?.getAttribute('href')).toBe(
+      '/workflows?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=10',
+    );
+  });
+
+  it('MM-1003 verifies Workflow Details primary actions inside the desktop workspace shell', async () => {
+    window.history.pushState({}, 'Workspace Actions Test', '/workflows/test-123/artifacts?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceActionFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={{
+      ...actionsPayload,
+      initialData: {
+        dashboardConfig: {
+          features: {
+            temporalDashboard: {
+              actionsEnabled: true,
+              temporalTaskEditing: true,
+            },
+          },
+        },
+      },
+    }} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    const menu = await openWorkflowActionsMenu();
+    for (const label of [
+      'Rename',
+      'Edit',
+      'Compare run',
+      'Rerun',
+      'Resume from failed step',
+      'Recover from selected step',
+      'Pause',
+      'Resume',
+      'Approve',
+      'Reject',
+      'Cancel',
+      'Send Message',
+      'Bypass Dependencies',
+      'Remediate',
+    ]) {
+      expect(within(menu).getByRole('menuitem', { name: label })).toBeTruthy();
+    }
+
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Pause' }));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/executions/test-123/signal',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ signalName: 'Pause', payload: {} }),
+        }),
+      );
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Workflow actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Cancel' }));
+    expect(screen.getByRole('dialog', { name: 'Cancel workflow' })).toBeTruthy();
   });
 
   it('MM-997 translates workspace sidebar limit state to the executions API page size', async () => {
@@ -635,6 +941,20 @@ describe('Workflow Detail Entrypoint', () => {
 
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+  });
+
+  it('MM-1003 keeps mobile detail standalone with no sidebar controls in the accessibility tree', async () => {
+    window.history.pushState({}, 'Workspace Mobile Accessibility Test', '/workflows/test-123/steps?source=temporal');
+    mockDesktopViewport(false);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeTruthy();
   });
 
   it('MM-801 renders Overview as a concise summary with route preview cards', async () => {

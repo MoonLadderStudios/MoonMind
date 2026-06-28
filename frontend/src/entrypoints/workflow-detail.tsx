@@ -262,7 +262,9 @@ function WorkflowWorkspaceShell({
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
+  );
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
@@ -294,6 +296,7 @@ function WorkflowWorkspaceShell({
               className="secondary"
               onClick={() => {
                 setSidebarOpen(false);
+                updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
                 window.setTimeout(() => openButtonRef.current?.focus(), 0);
               }}
             >
@@ -342,6 +345,7 @@ function WorkflowWorkspaceShell({
           className="secondary workflow-workspace-open-sidebar"
           onClick={() => {
             setSidebarOpen(true);
+            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
             window.setTimeout(() => closeButtonRef.current?.focus(), 0);
           }}
         >
