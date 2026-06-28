@@ -224,8 +224,13 @@ export function DataTable<T>({
 
   const renderCards = () => {
     if (isLoading || isError || !hasRows) return null;
+    // Intentionally not aria-hidden: when the responsive breakpoint hides the
+    // table (`display: none`), the table is removed from the accessibility tree
+    // and these cards become the only representation of the rows for assistive
+    // tech. CSS `display: none` mutually excludes the table and cards across the
+    // breakpoint, so exactly one is exposed to AT at any width.
     return (
-      <ul className="data-table-cards" aria-hidden="true">
+      <ul className="data-table-cards">
         {sortedData.map((item) => (
           <li key={getRowKey(item)} className="data-table-card">
             {columns.map((col) => (

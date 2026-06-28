@@ -87,7 +87,11 @@ describe('DataTable (MM-959)', () => {
     // The action renders in both the table and the card fallback.
     expect(screen.getAllByRole('button', { name: 'Edit Beta' }).length).toBeGreaterThanOrEqual(1);
     // Card fallback present in DOM (CSS toggles visibility by viewport width).
-    expect(document.querySelector('.data-table-cards')).toBeTruthy();
+    const cards = document.querySelector('.data-table-cards');
+    expect(cards).toBeTruthy();
     expect(document.querySelector('[data-responsive="on"]')).toBeTruthy();
+    // The cards replace the table at narrow widths, so they must remain exposed
+    // to assistive tech rather than being aria-hidden.
+    expect(cards?.getAttribute('aria-hidden')).toBeNull();
   });
 });
