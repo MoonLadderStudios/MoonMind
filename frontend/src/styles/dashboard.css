@@ -6583,13 +6583,35 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 1.2;
   text-align: left;
   text-decoration: none;
+  /*
+   * These options are <button>/<a> elements, so without this they inherit the
+   * global control treatment — a resting purple drop-shadow, plus a hover
+   * scale/glow and an active press ring. In a tight menu that reads as a stack
+   * of primary buttons casting glow bands between rows. Flatten it: the popover
+   * is the elevated surface, the rows are not.
+   */
+  box-shadow: none;
+  transform: none;
+  filter: none;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
+/* Pointer hover / active and programmatic focus: one calm filled-row cue. */
 .td-workflow-actions-item:hover,
-.td-workflow-actions-item:focus-visible {
-  border-color: rgb(var(--mm-accent-2) / 0.55);
+.td-workflow-actions-item:focus,
+.td-workflow-actions-item:active {
+  border-color: rgb(var(--mm-accent) / 0.45);
   background: var(--mm-control-shell-hover);
+  box-shadow: none;
+  transform: none;
+  filter: none;
   outline: none;
+}
+
+/* Keyboard focus: the standard single accent ring, no competing border. */
+.td-workflow-actions-item:focus-visible {
+  border-color: transparent;
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .td-workflow-actions-item-danger {
@@ -6602,9 +6624,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .td-workflow-actions-item-disabled:hover,
-.td-workflow-actions-item-disabled:focus-visible {
-  border-color: rgb(var(--mm-border) / 0.72);
-  background: rgb(var(--mm-border) / 0.16);
+.td-workflow-actions-item-disabled:focus,
+.td-workflow-actions-item-disabled:focus-visible,
+.td-workflow-actions-item-disabled:active {
+  border-color: rgb(var(--mm-border) / 0.6);
+  background: rgb(var(--mm-border) / 0.14);
+  box-shadow: none;
+  transform: none;
+  filter: none;
 }
 
 .td-workflow-actions-disabled-reason,
