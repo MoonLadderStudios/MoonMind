@@ -20,7 +20,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
-import { workflowListHrefFromContext } from '../lib/workflowListContext';
+import { workflowListContextParams, workflowListHrefFromContext } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -229,8 +229,7 @@ function workflowDetailSubrouteHref(
 }
 
 function workflowWorkspaceListQuery(search: URLSearchParams): string {
-  const params = new URLSearchParams(search);
-  params.delete('selectedWorkflowId');
+  const params = workflowListContextParams(search);
   const pageSize = params.get('limit') || params.get('pageSize') || '25';
   params.delete('limit');
   params.set('pageSize', pageSize);

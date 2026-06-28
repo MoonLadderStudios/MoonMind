@@ -724,7 +724,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState(
       {},
       'Workspace Query Test',
-      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2&selectedWorkflowId=test-123',
+      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2&selectedWorkflowId=test-123&sort=status&unsafe=1',
     );
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
