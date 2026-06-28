@@ -80,6 +80,12 @@ type FilterField =
   | 'createdAt'
   | 'closedAt';
 
+// Matches the 768px breakpoint that switches dashboard.css between the mobile
+// card list and the desktop table. Above it, the table headers carry the
+// per-column filters and the "View options" control, so the results header row
+// (Filters trigger + chips) is not rendered.
+const DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
+
 // Scan-first desktop columns, ordered left-to-right. `field` is the sort/identity
 // key and `sortable` controls whether the header renders a sort button or a static
 // label. Workflow title leads as the primary anchor; raw/debug identifiers move
@@ -770,6 +776,17 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const [liveUpdatesPref, setLiveUpdatesPref] = useState(initialPrefs.liveUpdatesEnabled);
   const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
   const prefsMenuRef = useRef<HTMLDivElement | null>(null);
+  // The desktop table and the mobile card list are separate surfaces. On desktop
+  // the per-column filter buttons replace the Filters trigger and the "View
+  // options" control moves into the Actions header, so the results header row
+  // above the table is dropped entirely. matchMedia is unavailable under jsdom;
+  // fall back to the mobile layout there so the test surface keeps the Filters
+  // trigger and text "View options" button.
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(DESKTOP_MEDIA_QUERY).matches
+      : false,
+  );
   const [pageSize, setPageSize] = useState(() => {
     const limitParam = initial.get('limit');
     return limitParam !== null ? parsePageSize(limitParam) : initialPrefs.workflowListPageSize;
@@ -1011,6 +1028,18 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [closeDesktopFilter, desktopFilterField]);
+
+  // Track the desktop breakpoint so the toolbar layout (Filters trigger vs.
+  // per-column filters, results header vs. Actions-header "View options") stays
+  // in sync with the active responsive surface.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const query = window.matchMedia(DESKTOP_MEDIA_QUERY);
+    const onChange = (event: MediaQueryListEvent) => setIsDesktop(event.matches);
+    setIsDesktop(query.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
 
   // MM-964: close the dashboard preferences popover on an outside click.
   useEffect(() => {
@@ -1501,6 +1530,174 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return null;
   };
 
+  // The "View options" control is a single instance whose placement follows the
+  // active surface: an icon button in the Actions header on desktop, the labelled
+  // button in the results header otherwise.
+  const renderViewOptions = (variant: 'text' | 'icon') => (
+    <div
+      className={`workflow-list-view-options${variant === 'icon' ? ' workflow-list-view-options--icon' : ''}`}
+      ref={prefsMenuRef}
+    >
+      <button
+        type="button"
+        className={
+          variant === 'icon'
+            ? 'workflow-list-view-options-trigger workflow-list-view-options-trigger--icon'
+            : 'secondary workflow-list-view-options-trigger'
+        }
+        aria-haspopup="dialog"
+        aria-expanded={prefsMenuOpen}
+        aria-label="View options"
+        title={variant === 'icon' ? 'View options' : undefined}
+        onClick={() => setPrefsMenuOpen((open) => !open)}
+      >
+        {variant === 'icon' ? (
+          <svg
+            aria-hidden="true"
+            className="workflow-list-view-options-icon"
+            viewBox="0 0 16 16"
+            focusable="false"
+          >
+            <g fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+              <line x1="2.5" y1="4.5" x2="13.5" y2="4.5" />
+              <line x1="2.5" y1="8" x2="13.5" y2="8" />
+              <line x1="2.5" y1="11.5" x2="13.5" y2="11.5" />
+              <circle cx="6" cy="4.5" r="1.7" fill="currentColor" stroke="none" />
+              <circle cx="10.5" cy="8" r="1.7" fill="currentColor" stroke="none" />
+              <circle cx="5" cy="11.5" r="1.7" fill="currentColor" stroke="none" />
+            </g>
+          </svg>
+        ) : (
+          'View options'
+        )}
+      </button>
+      {prefsMenuOpen ? (
+        <div
+          className="workflow-list-view-options-popover"
+          role="dialog"
+          aria-label="Workflow list view options"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation();
+              setPrefsMenuOpen(false);
+            }
+          }}
+        >
+          <fieldset className="workflow-list-view-options-group">
+            <legend>Density</legend>
+            <label className="checkbox">
+              <input
+                type="radio"
+                name="workflow-list-density"
+                checked={density === 'comfortable'}
+                onChange={() => handleDensityChange('comfortable')}
+              />
+              Comfortable
+            </label>
+            <label className="checkbox">
+              <input
+                type="radio"
+                name="workflow-list-density"
+                checked={density === 'compact'}
+                onChange={() => handleDensityChange('compact')}
+              />
+              Compact
+            </label>
+          </fieldset>
+          <fieldset className="workflow-list-view-options-group">
+            <legend>Columns</legend>
+            {TABLE_COLUMNS.filter((column) =>
+              (TOGGLEABLE_WORKFLOW_LIST_COLUMNS as readonly string[]).includes(column.field),
+            ).map((column) => (
+              <label className="checkbox" key={column.field}>
+                <input
+                  type="checkbox"
+                  checked={isColumnVisible(column.field)}
+                  onChange={(event) =>
+                    handleToggleColumn(
+                      column.field as ToggleableWorkflowListColumn,
+                      event.target.checked,
+                    )
+                  }
+                />
+                {column.label}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="workflow-list-view-options-group">
+            <legend>Live updates</legend>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={liveUpdatesPref}
+                onChange={(event) => handleLiveUpdatesChange(event.target.checked)}
+              />
+              Poll for live updates
+            </label>
+          </fieldset>
+          <div className="workflow-list-view-options-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleResetPreferences}
+              aria-label="Reset dashboard preferences to defaults"
+            >
+              Reset to defaults
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+
+  // Desktop entry point to the full advanced-filters drawer. When the results
+  // header row is dropped on desktop, the per-column buttons only cover
+  // TABLE_COLUMN_FILTER_FIELDS, so this keeps every drawer-only field (ID, Skill,
+  // Scheduled, Created, Finished, and any column hidden via View options)
+  // reachable and surfaces the active-filter count so those filters can still be
+  // reviewed and cleared without hand-editing the URL.
+  const renderAdvancedFiltersTrigger = () => (
+    <button
+      type="button"
+      className={`workflow-list-advanced-filters-trigger${hasActiveFilters ? ' is-active' : ''}`}
+      ref={drawerToggleRef}
+      aria-haspopup="dialog"
+      aria-expanded={drawerOpen}
+      aria-label={
+        hasActiveFilters
+          ? `Advanced filters. ${activeFilters.length} active.`
+          : 'Advanced filters'
+      }
+      title="Advanced filters"
+      onClick={(event) => openDrawer(null, event.currentTarget)}
+    >
+      <svg
+        aria-hidden="true"
+        className="workflow-list-advanced-filters-icon"
+        viewBox="0 0 16 16"
+        focusable="false"
+      >
+        <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+      </svg>
+      {hasActiveFilters ? (
+        <span className="workflow-list-advanced-filters-count" aria-hidden="true">
+          {activeFilters.length}
+        </span>
+      ) : null}
+    </button>
+  );
+
+  // Desktop promotes the per-column filter buttons and an Actions-header "View
+  // options" icon, dropping the results header row. The icon lives inside the
+  // rendered table header, so it can only host "View options" when the table is
+  // actually on screen. The labelled control falls back to the results header
+  // otherwise — on mobile, when there is no Actions column, and on the
+  // loading/error/empty states where the table (and its column filters) are
+  // replaced by a message and the Filters trigger is the only filter affordance.
+  const tableHasRows = !isLoading && !isError && sortedItems.length > 0;
+  const showViewOptionsIcon = isDesktop && actionsEnabled && tableHasRows;
+  const showResultsHeader = !showViewOptionsIcon;
+
   return (
     <div className="stack">
       {hasWorkflowListNotices ? (
@@ -1638,6 +1835,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         className="queue-layouts panel--data workflow-list-data-slab"
         aria-label="Workflow list"
       >
+        {showResultsHeader ? (
         <header className="workflow-list-results-header">
           <div className="workflow-list-filter-bar">
             <button
@@ -1690,94 +1888,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
             ) : null}
           </div>
-          <div className="workflow-list-view-options" ref={prefsMenuRef}>
-            <button
-              type="button"
-              className="secondary workflow-list-view-options-trigger"
-              aria-haspopup="dialog"
-              aria-expanded={prefsMenuOpen}
-              onClick={() => setPrefsMenuOpen((open) => !open)}
-            >
-              View options
-            </button>
-            {prefsMenuOpen ? (
-              <div
-                className="workflow-list-view-options-popover"
-                role="dialog"
-                aria-label="Workflow list view options"
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.stopPropagation();
-                    setPrefsMenuOpen(false);
-                  }
-                }}
-              >
-                <fieldset className="workflow-list-view-options-group">
-                  <legend>Density</legend>
-                  <label className="checkbox">
-                    <input
-                      type="radio"
-                      name="workflow-list-density"
-                      checked={density === 'comfortable'}
-                      onChange={() => handleDensityChange('comfortable')}
-                    />
-                    Comfortable
-                  </label>
-                  <label className="checkbox">
-                    <input
-                      type="radio"
-                      name="workflow-list-density"
-                      checked={density === 'compact'}
-                      onChange={() => handleDensityChange('compact')}
-                    />
-                    Compact
-                  </label>
-                </fieldset>
-                <fieldset className="workflow-list-view-options-group">
-                  <legend>Columns</legend>
-                  {TABLE_COLUMNS.filter((column) =>
-                    (TOGGLEABLE_WORKFLOW_LIST_COLUMNS as readonly string[]).includes(column.field),
-                  ).map((column) => (
-                    <label className="checkbox" key={column.field}>
-                      <input
-                        type="checkbox"
-                        checked={isColumnVisible(column.field)}
-                        onChange={(event) =>
-                          handleToggleColumn(
-                            column.field as ToggleableWorkflowListColumn,
-                            event.target.checked,
-                          )
-                        }
-                      />
-                      {column.label}
-                    </label>
-                  ))}
-                </fieldset>
-                <fieldset className="workflow-list-view-options-group">
-                  <legend>Live updates</legend>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={liveUpdatesPref}
-                      onChange={(event) => handleLiveUpdatesChange(event.target.checked)}
-                    />
-                    Poll for live updates
-                  </label>
-                </fieldset>
-                <div className="workflow-list-view-options-actions">
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={handleResetPreferences}
-                    aria-label="Reset dashboard preferences to defaults"
-                  >
-                    Reset to defaults
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
+          {renderViewOptions('text')}
         </header>
+        ) : null}
         {isLoading ? (
           <p className="loading workflow-list-empty-message">Loading workflows...</p>
         ) : isError ? (
@@ -1921,7 +2034,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       })}
                       {actionsEnabled ? (
                         <th scope="col" className="queue-table-actions-header">
-                          Actions
+                          <div className="queue-table-actions-header-inner">
+                            <span>Actions</span>
+                            {showViewOptionsIcon ? renderAdvancedFiltersTrigger() : null}
+                            {showViewOptionsIcon ? renderViewOptions('icon') : null}
+                          </div>
                         </th>
                       ) : null}
                     </tr>
