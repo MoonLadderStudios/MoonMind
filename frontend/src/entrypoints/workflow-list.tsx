@@ -9,6 +9,7 @@ import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector'
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
   WORKFLOW_LIST_CONTEXT_RETURN_PARAM,
+  consumeWorkflowListReturnFocusIntent,
   workflowDetailHref,
 } from '../lib/workflowListContext';
 import {
@@ -198,6 +199,7 @@ const ExecutionRowSchema = z
     scheduledFor: z.string().nullable().optional(),
     closedAt: z.string().nullable().optional(),
     createdAt: z.string(),
+    updatedAt: z.string().nullable().optional(),
     entry: z.string().optional(),
     dependsOn: z.array(z.string()).optional(),
     blockedOnDependencies: z.boolean().optional(),
@@ -311,6 +313,21 @@ function statusSupplementItems(row: ExecutionRow): string[] {
   return items;
 }
 
+const TERMINAL_UPDATED_AT_FALLBACK_STATES = new Set(['completed', 'failed', 'canceled', 'cancelled', 'succeeded']);
+
+function rowLifecycleState(row: ExecutionRow): string {
+  return String(row.rawState || row.state || row.status || '').toLowerCase();
+}
+
+function laterTimestamp(preferred: string | null | undefined, fallback: string): string {
+  if (!preferred) return fallback;
+  const preferredMs = Date.parse(preferred);
+  const fallbackMs = Date.parse(fallback);
+  if (Number.isNaN(preferredMs)) return fallback;
+  if (Number.isNaN(fallbackMs)) return preferred;
+  return preferredMs >= fallbackMs ? preferred : fallback;
+}
+
 function formatProgress(row: ExecutionRow): { text: string; title?: string } {
   const progress = row.progress;
   const total = progress?.total ?? 0;
@@ -337,7 +354,14 @@ function formatProgress(row: ExecutionRow): { text: string; title?: string } {
 }
 
 function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
-  return row.closedAt || row.scheduledFor || row.createdAt;
+  const state = rowLifecycleState(row);
+  if (row.closedAt && TERMINAL_UPDATED_AT_FALLBACK_STATES.has(state)) {
+    return laterTimestamp(row.updatedAt, row.closedAt);
+  }
+  if (row.scheduledFor && state === 'scheduled') {
+    return laterTimestamp(row.updatedAt, row.scheduledFor);
+  }
+  return row.updatedAt || row.closedAt || row.scheduledFor || row.createdAt;
 }
 
 const RELATIVE_TIME_UNITS: Array<[string, number]> = [
@@ -788,6 +812,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
   const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
+  const focusListOnWorkspaceReturn = useMemo(
+    () => consumeWorkflowListReturnFocusIntent(initial),
+    [initial],
+  );
   const [workspaceCursorResetNotice, setWorkspaceCursorResetNotice] = useState(false);
   const [workspaceReturnFromDetail, setWorkspaceReturnFromDetail] = useState(() =>
     initial.get(WORKFLOW_LIST_CONTEXT_RETURN_PARAM) === '1',
@@ -801,6 +829,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const drawerToggleRef = useRef<HTMLButtonElement | null>(null);
   const desktopFilterRef = useRef<HTMLDivElement | null>(null);
+  const workflowListRegionRef = useRef<HTMLElement | null>(null);
+  const didFocusWorkspaceReturnRef = useRef(false);
   // The element that opened the drawer (the Filters trigger or a chip). Focus is
   // returned here when the drawer closes so keyboard users keep their place.
   const filterTriggerRef = useRef<HTMLElement | null>(null);
@@ -959,6 +989,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     resetToFirstPage,
     workspaceReturnFromDetail,
   ]);
+
+  useEffect(() => {
+    if (!focusListOnWorkspaceReturn || didFocusWorkspaceReturnRef.current) return;
+    didFocusWorkspaceReturnRef.current = true;
+    const frame = window.requestAnimationFrame(() => {
+      workflowListRegionRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusListOnWorkspaceReturn]);
 
   // MM-964: column visibility. The workflow title column is the primary anchor
   // and is always shown; every other column honors the stored preference.
@@ -1913,8 +1952,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       ) : null}
 
       <section
+        ref={workflowListRegionRef}
         className="queue-layouts panel--data workflow-list-data-slab"
         aria-label="Workflow list"
+        tabIndex={focusListOnWorkspaceReturn ? -1 : undefined}
       >
         {showResultsHeader ? (
         <header className="workflow-list-results-header">

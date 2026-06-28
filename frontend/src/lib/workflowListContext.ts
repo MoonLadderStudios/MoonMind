@@ -1,4 +1,26 @@
 export const WORKFLOW_LIST_CONTEXT_RETURN_PARAM = 'returnFromWorkflowDetail';
+export const WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY = 'moonmind.workflowList.returnFocusIntent';
+
+export function markWorkflowListReturnFocusIntent(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY, '1');
+  } catch {
+    // Ignore storage failures; query-marked returns still focus the list.
+  }
+}
+
+export function consumeWorkflowListReturnFocusIntent(source: URLSearchParams): boolean {
+  const hasReturnParam = source.get(WORKFLOW_LIST_CONTEXT_RETURN_PARAM) === '1';
+  if (typeof window === 'undefined') return hasReturnParam;
+  try {
+    const hasStoredIntent = window.sessionStorage.getItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY) === '1';
+    window.sessionStorage.removeItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY);
+    return hasReturnParam || hasStoredIntent;
+  } catch {
+    return hasReturnParam;
+  }
+}
 
 const WORKFLOW_LIST_CONTEXT_ALLOWLIST = new Set([
   'source',

@@ -24,6 +24,8 @@ moonmind_severity_floor_default = "high"
 proposal_delivery_provider_default = "github"
 
 [feature_flags]
+# Enable /api/sessions compatibility facades over canonical AgentRun session APIs.
+session_api_compat_enabled = false
 # Disable the Preset Catalog (UI + API) when required.
 disable_preset_catalog = false
 # Rollout scope for the session-aware Live Logs timeline contract:

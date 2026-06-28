@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { BootPayload } from '../boot/parseBootPayload';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
+import { markWorkflowListReturnFocusIntent } from '../lib/workflowListContext';
 import { WorkflowListPage } from './workflow-list';
 import '../styles/dashboard.css';
 
@@ -337,6 +338,125 @@ describe('Workflows Entrypoint', () => {
     // Visible text is the relative "Updated" signal; the exact timestamp is on hover.
     expect(updatedCell.getAttribute('title')).toBe(expectedExact);
     expect(updatedCell.getAttribute('title')).not.toContain('2026');
+  });
+
+  it('uses the API updatedAt value for the Updated column before fallback timestamps', async () => {
+    const updatedAt = new Date(Date.now() - 60 * 1000).toISOString();
+    const createdAt = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-active',
+            source: 'temporal',
+            title: 'Actively executing task',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt,
+            updatedAt,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Actively executing task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    const expectedExact = new Date(updatedAt).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const staleExact = new Date(createdAt).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(updatedCell.getAttribute('title')).toBe(expectedExact);
+    expect(updatedCell.getAttribute('title')).not.toBe(staleExact);
+  });
+
+  it('uses closedAt for terminal rows when synthetic updatedAt is older', async () => {
+    const closedAt = '2026-04-15T20:00:00Z';
+    const syntheticUpdatedAt = '2026-04-15T10:00:00Z';
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-completed',
+            source: 'temporal',
+            title: 'Completed task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            createdAt: '2026-04-15T09:00:00Z',
+            updatedAt: syntheticUpdatedAt,
+            closedAt,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Completed task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    const expectedExact = new Date(closedAt).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(updatedCell.getAttribute('title')).toBe(expectedExact);
+  });
+
+  it('uses scheduledFor for scheduled rows when synthetic updatedAt is older', async () => {
+    const scheduledFor = '2026-04-15T20:00:00Z';
+    const syntheticUpdatedAt = '2026-04-15T10:00:00Z';
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-scheduled',
+            source: 'temporal',
+            title: 'Scheduled task',
+            status: 'scheduled',
+            state: 'scheduled',
+            rawState: 'scheduled',
+            createdAt: '2026-04-15T09:00:00Z',
+            updatedAt: syntheticUpdatedAt,
+            scheduledFor,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Scheduled task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    const expectedExact = new Date(scheduledFor).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(updatedCell.getAttribute('title')).toBe(expectedExact);
   });
 
   it('floors relative Updated values so units roll over at the exact threshold', async () => {
@@ -924,11 +1044,50 @@ describe('Workflows Entrypoint', () => {
     const table = closedTitle.closest('table') as HTMLTableElement;
     const closedLink = within(table).getByRole('link', { name: 'Closed latest task' });
     const openLink = within(table).getByRole('link', { name: 'Open later task' });
-    // Default Updated sort is descending by rowUpdatedAt (closedAt || scheduledFor || createdAt),
-    // so the completed row whose closedAt is newest sorts first even though its
-    // scheduledFor is older than the open row's scheduledFor.
+    // When updatedAt is absent, the Updated sort keeps the fallback behavior:
+    // closedAt wins over scheduledFor/createdAt for completed rows.
     expect(
       closedLink.compareDocumentPosition(openLink) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('sorts the Updated column by API updatedAt when it is present', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-created-late',
+            source: 'temporal',
+            title: 'Created late task',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T19:00:00Z',
+            updatedAt: '2026-04-15T19:05:00Z',
+          },
+          {
+            taskId: 'task-updated-later',
+            source: 'temporal',
+            title: 'Updated later task',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T00:00:00Z',
+            updatedAt: '2026-04-15T20:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const updatedLaterTitle = (await screen.findAllByText('Updated later task'))[0]!;
+    const table = updatedLaterTitle.closest('table') as HTMLTableElement;
+    const updatedLaterLink = within(table).getByRole('link', { name: 'Updated later task' });
+    const createdLateLink = within(table).getByRole('link', { name: 'Created late task' });
+    expect(
+      updatedLaterLink.compareDocumentPosition(createdLateLink) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -1302,6 +1461,43 @@ describe('Workflows Entrypoint', () => {
     ).toBeNull();
   });
 
+  it('MM-1008 focuses the workflow list region when expanded from workspace detail', async () => {
+    window.history.pushState(
+      {},
+      'Workspace return focus',
+      '/workflows?stateIn=completed&limit=50&returnFromWorkflowDetail=1',
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const listRegion = screen.getByRole('region', { name: 'Workflow list' });
+    await waitFor(() => expect(document.activeElement).toBe(listRegion));
+    expect(listRegion.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('MM-1008 does not make the workflow list region focusable on normal list visits', async () => {
+    window.history.pushState({}, 'Normal workflows', '/workflows?stateIn=completed&limit=50');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(screen.getByRole('region', { name: 'Workflow list' }).getAttribute('tabindex')).toBeNull();
+  });
+
+  it('MM-1008 focuses the workflow list region on a plain expand return intent', async () => {
+    markWorkflowListReturnFocusIntent();
+    window.history.pushState({}, 'Plain workspace return focus', '/workflows');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const listRegion = screen.getByRole('region', { name: 'Workflow list' });
+    await waitFor(() => expect(document.activeElement).toBe(listRegion));
+    expect(listRegion.getAttribute('tabindex')).toBe('-1');
+    expect(window.sessionStorage.getItem('moonmind.workflowList.returnFocusIntent')).toBeNull();
+  });
+
   it('supports skill and date filter chips with blank semantics', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -1651,6 +1847,35 @@ describe('Workflows Entrypoint', () => {
     expect(await within(cardList).findByRole('link', { name: 'Example task' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
   }, 10000);
+
+  it('MM-1010 keeps desktop workspace sidebar controls out of mobile workflow list accessibility', async () => {
+    renderWithClient(
+      <WorkflowListPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            dashboardConfig: {
+              features: {
+                temporalDashboard: {
+                  workspaceShellEnabled: true,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    await screen.findAllByText('Example task');
+    const cardList = document.querySelector('.queue-card-list') as HTMLElement | null;
+    expect(cardList).toBeTruthy();
+    expect(within(cardList as HTMLElement).getByRole('link', { name: 'Example task' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+  });
 
   it('keeps mobile task cards constrained to the viewport width', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);

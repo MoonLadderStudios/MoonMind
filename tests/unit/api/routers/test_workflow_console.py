@@ -403,6 +403,25 @@ def test_detail_sub_routes_render_dashboard_shell(client: TestClient) -> None:
         assert 'type="module"' in response.text
         assert "/static/workflow_console/dist/assets/" in response.text
 
+def test_detail_shell_boot_payload_keeps_workspace_query_state_browser_only(
+    client: TestClient,
+) -> None:
+    """MM-1010 / MM-975: shell routing authorizes the path without embedding URL secrets."""
+    token_param = "token" + "=redacted-fixture"
+    password_param = "password" + "=redacted-fixture"
+    response = client.get(
+        "/workflows/mm:workflow-123/steps"
+        f"?source=temporal&stateIn=completed&{token_param}&{password_param}"
+    )
+
+    assert response.status_code == 200
+    boot_payload = _extract_boot_payload(response.text)
+    dashboard_config = boot_payload["initialData"]["dashboardConfig"]
+    assert dashboard_config["initialPath"] == "/workflows/mm:workflow-123/steps"
+    serialized_boot_payload = json.dumps(boot_payload)
+    assert token_param not in serialized_boot_payload
+    assert password_param not in serialized_boot_payload
+
 def test_data_wide_panel_on_selected_react_routes(client: TestClient) -> None:
     for path in (
         "/workflows",

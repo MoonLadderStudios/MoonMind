@@ -378,7 +378,7 @@ def evaluate_attempt_continuation(
             reason="accepted_gate_passed",
             diagnostics_ref=gate.diagnostics_ref,
         )
-    if gate.verdict == "ADDITIONAL_WORK_NEEDED" and gate.remaining_work_ref:
+    if gate.verdict == "ADDITIONAL_WORK_NEEDED":
         return LoopStopDecision(
             state=LoopStopState.FAILED_WITH_REMAINING_WORK,
             reason="verification_requested_remediation",

@@ -23,6 +23,7 @@ import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
+import { WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY } from '../lib/workflowListContext';
 
 declare const __dirname: string;
 
@@ -637,6 +638,42 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  function mockWorkflowWorkspaceDetailFailure() {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: 'test-123',
+                taskId: 'test-123',
+                source: 'temporal',
+                title: 'MM-1010 sidebar remains loaded',
+                status: 'running',
+                state: 'executing',
+                rawState: 'executing',
+                createdAt: '2026-04-09T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        statusText: 'Forbidden',
+        json: async () => ({}),
+      } as Response);
+    });
+  }
+
   function mockDesktopViewport(matches = true) {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -707,16 +744,51 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
+  it('MM-1010 keeps an empty filtered sidebar state, pinned current workflow, and detail content independent (MM-975)', async () => {
+    window.history.pushState({}, 'Workspace Empty Filter Test', '/workflows/test-123?source=temporal&stateIn=failed');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches({ rows: [] });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByText('No workflows match the current list filters.')).toBeTruthy();
+    const pinnedGroup = within(sidebar).getByRole('list', { name: 'Current workflow' });
+    const pinned = within(pinnedGroup).getByRole('link', { name: /MM-997 selected workflow/i });
+    expect(pinned.getAttribute('aria-current')).toBe('page');
+    expect(pinned.getAttribute('data-pinned')).toBe('true');
+    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
+      '/workflows?stateIn=failed&returnFromWorkflowDetail=1',
+    );
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&stateIn=failed&pageSize=25');
+  });
+
   it('MM-999 keeps detail visible and retries only sidebar data after a recoverable sidebar error', async () => {
     window.history.pushState({}, 'Workspace Sidebar Error Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceSidebarFailure();
 
-    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000, list: 60000 },
+            },
+          },
+        }}
+      />,
+    );
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(await within(sidebar).findByText('Workflow navigation is unavailable.')).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    const detailCallsBeforeRetry = fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+    ).length;
 
     fireEvent.click(within(sidebar).getByRole('button', { name: 'Retry' }));
 
@@ -725,6 +797,26 @@ describe('Workflow Detail Entrypoint', () => {
       expect(sidebarFetches.length).toBeGreaterThanOrEqual(2);
     });
     expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+      ).length,
+    ).toBe(detailCallsBeforeRetry);
+  });
+
+  it('MM-1010 keeps a loaded desktop sidebar visible when the selected detail request fails (MM-975)', async () => {
+    window.history.pushState({}, 'Workspace Detail Failure Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceDetailFailure();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const active = await within(sidebar).findByRole('link', { name: /MM-1010 sidebar remains loaded/i });
+    expect(active.getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(await screen.findByText('Failed to fetch workflow: Forbidden')).toBeTruthy();
+    expect(within(sidebar).queryByText('Workflow navigation is unavailable.')).toBeNull();
   });
 
   it('MM-997 translates workspace sidebar limit state to the executions API page size', async () => {
@@ -899,6 +991,30 @@ describe('Workflow Detail Entrypoint', () => {
     expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
     expect(expand.getAttribute('href')).not.toContain('unsafe=');
     expect(expand.getAttribute('class') || '').toContain('button');
+    expect(expand.getAttribute('class') || '').toContain('workflow-workspace-expand-list');
+    expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
+      'workflow-workspace-close-sidebar',
+    );
+  });
+
+  it('MM-1008 keeps close-sidebar and expand-list controls visually distinct', async () => {
+    window.history.pushState({}, 'Workspace Controls Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
+      'workflow-workspace-close-sidebar',
+    );
+    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('class') || '').toContain(
+      'workflow-workspace-expand-list',
+    );
+
+    const dashboardCss = await readDashboardCss();
+    expect(dashboardCss).toMatch(/\.workflow-workspace-close-sidebar\s*\{[\s\S]*border-style:\s*dashed;/);
+    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list\s*\{[\s\S]*background:\s*rgb\(var\(--mm-accent\)/);
   });
 
   it('MM-1002 renders sidebar titles, repositories, runtimes, and statuses as React text', async () => {
@@ -939,9 +1055,11 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
-      '/workflows',
-    );
+    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
+    expect(expandLink.getAttribute('href')).toBe('/workflows');
+
+    fireEvent.click(expandLink);
+    expect(window.sessionStorage.getItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY)).toBe('1');
   });
 
   it('MM-1000 uses a single-column collapsed workspace layout and reduced-motion guard', async () => {
@@ -7320,6 +7438,8 @@ describe('Workflow Detail Entrypoint', () => {
     };
     const executionDetailUrl = '/api/executions/test-123?source=temporal';
 
+    let resolveFollowUpControl: ((response: Response) => void) | null = null;
+
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
@@ -7348,20 +7468,26 @@ describe('Workflow Detail Entrypoint', () => {
         } as Response);
       }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        const action = JSON.parse(String(init?.body || '{}')).action;
+        if (action === 'send_follow_up') {
+          return new Promise((resolve) => {
+            resolveFollowUpControl = resolve;
+          });
+        }
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            action: JSON.parse(String(init?.body || '{}')).action,
+            action,
             projection: {
               agent_run_id: 'wf-task-1',
               session_id: 'sess:wf-task-1:codex_cli',
-              session_epoch: JSON.parse(String(init?.body || '{}')).action === 'clear_session' ? 2 : 1,
+              session_epoch: action === 'clear_session' ? 2 : 1,
               grouped_artifacts: [],
               latest_summary_ref: { artifact_id: 'art-summary' },
               latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
               latest_control_event_ref: { artifact_id: 'art-control' },
               latest_reset_boundary_ref:
-                JSON.parse(String(init?.body || '{}')).action === 'clear_session'
+                action === 'clear_session'
                   ? { artifact_id: 'art-reset' }
                   : null,
             },
@@ -7408,6 +7534,14 @@ describe('Workflow Detail Entrypoint', () => {
     ).length;
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
 
+    const pendingMessages = await screen.findByLabelText('Pending session messages');
+    const optimisticBubble = within(pendingMessages).getByText('Continue with the existing session.');
+    const optimisticContainer = optimisticBubble.closest('.chat-session-message');
+    expect(optimisticContainer?.getAttribute('data-client-event-key')).toMatch(
+      /^MM-1015:MM-977:sess:wf-task-1:codex_cli:1:\d+$/,
+    );
+    expect(screen.getByText('Operator message · Sending')).toBeTruthy();
+
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
@@ -7419,6 +7553,29 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         }),
       );
+    });
+    expect(resolveFollowUpControl).toBeTruthy();
+
+    act(() => {
+      resolveFollowUpControl?.({
+        ok: true,
+        json: async () => ({
+          action: 'send_follow_up',
+          projection: {
+            agent_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: { artifact_id: 'art-summary' },
+            latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+            latest_control_event_ref: { artifact_id: 'art-control' },
+            latest_reset_boundary_ref: null,
+          },
+        }),
+      } as Response);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('Operator message · Sending')).toBeNull();
     });
     await waitFor(() => {
       expect(
@@ -7444,6 +7601,105 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
+  });
+
+  it('marks optimistic follow-up bubbles failed when durable control confirmation fails', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'wf-session-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex session task',
+      summary: 'Session-backed work',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: false,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: 'Follow-up is not supported for this session.' }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            agent_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: null,
+            latest_checkpoint_ref: null,
+            latest_control_event_ref: null,
+            latest_reset_boundary_ref: null,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Follow-up message'), {
+      target: { value: 'Try the next turn.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+
+    const pendingMessages = await screen.findByLabelText('Pending session messages');
+    expect(within(pendingMessages).getByText('Try the next turn.')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('Operator message · Failed')).toBeTruthy();
+    });
+    expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
   });
 
   it('routes active-turn interrupt and cancel controls through the agent-run session control API', async () => {
@@ -8544,6 +8800,136 @@ describe('LiveLogsPanel', () => {
     expect(screen.getByText('Turn completed')).toBeTruthy();
     expect(screen.getByText('Turn failed')).toBeTruthy();
     expect(screen.getByText('Turn interrupted')).toBeTruthy();
+  });
+
+  it('MM-1014 renders chat session blocks, updates paired rows, streams live rows through the same projection, and exposes raw timeline', async () => {
+    const events = [
+      {
+        sequence: 1,
+        timestamp: '2026-04-08T00:00:01Z',
+        stream: 'session',
+        kind: 'user_message_submitted',
+        text: 'Please inspect the run.',
+        turn_id: 'turn-mm-1014',
+      },
+      {
+        sequence: 2,
+        timestamp: '2026-04-08T00:00:02Z',
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'I will inspect the run.',
+        turn_id: 'turn-mm-1014',
+      },
+      {
+        sequence: 3,
+        timestamp: '2026-04-08T00:00:03Z',
+        stream: 'session',
+        kind: 'tool_call_started',
+        text: 'exec_command: rg -n MM-1014',
+        turn_id: 'turn-mm-1014',
+        metadata: { toolCallId: 'tool-1', toolName: 'exec_command' },
+      },
+      {
+        sequence: 4,
+        timestamp: '2026-04-08T00:00:04Z',
+        stream: 'session',
+        kind: 'tool_call_output',
+        text: 'MM-1014 evidence line',
+        turn_id: 'turn-mm-1014',
+        metadata: { toolCallId: 'tool-1' },
+      },
+      {
+        sequence: 5,
+        timestamp: '2026-04-08T00:00:05Z',
+        stream: 'session',
+        kind: 'approval_requested',
+        text: 'Approval requested for command execution.',
+        turn_id: 'turn-mm-1014',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 6,
+        timestamp: '2026-04-08T00:00:06Z',
+        stream: 'session',
+        kind: 'approval_resolved',
+        text: 'Approval resolved by operator.',
+        turn_id: 'turn-mm-1014',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 7,
+        timestamp: '2026-04-08T00:00:07Z',
+        stream: 'session',
+        kind: 'session_cleared',
+        text: 'Session cleared before the next turn.',
+        metadata: { controlEventRef: 'art-control' },
+      },
+    ];
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: true,
+              liveStreamStatus: 'available',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events, truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+      expect(screen.getByText('Please inspect the run.')).toBeTruthy();
+      expect(screen.getByText('I will inspect the run.')).toBeTruthy();
+      expect(screen.getByText('exec_command')).toBeTruthy();
+      expect(screen.getByText('MM-1014 evidence line')).toBeTruthy();
+      expect(screen.getByText('Approval requested for command execution.')).toBeTruthy();
+      expect(screen.getByText('Approval resolved by operator.')).toBeTruthy();
+      expect(screen.getByText('Session cleared before the next turn.')).toBeTruthy();
+    });
+
+    expect(screen.getByText('Raw Timeline')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+    fireEvent.click(screen.getByText('Raw Timeline'));
+    await waitFor(() => expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy());
+
+    await waitForEventSourceInstance();
+    const es = MockEventSource.instances.at(-1)!;
+    act(() => es.triggerOpen());
+    act(() =>
+      es.triggerLogChunk({
+        sequence: 8,
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'Live assistant update.',
+        turn_id: 'turn-mm-1014-live',
+      }),
+    );
+
+    await waitFor(() => expect(screen.getAllByText('Live assistant update.').length).toBeGreaterThan(0));
+    expect(document.querySelectorAll('[data-chat-block-type="approval"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-chat-block-type="tool"]')).toHaveLength(1);
   });
 
   it('renders inline artifact links for publication and clear-reset timeline rows', async () => {
