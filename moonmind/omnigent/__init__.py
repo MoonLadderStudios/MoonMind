@@ -5,6 +5,8 @@ from moonmind.omnigent.settings import (
     OmnigentRuntimeGate,
     build_omnigent_gate,
     is_omnigent_enabled,
+    resolved_api_token,
+    resolved_default_agent_name,
     resolved_server_url,
 )
 
@@ -13,5 +15,7 @@ __all__ = [
     "OmnigentRuntimeGate",
     "build_omnigent_gate",
     "is_omnigent_enabled",
+    "resolved_api_token",
+    "resolved_default_agent_name",
     "resolved_server_url",
 ]

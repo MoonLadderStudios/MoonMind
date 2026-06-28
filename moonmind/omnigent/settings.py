@@ -80,10 +80,26 @@ def resolved_server_url(*, env: Mapping[str, Any] | None = None) -> str:
     return _clean(source.get("OMNIGENT_SERVER_URL"))
 
 
+def resolved_api_token(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return configured Omnigent API token."""
+
+    source = env if env is not None else os.environ
+    return _clean(source.get("OMNIGENT_API_TOKEN"))
+
+
+def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return configured default Omnigent agent name."""
+
+    source = env if env is not None else os.environ
+    return _clean(source.get("OMNIGENT_DEFAULT_AGENT_NAME"))
+
+
 __all__ = [
     "OMNIGENT_DISABLED_MESSAGE",
     "OmnigentRuntimeGate",
     "build_omnigent_gate",
     "is_omnigent_enabled",
+    "resolved_api_token",
+    "resolved_default_agent_name",
     "resolved_server_url",
 ]
