@@ -15,10 +15,12 @@ describe('WorkflowRowActionsMenu', () => {
     actions: {
       canPause: true,
       canCancel: true,
+      canRerun: true,
     },
   };
 
   beforeEach(() => {
+    window.history.pushState({}, 'Workflows', '/workflows?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/executions/wf-123?source=temporal') {
@@ -40,16 +42,6 @@ describe('WorkflowRowActionsMenu', () => {
         taskEditingEnabled={false}
       />,
     );
-  const renderTaskEditingMenu = () =>
-    renderWithClient(
-      <WorkflowRowActionsMenu
-        workflowId="wf-123"
-        apiBase="/api"
-        actionsEnabled
-        taskEditingEnabled
-      />,
-    );
-
   it('renders an icon trigger labeled "Actions" and does not fetch until opened', () => {
     renderMenu();
     expect(screen.getByRole('button', { name: 'Actions' })).toBeTruthy();
@@ -105,45 +97,31 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
-  it('requests rerun from a row action without navigating to the workflow detail page', async () => {
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/api/executions/wf-123?source=temporal') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            ...detailResponse,
-            actions: { canRerun: true },
-          }),
-        } as Response);
-      }
-      if (url === '/api/executions/wf-123/update') {
-        return Promise.resolve({
-          ok: true,
-          json: async () => ({
-            accepted: true,
-            applied: 'continue_as_new',
-            execution: { workflowId: 'wf-rerun-created' },
-          }),
-        } as Response);
-      }
-      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
-    });
-
-    renderTaskEditingMenu();
+  it('requests a rerun from the row menu without navigating away from the workflow list', async () => {
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
 
     await waitFor(() => {
-      const updateCall = fetchSpy.mock.calls.find(
+      const rerunCall = fetchSpy.mock.calls.find(
         ([url]) => String(url) === '/api/executions/wf-123/update',
       );
-      expect(updateCall).toBeTruthy();
-      expect(JSON.parse(String((updateCall?.[1] as RequestInit).body))).toEqual({
+      expect(rerunCall).toBeTruthy();
+      const requestBody = (rerunCall?.[1] as RequestInit | undefined)?.body;
+      expect(requestBody).toBeDefined();
+      expect(JSON.parse(requestBody as string)).toMatchObject({
         updateName: 'RequestRerun',
       });
     });
-    expect(window.location.pathname).not.toBe('/workflows/wf-rerun-created');
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?source=temporal');
     expect(
       await screen.findByText('Rerun was requested and the latest execution view is ready.'),
     ).toBeTruthy();

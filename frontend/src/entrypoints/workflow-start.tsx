@@ -8498,6 +8498,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           : applied === "continue_as_new"
             ? "Changes were accepted and will continue in a refreshed run."
             : "Changes were saved to this execution.";
+      if (isRerun) {
+        setSubmitMessage(statusText, "ok");
+        return;
+      }
       try {
         window.sessionStorage.setItem(
           "moonmind.temporalTaskEditing.notice",
@@ -8505,10 +8509,6 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
         );
       } catch {
         // Success handling should not depend on session storage availability.
-      }
-      if (isRerun) {
-        setSubmitMessage(statusText, "ok");
-        return;
       }
       const redirectWorkflowId =
         String(result.execution?.workflowId || "").trim() || workflowId;

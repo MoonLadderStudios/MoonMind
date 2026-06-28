@@ -3977,7 +3977,7 @@ describe.skip("Task Create Entrypoint", () => {
     expect(screen.getByRole("status").className).toContain("ok");
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
-    ).toBe("Rerun was requested and the latest execution view is ready.");
+    ).toBeNull();
   });
 
   it("submits exact terminal rerun without task or input mutation fields when unchanged", async () => {

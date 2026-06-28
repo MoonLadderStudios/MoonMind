@@ -5412,14 +5412,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       {
         onSuccess: () => {
           setActionNotice('Rerun was requested and the latest execution view is ready.');
-          try {
-            window.sessionStorage.setItem(
-              'moonmind.temporalTaskEditing.notice',
-              'Rerun was requested and the latest execution view is ready.',
-            );
-          } catch {
-            // Success handling should not depend on session storage availability.
-          }
         },
       },
     );

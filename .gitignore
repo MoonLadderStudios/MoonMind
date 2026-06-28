@@ -18,6 +18,7 @@ jobs/
 .env.*
 !.env-template
 !.env.vllm-template
+.moonmind
 
 # Codex user-specific data (sessions, logs, auth, history)
 .codex/sessions/

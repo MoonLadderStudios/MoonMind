@@ -802,6 +802,21 @@ def managed_session_runtime_family_for_runtime_id(
 
 _ASSISTANT_TEXT_METADATA_KEYS = frozenset({"assistantText", "lastAssistantText"})
 _ASSISTANT_TEXT_METADATA_MAX_BYTES = 8 * 1024
+_OBSERVABILITY_EVENTS_METADATA_KEY = "observabilityEvents"
+_OBSERVABILITY_EVENTS_MAX_BYTES = 4 * 1024
+_OBSERVABILITY_EVENT_TEXT_MAX_CHARS = 500
+_OBSERVABILITY_EVENT_METADATA_VALUE_MAX_CHARS = 500
+_OBSERVABILITY_EVENT_METADATA_MAX_KEYS = 12
+_OBSERVABILITY_EVENT_METADATA_KEYS = frozenset(
+    {
+        "activeTurnId",
+        "kind",
+        "metadata",
+        "text",
+        "turnId",
+        "type",
+    }
+)
 
 def _truncate_utf8_text(value: str, *, max_bytes: int) -> str:
     encoded = value.encode("utf-8")
@@ -823,6 +838,83 @@ def _truncate_json_text(value: str, *, max_bytes: int) -> str:
         else:
             high = midpoint - 1
     return value[:low]
+
+def _compact_observability_event_metadata(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact: dict[str, Any] = {}
+    for raw_key, raw_value in value.items():
+        if len(compact) >= _OBSERVABILITY_EVENT_METADATA_MAX_KEYS:
+            break
+        key = str(raw_key).strip()
+        if not key:
+            continue
+        if raw_value is None:
+            continue
+        if isinstance(raw_value, str):
+            text = raw_value.strip()
+            if not text:
+                continue
+            compact[key] = text[:_OBSERVABILITY_EVENT_METADATA_VALUE_MAX_CHARS]
+            continue
+        if isinstance(raw_value, (bool, int, float)):
+            compact[key] = raw_value
+            continue
+        if isinstance(raw_value, (dict, list, tuple)) and raw_value:
+            compact[key] = raw_value
+    return compact or None
+
+def _compact_observability_event(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    compact: dict[str, Any] = {}
+    for key in _OBSERVABILITY_EVENT_METADATA_KEYS:
+        raw_value = value.get(key)
+        if raw_value is None:
+            continue
+        if key in {"kind", "type", "turnId", "activeTurnId"}:
+            text = str(raw_value).strip()
+            if text:
+                compact[key] = text[:_OBSERVABILITY_EVENT_METADATA_VALUE_MAX_CHARS]
+            continue
+        if key == "text":
+            text = str(raw_value).strip()
+            if not text:
+                continue
+            compact["textLength"] = len(text)
+            if (value.get("kind") or value.get("type")) != "assistant_message_delta":
+                compact["text"] = text[:_OBSERVABILITY_EVENT_TEXT_MAX_CHARS]
+            continue
+        if key == "metadata":
+            event_metadata = _compact_observability_event_metadata(raw_value)
+            if event_metadata is not None:
+                compact[key] = event_metadata
+    return compact or None
+
+def _compact_observability_events(value: Any) -> tuple[list[dict[str, Any]], int]:
+    if not isinstance(value, list):
+        return ([], 0)
+    compact_events: list[dict[str, Any]] = []
+    for raw_event in value:
+        event = _compact_observability_event(raw_event)
+        if event is None:
+            continue
+        candidate = [*compact_events, event]
+        try:
+            encoded_size = len(
+                json.dumps(
+                    candidate,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            )
+        except (TypeError, ValueError):
+            continue
+        if encoded_size > _OBSERVABILITY_EVENTS_MAX_BYTES:
+            break
+        compact_events.append(event)
+    return (compact_events, len(value) - len(compact_events))
 
 def _compact_managed_session_metadata(
     value: dict[str, Any],
@@ -848,6 +940,16 @@ def _compact_managed_session_metadata(
             normalized[key] = compact_text
             normalized[f"{key}Truncated"] = True
             normalized[f"{key}OriginalChars"] = original_chars
+    if _OBSERVABILITY_EVENTS_METADATA_KEY in normalized:
+        compact_events, omitted_count = _compact_observability_events(
+            normalized.get(_OBSERVABILITY_EVENTS_METADATA_KEY)
+        )
+        if compact_events:
+            normalized[_OBSERVABILITY_EVENTS_METADATA_KEY] = compact_events
+        else:
+            normalized.pop(_OBSERVABILITY_EVENTS_METADATA_KEY, None)
+        if omitted_count > 0:
+            normalized["observabilityEventsOmittedCount"] = omitted_count
     return normalized
 
 class ManagedSessionPlaneContract(BaseModel):

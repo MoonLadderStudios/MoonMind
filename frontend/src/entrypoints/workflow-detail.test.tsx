@@ -2530,6 +2530,11 @@ describe('Workflow Detail Entrypoint', () => {
       );
     });
     expect(navigateTo).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/workflows/test-123/steps');
+    expect(window.location.search).toBe('?source=temporal');
+    expect(
+      window.sessionStorage.getItem('moonmind.temporalTaskEditing.notice'),
+    ).toBeNull();
     expect(
       await screen.findByText('Rerun was requested and the latest execution view is ready.'),
     ).toBeTruthy();
@@ -2949,7 +2954,8 @@ describe('Workflow Detail Entrypoint', () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     });
     await waitFor(() => {
-      expect(screen.getByText('Pause unavailable: state not eligible')).toBeTruthy();
+      const pauseItem = screen.getByRole('menuitem', { name: /Pause/ });
+      expect(within(pauseItem).getByText('state not eligible')).toBeTruthy();
     });
     fireEvent.click(screen.getByRole('menuitem', { name: /Pause/ }));
     expect(fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/signal') && init?.method === 'POST')).toBe(false);
@@ -3095,7 +3101,7 @@ describe('Workflow Detail Entrypoint', () => {
     menu = await openWorkflowActionsMenu();
     const rerunItem = within(menu).getByRole('menuitem', { name: /Rerun/ });
     expect(rerunItem.getAttribute('aria-disabled')).toBe('true');
-    expect(within(rerunItem).getByText('Rerun unavailable: action pending')).toBeTruthy();
+    expect(within(rerunItem).getByText('action pending')).toBeTruthy();
     fireEvent.click(rerunItem);
     const updateCalls = fetchSpy.mock.calls.filter(([input]) => String(input).includes('/update'));
     expect(updateCalls).toHaveLength(1);
@@ -3203,10 +3209,9 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     const menu = await openWorkflowActionsMenu();
-    expect(within(menu).getByRole('menuitem', { name: 'Edit' }).getAttribute('href')).toBe(
-      '/workflows/new?editExecutionId=test-123',
-    );
-    expect(screen.queryByText(/Edit workflow unavailable:/)).toBeNull();
+    const editItem = within(menu).getByRole('menuitem', { name: 'Edit' });
+    expect(editItem.getAttribute('href')).toBe('/workflows/new?editExecutionId=test-123');
+    expect(within(editItem).queryByText('state not eligible')).toBeNull();
   });
 
   it('shows failed workflow edit-for-rerun disabled reasons without inferring from status', async () => {
@@ -3261,11 +3266,13 @@ describe('Workflow Detail Entrypoint', () => {
     const menu = await openWorkflowActionsMenu();
     expect(screen.queryByRole('link', { name: 'Edit' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Rerun' })).toBeNull();
+    const disabledEditItem = within(menu).getByRole('menuitem', { name: 'Edit' });
     expect(
-      within(menu).getByText('Edit unavailable: original task input snapshot missing'),
+      within(disabledEditItem).getByText('original task input snapshot missing'),
     ).toBeTruthy();
+    const disabledRerunItem = within(menu).getByRole('menuitem', { name: 'Rerun' });
     expect(
-      within(menu).getByText('Rerun unavailable: original task input snapshot missing'),
+      within(disabledRerunItem).getByText('original task input snapshot missing'),
     ).toBeTruthy();
   });
 
