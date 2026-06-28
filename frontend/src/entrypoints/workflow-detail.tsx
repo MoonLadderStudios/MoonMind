@@ -5,8 +5,10 @@ import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
 import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
+import { DashboardActionDialog } from '../components/DashboardActionDialog';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
+import { LogPanel } from '../components/dashboard/LogPanel';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   readDashboardPreferences,
@@ -108,6 +110,15 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
 }
 
 type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
+type WorkflowDialogKind =
+  | 'rename'
+  | 'resume-from-failed-step'
+  | 'recover-from-selected-step'
+  | 'bypass-dependencies'
+  | 'cancel'
+  | 'force-cancel'
+  | 'reject'
+  | 'send-message';
 
 function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
   const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs|debug))?$/);
@@ -3630,7 +3641,6 @@ function StaticLogPanel({
   routes: AgentRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [wrapLines, setWrapLines] = useState(true);
 
   const streamQuery = useQuery({
     queryKey: ['agent-run-stream', agentRunId, stream],
@@ -3647,11 +3657,6 @@ function StaticLogPanel({
 
   const title = stream === 'stdout' ? 'Stdout' : 'Stderr';
 
-  const handleCopy = () => {
-    if (!streamQuery.data) return;
-    copyTextToClipboard(streamQuery.data);
-  };
-
   const downloadUrl = agentRunRoute(
     apiBase,
     stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
@@ -3660,46 +3665,17 @@ function StaticLogPanel({
   );
 
   return (
-    <details className="stack" open={expanded}>
-      <summary
-        onClick={(e) => {
-          e.preventDefault();
-          setExpanded((prev) => !prev);
-        }}
-        style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
-      >
-        <span>{title}</span>
-      </summary>
-      <div className="stack">
-        {expanded ? (
-          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-              <span className="small">Wrap lines</span>
-            </label>
-            <button className="secondary small" onClick={handleCopy}>Copy</button>
-            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-          </div>
-        ) : null}
-        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-          <pre
-            style={{
-              background: '#111',
-              color: '#e8e8e8',
-              padding: '0.75rem',
-              fontSize: '0.7rem',
-              lineHeight: 1.4,
-              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
-              wordBreak: wrapLines ? 'break-all' : 'normal',
-              borderRadius: '4px',
-              margin: 0,
-            }}
-          >
-            {streamQuery.isLoading ? 'Loading...' : streamQuery.isError ? `Error loading ${stream}` : streamQuery.data || `(no ${stream} output)`}
-          </pre>
-        </div>
-      </div>
-    </details>
+    <LogPanel
+      title={title}
+      text={streamQuery.data}
+      isLoading={streamQuery.isLoading}
+      isError={streamQuery.isError}
+      errorMessage={`Error loading ${stream}`}
+      emptyMessage={`(no ${stream} output)`}
+      downloadUrl={downloadUrl}
+      onExpandedChange={setExpanded}
+      ariaLabel={`${title} output`}
+    />
   );
 }
 
@@ -3713,7 +3689,6 @@ function DiagnosticsPanel({
   routes: AgentRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [wrapLines, setWrapLines] = useState(true);
 
   const diagQuery = useQuery({
     queryKey: ['agent-run-diagnostics', agentRunId],
@@ -3721,11 +3696,6 @@ function DiagnosticsPanel({
     enabled: !!agentRunId && expanded,
     retry: false,
   });
-
-  const handleCopy = () => {
-    if (!diagQuery.data) return;
-    copyTextToClipboard(diagQuery.data);
-  };
 
   const downloadUrl = agentRunRoute(
     apiBase,
@@ -3735,46 +3705,17 @@ function DiagnosticsPanel({
   );
 
   return (
-    <details className="stack" open={expanded}>
-      <summary
-        onClick={(e) => {
-          e.preventDefault();
-          setExpanded((prev) => !prev);
-        }}
-        style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
-      >
-        <span>Diagnostics</span>
-      </summary>
-      <div className="stack">
-        {expanded ? (
-          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-              <span className="small">Wrap lines</span>
-            </label>
-            <button className="secondary small" onClick={handleCopy}>Copy</button>
-            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-          </div>
-        ) : null}
-        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-          <pre
-            style={{
-              background: '#111',
-              color: '#e8e8e8',
-              padding: '0.75rem',
-              fontSize: '0.7rem',
-              lineHeight: 1.4,
-              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
-              wordBreak: wrapLines ? 'break-all' : 'normal',
-              borderRadius: '4px',
-              margin: 0,
-            }}
-          >
-            {diagQuery.isLoading ? 'Loading...' : diagQuery.isError ? 'Error loading diagnostics' : diagQuery.data || '(no diagnostics output)'}
-          </pre>
-        </div>
-      </div>
-    </details>
+    <LogPanel
+      title="Diagnostics"
+      text={diagQuery.data}
+      isLoading={diagQuery.isLoading}
+      isError={diagQuery.isError}
+      errorMessage="Error loading diagnostics"
+      emptyMessage="(no diagnostics output)"
+      downloadUrl={downloadUrl}
+      onExpandedChange={setExpanded}
+      ariaLabel="Diagnostics output"
+    />
   );
 }
 
@@ -4907,6 +4848,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const sourceTemporal = search.get('source') === 'temporal';
 
   const [actionError, setActionError] = useState<string | null>(null);
+  const [activeWorkflowDialog, setActiveWorkflowDialog] = useState<WorkflowDialogKind | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(() => {
     try {
       const message = window.sessionStorage.getItem(
@@ -5394,9 +5336,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onRename = () => {
     setActionError(null);
-    const title = window.prompt('New workflow title', execution?.title || '');
-    if (title === null || !title.trim()) return;
-    updateMutation.mutate({ updateName: 'SetTitle', title: title.trim() });
+    setActiveWorkflowDialog('rename');
   };
 
   const onPause = () => {
@@ -5411,15 +5351,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onResumeFromFailedStep = () => {
     setActionError(null);
-    if (!window.confirm('Resume from the failed step using the original workflow input snapshot?')) return;
-    failedStepResumeMutation.mutate();
+    setActiveWorkflowDialog('resume-from-failed-step');
   };
 
   const onRecoverFromSelectedStep = () => {
     setActionError(null);
-    const label = selectedRecoveryStep?.title || selectedRecoveryStep?.logicalStepId || 'the selected step';
-    if (!window.confirm(`Recover from ${label} using checkpoint evidence from the source run?`)) return;
-    selectedStepRecoveryMutation.mutate();
+    setActiveWorkflowDialog('recover-from-selected-step');
   };
 
   const onApprove = () => {
@@ -5427,44 +5364,24 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     signalMutation.mutate({ signalName: 'Approve', payload: {} });
   };
 
-  const onSendMessage = (message: string) => {
-    setActionError(null);
-    signalMutation.mutate({ signalName: 'SendMessage', payload: { message } });
-  };
-
   const onBypassDependencies = () => {
     setActionError(null);
-    if (!window.confirm('Bypass dependency waiting for this workflow?')) return;
-    signalMutation.mutate({
-      signalName: 'BypassDependencies',
-      payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
-    });
+    setActiveWorkflowDialog('bypass-dependencies');
   };
 
   const onCancel = () => {
     setActionError(null);
-    if (!window.confirm('Cancel this workflow?')) return;
-    cancelMutation.mutate({ action: 'cancel', graceful: true });
+    setActiveWorkflowDialog('cancel');
   };
 
   const onForceCancel = () => {
     setActionError(null);
-    if (!window.confirm('Force cancel this workflow? This terminates the Temporal workflow immediately.')) return;
-    cancelMutation.mutate({
-      action: 'cancel',
-      graceful: false,
-      reason: 'Force canceled by operator from the dashboard.',
-    });
+    setActiveWorkflowDialog('force-cancel');
   };
 
   const onReject = () => {
     setActionError(null);
-    if (!window.confirm('Reject this workflow?')) return;
-    cancelMutation.mutate({
-      action: 'reject',
-      graceful: true,
-      reason: 'Rejected by operator.',
-    });
+    setActiveWorkflowDialog('reject');
   };
 
   const actions = execution?.actions;
@@ -5599,8 +5516,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       onCancel,
       onForceCancel,
       onSendMessage: () => {
-        const message = window.prompt('Operator message', '');
-        if (message?.trim()) onSendMessage(message.trim());
+        setActionError(null);
+        setActiveWorkflowDialog('send-message');
       },
       onBypassDependencies,
       onCreateRemediation: () => {
@@ -5614,6 +5531,70 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       ...prev,
       [logicalStepId]: !prev[logicalStepId],
     }));
+  };
+  const workflowDialogSubject = execution?.title?.trim() || taskId || 'Workflow';
+  const workflowDialogId = taskId || workflowId || '';
+  const selectedRecoveryStepLabel =
+    selectedRecoveryStep?.title || selectedRecoveryStep?.logicalStepId || 'the selected step';
+  const closeWorkflowDialog = () => {
+    setActiveWorkflowDialog(null);
+    setActionError(null);
+  };
+  const confirmWorkflowDialog = (value: string) => {
+    const closeOnSuccess = { onSuccess: () => setActiveWorkflowDialog(null) };
+    switch (activeWorkflowDialog) {
+      case 'rename':
+        updateMutation.mutate(
+          { updateName: 'SetTitle', title: value },
+          closeOnSuccess,
+        );
+        break;
+      case 'resume-from-failed-step':
+        failedStepResumeMutation.mutate(undefined, closeOnSuccess);
+        break;
+      case 'recover-from-selected-step':
+        selectedStepRecoveryMutation.mutate(undefined, closeOnSuccess);
+        break;
+      case 'bypass-dependencies':
+        signalMutation.mutate(
+          {
+            signalName: 'BypassDependencies',
+            payload: { reason: value || 'Dependency wait bypassed by operator from the dashboard.' },
+          },
+          closeOnSuccess,
+        );
+        break;
+      case 'cancel':
+        cancelMutation.mutate(
+          { action: 'cancel', graceful: true, ...(value ? { reason: value } : {}) },
+          closeOnSuccess,
+        );
+        break;
+      case 'force-cancel':
+        cancelMutation.mutate(
+          {
+            action: 'cancel',
+            graceful: false,
+            reason: value || 'Force canceled by operator from the dashboard.',
+          },
+          closeOnSuccess,
+        );
+        break;
+      case 'reject':
+        cancelMutation.mutate(
+          { action: 'reject', graceful: true, reason: value || 'Rejected by operator.' },
+          closeOnSuccess,
+        );
+        break;
+      case 'send-message':
+        signalMutation.mutate(
+          { signalName: 'SendMessage', payload: { message: value } },
+          closeOnSuccess,
+        );
+        break;
+      default:
+        break;
+    }
   };
   const primaryReport = latestReportQuery.data?.artifacts[0] ?? null;
   const relatedReports = relatedReportArtifacts(artifactsQuery.data?.artifacts || []);
@@ -5679,6 +5660,143 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           <WorkflowActionsMenu items={workflowActionMenuItems} />
         </section>
       ) : null}
+
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'rename'}
+        title="Rename workflow"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence="Set a dashboard title for this workflow. Execution history, artifacts, and workflow identity stay unchanged."
+        valueLabel="Workflow title"
+        valueRequired
+        initialValue={execution?.title || ''}
+        confirmLabel={updateMutation.isPending ? 'Renaming' : 'Rename workflow'}
+        confirmPending={updateMutation.isPending}
+        disabledReason={actionDisabledReason('canSetTitle')}
+        error={activeWorkflowDialog === 'rename' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'resume-from-failed-step'}
+        title="Resume from failed step"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence="Resume from the failed step using the original workflow input snapshot."
+        confirmLabel={failedStepResumeMutation.isPending ? 'Resuming' : 'Resume workflow'}
+        confirmPending={failedStepResumeMutation.isPending}
+        disabledReason={actionDisabledReason('canResumeFromFailedStep')}
+        error={activeWorkflowDialog === 'resume-from-failed-step' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'recover-from-selected-step'}
+        title="Recover from selected step"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence={`Recover from ${selectedRecoveryStepLabel} using checkpoint evidence from the source run.`}
+        confirmLabel={selectedStepRecoveryMutation.isPending ? 'Recovering' : 'Recover workflow'}
+        confirmPending={selectedStepRecoveryMutation.isPending}
+        disabledReason={
+          selectedRecoveryStep?.eligible
+            ? null
+            : selectedRecoveryStep?.reason
+              ? formatStatusLabel(selectedRecoveryStep.reason)
+              : 'selected step is not eligible'
+        }
+        error={activeWorkflowDialog === 'recover-from-selected-step' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'bypass-dependencies'}
+        title="Bypass dependencies"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence="Bypass dependency waiting for this workflow. Downstream work may proceed before prerequisites finish."
+        valueLabel="Reason"
+        valuePlaceholder="Dependency wait bypassed by operator from the dashboard."
+        valueMultiline
+        confirmLabel={signalMutation.isPending ? 'Bypassing' : 'Bypass dependencies'}
+        confirmPending={signalMutation.isPending}
+        danger
+        disabledReason={actionDisabledReason('canBypassDependencies')}
+        error={activeWorkflowDialog === 'bypass-dependencies' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'cancel'}
+        title="Cancel workflow"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence="Request a graceful workflow cancellation. Running work may stop at the next cancellation boundary."
+        valueLabel="Reason"
+        valuePlaceholder="Optional operator reason"
+        valueMultiline
+        confirmLabel={cancelMutation.isPending ? 'Cancelling' : 'Cancel workflow'}
+        confirmPending={cancelMutation.isPending}
+        danger
+        disabledReason={actionDisabledReason('canCancel')}
+        error={activeWorkflowDialog === 'cancel' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'force-cancel'}
+        title="Force cancel workflow"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence="Terminate the Temporal workflow immediately. This is a high-risk operator action and may skip graceful cleanup."
+        valueLabel="Reason"
+        valuePlaceholder="Force canceled by operator from the dashboard."
+        valueMultiline
+        confirmLabel={cancelMutation.isPending ? 'Force cancelling' : 'Force cancel workflow'}
+        confirmPending={cancelMutation.isPending}
+        danger
+        destructive
+        confirmationText="FORCE CANCEL"
+        disabledReason={actionDisabledReason('canCancel')}
+        error={activeWorkflowDialog === 'force-cancel' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'reject'}
+        title="Reject workflow"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence="Reject the workflow and record an operator rejection outcome."
+        valueLabel="Reason"
+        valuePlaceholder="Rejected by operator."
+        valueMultiline
+        confirmLabel={cancelMutation.isPending ? 'Rejecting' : 'Reject workflow'}
+        confirmPending={cancelMutation.isPending}
+        danger
+        destructive
+        confirmationText="REJECT"
+        disabledReason={actionDisabledReason('canReject')}
+        error={activeWorkflowDialog === 'reject' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
+      <DashboardActionDialog
+        open={activeWorkflowDialog === 'send-message'}
+        title="Send operator message"
+        subject={workflowDialogSubject}
+        compactId={workflowDialogId}
+        consequence="Send a message into the workflow's operator intervention channel."
+        valueLabel="Message"
+        valueRequired
+        valueMultiline
+        confirmLabel={signalMutation.isPending ? 'Sending' : 'Send message'}
+        confirmPending={signalMutation.isPending}
+        disabledReason={actionDisabledReason('canSendMessage')}
+        error={activeWorkflowDialog === 'send-message' ? actionError : null}
+        onCancel={closeWorkflowDialog}
+        onConfirm={confirmWorkflowDialog}
+      />
 
       {actionError ? <div className="notice error">{actionError}</div> : null}
       {actionNotice ? (

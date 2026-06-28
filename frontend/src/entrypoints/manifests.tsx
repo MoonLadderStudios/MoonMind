@@ -407,82 +407,84 @@ export function ManifestsPage({ payload }: { payload: BootPayload }) {
 
       <section className="panel panel--data" aria-labelledby="manifests-recent-title">
         <h3 className="page-title" id="manifests-recent-title">Recent Runs</h3>
-        {isLoading ? (
-          <p className="loading">Loading manifest jobs...</p>
-        ) : isError ? (
-          <div className="notice error">{(error as Error).message}</div>
-        ) : (
-          <>
-            <div className="manifests-filter-grid">
-              <label>
-                Filter by status
-                <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-                  <option value="all">All statuses</option>
-                  {statusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {formatStatusLabel(status)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Filter by manifest
-                <input
-                  value={manifestFilter}
-                  onChange={(event) => setManifestFilter(event.target.value)}
-                  placeholder="Manifest name"
-                />
-              </label>
-              <label>
-                Search recent runs
-                <input
-                  value={searchFilter}
-                  onChange={(event) => setSearchFilter(event.target.value)}
-                  placeholder="Run ID, action, status, or stage"
-                />
-              </label>
-            </div>
-            <DataTable
-              ariaLabel="Recent manifest runs"
-              data={filteredRuns}
-              columns={[
-                {
-                  key: 'taskId',
-                  header: 'Run ID',
-                  render: (item: ManifestRun) => (
-                    <a href={detailHref(item)} aria-label={`Open run ${runWorkflowId(item)}`}>
-                      <code>{runWorkflowId(item)}</code>
-                    </a>
-                  ),
-                },
-                { key: 'manifestName', header: 'Manifest', render: manifestLabel },
-                { key: 'action', header: 'Action', render: runAction },
-                { key: 'status', header: 'Status', render: statusLabel },
-                {
-                  key: 'startedAt',
-                  header: 'Started',
-                  render: (item: ManifestRun) => formatWhen(item.startedAt || item.createdAt),
-                },
-                {
-                  key: 'durationSeconds',
-                  header: 'Duration',
-                  render: (item: ManifestRun) => formatDuration(item.durationSeconds),
-                },
-                {
-                  key: 'actions',
-                  header: 'Actions',
-                  render: (item: ManifestRun) => (
-                    <a href={detailHref(item)} aria-label={`View details for ${runWorkflowId(item)}`}>
-                      View details
-                    </a>
-                  ),
-                },
-              ]}
-              emptyMessage="No manifest runs exist yet. Run a registry manifest or submit inline YAML above."
-              getRowKey={(item) => runWorkflowId(item)}
-            />
-          </>
-        )}
+        {!isLoading && !isError ? (
+          <div className="manifests-filter-grid">
+            <label>
+              Filter by status
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="all">All statuses</option>
+                {statusOptions.map((status) => (
+                  <option key={status} value={status}>
+                    {formatStatusLabel(status)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Filter by manifest
+              <input
+                value={manifestFilter}
+                onChange={(event) => setManifestFilter(event.target.value)}
+                placeholder="Manifest name"
+              />
+            </label>
+            <label>
+              Search recent runs
+              <input
+                value={searchFilter}
+                onChange={(event) => setSearchFilter(event.target.value)}
+                placeholder="Run ID, action, status, or stage"
+              />
+            </label>
+          </div>
+        ) : null}
+        <DataTable
+          ariaLabel="Recent manifest runs"
+          data={filteredRuns}
+          isLoading={isLoading}
+          loadingMessage="Loading manifest jobs..."
+          isError={isError}
+          errorMessage={(error as Error | null)?.message ?? 'Failed to load manifest jobs.'}
+          columns={[
+            {
+              key: 'taskId',
+              header: 'Run ID',
+              render: (item: ManifestRun) => (
+                <a href={detailHref(item)} aria-label={`Open run ${runWorkflowId(item)}`}>
+                  <code>{runWorkflowId(item)}</code>
+                </a>
+              ),
+            },
+            { key: 'manifestName', header: 'Manifest', render: manifestLabel },
+            { key: 'action', header: 'Action', render: runAction },
+            { key: 'status', header: 'Status', render: statusLabel, sortable: true },
+            {
+              key: 'startedAt',
+              header: 'Started',
+              sortable: true,
+              sortValue: (item: ManifestRun) => item.startedAt || item.createdAt,
+              render: (item: ManifestRun) => formatWhen(item.startedAt || item.createdAt),
+            },
+            {
+              key: 'durationSeconds',
+              header: 'Duration',
+              align: 'right',
+              sortable: true,
+              render: (item: ManifestRun) => formatDuration(item.durationSeconds),
+            },
+            {
+              key: 'actions',
+              header: 'Actions',
+              render: (item: ManifestRun) => (
+                <a href={detailHref(item)} aria-label={`View details for ${runWorkflowId(item)}`}>
+                  View details
+                </a>
+              ),
+            },
+          ]}
+          emptyMessage="No manifest runs exist yet. Run a registry manifest or submit inline YAML above."
+          getRowKey={(item) => runWorkflowId(item)}
+        />
       </section>
     </div>
   );

@@ -325,6 +325,16 @@ describe('Workflow Detail Entrypoint', () => {
     return screen.getByRole('menu', { name: 'Workflow actions' });
   }
 
+  function confirmWorkflowDialog(name: string) {
+    fireEvent.click(screen.getByRole('button', { name }));
+  }
+
+  function typeWorkflowConfirmation(text: string) {
+    fireEvent.change(screen.getByLabelText(`Type ${text} to confirm`), {
+      target: { value: text },
+    });
+  }
+
   function mockWorkflowDetailSubrouteFetch() {
     const mockExecution = {
       taskId: 'test-123',
@@ -2721,8 +2731,6 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('routes menu selections through existing handlers and preserves destructive confirmations', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Updated title');
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -2760,6 +2768,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Workflow actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByLabelText('Workflow title'), {
+      target: { value: 'Updated title' },
+    });
+    confirmWorkflowDialog('Rename workflow');
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/executions/test-123/update',
@@ -2784,12 +2796,10 @@ describe('Workflow Detail Entrypoint', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Workflow actions' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Cancel' }));
-    expect(confirmSpy).toHaveBeenCalledWith('Cancel this workflow?');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(
       fetchSpy.mock.calls.some(([url, init]) => String(url).includes('/cancel') && init?.method === 'POST'),
     ).toBe(false);
-    promptSpy.mockRestore();
-    confirmSpy.mockRestore();
   });
 
   it('dismisses the Workflow actions menu without side effects and supports keyboard selection', async () => {
@@ -3063,13 +3073,15 @@ describe('Workflow Detail Entrypoint', () => {
       }
       return Promise.resolve({ ok: true, json: async () => mockExecution } as Response);
     });
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Renamed task');
-
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
     let menu = await openWorkflowActionsMenu();
     expect(within(menu).getByRole('menuitem', { name: 'Rerun' })).toBeTruthy();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByLabelText('Workflow title'), {
+      target: { value: 'Renamed task' },
+    });
+    confirmWorkflowDialog('Rename workflow');
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([input]) => String(input).includes('/update'))).toBe(true);
@@ -3082,7 +3094,6 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.click(rerunItem);
     const updateCalls = fetchSpy.mock.calls.filter(([input]) => String(input).includes('/update'));
     expect(updateCalls).toHaveLength(1);
-    promptSpy.mockRestore();
   });
 
   it('shows failed workflow Edit task and Rerun entry points when capabilities allow them', async () => {
@@ -3254,7 +3265,6 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('renders failed-step Resume separately from lifecycle Resume and submits the resume command', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -3327,6 +3337,7 @@ describe('Workflow Detail Entrypoint', () => {
     const resumeButton = within(menu).getByRole('menuitem', { name: 'Resume from failed step' });
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
     fireEvent.click(resumeButton);
+    confirmWorkflowDialog('Resume workflow');
 
     await waitFor(() => {
       expect(calls.some((call) => call.url.includes('/recover-from-failed-step'))).toBe(true);
@@ -3335,11 +3346,9 @@ describe('Workflow Detail Entrypoint', () => {
     expect(JSON.parse(String(resumeCall?.init?.body || '{}')).recoveryCheckpointRef).toBe(
       'artifact://checkpoint/source',
     );
-    confirmSpy.mockRestore();
   });
 
   it('submits selected-step recovery with pinned source identity', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const actionPayload: BootPayload = {
       ...mockPayload,
       initialData: {
@@ -3465,6 +3474,7 @@ describe('Workflow Detail Entrypoint', () => {
     ).toBe(true);
     const menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Recover from selected step' }));
+    confirmWorkflowDialog('Recover workflow');
 
     await waitFor(() => {
       expect(calls.some((call) => call.url.includes('/recover-from-selected-step'))).toBe(true);
@@ -3477,7 +3487,6 @@ describe('Workflow Detail Entrypoint', () => {
       selectedStartStepId: 'plan',
       recoveryCheckpointRef: 'artifact://checkpoint/source',
     });
-    confirmSpy.mockRestore();
   });
 
   it('omits Temporal task editing entry points when the flag is off', async () => {
@@ -5131,7 +5140,6 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('signals a manual dependency wait bypass from the dependency panel', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     const signalBodies: unknown[] = [];
     const mockExecution = {
       taskId: 'mm:dependent-1',
@@ -5197,9 +5205,9 @@ describe('Workflow Detail Entrypoint', () => {
 
     const menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Bypass Dependencies' }));
+    confirmWorkflowDialog('Bypass dependencies');
 
     await waitFor(() => {
-      expect(confirmSpy).toHaveBeenCalledWith('Bypass dependency waiting for this workflow?');
       expect(signalBodies).toEqual([
         {
           signalName: 'BypassDependencies',
@@ -6105,8 +6113,6 @@ describe('Workflow Detail Entrypoint', () => {
       interventionAudit: [],
     };
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
@@ -6143,9 +6149,12 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={actionPayload} />);
 
-    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Please use Provider Profiles.');
     let menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Send Message' }));
+    fireEvent.change(screen.getByLabelText('Message'), {
+      target: { value: 'Please use Provider Profiles.' },
+    });
+    confirmWorkflowDialog('Send message');
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -6162,6 +6171,8 @@ describe('Workflow Detail Entrypoint', () => {
 
     menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Reject' }));
+    typeWorkflowConfirmation('REJECT');
+    confirmWorkflowDialog('Reject workflow');
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -6176,9 +6187,6 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
-    promptSpy.mockRestore();
-
-    confirmSpy.mockRestore();
   });
 
   it('does not show the obsolete dependency wait skip action in the Intervention panel', async () => {
@@ -6571,8 +6579,6 @@ describe('Workflow Detail Entrypoint', () => {
       },
     };
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/cancel')) {
@@ -6618,6 +6624,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel Execution' }));
+    confirmWorkflowDialog('Cancel workflow');
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
@@ -6631,8 +6638,6 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
-
-    confirmSpy.mockRestore();
   });
 
   it('keeps polling session continuity until a projection or terminal state exists', () => {
