@@ -63,6 +63,35 @@ def test_managed_session_turn_response_metadata_allows_compact_artifact_refs() -
         "checkpointRef": "art-checkpoint",
     }
 
+def test_managed_session_turn_response_compacts_observability_event_stream() -> None:
+    response = CodexManagedSessionTurnResponse(
+        sessionState=CodexManagedSessionState(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="container-1",
+            threadId="thread-1",
+        ),
+        turnId="turn-1",
+        status="completed",
+        metadata={
+            "observabilityEvents": [
+                {
+                    "kind": "assistant_message_delta",
+                    "turnId": "turn-1",
+                    "text": "x" * 9000,
+                    "metadata": {"index": index},
+                }
+                for index in range(200)
+            ],
+        },
+    )
+
+    assert response.metadata["observabilityEventsOmittedCount"] > 0
+    first_event = response.metadata["observabilityEvents"][0]
+    assert first_event["kind"] == "assistant_message_delta"
+    assert first_event["textLength"] == 9000
+    assert "text" not in first_event
+
 def test_integration_provider_summary_rejects_large_provider_body() -> None:
     with pytest.raises(ValidationError, match="store large payloads in artifacts"):
         IntegrationCallbackRequest(
