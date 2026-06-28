@@ -1,6 +1,8 @@
 ---
-description: "Task list template for single-story Moon Spec implementation"
+description: "Task list template for single-story MoonSpec implementation"
 ---
+<!-- Generated from vendor/moonspec/bundle/templates/tasks-template.md; edit MoonSpec repo instead. -->
+
 
 # Tasks: [FEATURE NAME]
 
@@ -19,7 +21,7 @@ description: "Task list template for single-story Moon Spec implementation"
 
 - Unit tests: `[UNIT TEST COMMAND]`
 - Integration tests: `[INTEGRATION TEST COMMAND]`
-- Final verification: `/speckit.verify`
+- Final verification: `/moonspec.verify`
 
 ## Format: `[ID] [P?] Description`
 
@@ -39,7 +41,7 @@ description: "Task list template for single-story Moon Spec implementation"
   ============================================================================
   IMPORTANT: The tasks below are SAMPLE TASKS for illustration purposes only.
 
-  The /speckit.tasks command MUST replace these with actual tasks based on:
+  The /moonspec.tasks command MUST replace these with actual tasks based on:
   - The single user story from spec.md
   - The original request/design preserved in spec.md Input
   - Stable source claim mappings such as CLAIM-*, DESIGN-REQ-* or DOC-REQ-*
@@ -150,7 +152,7 @@ Examples of foundational tasks (include only what the story truly depends on):
 - [ ] TXXX [P] Expand integration coverage for operational scenarios covering DESIGN-REQ-001 in tests/integration/
 - [ ] TXXX Security hardening for CLAIM-003 in src/[location]/[file].py
 - [ ] TXXX Run quickstart.md validation (No source claim applies: validation task)
-- [ ] TXXX Run `/speckit.verify` to validate the final implementation against the original feature request and Source Packet claims (No source claim applies: validation task)
+- [ ] TXXX Run `/moonspec.verify` to validate the final implementation against the original feature request and Source Packet claims (No source claim applies: validation task)
 - [ ] TXXX Run `moonspec-doc-reconcile` for the canonical source document when `spec.md` names a canonical source under docs/ (No source claim applies: documentation reconciliation task)
 
 ---
@@ -211,7 +213,7 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 5. Write integration tests for the story and confirm they fail
 6. Implement the story until all new tests pass
 7. Validate the story independently with unit, integration, and quickstart checks
-8. Complete Phase 4: Polish and final verification with `/speckit.verify`
+8. Complete Phase 4: Polish and final verification with `/moonspec.verify`
 
 ---
 
@@ -223,7 +225,7 @@ Task: "Create [Entity2] model in src/models/[entity2].py"
 - Each in-scope requirement, scenario, success criterion, and stable source claim mapping must have task coverage
 - Each task must map to stable claim IDs or state `No source claim applies: <reason>`
 - Verify unit and integration tests fail before implementing
-- Run `/speckit.verify` after implementation to check the final result against the original request
+- Run `/moonspec.verify` after implementation to check the final result against the original request
 - Commit after each task or logical group
 - Stop at the checkpoint to validate the story independently
 - Avoid: vague tasks, optional testing, same file conflicts, multi-story phases, or hidden scope beyond the story

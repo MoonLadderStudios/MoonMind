@@ -3420,7 +3420,7 @@ export interface components {
          * @description Phases executed during the workflow automation pipeline.
          * @enum {string}
          */
-        AutomationPhase: "prepare_job" | "start_job_container" | "git_clone" | "speckit_specify" | "speckit_plan" | "speckit_tasks" | "speckit_analyze" | "speckit_implement" | "speckit_specify" | "speckit_plan" | "speckit_tasks" | "speckit_analyze" | "speckit_implement" | "commit_push" | "open_pr" | "cleanup";
+        AutomationPhase: "prepare_job" | "start_job_container" | "git_clone" | "moonspec_specify" | "moonspec_plan" | "moonspec_tasks" | "moonspec_align" | "moonspec_implement" | "moonspec_verify" | "moonspec_doc_reconcile" | "moonspec_orchestrate" | "commit_push" | "open_pr" | "cleanup";
         /**
          * AutomationPhaseState
          * @description Schema describing a single workflow automation phase execution.

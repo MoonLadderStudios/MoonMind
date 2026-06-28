@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Generated from vendor/moonspec/bundle/scripts/bash/common.sh; edit MoonSpec repo instead.
 # Common functions and variables for all scripts
 
 # Get repository root, with fallback for non-git repositories

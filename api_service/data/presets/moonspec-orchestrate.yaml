@@ -1,6 +1,7 @@
+# Generated from vendor/moonspec/bundle/presets/moonspec-orchestrate.yaml; edit MoonSpec repo instead.
 slug: moonspec-orchestrate
 title: MoonSpec Orchestrate
-description: Run the full Moon Spec lifecycle from a preselected single-story request or active feature context through specification, planning, alignment, implementation, and verification.
+description: Run the full MoonSpec lifecycle from a preselected single-story request or active feature context through specification, planning, alignment, implementation, and verification.
 scope: global
 tags:
   - moonspec
@@ -27,9 +28,9 @@ inputs:
     required: false
     default: ""
 steps:
-  - title: Create or select Moon Spec
+  - title: Create or select MoonSpec
     instructions: |-
-      Use this preselected single-story request or active feature context as the canonical Moon Spec orchestration input:
+      Use this preselected single-story request or active feature context as the canonical MoonSpec orchestration input:
       {{ inputs.feature_request }}
 
       Additional constraints:
@@ -58,11 +59,11 @@ steps:
   - title: Generate TDD task breakdown
     instructions: |-
       Run moonspec-tasks when tasks.md is missing or upstream artifacts changed.
-      Verify tasks.md covers exactly one story and includes red-first unit tests, integration tests, implementation tasks, story validation, and final /moonspec-verify work.
+      Verify tasks.md covers exactly one story and includes red-first unit tests, integration tests, implementation tasks, story validation, and final /moonspec.verify work.
     skill:
       id: moonspec-tasks
       args: {}
-  - title: Align Moon Spec artifacts
+  - title: Align MoonSpec artifacts
     instructions: |-
       Run moonspec-align after task generation.
       Let moonspec-align analyze and remediate artifact drift conservatively without manual analyze prompts, scripted user approvals, or extra Prompt A/Prompt B loops.

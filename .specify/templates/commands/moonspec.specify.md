@@ -2,13 +2,11 @@
 description: Create or update the feature specification from a natural language feature description.
 handoffs: 
   - label: Build Technical Plan
-    agent: speckit.plan
+    agent: moonspec.plan
     prompt: Create a plan for the spec. I am building with...
-  - label: Clarify Spec Requirements
-    agent: speckit.clarify
-    prompt: Clarify specification requirements
-    send: true
 ---
+<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.specify.md; edit MoonSpec repo instead. -->
+
 
 ## User Input
 
@@ -54,7 +52,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-The text the user typed after `/speckit.specify` in the triggering message **is** the feature description. Assume you always have it available in this conversation even if `{ARGS}` appears literally below. Do not ask the user to repeat it unless they provided an empty command.
+The text the user typed after `/moonspec.specify` in the triggering message **is** the feature description. Assume you always have it available in this conversation even if `{ARGS}` appears literally below. Do not ask the user to repeat it unless they provided an empty command.
 
 Given that feature description, do this:
 
@@ -100,13 +98,13 @@ Given that feature description, do this:
      }
      ```
      Write the actual resolved directory path value (for example, `specs/003-user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY`.
-     This allows downstream commands (`/speckit.plan`, `/speckit.tasks`, etc.) to locate the feature directory without relying on git branch name conventions.
+     This allows downstream commands (`/moonspec.plan`, `/moonspec.tasks`, etc.) to locate the feature directory without relying on git branch name conventions.
 
    **IMPORTANT**:
-   - You must only create one feature per `/speckit.specify` invocation
+   - You must only create one feature per `/moonspec.specify` invocation
    - The generated spec MUST contain exactly one user story
    - Do not generate P1/P2/P3 stories or multiple story sections
-   - If the input describes multiple independent stories, choose the primary story only when obvious and record the rest as out of scope; otherwise ask for clarification or direct the user to `/speckit.breakdown` when starting from a technical or declarative design
+   - If the input describes multiple independent stories, choose the primary story only when obvious and record the rest as out of scope; otherwise ask for clarification or direct the user to `/moonspec.breakdown` when starting from a technical or declarative design
    - The spec directory name and the git branch name are independent — they may be the same but that is the user's choice
    - The spec directory and file are always created by this command, never by the hook
 
@@ -151,7 +149,7 @@ Given that feature description, do this:
     9. Return: SUCCESS (spec ready for planning)
 
 6. Write the specification to SPEC_FILE using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings.
-   - Preserve the original user description verbatim in the `**Input**` field. Do not summarize or normalize it; downstream `/speckit.verify` uses it as the source request.
+   - Preserve the original user description verbatim in the `**Input**` field. Do not summarize or normalize it; downstream `/moonspec.verify` uses it as the source request.
    - Replace every `## Source Packet` placeholder with concrete values from the user request or referenced source document. If no source document or stable claim ID is available, use `original request only`, `original request`, `none`, and `none - original request has no stable claim IDs` as appropriate.
    - Produce exactly one `## User Story - ...` section.
 
@@ -196,7 +194,7 @@ Given that feature description, do this:
       
       ## Notes
       
-      - Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`
+      - Items marked incomplete require spec updates before `/moonspec.plan`
       ```
 
    b. **Run Validation Check**: Review the spec against each checklist item:
@@ -254,7 +252,7 @@ Given that feature description, do this:
    - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path
    - `SPEC_FILE` — the spec file path
    - Checklist results summary
-   - Readiness for the next phase (`/speckit.clarify` or `/speckit.plan`)
+   - Readiness for the next phase (`/moonspec.plan`)
 
 9. **Check for extension hooks**: After reporting completion, check if `.specify/extensions.yml` exists in the project root.
    - If it exists, read it and look for entries under the `hooks.after_specify` key

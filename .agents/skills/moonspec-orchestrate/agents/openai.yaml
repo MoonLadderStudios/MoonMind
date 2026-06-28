@@ -1,4 +1,5 @@
+# Generated from vendor/moonspec/bundle/skills/moonspec-orchestrate/agents/openai.yaml; edit MoonSpec repo instead.
 interface:
   display_name: "MoonSpec Orchestrate"
-  short_description: "Run the Moon Spec lifecycle end to end"
-  default_prompt: "Run the Moon Spec workflow for this feature"
+  short_description: "Run the MoonSpec lifecycle end to end"
+  default_prompt: "Run the MoonSpec workflow for this feature"

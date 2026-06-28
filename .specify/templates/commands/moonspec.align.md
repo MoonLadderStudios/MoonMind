@@ -1,9 +1,10 @@
 ---
-description: Analyze and automatically remediate Moon Spec artifact drift across spec.md, plan.md, tasks.md, and related design files without asking for user input.
+description: Analyze and automatically remediate MoonSpec artifact drift across spec.md, plan.md, tasks.md, and related design files without asking for user input.
 scripts:
-  sh: scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
-  ps: scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks
+  sh: .specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 ---
+<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.align.md; edit MoonSpec repo instead. -->
+
 
 ## User Input
 
@@ -17,7 +18,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 **Check for extension hooks (before alignment)**:
 - Check if `.specify/extensions.yml` exists in the project root.
-- If it exists, read it and look for entries under `hooks.before_align`. If none exist, also check `hooks.before_analyze` for compatibility with analyze-style extensions.
+- If it exists, read it and look for entries under `hooks.before_align`.
 - If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
@@ -49,19 +50,19 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Goal
 
-Identify inconsistencies, duplications, ambiguities, underspecified items, coverage gaps, and constitution conflicts across Moon Spec artifacts, then automatically implement conservative artifact improvements without asking the user for clarification.
+Identify inconsistencies, duplications, ambiguities, underspecified items, coverage gaps, and constitution conflicts across MoonSpec artifacts, then automatically implement conservative artifact improvements without asking the user for clarification.
 
-This command MUST run only after `/speckit.tasks` has successfully produced a complete `tasks.md`.
+This command MUST run only after `/moonspec.tasks` has successfully produced a complete `tasks.md`.
 
 ## Operating Constraints
 
-**Artifact-editing command**: This command may modify Moon Spec artifacts, including `spec.md`, `plan.md`, `tasks.md`, `research.md`, `data-model.md`, `quickstart.md`, files under `contracts/`, and feature checklists when present.
+**Artifact-editing command**: This command may modify MoonSpec artifacts, including `spec.md`, `plan.md`, `tasks.md`, `research.md`, `data-model.md`, `quickstart.md`, files under `contracts/`, and feature checklists when present.
 
 **No user input loop**: Do **not** ask the user for clarification or permission before applying remediation. Resolve uncertainty by reading project context, weighing tradeoffs, choosing conservative defaults, documenting assumptions, and applying the least surprising coherent edit.
 
 **No application implementation**: Do **not** edit application source code, production tests, migrations, or runtime configuration unless the user explicitly asks for implementation beyond artifact alignment.
 
-**Constitution Authority**: The project constitution (`/memory/constitution.md`) is **non-negotiable** within this command. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, design artifacts, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/speckit.align`.
+**Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this command. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, design artifacts, or tasks—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/moonspec.align`.
 
 ## Execution Steps
 
@@ -284,7 +285,7 @@ Include exact artifact paths. Mention remediation intentionally skipped because 
 
 **Check for extension hooks (after alignment)**:
 - Check if `.specify/extensions.yml` exists in the project root.
-- If it exists, read it and look for entries under `hooks.after_align`. If none exist, also check `hooks.after_analyze` for compatibility with analyze-style extensions.
+- If it exists, read it and look for entries under `hooks.after_align`.
 - If the YAML cannot be parsed or is invalid, skip hook checking silently and continue normally.
 - Filter out hooks where `enabled` is explicitly `false`. Treat hooks without an `enabled` field as enabled by default.
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:

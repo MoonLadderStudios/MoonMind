@@ -1,3 +1,5 @@
+<!-- Generated from vendor/moonspec/bundle/docs/MoonSpecDocumentModel.md; edit MoonSpec repo instead. -->
+
 # MoonSpec Document Model
 
 This document defines the document classes MoonSpec workflows operate on, the precedence rules between them, and the reconciliation expectation that keeps canonical documentation aligned with verified implementation. MoonSpec skills and presets reference this document instead of restating its rules.

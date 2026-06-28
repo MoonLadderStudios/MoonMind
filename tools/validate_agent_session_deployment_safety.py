@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         "--feature-dir",
         default=os.environ.get("SPECIFY_FEATURE"),
         help=(
-            "Optional active Spec Kit feature directory or name. Defaults to "
+            "Optional active MoonSpec feature directory or name. Defaults to "
             "SPECIFY_FEATURE when set, which lets local non-feature branches use "
             "the intended feature artifacts."
         ),
@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("AgentSession deployment safety validation passed; no sensitive changes.")
     if report.active_feature_dir:
-        print(f"Active Spec Kit feature: {report.active_feature_dir}")
+        print(f"Active MoonSpec feature: {report.active_feature_dir}")
     return 0
 
 if __name__ == "__main__":

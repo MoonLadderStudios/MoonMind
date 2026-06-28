@@ -1,3 +1,5 @@
+<!-- Generated from vendor/moonspec/bundle/templates/agent-file-template.md; edit MoonSpec repo instead. -->
+
 # [PROJECT NAME] Development Guidelines
 
 Auto-generated from all feature plans. Last updated: [DATE]

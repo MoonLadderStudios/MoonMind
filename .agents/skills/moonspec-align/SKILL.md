@@ -1,18 +1,20 @@
 ---
 name: moonspec-align
-description: Analyze and automatically remediate Moon Spec artifact inconsistencies across spec.md, plan.md, tasks.md, and related design files. Use when the user asks to run an automated `/speckit.analyze`-style workflow that identifies uncertainty, weighs tradeoffs in project context, edits artifacts without asking follow-up questions, resolves coverage gaps, or aligns generated Moon Spec documents before implementation.
+description: Analyze and automatically remediate MoonSpec artifact inconsistencies across spec.md, plan.md, tasks.md, and related design files. Use when the user asks to run `/moonspec.align`, identify uncertainty, weigh tradeoffs in project context, edit artifacts without asking follow-up questions, resolve coverage gaps, or align generated MoonSpec documents before implementation.
 metadata:
   required-capabilities:
     - git
 ---
+<!-- Generated from vendor/moonspec/bundle/skills/moonspec-align/SKILL.md; edit MoonSpec repo instead. -->
+
 
 # MoonSpec Align
 
-Use this skill to perform an automated analyze-to-remediate workflow for an active Moon Spec feature.
+Use this skill to perform an automated analyze-to-remediate workflow for an active MoonSpec feature.
 
 ## Scope
 
-This skill edits Moon Spec artifacts, not application feature code. Typical targets are:
+This skill edits MoonSpec artifacts, not application feature code. Typical targets are:
 
 - `spec.md`
 - `plan.md`
@@ -40,13 +42,7 @@ Do not ask the user for clarification. Resolve uncertainty by reading project co
 Run the prerequisite script from the repository root:
 
 ```bash
-scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
-```
-
-On PowerShell projects, use:
-
-```powershell
-scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks
+.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 ```
 
 Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
@@ -61,7 +57,7 @@ If shell arguments contain single quotes, use shell-safe escaping such as `'I'\'
 
 ## Extension Hooks
 
-Before analysis, check `.specify/extensions.yml` for `hooks.before_analyze`. After remediation and reporting, check it for `hooks.after_analyze`.
+Before analysis, check `.specify/extensions.yml` for `hooks.before_align`. After remediation and reporting, check it for `hooks.after_align`.
 
 If the YAML cannot be parsed or is invalid, skip hook checking silently. Ignore hooks where `enabled` is explicitly `false`; hooks without `enabled` are enabled. Do not evaluate non-empty `condition` expressions. Treat hooks with no condition, null condition, or empty condition as executable; skip hooks with non-empty conditions.
 
@@ -161,7 +157,7 @@ Constraints:
 - Do not make broad rewrites unrelated to identified findings.
 - Do not create multiple user stories inside a single `spec.md`.
 - Do not invent dependencies or architectural choices that conflict with the repo.
-- Do not edit application source code unless the user explicitly asks for implementation beyond Moon Spec artifacts.
+- Do not edit application source code unless the user explicitly asks for implementation beyond MoonSpec artifacts.
 
 ## Editing Order
 

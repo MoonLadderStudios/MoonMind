@@ -2,9 +2,11 @@
 description: Extract coverage-checked, independently testable user stories from a technical or declarative design and create one spec per story.
 handoffs:
   - label: Plan First Story
-    agent: speckit.plan
+    agent: moonspec.plan
     prompt: Create an implementation plan for the highest-priority generated spec.
 ---
+<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.breakdown.md; edit MoonSpec repo instead. -->
+
 
 ## User Input
 
@@ -50,9 +52,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-The text the user typed after `/speckit.breakdown` is the source technical or declarative design. Treat it as the authoritative source for story extraction. If the user provided a path instead of inline text, read that file and use its contents as the source design.
+The text the user typed after `/moonspec.breakdown` is the source technical or declarative design. Treat it as the authoritative source for story extraction. If the user provided a path instead of inline text, read that file and use its contents as the source design.
 
-This command turns one broad design into a complete, coverage-checked set of one-story feature specs. Each generated spec MUST follow `templates/spec-template.md` and MUST contain exactly one independently testable user story. Moon Spec uses those specs for test-driven implementation: acceptance scenarios must be concrete enough to derive unit tests and integration tests before production code is written.
+This command turns one broad design into a complete, coverage-checked set of one-story feature specs. Each generated spec MUST follow `templates/spec-template.md` and MUST contain exactly one independently testable user story. MoonSpec uses those specs for test-driven implementation: acceptance scenarios must be concrete enough to derive unit tests and integration tests before production code is written.
 
 1. **Validate input**:
    - If no design text or readable design path is provided: ERROR "No technical design provided"
@@ -116,7 +118,7 @@ This command turns one broad design into a complete, coverage-checked set of one
    - Do not create P1/P2/P3 sections inside a spec; create another spec instead
 
 8. **Fill each generated `spec.md`**:
-   - Preserve the source design verbatim in the `**Input**` field so `/speckit.verify` can compare the final implementation to the original source
+   - Preserve the source design verbatim in the `**Input**` field so `/moonspec.verify` can compare the final implementation to the original source
    - Fill exactly one `## User Story - ...` section
    - Include story-specific Summary, Goal, Independent Test, Acceptance Scenarios, Edge Cases, Functional Requirements, Key Entities if relevant, Assumptions, and Success Criteria
    - Add a `### Source Design Coverage` subsection under `## Requirements` listing the `DESIGN-REQ-*` points owned by the spec, with short explanations of how the story covers each point
@@ -143,11 +145,11 @@ This command turns one broad design into a complete, coverage-checked set of one
 
 10. **Report completion**:
     - List each generated spec path
-    - Identify the recommended first spec to run through `/speckit.plan`
+    - Identify the recommended first spec to run through `/moonspec.plan`
     - Note any specs with unresolved `[NEEDS CLARIFICATION]` markers
     - State that each generated spec contains one story only
-    - State that TDD remains the default strategy for downstream `/speckit.plan`, `/speckit.tasks`, and `/speckit.implement`
-    - State that `/speckit.verify` should be run after implementation to compare the final behavior against the original design preserved in each spec
+    - State that TDD remains the default strategy for downstream `/moonspec.plan`, `/moonspec.tasks`, and `/moonspec.implement`
+    - State that `/moonspec.verify` should be run after implementation to compare the final behavior against the original design preserved in each spec
 
 ## Post-Execution Checks
 
@@ -191,4 +193,4 @@ Check if `.specify/extensions.yml` exists in the project root.
 - Every major design point, constraint, and non-goal must be explicitly owned by at least one spec.
 - Acceptance scenarios must support downstream integration tests; functional requirements and edge cases must support downstream unit tests.
 - Do not generate tasks, implementation plans, code, or issues from this command.
-- Final implementation alignment is checked later with `/speckit.verify`.
+- Final implementation alignment is checked later with `/moonspec.verify`.

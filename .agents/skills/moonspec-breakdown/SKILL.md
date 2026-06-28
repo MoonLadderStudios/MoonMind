@@ -1,14 +1,16 @@
 ---
 name: moonspec-breakdown
-description: Extract coverage-checked, independently testable Moon Spec user stories from a technical or declarative design and write breakdown output under artifacts/story-breakdowns (gitignored). Use when the user asks to run or reproduce `/speckit.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/speckit.specify`.
+description: Extract coverage-checked, independently testable MoonSpec user stories from a technical or declarative design and write breakdown output under artifacts/story-breakdowns (gitignored). Use when the user asks to run or reproduce `/moonspec.breakdown`, split a broad design into one-story candidates, preserve source coverage, or build a coverage matrix before `/moonspec.specify`.
 metadata:
   required-capabilities:
     - git
 ---
+<!-- Generated from vendor/moonspec/bundle/skills/moonspec-breakdown/SKILL.md; edit MoonSpec repo instead. -->
+
 
 # MoonSpec Breakdown
 
-Use this skill to perform the Moon Spec breakdown workflow.
+Use this skill to perform the MoonSpec breakdown workflow.
 
 ## When To Use
 
@@ -20,7 +22,7 @@ Good inputs include:
 - A declarative design document.
 - A file path to a design artifact.
 - A trusted Jira issue brief or description when no source document path is provided.
-- A request to run or reproduce `/speckit.breakdown`.
+- A request to run or reproduce `/moonspec.breakdown`.
 
 Do not use this skill for a single natural-language feature request. Use `moonspec-specify` for one clearly scoped story.
 
@@ -31,7 +33,7 @@ Do not use this skill for a single natural-language feature request. Use `moonsp
   2. Jira issue description: if no source document path is provided and trusted Jira issue context is available from MoonMind previous outputs, use `jiraPresetBrief` or the Jira issue description/acceptance criteria from that trusted context.
   3. Workflow instructions: if neither of the above is available, use the workflow instructions or user request text as the source design.
 - If no selected input content is available after applying the preference chain, stop with: `ERROR "No technical design provided"`.
-- Preserve the original design text verbatim in the breakdown output so later `/speckit.specify` output can keep it in `spec.md` `**Input**`.
+- Preserve the original design text verbatim in the breakdown output so later `/moonspec.specify` output can keep it in `spec.md` `**Input**`.
 - Preserve the source document reference path whenever the selected source design came from a file. Use the repo-relative path when possible; otherwise use the absolute path provided by the user. If the selected source is trusted Jira context or workflow instructions, set source and story reference paths to `null` and preserve the source title/key instead.
 - The canonical source document, not the breakdown output, remains the source of truth for desired state. Breakdown output is a temporary derived view (see `docs/Workflows/MoonSpecDocumentModel.md`).
 - Do not implement, plan, generate tasks, create Jira issues, create `spec.md`, or create directories under `specs/`.
@@ -258,11 +260,11 @@ PASS - every major design point is owned by at least one story.
 Report completion with:
 
 - The JSON and markdown breakdown paths.
-- The recommended first story to run through `/speckit.specify`.
+- The recommended first story to run through `/moonspec.specify`.
 - Any stories with unresolved `[NEEDS CLARIFICATION]` markers.
 - Confirmation that no `spec.md` files or `specs/` directories were created.
-- Confirmation that TDD remains the default strategy for downstream `/speckit.plan`, `/speckit.tasks`, and `/speckit.implement`.
-- Confirmation that `/speckit.verify` should be run after implementation to compare final behavior against the original design preserved through specify.
+- Confirmation that TDD remains the default strategy for downstream `/moonspec.plan`, `/moonspec.tasks`, and `/moonspec.implement`.
+- Confirmation that `/moonspec.verify` should be run after implementation to compare final behavior against the original design preserved through specify.
 
 ## Post-Breakdown Hooks
 
@@ -313,4 +315,4 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 - Every major design point, constraint, and non-goal must be explicitly owned by at least one story candidate.
 - Acceptance scenarios must support downstream integration tests; functional requirements and edge cases must support downstream unit tests.
 - Do not generate tasks, implementation plans, code, or issues from this skill.
-- Final implementation alignment is checked later with `/speckit.verify`.
+- Final implementation alignment is checked later with `/moonspec.verify`.
