@@ -61,6 +61,31 @@ def test_docker_publish_passes_manifest_tag_into_image_build_metadata() -> None:
     assert all("date +" not in run and "VERSION_TAG=" not in run for run in merge_run_steps)
 
 
+def test_docker_publish_writes_build_summary_for_promotion() -> None:
+    # The app build mirrors the PentestGPT runner summary so an operator can copy
+    # the version tag / digest straight into the Promote GHCR image to stable
+    # workflow. `latest` stays the automatic current-build channel.
+    workflow = _load_workflow()
+    merge_steps = workflow["jobs"]["merge"]["steps"]
+
+    summary_step = next(
+        (
+            step
+            for step in merge_steps
+            if "run" in step and "GITHUB_STEP_SUMMARY" in step["run"]
+        ),
+        None,
+    )
+    assert summary_step, "merge job must write a build summary to GITHUB_STEP_SUMMARY"
+
+    run = summary_step["run"]
+    assert 'docker buildx imagetools inspect "${IMAGE_NAME}:latest"' in run
+    assert "{{.Manifest.Digest}}" in run
+    assert "${IMAGE_NAME}:${VERSION}@${DIGEST}" in run
+    assert "Promote GHCR image to stable" in run
+    assert "VERSION=\"${{ needs.metadata.outputs.version_tag }}\"" in run
+
+
 def test_docker_publish_no_longer_builds_pentestgpt_runner() -> None:
     # MM-867: PentestGPT runner publishing lives in pentestgpt-runner.yml so
     # runner-only changes do not publish the app image.

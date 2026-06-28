@@ -1,0 +1,138 @@
+name: Promote GHCR image to stable
+
+# Promotion is a registry-side retag, never a rebuild. Build workflows keep the
+# `latest` / `1.0` "current build channel" tags fresh automatically; this
+# workflow only moves the human-approved `stable` channel to an already-published
+# manifest selected by an operator. `docker buildx imagetools create` builds a
+# fresh manifest list from source manifests that already exist in GHCR, so no
+# image layers are pulled or rebuilt here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image to promote"
+        required: true
+        type: choice
+        options:
+          - app
+          - pentestgpt-runner
+      source_tag:
+        description: "Existing tag to promote, e.g. 20260624.123"
+        required: true
+        type: string
+      channel:
+        description: "Stable channel tag to update"
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+      expected_digest:
+        description: "Optional expected sha256:... digest guard"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: promote-ghcr-${{ inputs.image }}-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote image
+    runs-on: ubuntu-latest
+    environment: ghcr-stable
+
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Resolve image name
+        id: image
+        shell: bash
+        run: |
+          owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          repo="$(printf '%s' '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')"
+
+          case '${{ inputs.image }}' in
+            app)
+              image="ghcr.io/${owner}/${repo}"
+              ;;
+            pentestgpt-runner)
+              image="ghcr.io/${owner}/${repo}-pentestgpt"
+              ;;
+            *)
+              echo "::error::Unknown image '${{ inputs.image }}'"
+              exit 64
+              ;;
+          esac
+
+          echo "name=${image}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve source digest
+        id: source
+        shell: bash
+        run: |
+          image="${{ steps.image.outputs.name }}"
+          source_ref="${image}:${{ inputs.source_tag }}"
+
+          docker buildx imagetools inspect "${source_ref}"
+
+          digest="$(docker buildx imagetools inspect "${source_ref}" --format '{{.Manifest.Digest}}')"
+          if [ -z "${digest}" ]; then
+            echo "::error::Could not resolve digest for ${source_ref}"
+            exit 1
+          fi
+
+          expected="${{ inputs.expected_digest }}"
+          if [ -n "${expected}" ] && [ "${digest}" != "${expected}" ]; then
+            echo "::error::Digest mismatch. Expected ${expected}, got ${digest}"
+            exit 1
+          fi
+
+          echo "source_ref=${source_ref}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Promote manifest
+        shell: bash
+        run: |
+          image="${{ steps.image.outputs.name }}"
+          digest="${{ steps.source.outputs.digest }}"
+          channel="${{ inputs.channel }}"
+          source_tag="${{ inputs.source_tag }}"
+
+          docker buildx imagetools create \
+            -t "${image}:${channel}" \
+            -t "${image}:${channel}-${source_tag}" \
+            "${image}@${digest}"
+
+      - name: Verify promoted image and write summary
+        shell: bash
+        run: |
+          image="${{ steps.image.outputs.name }}"
+          channel="${{ inputs.channel }}"
+
+          docker buildx imagetools inspect "${image}:${channel}"
+          promoted_digest="$(docker buildx imagetools inspect "${image}:${channel}" --format '{{.Manifest.Digest}}')"
+
+          {
+            echo "### GHCR stable promotion"
+            echo ""
+            echo "- Image: \`${image}\`"
+            echo "- Source tag: \`${{ inputs.source_tag }}\`"
+            echo "- Source digest: \`${{ steps.source.outputs.digest }}\`"
+            echo "- Updated channel: \`${image}:${channel}\`"
+            echo "- Audit tag: \`${image}:${channel}-${{ inputs.source_tag }}\`"
+            echo "- Digest-pinned stable reference: \`${image}:${channel}@${promoted_digest}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
