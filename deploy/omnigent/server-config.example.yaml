@@ -1,0 +1,32 @@
+# Non-secret Omnigent server configuration example for local Docker Compose.
+# Set OMNIGENT_CONFIG to a mounted config path only when overriding defaults.
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  data_dir: /data
+
+database:
+  url_env: DATABASE_URL
+
+accounts:
+  built_in:
+    enabled: true
+    admin_email_env: OMNIGENT_BUILTIN_ADMIN_EMAIL
+    admin_password_env: OMNIGENT_BUILTIN_ADMIN_PASSWORD
+    user_email_env: OMNIGENT_BUILTIN_USER_EMAIL
+    user_password_env: OMNIGENT_BUILTIN_USER_PASSWORD
+
+oidc:
+  enabled_env: OMNIGENT_OIDC_ENABLED
+  issuer_url_env: OMNIGENT_OIDC_ISSUER_URL
+  client_id_env: OMNIGENT_OIDC_CLIENT_ID
+  client_secret_env: OMNIGENT_OIDC_CLIENT_SECRET
+  scopes_env: OMNIGENT_OIDC_SCOPES
+
+sandbox:
+  enabled: false
+  host_image_env: OMNIGENT_HOST_IMAGE
+  host_image_tag_env: OMNIGENT_HOST_IMAGE_TAG
+  network: local-network
+  workspace_root: /data/workspaces
