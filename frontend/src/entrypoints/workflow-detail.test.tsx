@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, act, fireEvent, within } from '@testing-library/react';
+import { screen, waitFor, act, fireEvent, within, cleanup } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import {
@@ -18,6 +18,10 @@ import {
 import { navigateTo } from '../lib/navigation';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
+import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+} from '../utils/dashboardPreferences';
 
 type MockVirtuosoRow = { id: string };
 type MockVirtuosoProps<Row = MockVirtuosoRow> = {
@@ -553,6 +557,136 @@ describe('Workflow Detail Entrypoint', () => {
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
       '/api/executions?source=temporal&nextPageToken=page-2&pageSize=10',
+    );
+  });
+
+  it('MM-1000 persists collapsed sidebar state across desktop detail reloads without changing the route', async () => {
+    window.history.pushState({}, 'Workspace Collapse Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const closeSidebar = await screen.findByRole('button', { name: 'Close sidebar' });
+    fireEvent.click(closeSidebar);
+
+    const openSidebar = await screen.findByRole('button', { name: 'Open workflow sidebar' });
+    expect(openSidebar).toBeTruthy();
+    expect(document.activeElement).toBe(openSidebar);
+    expect(window.location.pathname).toBe('/workflows/test-123');
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+  });
+
+  it('MM-1000 opens desktop detail routes by default unless the sidebar collapse preference is persisted', async () => {
+    window.history.pushState({}, 'Workspace Reload Default Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+
+    cleanup();
+    window.localStorage.clear();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+  });
+
+  it('MM-1000 restores the sidebar from persisted collapse without refetching selected detail data', async () => {
+    window.history.pushState({}, 'Workspace Reopen Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000, list: 60000 },
+            },
+          },
+        }}
+      />,
+    );
+
+    await screen.findByRole('button', { name: 'Open workflow sidebar' });
+    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    const detailCallsBeforeOpen = fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+    ).length;
+    fireEvent.click(screen.getByRole('button', { name: 'Open workflow sidebar' }));
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close sidebar' }));
+    expect(sidebar).toBeTruthy();
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+      ).length,
+    ).toBe(detailCallsBeforeOpen);
+  });
+
+  it('MM-1000 keeps persisted collapsed state out of mobile standalone detail routing', async () => {
+    window.history.pushState({}, 'Workspace Mobile Collapse Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(false);
+    mockWorkflowWorkspaceFetches();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+  });
+
+  it('MM-1000 expands to the full list with preserved context and focusable list target', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Expand Test',
+      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const expand = within(sidebar).getByRole('link', { name: 'Expand to full list' });
+    expect(expand.getAttribute('href')).toBe('/workflows?source=temporal&limit=10&nextPageToken=page-2');
+    expect(expand.getAttribute('class') || '').toContain('button');
+  });
+
+  it('MM-1000 uses a single-column collapsed workspace layout and reduced-motion guard', async () => {
+    window.history.pushState({}, 'Workspace Motion Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+    expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-sidebar-collapsed')).toBe(
+      'true',
+    );
+
+    const { readFileSync } = await import('node:fs');
+    const dashboardCss = readFileSync(
+      `${process.cwd()}/frontend/src/styles/dashboard.css`,
+      'utf8',
+    );
+    expect(dashboardCss).toMatch(
+      /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
     );
   });
 
