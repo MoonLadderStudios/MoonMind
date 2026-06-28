@@ -144,7 +144,7 @@ async def test_omnigent_execute_captures_streams_resources_and_diagnostics(tmp_p
     assert result.metadata["githubPrUrl"] == "https://github.com/acme/widgets/pull/42"
     assert result.metadata["childSessionIds"] == ["conv_child_1"]
     assert result.metadata["sourceIssue"] == "MM-993"
-    assert result.metadata["sourceIssueTrace"] == "MM-981"
+    assert result.metadata["sourceIssueTrace"] == "MM-993"
     assert set(result.output_refs) >= set(artifact_by_name.values())
 
     pr_metadata = _artifact_json(

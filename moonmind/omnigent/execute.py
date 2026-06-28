@@ -78,7 +78,7 @@ class _ArtifactRecorder:
                 "producer": "activity:integration.omnigent.execute",
                 "link_type": link_type,
                 "source_issue": "MM-993",
-                "source_issue_trace": "MM-981",
+                "source_issue_trace": "MM-993",
             },
         )
         self.artifacts.append(
@@ -106,7 +106,7 @@ class _ArtifactRecorder:
                 "producer": "activity:integration.omnigent.execute",
                 "link_type": link_type,
                 "source_issue": "MM-993",
-                "source_issue_trace": "MM-981",
+                "source_issue_trace": "MM-993",
             },
         )
         self.artifacts.append(
@@ -257,7 +257,7 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
         "provider": "omnigent",
         "endpointRef": "default",
         "sourceIssue": "MM-993",
-        "sourceIssueTrace": "MM-981",
+        "sourceIssueTrace": "MM-993",
         "artifactNames": [],
         "patch": {
             "status": "patch_unavailable",
@@ -298,7 +298,7 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 "normalizedStatus": "failed",
                 "diagnosticsRef": diagnostics_ref,
                 "sourceIssue": "MM-993",
-                "sourceIssueTrace": "MM-981",
+                "sourceIssueTrace": "MM-993",
             },
         )
 
@@ -461,7 +461,7 @@ async def _execute_with_client(
         {
             "schemaVersion": "v1",
             "sourceIssue": "MM-993",
-            "sourceIssueTrace": "MM-981",
+            "sourceIssueTrace": "MM-993",
             "artifacts": [
                 {
                     "name": artifact.name,
@@ -499,7 +499,7 @@ async def _execute_with_client(
         "childSessionIds": child_session_ids,
         "childSessionsRef": child_sessions_ref,
         "sourceIssue": "MM-993",
-        "sourceIssueTrace": "MM-981",
+        "sourceIssueTrace": "MM-993",
     }
     if github_pr_urls:
         metadata["githubPrUrl"] = github_pr_urls[0]
@@ -638,7 +638,7 @@ def _build_session_request(request: AgentExecutionRequest) -> dict[str, Any]:
             "moonmind.correlation_id": request.correlation_id,
             "moonmind.idempotency_key": request.idempotency_key,
             "moonmind.source_issue": "MM-993",
-            "moonmind.source_issue_trace": "MM-981",
+            "moonmind.source_issue_trace": "MM-993",
         },
         "host_type": host_type,
         "workspace": workspace,
