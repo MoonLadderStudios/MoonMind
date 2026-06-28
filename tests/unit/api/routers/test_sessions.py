@@ -178,7 +178,7 @@ def test_get_session_items_maps_events_and_artifact_refs(
             with patch(
                 "api_service.api.routers.sessions._load_agent_run_observability_events",
                 return_value=(events, "artifacts"),
-            ):
+            ) as load_events:
                 with patch(
                     "api_service.api.routers.sessions._build_agent_run_artifact_session_projection",
                     new=AsyncMock(return_value=_projection()),
@@ -196,6 +196,7 @@ def test_get_session_items_maps_events_and_artifact_refs(
         "latest_control_event",
         "latest_reset_boundary",
     }
+    assert load_events.call_args.kwargs["session_epochs"] == {2}
 
 
 def test_session_stream_delegates_to_agent_run_live_logs(
@@ -286,37 +287,24 @@ def test_post_session_event_rejects_unknown_type(
     assert "Unsupported session event type" in response.json()["detail"]
 
 
-def test_resolve_elicitation_uses_session_workflow_update(
+def test_resolve_elicitation_rejects_unsupported_facade(
     client: tuple[TestClient, AsyncMock],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _enable_session_api(monkeypatch)
     test_client, _ = client
-    temporal_client = SimpleNamespace(update_workflow=AsyncMock(return_value={"ok": True}))
 
     with patch(
         "api_service.api.routers.sessions.ManagedSessionStore.load",
         return_value=_session_record(),
     ):
-        with patch(
-            "api_service.api.routers.sessions.get_temporal_client_adapter",
-            return_value=temporal_client,
-        ):
-            response = test_client.post(
-                "/api/sessions/sess-1/elicitations/el-1/resolve",
-                json={"decision": "approve"},
-            )
+        response = test_client.post(
+            "/api/sessions/sess-1/elicitations/el-1/resolve",
+            json={"decision": "approve"},
+        )
 
-    assert response.status_code == 200
-    temporal_client.update_workflow.assert_awaited_once_with(
-        "mm:run-1:session:codex_cli",
-        "ResolveElicitation",
-        {
-            "elicitationId": "el-1",
-            "sessionEpoch": 2,
-            "resolution": {"decision": "approve"},
-        },
-    )
+    assert response.status_code == 501
+    assert "not implemented" in response.json()["detail"]
 
 
 def test_terminal_session_suppresses_elicitation_resolution_capability(

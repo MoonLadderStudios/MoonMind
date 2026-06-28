@@ -25,7 +25,6 @@ _build_agent_run_artifact_session_projection = (
 )
 _load_agent_run_observability_events = agent_runs_router._load_agent_run_observability_events
 control_agent_run_artifact_session = agent_runs_router.control_agent_run_artifact_session
-get_temporal_client_adapter = agent_runs_router.get_temporal_client_adapter
 stream_agent_run_live_logs = agent_runs_router.stream_agent_run_live_logs
 
 
@@ -179,7 +178,7 @@ async def get_session_items(
         since=since,
         streams=set(),
         kinds=set(),
-        session_epochs=set(),
+        session_epochs={record.session_epoch},
         thread_ids=set(),
     )
     events = agent_runs_router._filter_observability_events(
@@ -309,23 +308,9 @@ async def resolve_session_elicitation(
             status_code=status.HTTP_409_CONFLICT,
             detail="This managed session is not available for elicitation resolution.",
         )
-    client = get_temporal_client_adapter()
-    workflow_id = agent_runs_router._agent_run_session_workflow_id(
-        agent_run_id=record.agent_run_id,
-        runtime_id=record.runtime_id,
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "Session elicitation resolution is not implemented for managed sessions."
+        ),
     )
-    update_payload = {
-        "elicitationId": elicitation_id,
-        "sessionEpoch": record.session_epoch,
-        "resolution": dict(payload),
-    }
-    result = await client.update_workflow(
-        workflow_id,
-        "ResolveElicitation",
-        update_payload,
-    )
-    return {
-        "elicitationId": elicitation_id,
-        "status": "resolved",
-        "result": result,
-    }
