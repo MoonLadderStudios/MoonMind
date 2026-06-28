@@ -314,6 +314,7 @@ describe('Workflow Detail Entrypoint', () => {
     virtuosoPropsSpy.mockClear();
     window.history.pushState({}, 'Test', '/workflows/test-123/steps?source=temporal');
     window.sessionStorage.clear();
+    window.localStorage.clear();
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
     vi.mocked(navigateTo).mockReset();
@@ -1065,6 +1066,35 @@ describe('Workflow Detail Entrypoint', () => {
 
     // Raw Temporal facts are scoped to Debug only — not the Overview preview cards.
     expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
+  });
+
+  it('MM-964 hides the Debug tab when the debug-visibility preference is turned off and remembers it', async () => {
+    window.history.pushState({}, 'Debug Pref Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    const view = renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    // Debug tab is visible by default.
+    expect(await screen.findByRole('link', { name: 'Debug' })).toBeTruthy();
+
+    const toggle = screen.getByLabelText('Show debug details') as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    fireEvent.click(toggle);
+
+    // The Debug tab disappears and the preference is persisted.
+    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
+    expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toContain(
+      '"debugFieldsVisible":false',
+    );
+
+    // Simulate a reload: a fresh mount keeps the Debug tab hidden.
+    view.unmount();
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+    await screen.findByRole('link', { name: 'Overview' });
+    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
+    expect(
+      (screen.getByLabelText('Show debug details') as HTMLInputElement).checked,
+    ).toBe(false);
   });
 
   it('returns null for route templates with missing parameters', () => {

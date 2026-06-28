@@ -7,6 +7,14 @@ import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
+import {
+  TOGGLEABLE_WORKFLOW_LIST_COLUMNS,
+  readDashboardPreferences,
+  resetDashboardPreferences,
+  updateDashboardPreferences,
+  type ToggleableWorkflowListColumn,
+  type WorkflowListDensity,
+} from '../utils/dashboardPreferences';
 
 const POLL_MS_DEFAULT = 5000;
 
@@ -750,7 +758,22 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const filterTriggerRef = useRef<HTMLElement | null>(null);
   // Field whose first control should receive focus when the drawer opens.
   const pendingDrawerFocusRef = useRef<FilterField | null>(null);
-  const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
+  // MM-964: local-first dashboard preferences. Read once on mount; mutations are
+  // mirrored back to localStorage so they survive reload. An explicit `limit` in
+  // the URL still wins over the stored page-size preference so shared links keep
+  // their page size.
+  const initialPrefs = useMemo(() => readDashboardPreferences(), []);
+  const [density, setDensity] = useState<WorkflowListDensity>(initialPrefs.workflowListDensity);
+  const [columnVisibility, setColumnVisibility] = useState(
+    initialPrefs.workflowListColumnVisibility,
+  );
+  const [liveUpdatesPref, setLiveUpdatesPref] = useState(initialPrefs.liveUpdatesEnabled);
+  const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
+  const prefsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [pageSize, setPageSize] = useState(() => {
+    const limitParam = initial.get('limit');
+    return limitParam !== null ? parsePageSize(limitParam) : initialPrefs.workflowListPageSize;
+  });
   const [listCursor, setListCursor] = useState<string | null>(() =>
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
   );
@@ -812,7 +835,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
-    refetchInterval: listEnabled && !drawerOpen && desktopFilterField === null ? listPollMs : false,
+    refetchInterval:
+      listEnabled && liveUpdatesPref && !drawerOpen && desktopFilterField === null
+        ? listPollMs
+        : false,
   });
 
   // Facets enrich the include/exclude dropdowns. The mobile drawer can show
@@ -851,6 +877,57 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setListCursor(null);
     setCursorStack([]);
   }, []);
+
+  // MM-964: column visibility. The workflow title column is the primary anchor
+  // and is always shown; every other column honors the stored preference.
+  const isColumnVisible = useCallback(
+    (field: string): boolean => {
+      if (field === 'title') return true;
+      if (!(TOGGLEABLE_WORKFLOW_LIST_COLUMNS as readonly string[]).includes(field)) return true;
+      return columnVisibility[field as ToggleableWorkflowListColumn] !== false;
+    },
+    [columnVisibility],
+  );
+  const visibleColumns = useMemo(
+    () => TABLE_COLUMNS.filter((column) => isColumnVisible(column.field)),
+    [isColumnVisible],
+  );
+
+  const handleDensityChange = useCallback((next: WorkflowListDensity) => {
+    setDensity(next);
+    updateDashboardPreferences({ workflowListDensity: next });
+  }, []);
+
+  const handleToggleColumn = useCallback((field: ToggleableWorkflowListColumn, visible: boolean) => {
+    setColumnVisibility((current) => {
+      const next = { ...current, [field]: visible };
+      updateDashboardPreferences({ workflowListColumnVisibility: next });
+      return next;
+    });
+  }, []);
+
+  const handleLiveUpdatesChange = useCallback((enabled: boolean) => {
+    setLiveUpdatesPref(enabled);
+    updateDashboardPreferences({ liveUpdatesEnabled: enabled });
+  }, []);
+
+  const handlePageSizeChange = useCallback(
+    (size: number) => {
+      setPageSize(size);
+      updateDashboardPreferences({ workflowListPageSize: size });
+      resetToFirstPage();
+    },
+    [resetToFirstPage],
+  );
+
+  const handleResetPreferences = useCallback(() => {
+    const defaults = resetDashboardPreferences();
+    setDensity(defaults.workflowListDensity);
+    setColumnVisibility(defaults.workflowListColumnVisibility);
+    setLiveUpdatesPref(defaults.liveUpdatesEnabled);
+    setPageSize(defaults.workflowListPageSize);
+    resetToFirstPage();
+  }, [resetToFirstPage]);
 
   const restoreTriggerFocus = useCallback(() => {
     const trigger = filterTriggerRef.current;
@@ -930,6 +1007,19 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     document.addEventListener('mousedown', onMouseDown);
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [closeDesktopFilter, desktopFilterField]);
+
+  // MM-964: close the dashboard preferences popover on an outside click.
+  useEffect(() => {
+    if (!prefsMenuOpen) return;
+    const onMouseDown = (event: MouseEvent) => {
+      const root = prefsMenuRef.current;
+      if (root && !root.contains(event.target as Node)) {
+        setPrefsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [prefsMenuOpen]);
 
   useEffect(() => {
     if (desktopFilterField === null) return;
@@ -1028,9 +1118,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     <div className="queue-results-toolbar workflow-list-results-footer">
       <div className="workflow-list-footer-live">
         <span className="small">
-          {listEnabled
-            ? `Live updates enabled. Polling every ${Math.round(listPollMs / 1000)}s`
-            : 'Live updates unavailable while the list is disabled.'}
+          {!listEnabled
+            ? 'Live updates unavailable while the list is disabled.'
+            : liveUpdatesPref
+              ? `Live updates enabled. Polling every ${Math.round(listPollMs / 1000)}s`
+              : 'Live updates paused.'}
         </span>
         {sortedItems.length > 0 ? (
           <span className="small workflow-list-sort-scope-note">{CURRENT_PAGE_SORT_NOTICE}</span>
@@ -1040,10 +1132,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         <PageSizeSelector
           pageSize={pageSize}
           disabled={!listEnabled}
-          onPageSizeChange={(size) => {
-            setPageSize(size);
-            resetToFirstPage();
-          }}
+          onPageSizeChange={handlePageSizeChange}
         />
         <div className="workflow-list-footer-page-summary" aria-label="Pagination summary">
           <span className="small">{pageRangeSummary}</span>
@@ -1597,6 +1686,93 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
             ) : null}
           </div>
+          <div className="workflow-list-view-options" ref={prefsMenuRef}>
+            <button
+              type="button"
+              className="secondary workflow-list-view-options-trigger"
+              aria-haspopup="dialog"
+              aria-expanded={prefsMenuOpen}
+              onClick={() => setPrefsMenuOpen((open) => !open)}
+            >
+              View options
+            </button>
+            {prefsMenuOpen ? (
+              <div
+                className="workflow-list-view-options-popover"
+                role="dialog"
+                aria-label="Workflow list view options"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.stopPropagation();
+                    setPrefsMenuOpen(false);
+                  }
+                }}
+              >
+                <fieldset className="workflow-list-view-options-group">
+                  <legend>Density</legend>
+                  <label className="checkbox">
+                    <input
+                      type="radio"
+                      name="workflow-list-density"
+                      checked={density === 'comfortable'}
+                      onChange={() => handleDensityChange('comfortable')}
+                    />
+                    Comfortable
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="radio"
+                      name="workflow-list-density"
+                      checked={density === 'compact'}
+                      onChange={() => handleDensityChange('compact')}
+                    />
+                    Compact
+                  </label>
+                </fieldset>
+                <fieldset className="workflow-list-view-options-group">
+                  <legend>Columns</legend>
+                  {TABLE_COLUMNS.filter((column) =>
+                    (TOGGLEABLE_WORKFLOW_LIST_COLUMNS as readonly string[]).includes(column.field),
+                  ).map((column) => (
+                    <label className="checkbox" key={column.field}>
+                      <input
+                        type="checkbox"
+                        checked={isColumnVisible(column.field)}
+                        onChange={(event) =>
+                          handleToggleColumn(
+                            column.field as ToggleableWorkflowListColumn,
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      {column.label}
+                    </label>
+                  ))}
+                </fieldset>
+                <fieldset className="workflow-list-view-options-group">
+                  <legend>Live updates</legend>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={liveUpdatesPref}
+                      onChange={(event) => handleLiveUpdatesChange(event.target.checked)}
+                    />
+                    Poll for live updates
+                  </label>
+                </fieldset>
+                <div className="workflow-list-view-options-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={handleResetPreferences}
+                    aria-label="Reset dashboard preferences to defaults"
+                  >
+                    Reset to defaults
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </header>
         {isLoading ? (
           <p className="loading workflow-list-empty-message">Loading workflows...</p>
@@ -1616,17 +1792,17 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           </>
         ) : (
           <>
-            <div className="queue-table-wrapper" data-layout="table">
+            <div className="queue-table-wrapper" data-layout="table" data-density={density}>
                 <table>
                   <colgroup>
-                    {TABLE_COLUMNS.map((column) => (
+                    {visibleColumns.map((column) => (
                       <col key={column.field} className={column.colClassName} />
                     ))}
                     {actionsEnabled ? <col className="queue-table-column-actions" /> : null}
                   </colgroup>
                   <thead>
                     <tr>
-                      {TABLE_COLUMNS.map(({ field, label, sortable }) => {
+                      {visibleColumns.map(({ field, label, sortable }) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
                         const filterField = TABLE_COLUMN_FILTER_FIELDS[field];
                         const filterValue = filterField ? filterSummary(filterField, filters) : '';
@@ -1761,25 +1937,35 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             </a>
                             <code className="workflow-list-row-id">{rowWorkflowId(row)}</code>
                           </td>
-                          <td className="queue-table-cell-status">
-                            <ExecutionStatusPill status={row.rawState || row.state || row.status} />
-                          </td>
-                          <td className="queue-table-cell-next-action">
-                            {actionItems.length > 0 ? (
-                              actionItems.map((item) => (
-                                <div key={item} className="workflow-list-next-action-item small">
-                                  {item}
-                                </div>
-                              ))
-                            ) : (
-                              <span className="workflow-list-next-action-empty">—</span>
-                            )}
-                          </td>
-                          <td className="queue-table-cell-compact">{row.repository || '—'}</td>
-                          <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
-                          <td className="queue-table-cell-date" title={formatWhen(updatedAt)}>
-                            {formatRelative(updatedAt)}
-                          </td>
+                          {isColumnVisible('status') ? (
+                            <td className="queue-table-cell-status">
+                              <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                            </td>
+                          ) : null}
+                          {isColumnVisible('nextAction') ? (
+                            <td className="queue-table-cell-next-action">
+                              {actionItems.length > 0 ? (
+                                actionItems.map((item) => (
+                                  <div key={item} className="workflow-list-next-action-item small">
+                                    {item}
+                                  </div>
+                                ))
+                              ) : (
+                                <span className="workflow-list-next-action-empty">—</span>
+                              )}
+                            </td>
+                          ) : null}
+                          {isColumnVisible('repository') ? (
+                            <td className="queue-table-cell-compact">{row.repository || '—'}</td>
+                          ) : null}
+                          {isColumnVisible('targetRuntime') ? (
+                            <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
+                          ) : null}
+                          {isColumnVisible('updatedAt') ? (
+                            <td className="queue-table-cell-date" title={formatWhen(updatedAt)}>
+                              {formatRelative(updatedAt)}
+                            </td>
+                          ) : null}
                           {actionsEnabled ? (
                             <td className="queue-table-cell-actions">
                               <WorkflowRowActionsMenu

@@ -16,6 +16,7 @@ describe('Workflows Entrypoint', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    window.localStorage.clear();
     window.history.pushState({}, 'Test', '/workflows');
     fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
@@ -1793,5 +1794,111 @@ describe('Workflows Entrypoint', () => {
     const cardNextAction = document.querySelector('.queue-card-next-action');
     expect(cardNextAction?.textContent).toContain('Intervention requested');
     expect(cardNextAction?.textContent).toContain('Blocked by 1 prerequisite');
+  });
+});
+
+// MM-964: the workflow list density and column-visibility preferences are local
+// first, survive reload, and can be reset to defaults.
+describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
+  const mockPayload: BootPayload = {
+    page: 'workflow-list',
+    apiBase: '/api',
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    window.history.pushState({}, 'Test', '/workflows');
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'succeeded',
+            rawState: 'succeeded',
+            repository: 'octo/widgets',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+  });
+
+  const openViewOptions = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+
+  it('applies and persists the compact density preference across reload', async () => {
+    const view = renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'comfortable',
+    );
+
+    openViewOptions();
+    fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'compact',
+    );
+    expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toContain('compact');
+
+    // Simulate a reload by remounting a fresh instance that reads localStorage.
+    view.unmount();
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'compact',
+    );
+  });
+
+  it('hides a column when its visibility preference is turned off and remembers it', async () => {
+    const view = renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    // Repository column is visible by default.
+    expect(
+      screen.getByRole('button', { name: /Repository\. .*sort/i }),
+    ).toBeTruthy();
+
+    // The repository value is present in the desktop table before hiding.
+    expect(document.querySelector('table')?.textContent).toContain('octo/widgets');
+
+    openViewOptions();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Repository' }));
+
+    // Header and cell for the repository column are removed from the table.
+    // (The responsive mobile card layout is a separate surface and is out of
+    // scope for the column-visibility preference.)
+    expect(screen.queryByRole('button', { name: /Repository\. .*sort/i })).toBeNull();
+    expect(document.querySelector('table')?.textContent).not.toContain('octo/widgets');
+
+    view.unmount();
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+    expect(screen.queryByRole('button', { name: /Repository\. .*sort/i })).toBeNull();
+  });
+
+  it('resets density and column preferences back to defaults', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    openViewOptions();
+    fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Repository' }));
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'compact',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Reset dashboard preferences/i }));
+
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'comfortable',
+    );
+    expect(screen.getByRole('button', { name: /Repository\. .*sort/i })).toBeTruthy();
+    expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toBeNull();
   });
 });

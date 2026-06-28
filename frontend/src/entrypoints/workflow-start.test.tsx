@@ -13457,6 +13457,40 @@ describe("Task Create MM-641 authoring validation", () => {
     expect(within(controls).queryByLabelText("Max Attempts")).toBeNull();
   });
 
+  it("remembers the guided vs expert (Advanced mode) default across reload (MM-964)", async () => {
+    const findExecutionControls = () =>
+      document.querySelector<HTMLElement>(
+        '[data-canonical-create-section="Execution controls"]',
+      ) as HTMLElement;
+
+    const view = renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+    await screen.findByLabelText("Instructions");
+
+    const advancedToggle = within(findExecutionControls()).getByLabelText(
+      "Advanced mode",
+    ) as HTMLInputElement;
+    // Default is guided mode (Advanced off) with no stored preference.
+    expect(advancedToggle.checked).toBe(false);
+
+    fireEvent.click(advancedToggle);
+    expect(
+      (within(findExecutionControls()).getByLabelText("Advanced mode") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(window.localStorage.getItem("moonmind.dashboard.preferences")).toContain(
+      '"createExpertMode":true',
+    );
+
+    // Simulate a reload: a fresh mount reads the persisted expert default.
+    view.unmount();
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+    await screen.findByLabelText("Instructions");
+    expect(
+      (within(findExecutionControls()).getByLabelText("Advanced mode") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+  });
+
   it("ignores hidden Priority and Max Attempts values when Advanced mode is off", async () => {
     renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
 

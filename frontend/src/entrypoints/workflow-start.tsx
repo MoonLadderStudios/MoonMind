@@ -8,6 +8,10 @@ import { SkillCombobox } from "../components/SkillCombobox";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+} from "../utils/dashboardPreferences";
+import {
   buildTemporalArtifactEditUpdatePayload,
   buildRuntimeCommandVersionWarnings,
   buildTemporalSubmissionDraftFromExecution,
@@ -5252,7 +5256,13 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
   const stepsRef = useRef<StepState[]>(steps);
   const [nextStepNumber, setNextStepNumber] = useState(2);
-  const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(false);
+  // MM-964: the create page remembers the operator's guided vs expert default.
+  // The preference seeds the initial value; it is only re-persisted on an
+  // explicit toggle of the Advanced mode checkbox, never on the programmatic
+  // enabling that happens while reconstructing a preset's advanced step values.
+  const [showAdvancedStepOptions, setShowAdvancedStepOptions] = useState(
+    () => readDashboardPreferences().createExpertMode,
+  );
   const [runtime, setRuntime] = useState(defaultRuntime);
   const [model, setModel] = useState(
     String(
@@ -11798,9 +11808,12 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             <input
               type="checkbox"
               checked={showAdvancedStepOptions}
-              onChange={(event) =>
-                setShowAdvancedStepOptions(event.target.checked)
-              }
+              onChange={(event) => {
+                setShowAdvancedStepOptions(event.target.checked);
+                updateDashboardPreferences({
+                  createExpertMode: event.target.checked,
+                });
+              }}
             />
             Advanced mode
           </label>
