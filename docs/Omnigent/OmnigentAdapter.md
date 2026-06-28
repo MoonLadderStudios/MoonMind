@@ -294,7 +294,7 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
       "session": {
         "hostType": "managed",
         "hostId": null,
-        "workspacePath": null,
+        "workspace": "https://github.com/org/repo#main",
         "title": "Implement auth fix",
         "labels": {},
         "modelOverride": null,
@@ -303,8 +303,6 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
         "collaborationMode": null
       },
       "workspaceContext": {
-        "repository": "https://github.com/org/repo",
-        "branch": "main",
         "includeInPrompt": true
       },
       "prompt": {
@@ -340,8 +338,8 @@ All Omnigent-specific execution selection lives under `parameters.omnigent`.
 | `agent.harnessOverride` | Omnigent session harness override | Optional; only for compatible Omnigent agents. |
 | `session.hostType` | `managed` or `external` | `managed` means Omnigent provisions host/sandbox. |
 | `session.hostId` | Omnigent external host id | Must be absent/null for `managed`; required for external-host launch flows that need a host-bound runner. |
-| `session.workspacePath` | Absolute path on an external Omnigent host | Must be absent/null for `managed`; required when `hostId` is set. |
-| `workspaceContext` | Repository/branch context for prompts and artifact metadata | Not sent as Omnigent `workspace` when `hostType=managed`. |
+| `session.workspace` | Omnigent workspace selector | For managed sessions, optional git repository URL with optional `#branch`; for external hosts, absolute path on that host. |
+| `workspaceContext` | Additional prompt/artifact metadata | May mirror repository context, but it is not a checkout mechanism; repo work must use `session.workspace` for managed sessions. |
 | `session.terminalLaunchArgs` | Native Claude/Codex launch flags | Must be bounded and non-secret. |
 | `prompt.text` | Inline prompt | Prefer artifact-backed prompt for large inputs. |
 | `prompt.instructionRef` | MoonMind artifact ref with prompt/instructions | Activity reads artifact and posts text. |
@@ -355,10 +353,11 @@ The adapter must validate the session target before calling Omnigent.
 
 Rules:
 
-- For `hostType="managed"`, omit `host_id` and `workspace` in the Omnigent `POST /v1/sessions` payload. Omnigent server chooses both, and upstream rejects caller-provided `host_id` / `workspace` for managed session creates.
-- For `hostType="managed"`, `session.hostId` and `session.workspacePath` must be null or absent. Repository hints belong in `workspaceContext` or top-level `workspaceSpec`, and may be included in the first prompt, but they are not sent as Omnigent `workspace`.
-- For `hostType="external"`, `hostId` and `workspacePath` are allowed and may be translated to Omnigent `host_id` and `workspace`.
-- A repository URL in `workspaceSpec.repository` or `workspaceContext.repository` is prompt/artifact context unless a future Omnigent API explicitly accepts repository URLs for managed session creation.
+- For `hostType="managed"`, omit `host_id` but preserve a repository checkout by sending `workspace` when it is a git repository URL, optionally with `#<branch>`.
+- For `hostType="managed"`, `session.hostId` must be null or absent. `session.workspace` must be either null or a git repository URL. Local/absolute host paths are invalid because the sandbox does not exist before Omnigent provisions it.
+- For managed repository tasks, `workspaceSpec.repository`, `workspaceContext.repository`, or equivalent workflow repository input must be normalized into `session.workspace` before session creation. Keeping it only as prompt/artifact context creates an empty sandbox and is not sufficient for code-editing tasks.
+- If `hostType="managed"` and no repository URL is available, Omnigent creates an empty server workspace. The adapter should allow that only for non-repository tasks or when the request explicitly opts into an empty workspace.
+- For `hostType="external"`, `hostId` and `workspace` are allowed and `workspace` must be an absolute path on that external Omnigent host. Repository URLs belong to managed session creation, not external-host launch.
 
 ### 7.5 Target resolution order
 
@@ -459,7 +458,7 @@ AgentRunResult
 
 The activity creates an Omnigent session using JSON session creation.
 
-Representative managed-session payload:
+Representative managed repository-session payload:
 
 ```json
 {
@@ -472,13 +471,14 @@ Representative managed-session payload:
     "moonmind.idempotency_key": "..."
   },
   "host_type": "managed",
+  "workspace": "https://github.com/org/repo#main",
   "model_override": null,
   "reasoning_effort": "high",
   "terminal_launch_args": []
 }
 ```
 
-For `hostType=managed`, Omnigent server chooses/provisions the host and workspace. The adapter must not send `host_id` or `workspace` for managed session creation.
+For `hostType=managed`, Omnigent server provisions the host. When `workspace` is a git repository URL, the server clones it inside the sandbox and stores the cloned directory as the session workspace. When `workspace` is omitted/null, Omnigent creates an empty server workspace. The adapter must not send `host_id` for managed session creation, and must not send local host paths as managed `workspace` values.
 
 Representative external-host payload:
 
@@ -907,7 +907,8 @@ Rules:
 | Omnigent server returns `429` / rate limited | `integration_error` | Classify as rate-limited; honor `Retry-After` and use bounded retry, not immediate retry. |
 | Authentication failure to Omnigent | `integration_error` | Non-retryable until config fixed. |
 | Unknown Omnigent agent name | `user_error` | Bad request/target selection. |
-| Invalid managed-session create fields | `user_error` | Example: `hostType=managed` with `host_id` / `workspace`. |
+| Invalid managed-session create fields | `user_error` | Example: `hostType=managed` with `host_id`, or managed `workspace` set to a local path rather than a repository URL. |
+| Managed repo task without managed repository URL | `user_error` | Repository edit tasks must provide a managed `session.workspace` repository URL or explicitly opt into an empty workspace. |
 | Session create 4xx | `user_error` or `integration_error` | Depends on validation vs auth/config. |
 | Managed host provisioning failure | `system_error` or `integration_error` | Preserve Omnigent error body in diagnostics. |
 | Runtime/harness not configured | `integration_error` | Omnigent host/provider config issue. |
@@ -943,6 +944,7 @@ Example:
     "omnigentAgentId": "ag_abc123",
     "omnigentAgentName": "codex-native-ui",
     "hostType": "managed",
+    "workspace": "https://github.com/org/repo#main",
     "githubPrUrl": "https://github.com/org/repo/pull/123",
     "captureManifestRef": "art_capture_manifest",
     "patchRef": "art_github_pr_diff"
@@ -1061,7 +1063,7 @@ Additional requirements:
 - stricter ownership and cleanup policies;
 - child-session mapping in MoonMind run ledger;
 - per-message idempotency records, not only first-message records;
-- re-evaluate whether external sessions may carry `host_id` / `workspace` while managed sessions still omit both;
+- preserve the same workspace contract: managed sessions may use repository-URL `workspace`, while external sessions use host-path `workspace`;
 - if streaming-gateway execution should surface non-terminal states, change `MoonMind.AgentRun` to consume a status-bearing streaming result instead of treating every returned result as completed.
 
 ---
@@ -1096,8 +1098,11 @@ This helper must write to MoonMind's artifact API or artifact worker surface, no
 ### 23.1 Unit tests
 
 - target block validation;
-- managed-session rejection of caller-provided host/workspace fields;
-- external-session translation of `hostId` / `workspacePath` to Omnigent `host_id` / `workspace`;
+- managed-session rejection of caller-provided `hostId`;
+- managed-session rejection of local/absolute path workspaces;
+- managed repository URL preservation as Omnigent `workspace`;
+- managed repo task failure when repository context is prompt-only and no managed `session.workspace` is supplied;
+- external-session translation of `hostId` / host-path `workspace` to Omnigent `host_id` / `workspace`;
 - endpoint config resolution;
 - single canonical `agentId=omnigent` registration;
 - rejection of provider-specific top-level aliases;
@@ -1140,26 +1145,29 @@ Scenarios:
 1. successful run with text output;
 2. failed run;
 3. managed host launch delay;
-4. managed session create omits `host_id` and `workspace`;
-5. external session create may include `host_id` and `workspace`;
-6. stream disconnect and snapshot reconciliation;
-7. elicitation request and approval;
-8. changed files and current-file harvest without a diff endpoint;
-9. patch unavailable diagnostic when no GitHub PR/host helper/future diff capability exists;
-10. child session event capture;
-11. cancellation before completion;
-12. idempotent retry after session create but before first message;
-13. idempotent retry after first message response but before terminal result;
-14. crash-window retry with `posting` state and snapshot reconciliation;
-15. ambiguous `posting` reconciliation fails closed rather than returning `intervention_requested` from execute;
-16. conflicting first-message digest under the same idempotency key.
+4. managed session create includes repository URL `workspace` when repository work is requested;
+5. managed session create rejects local path `workspace` and caller-provided `host_id`;
+6. managed session create may omit `workspace` only for explicit empty-workspace tasks;
+7. external session create may include `host_id` and absolute-path `workspace`;
+8. stream disconnect and snapshot reconciliation;
+9. elicitation request and approval;
+10. changed files and current-file harvest without a diff endpoint;
+11. patch unavailable diagnostic when no GitHub PR/host helper/future diff capability exists;
+12. child session event capture;
+13. cancellation before completion;
+14. idempotent retry after session create but before first message;
+15. idempotent retry after first message response but before terminal result;
+16. crash-window retry with `posting` state and snapshot reconciliation;
+17. ambiguous `posting` reconciliation fails closed rather than returning `intervention_requested` from execute;
+18. conflicting first-message digest under the same idempotency key.
 
 ### 23.4 Live smoke tests
 
 Run against a real Omnigent server with a disposable repository and a sandbox host. Validate:
 
 - session creation;
-- managed session creation does not include caller-provided workspace;
+- managed repository session creation includes `workspace` as a repository URL;
+- managed path workspaces and `host_id` are rejected before or by Omnigent;
 - host provisioning;
 - Claude or Codex launch selected through `parameters.omnigent`;
 - stream capture;
@@ -1194,6 +1202,7 @@ The stable implementation milestones are:
 6. *(Resolved — see §10.1.)* A shared `externalSession` table is not introduced in v1; `omnigent_external_runs` stays dedicated, and promotion to a shared table is deferred until a second provider needs durable session mapping.
 7. *(Resolved — fail closed.)* Ambiguous `posting` retries do not return a non-terminal state from the streaming execute activity. They raise/retry while the reconciliation grace period remains, then fail with `failureClass=integration_error` or an equivalent non-retryable integration error once exhausted.
 8. Should MoonMind require a host-side helper for first-class patch artifacts, or is GitHub PR post-processing sufficient for v1?
+9. Should empty managed workspaces require an explicit `allowEmptyWorkspace` flag, or is absence of `workspaceSpec.repository` sufficient?
 
 ---
 
