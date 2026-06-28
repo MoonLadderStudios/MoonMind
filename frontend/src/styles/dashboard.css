@@ -4353,6 +4353,38 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: rgb(14 165 233 / 0.08);
 }
 
+.live-logs-row-user {
+  margin: 0.35rem 0.75rem;
+  border-left-color: rgb(59 130 246);
+  border-radius: 0.45rem;
+  background: rgb(59 130 246 / 0.12);
+}
+
+.live-logs-row-assistant {
+  margin: 0.25rem 0.75rem;
+  border-left-color: rgb(20 184 166);
+  border-radius: 0.45rem;
+  background: rgb(20 184 166 / 0.09);
+}
+
+.live-logs-row-tool {
+  margin: 0.25rem 0.75rem;
+  border: 1px solid rgb(148 163 184 / 0.24);
+  border-left: 4px solid rgb(148 163 184 / 0.82);
+  border-radius: 0.45rem;
+  background: rgb(148 163 184 / 0.08);
+}
+
+.live-logs-row-turn {
+  border-left-color: rgb(168 85 247);
+  background: rgb(168 85 247 / 0.08);
+}
+
+.live-logs-row-turn-failure {
+  border-left-color: rgb(239 68 68);
+  background: rgb(239 68 68 / 0.11);
+}
+
 .live-logs-row-boundary {
   margin: 0.5rem 0.6rem;
   border: 1px solid rgb(var(--mm-warn) / 0.8);
@@ -4367,6 +4399,27 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.live-logs-row-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.live-logs-treatment-label {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.14rem 0.5rem;
+  background: rgb(255 255 255 / 0.12);
+  color: rgb(255 255 255 / 0.9);
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .live-logs-kind-chip {

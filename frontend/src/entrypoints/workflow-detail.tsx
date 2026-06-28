@@ -2115,7 +2115,19 @@ type TimelineRow = {
   turnId: string | null;
   activeTurnId: string | null;
   metadata: Record<string, unknown>;
-  rowType: 'output' | 'system' | 'session' | 'approval' | 'publication' | 'boundary' | 'fallback';
+  rowType:
+    | 'output'
+    | 'system'
+    | 'session'
+    | 'approval'
+    | 'publication'
+    | 'boundary'
+    | 'user'
+    | 'assistant'
+    | 'tool'
+    | 'turn'
+    | 'turn-failure'
+    | 'fallback';
 };
 
 function splitLogText(content: string): string[] {
@@ -2171,18 +2183,59 @@ function parseArtifactToRows(content: string): TimelineRow[] {
   });
 }
 
-function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
-  if (event.kind === 'session_reset_boundary') {
+const USER_MESSAGE_EVENT_KINDS = new Set(['user_message_submitted']);
+const ASSISTANT_MESSAGE_EVENT_KINDS = new Set([
+  'assistant_message_delta',
+  'assistant_message_completed',
+  'assistant_message',
+]);
+const TOOL_CALL_EVENT_KINDS = new Set([
+  'tool_call_started',
+  'tool_call_output',
+  'tool_call_completed',
+  'tool_call_failed',
+]);
+const TURN_BOUNDARY_EVENT_KINDS = new Set(['turn_started', 'turn_completed']);
+const TURN_FAILURE_EVENT_KINDS = new Set(['turn_failed', 'turn_interrupted']);
+const OPERATOR_ATTENTION_EVENT_KINDS = new Set([
+  'approval_requested',
+  'approval_granted',
+  'approval_denied',
+  'intervention_requested',
+  'intervention_resolved',
+]);
+
+export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
+  const kind = event.kind ?? '';
+  if (kind === 'session_reset_boundary') {
     return 'boundary';
+  }
+  if (USER_MESSAGE_EVENT_KINDS.has(kind)) {
+    return 'user';
+  }
+  if (ASSISTANT_MESSAGE_EVENT_KINDS.has(kind)) {
+    return 'assistant';
+  }
+  if (TOOL_CALL_EVENT_KINDS.has(kind)) {
+    return 'tool';
+  }
+  if (TURN_FAILURE_EVENT_KINDS.has(kind)) {
+    return 'turn-failure';
+  }
+  if (TURN_BOUNDARY_EVENT_KINDS.has(kind)) {
+    return 'turn';
+  }
+  if (OPERATOR_ATTENTION_EVENT_KINDS.has(kind)) {
+    return 'approval';
   }
   if (event.stream === 'system') {
     return 'system';
   }
   if (event.stream === 'session') {
-    if ((event.kind ?? '').startsWith('approval_')) {
+    if (kind.startsWith('approval_') || kind.startsWith('intervention_')) {
       return 'approval';
     }
-    if ((event.kind ?? '').endsWith('_published')) {
+    if (kind.endsWith('_published')) {
       return 'publication';
     }
     return 'session';
@@ -2287,6 +2340,31 @@ function renderTimelineRowText(row: TimelineRow, timelineViewerEnabled: boolean)
     return renderAnsiFragments(row.text);
   }
   return row.text;
+}
+
+function getTimelineRowTreatmentLabel(row: TimelineRow): string | null {
+  if (row.rowType === 'user') {
+    return 'User turn';
+  }
+  if (row.rowType === 'assistant') {
+    return 'Assistant output';
+  }
+  if (row.rowType === 'tool') {
+    if (row.kind === 'tool_call_failed') return 'Tool failed';
+    if (row.kind === 'tool_call_completed') return 'Tool completed';
+    if (row.kind === 'tool_call_output') return 'Tool output';
+    return 'Tool call';
+  }
+  if (row.rowType === 'approval') {
+    return row.kind?.startsWith('intervention_') ? 'Operator intervention' : 'Operator approval';
+  }
+  if (row.rowType === 'turn-failure') {
+    return row.kind === 'turn_interrupted' ? 'Turn interrupted' : 'Turn failed';
+  }
+  if (row.rowType === 'turn') {
+    return row.kind === 'turn_completed' ? 'Turn completed' : 'Turn started';
+  }
+  return null;
 }
 
 function getCopyableRowText(row: TimelineRow): string {
@@ -2724,8 +2802,15 @@ function renderTimelineRow(
       key={row.id}
       className={rowClasses}
     >
-      {timelineViewerEnabled && row.kind ? (
-        <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+      {timelineViewerEnabled && (row.kind || getTimelineRowTreatmentLabel(row)) ? (
+        <div className="live-logs-row-heading">
+          {getTimelineRowTreatmentLabel(row) ? (
+            <span className="live-logs-treatment-label">{getTimelineRowTreatmentLabel(row)}</span>
+          ) : null}
+          {row.kind ? (
+            <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+          ) : null}
+        </div>
       ) : null}
       <div
         className="live-logs-row-text"
