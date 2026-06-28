@@ -8507,8 +8507,8 @@ describe('LiveLogsPanel', () => {
         sequence: 6,
         timestamp: '2026-04-08T00:00:06Z',
         stream: 'session',
-        kind: 'approval_granted',
-        text: 'Approval granted by operator.',
+        kind: 'approval_resolved',
+        text: 'Approval resolved by operator.',
         turn_id: 'turn-mm-1014',
         metadata: { requestId: 'approval-1' },
       },
@@ -8561,7 +8561,7 @@ describe('LiveLogsPanel', () => {
       expect(screen.getByText('exec_command')).toBeTruthy();
       expect(screen.getByText('MM-1014 evidence line')).toBeTruthy();
       expect(screen.getByText('Approval requested for command execution.')).toBeTruthy();
-      expect(screen.getByText('Approval granted by operator.')).toBeTruthy();
+      expect(screen.getByText('Approval resolved by operator.')).toBeTruthy();
       expect(screen.getByText('Session cleared before the next turn.')).toBeTruthy();
     });
 

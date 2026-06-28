@@ -2354,6 +2354,7 @@ const TURN_BOUNDARY_EVENT_KINDS = new Set(['turn_started', 'turn_completed']);
 const TURN_FAILURE_EVENT_KINDS = new Set(['turn_failed', 'turn_interrupted']);
 const OPERATOR_ATTENTION_EVENT_KINDS = new Set([
   'approval_requested',
+  'approval_resolved',
   'approval_granted',
   'approval_denied',
   'intervention_requested',
@@ -2566,7 +2567,7 @@ function chatSessionReducer(state: ChatSessionReducerState, row: TimelineRow): C
         ? 'granted'
         : row.kind === 'approval_denied'
           ? 'denied'
-          : row.kind === 'intervention_resolved'
+          : row.kind === 'approval_resolved' || row.kind === 'intervention_resolved'
             ? 'resolved'
             : null;
 
