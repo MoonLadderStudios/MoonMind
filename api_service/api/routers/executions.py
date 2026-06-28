@@ -6331,8 +6331,60 @@ _PR_RESOLVER_SELECTOR_ERROR = (
     "pr-resolver workflow requires a structured PR selector: "
     "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
     "payload.workflow.tool.inputs.pr/branch, or "
-    "payload.workflow.git.startingBranch."
+    "payload.workflow.git.startingBranch, or a non-default "
+    "payload.workflow.git.branch."
 )
+_PR_RESOLVER_DEFAULT_BRANCH_NAMES = frozenset(
+    {"main", "master", "develop", "development", "trunk"}
+)
+
+
+def _pr_resolver_default_branch_names(
+    *payloads: Mapping[str, Any],
+) -> set[str]:
+    names = set(_PR_RESOLVER_DEFAULT_BRANCH_NAMES)
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            continue
+        for key in (
+            "defaultBranch",
+            "default_branch",
+            "repositoryDefaultBranch",
+            "repository_default_branch",
+        ):
+            value = str(payload.get(key) or "").strip().lower()
+            if value:
+                names.add(value)
+    return names
+
+
+def _pr_resolver_authored_branch_selector(
+    *,
+    task_payload: Mapping[str, Any],
+    normalized_task: Mapping[str, Any],
+    task_inputs: Mapping[str, Any],
+    normalized_inputs: Mapping[str, Any],
+    task_git: Mapping[str, Any],
+    normalized_git: Mapping[str, Any],
+) -> str:
+    default_names = _pr_resolver_default_branch_names(
+        task_payload,
+        normalized_task,
+        task_inputs,
+        normalized_inputs,
+        task_git,
+        normalized_git,
+    )
+    for value in (
+        task_git.get("branch"),
+        normalized_git.get("branch"),
+        task_payload.get("branch"),
+        normalized_task.get("branch"),
+    ):
+        text = str(value or "").strip()
+        if text and text.lower() not in default_names:
+            return text
+    return ""
 
 
 def _pr_resolver_structured_selector(
@@ -6375,6 +6427,14 @@ def _pr_resolver_structured_selector(
         normalized_inputs.get("branch"),
         tool_inputs.get("branch"),
         skill_inputs.get("branch"),
+        _pr_resolver_authored_branch_selector(
+            task_payload=task_payload,
+            normalized_task=normalized_task,
+            task_inputs=task_inputs,
+            normalized_inputs=normalized_inputs,
+            task_git=task_git,
+            normalized_git=normalized_git,
+        ),
     ):
         text = str(value or "").strip()
         if text:
