@@ -445,7 +445,11 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
-  function mockWorkflowWorkspaceFetches() {
+  function mockWorkflowWorkspaceFetches({
+    rows,
+  }: {
+    rows?: Array<Record<string, unknown>>;
+  } = {}) {
     const mockExecution = {
       taskId: 'test-123',
       workflowId: 'test-123',
@@ -473,7 +477,7 @@ describe('Workflow Detail Entrypoint', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            items: [
+            items: rows ?? [
               {
                 workflowId: 'test-123',
                 taskId: 'test-123',
@@ -739,6 +743,35 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
+  it('MM-1002 keeps sidebar API and full-list navigation within allowlisted workflow context', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Sidebar Security Test',
+      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira&selectedWorkflowId=test-123&sort=status&token=secret&unsafe=1',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
+      '/api/executions?source=temporal&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira&pageSize=10',
+    );
+    const anotherWorkflow = await within(sidebar).findByRole('link', { name: /Another workflow/i });
+    expect(anotherWorkflow.getAttribute('href')).toBe(
+      '/workflows/test-456?source=temporal&limit=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira',
+    );
+    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
+    expect(expandLink.getAttribute('href')).toBe(
+      '/workflows?limit=10&repoContains=moon%2Frepo&integration=jira&returnFromWorkflowDetail=1',
+    );
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('selectedWorkflowId=');
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('sort=');
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('token=');
+    expect(expandLink.getAttribute('href')).not.toContain('token=');
+  });
+
   it('preserves API-style pageSize state when fetching the workspace sidebar', async () => {
     window.history.pushState(
       {},
@@ -865,6 +898,36 @@ describe('Workflow Detail Entrypoint', () => {
     expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
     expect(expand.getAttribute('href')).not.toContain('unsafe=');
     expect(expand.getAttribute('class') || '').toContain('button');
+  });
+
+  it('MM-1002 renders sidebar titles, repositories, runtimes, and statuses as React text', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Text Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches({
+      rows: [
+        {
+          workflowId: 'test-123',
+          taskId: 'test-123',
+          title: '<img src=x onerror=alert(1)>',
+          status: '<script>alert(1)</script>',
+          state: '<script>alert(1)</script>',
+          rawState: '<script>alert(1)</script>',
+          repository: '<b>owner/repo</b>',
+          targetRuntime: 'codex_cli',
+          createdAt: '2026-04-09T00:00:00Z',
+        },
+      ],
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByText('<img src=x onerror=alert(1)>')).toBeTruthy();
+    expect(within(sidebar).getByText('<b>owner/repo</b>')).toBeTruthy();
+    expect(within(sidebar).getByText('Codex CLI')).toBeTruthy();
+    expect(within(sidebar).getAllByText('<script>alert(1)</script>').length).toBeGreaterThan(0);
+    expect(within(sidebar).queryByRole('img')).toBeNull();
+    expect(sidebar.querySelector('script')).toBeNull();
   });
 
   it('MM-1005 expands to the plain workflow list from the desktop workspace when no list context exists', async () => {

@@ -20,7 +20,11 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
-import { workflowListContextParams, workflowListHrefFromContext } from '../lib/workflowListContext';
+import {
+  workflowDetailHref,
+  workflowListContextParams,
+  workflowListHrefFromContext,
+} from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -245,21 +249,25 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
 function WorkflowSidebarRow({
   row,
   activeWorkflowId,
+  search,
   pinned = false,
 }: {
   row: WorkflowWorkspaceRow;
   activeWorkflowId: string;
+  search: URLSearchParams;
   pinned?: boolean;
 }) {
   const workflowId = workflowWorkspaceRowId(row);
   const active = workflowId === activeWorkflowId;
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
+  const repository = row.repository?.trim();
+  const runtime = formatRuntimeLabel(row.targetRuntime);
   return (
     <li>
       <a
         className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
-        href={`/workflows/${encodeURIComponent(workflowId)}?source=temporal`}
+        href={workflowDetailHref(workflowId, search)}
         aria-current={active ? 'page' : undefined}
         data-active={active ? 'true' : 'false'}
         data-pinned={pinned ? 'true' : 'false'}
@@ -269,6 +277,11 @@ function WorkflowSidebarRow({
           <span className="workflow-workspace-sidebar-title">{title}</span>
           <span className="workflow-workspace-sidebar-meta">
             {formatWorkflowWorkspaceRelativeTime(workflowWorkspaceRowUpdatedAt(row))}
+          </span>
+          <span className="workflow-workspace-sidebar-labels" aria-label="Workflow metadata">
+            {repository ? <span>{repository}</span> : null}
+            {runtime !== '—' ? <span>{runtime}</span> : null}
+            <span>{formatStatusLabel(status)}</span>
           </span>
         </span>
         <ExecutionStatusPill status={status} />
@@ -306,11 +319,13 @@ function WorkflowSidebarControls({
 function WorkflowSidebarList({
   rows,
   activeWorkflowId,
+  search,
   ariaLabel = 'Workflow navigation list',
   pinned = false,
 }: {
   rows: WorkflowWorkspaceRow[];
   activeWorkflowId: string;
+  search: URLSearchParams;
   ariaLabel?: string;
   pinned?: boolean;
 }) {
@@ -328,6 +343,7 @@ function WorkflowSidebarList({
           key={workflowWorkspaceRowId(row)}
           row={row}
           activeWorkflowId={activeWorkflowId}
+          search={search}
           pinned={pinned}
         />
       ))}
@@ -341,6 +357,7 @@ function WorkflowSidebar({
   filteredRows,
   pinnedCurrentRow,
   fullListHref,
+  search,
   closeButtonRef,
   onClose,
 }: {
@@ -349,6 +366,7 @@ function WorkflowSidebar({
   filteredRows: WorkflowWorkspaceRow[];
   pinnedCurrentRow: WorkflowWorkspaceRow | null;
   fullListHref: string;
+  search: URLSearchParams;
   closeButtonRef: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
 }) {
@@ -374,6 +392,7 @@ function WorkflowSidebar({
         <WorkflowSidebarList
           rows={[pinnedCurrentRow]}
           activeWorkflowId={workflowId}
+          search={search}
           ariaLabel="Current workflow"
           pinned
         />
@@ -381,7 +400,7 @@ function WorkflowSidebar({
       {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
         <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
       ) : null}
-      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} />
+      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} search={search} />
     </aside>
   );
 }
@@ -447,7 +466,7 @@ function WorkflowWorkspaceShell({
     <div
       className="workflow-workspace-shell"
       data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
-      data-jira-issue="MM-997 MM-999 MM-1000 MM-1005"
+      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005"
       data-source-issue="MM-975"
     >
       {sidebarOpen ? (
@@ -457,6 +476,7 @@ function WorkflowWorkspaceShell({
           filteredRows={filteredRows}
           pinnedCurrentRow={pinnedCurrentRow}
           fullListHref={fullListHref}
+          search={search}
           closeButtonRef={closeButtonRef}
           onClose={() => {
             updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });

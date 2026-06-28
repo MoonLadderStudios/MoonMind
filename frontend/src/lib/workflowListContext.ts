@@ -15,6 +15,7 @@ const WORKFLOW_LIST_CONTEXT_ALLOWLIST = new Set([
   'repoContains',
   'repoExact',
   'repo',
+  'integration',
   'targetRuntimeIn',
   'targetRuntimeNotIn',
   'targetRuntimeBlank',
