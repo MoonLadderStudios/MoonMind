@@ -3371,7 +3371,7 @@ async def test_controller_send_turn_maps_reliable_native_markers_and_turn_failur
         "user_message_submitted",
         "turn_started",
         "runtime_status",
-        "tool_started",
+        "tool_call_started",
         "turn_failed",
     ]
     assert emitted[-1].kwargs["metadata"] == {
@@ -5723,6 +5723,7 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
     tmp_path: Path,
 ) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
+    session_supervisor = AsyncMock(spec=ManagedSessionSupervisor)
     store.save(
         CodexManagedSessionRecord(
             sessionId="sess-1",
@@ -5768,6 +5769,7 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
         codex_volume_name="codex_auth_volume",
         workspace_root="/tmp/agent_jobs",
         session_store=store,
+        session_supervisor=session_supervisor,
         command_runner=_fake_runner,
     )
 
@@ -5787,6 +5789,25 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
     assert updated.metadata["lastAssistantTextTruncated"] is True
     assert updated.metadata["lastAssistantTextOriginalChars"] == 8190
     assert len(str(updated.metadata["lastAssistantText"]).encode("utf-8")) <= 4096
+    emitted_kinds = [
+        call.kwargs.get("kind")
+        for call in session_supervisor.emit_session_event.call_args_list
+    ]
+    emitted_metadata = [
+        call.kwargs.get("metadata")
+        for call in session_supervisor.emit_session_event.call_args_list
+    ]
+    assert emitted_kinds == [
+        "user_message_submitted",
+        "turn_started",
+        "assistant_message",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    assert emitted_metadata[2]["contentLength"] == 8190
+    assert emitted_metadata[3]["contentLength"] == 8190
+    assert emitted_metadata[4]["assistantMessageLength"] == 8190
+    assert all("assistantText" not in metadata for metadata in emitted_metadata)
 
 @pytest.mark.asyncio
 async def test_controller_interrupt_turn_preserves_failed_runtime_result(

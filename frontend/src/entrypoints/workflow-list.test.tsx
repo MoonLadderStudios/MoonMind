@@ -1705,6 +1705,108 @@ describe('Workflows Entrypoint', () => {
     expect(detailCallsBefore).toHaveLength(0);
   });
 
+  it('promotes "View options" into the Actions header and drops the Filters row on desktop', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+        },
+      },
+    };
+
+    // Force the desktop breakpoint (jsdom has no matchMedia, so the component
+    // otherwise defaults to the mobile layout).
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    );
+
+    try {
+      renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+      await screen.findAllByText('Example task');
+
+      // The results header row is dropped on desktop, so the Filters trigger is
+      // gone in favor of the per-column filter buttons.
+      expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
+
+      // The single "View options" control is now the icon button hosted to the
+      // right of the Actions column header.
+      const viewOptions = screen.getByRole('button', { name: 'View options' });
+      expect(viewOptions.closest('th')?.classList.contains('queue-table-actions-header')).toBe(
+        true,
+      );
+
+      // It still opens the preferences popover from its new location.
+      fireEvent.click(viewOptions);
+      expect(screen.getByRole('radio', { name: 'Compact' })).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps a desktop entry point to the advanced filters drawer after dropping the Filters row', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+        },
+      },
+    };
+
+    // Force the desktop breakpoint (jsdom has no matchMedia, so the component
+    // otherwise defaults to the mobile layout).
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    );
+
+    try {
+      renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+      await screen.findAllByText('Example task');
+
+      // The top-row Filters trigger is gone, but the full filter surface must
+      // stay reachable on desktop: the per-column buttons only cover
+      // TABLE_COLUMN_FILTER_FIELDS, so drawer-only fields (ID, Skill, Scheduled,
+      // Created, Finished) would otherwise be unreachable. The entry point moves
+      // to a compact icon in the Actions header.
+      expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
+      const advancedFilters = screen.getByRole('button', { name: 'Advanced filters' });
+      expect(
+        advancedFilters.closest('th')?.classList.contains('queue-table-actions-header'),
+      ).toBe(true);
+
+      // Opening it surfaces the advanced filters drawer, including a drawer-only
+      // field (Skill) that has no per-column filter button.
+      fireEvent.click(advancedFilters);
+      const drawer = screen.getByRole('dialog', { name: 'Advanced filters' });
+      expect(within(drawer).getByRole('region', { name: 'Skill filter' })).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // MM-952: scan-first desktop table information architecture.
   it('leads the desktop table with a title-first Workflow column and secondary compact id', async () => {
     fetchSpy.mockResolvedValue({
