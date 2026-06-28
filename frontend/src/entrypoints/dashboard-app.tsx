@@ -1,6 +1,10 @@
 import { Suspense, lazy, type ComponentType, type ReactNode } from 'react';
+import { QueryErrorResetBoundary } from '@tanstack/react-query';
 
 import type { BootPayload } from '../boot/parseBootPayload';
+import { validatePageBoot } from '../boot/pageBootSchemas';
+import { DashboardErrorState } from '../components/DashboardErrorState';
+import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBoundary';
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
@@ -52,6 +56,21 @@ function UnknownPage({ page }: { page: string }) {
   );
 }
 
+function ConfigurationErrorPage({ page, message }: { page: string; message: string }) {
+  return (
+    <DashboardErrorState
+      title="Dashboard configuration error"
+      description={
+        <>
+          The <code>{page}</code> page received invalid boot data and cannot be displayed. Please
+          reload, and contact support if the problem persists.
+        </>
+      }
+      detail={message}
+    />
+  );
+}
+
 function AppShell({
   dataWidePanel,
   children,
@@ -76,19 +95,37 @@ function AppShell({
   );
 }
 
+function PageContent({ payload }: { payload: BootPayload }) {
+  if (!isSupportedPage(payload.page)) {
+    return <UnknownPage page={payload.page} />;
+  }
+
+  const validation = validatePageBoot(payload.page, payload);
+  if (!validation.ok) {
+    return <ConfigurationErrorPage page={payload.page} message={validation.message} />;
+  }
+
+  const LazyPage = PAGE_COMPONENTS[payload.page];
+
+  return (
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <DashboardRouteErrorBoundary onReset={reset}>
+          <Suspense fallback={<LoadingPage />}>
+            <LazyPage payload={payload} />
+          </Suspense>
+        </DashboardRouteErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
+  );
+}
+
 export function DashboardApp({ payload }: { payload: BootPayload }) {
   const layout = readSharedLayout(payload);
-  const LazyPage = isSupportedPage(payload.page) ? PAGE_COMPONENTS[payload.page] : null;
 
   return (
     <AppShell dataWidePanel={layout.dataWidePanel === true}>
-      {LazyPage ? (
-        <Suspense fallback={<LoadingPage />}>
-          <LazyPage payload={payload} />
-        </Suspense>
-      ) : (
-        <UnknownPage page={payload.page} />
-      )}
+      <PageContent payload={payload} />
     </AppShell>
   );
 }

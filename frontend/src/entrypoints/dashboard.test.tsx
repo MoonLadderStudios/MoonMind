@@ -178,6 +178,23 @@ describe('Dashboard shared entry', () => {
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
   });
 
+  it('shows a styled configuration error for invalid page boot data (MM-960)', async () => {
+    renderWithClient(
+      <DashboardApp
+        payload={{
+          page: 'workflows-home',
+          apiBase: '/api',
+          initialData: { layout: { dataWidePanel: 'wide' } },
+        } as unknown as BootPayload}
+      />,
+    );
+
+    expect(await screen.findByText('Dashboard configuration error')).toBeTruthy();
+    expect(screen.getByRole('alert')).toBeTruthy();
+    // The invalid page is not rendered.
+    expect(screen.queryByRole('heading', { name: 'Workflows' })).toBeNull();
+  });
+
   it('does not render operational metrics on the workflows home dashboard', async () => {
     renderWithClient(<DashboardApp payload={{ page: 'workflows-home', apiBase: '/api' }} />);
 
