@@ -20,6 +20,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { workflowListHrefFromContext } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -5148,6 +5149,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
+  const expandToFullListHref = useMemo(
+    () => workflowListHrefFromContext(search, { markDetailReturn: true }),
+    [search],
+  );
   const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
   const sourceTemporal = search.get('source') === 'temporal';
 
@@ -5901,6 +5906,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         <div className="toolbar-controls">
+          <a className="button secondary" href={expandToFullListHref}>
+            Expand to full list
+          </a>
           <span className="small">
             Live updates enabled. Polling every {Math.round(detailPoll / 1000)}s
           </span>

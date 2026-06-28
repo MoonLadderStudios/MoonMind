@@ -660,6 +660,41 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('reconstructs the full workflow list from allowlisted detail-route context (MM-998, MM-975)', async () => {
+    window.history.pushState(
+      {},
+      'Detail Context Test',
+      '/workflows/test-123?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+    );
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText('Focused route summary');
+    const expandLink = screen.getByRole('link', { name: 'Expand to full list' });
+    expect(expandLink.getAttribute('href')).toBe(
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=25&returnFromWorkflowDetail=1',
+    );
+    expect(expandLink.getAttribute('href')).not.toContain('source=');
+    expect(expandLink.getAttribute('href')).not.toContain('sort=');
+    expect(expandLink.getAttribute('href')).not.toContain('nextPageToken=');
+    expect(expandLink.getAttribute('href')).not.toContain('selectedWorkflowId=');
+    expect(expandLink.getAttribute('href')).not.toContain('unsafe=');
+    expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe(
+      '/workflows/test-123/steps?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+    );
+  });
+
+  it('expands to plain workflow list when no preserved list context exists (MM-998, MM-975)', async () => {
+    window.history.pushState({}, 'Plain Detail Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText('Focused route summary');
+    expect(screen.getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe('/workflows');
+  });
+
   it('renders recovery evidence from the failed step execution detail payload', async () => {
     window.history.pushState({}, 'Recovery Evidence Test', '/workflows/test-123/steps?source=temporal');
     const failedStepsSnapshot = {
