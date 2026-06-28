@@ -5,6 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { SkillCombobox } from "../components/SkillCombobox";
+import { DashboardErrorDetails } from "../components/dashboard/DashboardErrorDetails";
 import { useLiquidGL } from "../lib/liquidGL/useLiquidGL";
 import { navigateTo } from "../lib/navigation";
 import {
@@ -5366,8 +5367,19 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   >(null);
   const submitMessage = submitMessageState?.text ?? null;
   const submitMessageTone = submitMessageState?.tone ?? "error";
+  // Structured technical diagnostics for the most recent submit failure. When
+  // set, the friendly submitMessage is rendered through DashboardErrorDetails
+  // so endpoint/raw-error detail stays behind a disclosure instead of being
+  // dumped into the main error text (MM-959).
+  const [submitErrorDetail, setSubmitErrorDetail] = useState<{
+    endpoint?: string | null;
+    status?: number | string | null;
+    requestId?: string | null;
+    rawError?: string | null;
+  } | null>(null);
   const setSubmitMessage = useCallback(
     (text: string | null, tone: "error" | "pending" = "error") => {
+      setSubmitErrorDetail(null);
       setSubmitMessageState(text === null ? null : { text, tone });
     },
     [],
@@ -10009,11 +10021,14 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           },
         );
         setSubmitMessage(
-          "Failed to reach the workflow start API. " +
-            `Endpoint: ${temporalCreateEndpoint}. ` +
-            "This usually means the API service is unreachable, a CORS policy is blocking the request, " +
-            "or there is a network connectivity issue. Check the browser console for more details.",
+          "Couldn't reach the workflow start service. This usually means the " +
+            "API is unreachable, a network/connectivity issue, or a CORS policy " +
+            "is blocking the request. Check your connection and try again.",
         );
+        setSubmitErrorDetail({
+          endpoint: temporalCreateEndpoint,
+          rawError: `${failure.name}: ${failure.message}`,
+        });
       } else {
         setSubmitMessage(failure.message);
       }
@@ -10123,7 +10138,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
   }
 
   return (
-    <div className="stack workflow-start-page">
+    <div className="stack workflow-start-page dashboard-surface dashboard-surface--page">
       <section data-canonical-create-section="Header" aria-label="Header">
         <h2 className="page-title">{pageTitle}</h2>
       </section>
@@ -12055,7 +12070,16 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           data-canonical-create-section="Submit"
           aria-label="Submit"
         >
-        {submitMessage ? (
+        {submitMessage && submitErrorDetail ? (
+          <DashboardErrorDetails
+            className="queue-submit-message"
+            message={submitMessage}
+            endpoint={submitErrorDetail.endpoint}
+            status={submitErrorDetail.status}
+            requestId={submitErrorDetail.requestId}
+            rawError={submitErrorDetail.rawError}
+          />
+        ) : submitMessage ? (
           <p
             id="queue-submit-message"
             role={submitMessageTone === "error" ? "alert" : "status"}
