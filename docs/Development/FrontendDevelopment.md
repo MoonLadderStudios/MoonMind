@@ -26,7 +26,7 @@ docker compose up -d api
 Then open the dashboard through the normal FastAPI route:
 
 ```text
-http://localhost:8000/workflows
+http://localhost:7000/workflows
 ```
 
 For network demos, replace `localhost` with the host name or IP address that the
