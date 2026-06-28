@@ -20,10 +20,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
-import {
-  workflowListContextParams,
-  workflowListHrefFromContext,
-} from '../lib/workflowListContext';
+import { workflowListHrefFromContext } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -4845,10 +4842,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   );
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
-  const search = useMemo(
-    () => workflowListContextParams(new URLSearchParams(window.location.search)),
-    [],
-  );
+  const search = useMemo(() => new URLSearchParams(window.location.search), []);
   const expandToFullListHref = useMemo(
     () => workflowListHrefFromContext(search, { markDetailReturn: true }),
     [search],

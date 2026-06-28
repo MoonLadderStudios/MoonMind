@@ -1286,6 +1286,11 @@ describe('Workflows Entrypoint', () => {
       );
     });
     expect(window.location.search).toBe('?stateIn=completed&limit=50');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(
+      screen.queryByText('Saved pagination was no longer available. Showing the first page.'),
+    ).toBeNull();
   });
 
   it('supports skill and date filter chips with blank semantics', async () => {

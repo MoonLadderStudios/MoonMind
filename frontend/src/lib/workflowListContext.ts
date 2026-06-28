@@ -60,6 +60,9 @@ export function workflowListHrefFromContext(
 ): string {
   const params = workflowListContextParams(source);
   params.delete('source');
+  if (options.markDetailReturn) {
+    params.delete('nextPageToken');
+  }
   if (options.markDetailReturn && params.toString()) {
     params.set(WORKFLOW_LIST_CONTEXT_RETURN_PARAM, '1');
   }

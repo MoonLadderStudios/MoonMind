@@ -459,14 +459,15 @@ describe('Workflow Detail Entrypoint', () => {
     await screen.findByText('Focused route summary');
     const expandLink = screen.getByRole('link', { name: 'Expand to full list' });
     expect(expandLink.getAttribute('href')).toBe(
-      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&returnFromWorkflowDetail=1',
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=25&returnFromWorkflowDetail=1',
     );
     expect(expandLink.getAttribute('href')).not.toContain('source=');
     expect(expandLink.getAttribute('href')).not.toContain('sort=');
+    expect(expandLink.getAttribute('href')).not.toContain('nextPageToken=');
     expect(expandLink.getAttribute('href')).not.toContain('selectedWorkflowId=');
     expect(expandLink.getAttribute('href')).not.toContain('unsafe=');
     expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe(
-      '/workflows/test-123/steps?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2',
+      '/workflows/test-123/steps?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
     );
   });
 

@@ -1789,6 +1789,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           {workspaceCursorResetNotice ? (
             <div className="notice" role="status">
               Saved pagination was no longer available. Showing the first page.
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setWorkspaceCursorResetNotice(false)}
+              >
+                Dismiss
+              </button>
             </div>
           ) : null}
         </section>
