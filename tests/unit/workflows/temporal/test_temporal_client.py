@@ -128,8 +128,8 @@ async def test_get_drain_metrics_empty_namespace(adapter):
 
 # ---- send_batch_pause_signal / send_batch_resume_signal ----
 
-async def test_send_batch_pause_signal_sends_to_all(adapter):
-    """Batch pause signal should signal each running workflow with 'pause'."""
+async def test_send_batch_pause_signal_updates_all_with_canonical_pause(adapter):
+    """Batch pause should update each running workflow with 'Pause'."""
 
     executions = [_FakeWorkflowExecution(f"wf-{i}") for i in range(3)]
     mock_handles = {}
@@ -148,10 +148,10 @@ async def test_send_batch_pause_signal_sends_to_all(adapter):
 
     assert signaled == 3
     for handle in mock_handles.values():
-        handle.signal.assert_awaited_once_with("pause")
+        handle.execute_update.assert_awaited_once_with("Pause")
 
-async def test_send_batch_resume_signal_sends_to_all(adapter):
-    """Batch resume signal should signal each running workflow with 'resume'."""
+async def test_send_batch_resume_signal_updates_all_with_canonical_resume(adapter):
+    """Batch resume should update each running workflow with 'Resume'."""
 
     executions = [_FakeWorkflowExecution("wf-1")]
     mock_handle = AsyncMock()
@@ -166,10 +166,10 @@ async def test_send_batch_resume_signal_sends_to_all(adapter):
     signaled = await adapter.send_batch_resume_signal()
 
     assert signaled == 1
-    mock_handle.signal.assert_awaited_once_with("resume")
+    mock_handle.execute_update.assert_awaited_once_with("Resume")
 
-async def test_send_batch_signal_skips_failed_workflows(adapter):
-    """Signal dispatch should continue when individual workflows fail."""
+async def test_send_batch_update_skips_failed_workflows(adapter):
+    """Update dispatch should continue when individual workflows fail."""
 
     executions = [
         _FakeWorkflowExecution("wf-ok"),
@@ -178,7 +178,7 @@ async def test_send_batch_signal_skips_failed_workflows(adapter):
     ]
     ok_handle = AsyncMock()
     fail_handle = AsyncMock()
-    fail_handle.signal = AsyncMock(side_effect=RuntimeError("gone"))
+    fail_handle.execute_update = AsyncMock(side_effect=RuntimeError("gone"))
     ok2_handle = AsyncMock()
 
     handles = {"wf-ok": ok_handle, "wf-fail": fail_handle, "wf-ok2": ok2_handle}
@@ -194,5 +194,5 @@ async def test_send_batch_signal_skips_failed_workflows(adapter):
 
     # 2 succeeded, 1 failed
     assert signaled == 2
-    ok_handle.signal.assert_awaited_once_with("pause")
-    ok2_handle.signal.assert_awaited_once_with("pause")
+    ok_handle.execute_update.assert_awaited_once_with("Pause")
+    ok2_handle.execute_update.assert_awaited_once_with("Pause")

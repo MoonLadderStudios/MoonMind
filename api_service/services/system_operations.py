@@ -99,16 +99,11 @@ class SystemOperationsService:
         failure_reason: str | None = None,
     ) -> WorkerPauseSnapshotResponse:
         state = await self._load_state()
+        metrics = await self._load_metrics()
         audit = await self._latest_audit()
         return WorkerPauseSnapshotResponse(
             system=QueueSystemMetadataModel.from_service_metadata(state),
-            metrics=WorkerPauseMetricsModel(
-                queued=0,
-                running=0,
-                staleRunning=0,
-                isDrained=True,
-                metricsSource="temporal",
-            ),
+            metrics=metrics,
             commands=self._command_descriptors(state),
             audit=WorkerPauseAuditListModel(latest=audit),
             signalStatus=failure_reason or signal_status,
@@ -358,6 +353,28 @@ class SystemOperationsService:
                 updated_at=now,
             )
         return self._metadata_from_payload(row.value_json)
+
+    async def _load_metrics(self) -> WorkerPauseMetricsModel:
+        reader = getattr(self._temporal_service, "get_drain_metrics", None)
+        if not callable(reader):
+            return WorkerPauseMetricsModel(
+                queued=0,
+                running=0,
+                staleRunning=0,
+                isDrained=False,
+                metricsSource="unavailable",
+            )
+        raw = await reader()
+        queued = max(0, int(raw.get("queued") or 0))
+        running = max(0, int(raw.get("running") or 0))
+        stale_running = max(0, int(raw.get("stale_running") or 0))
+        return WorkerPauseMetricsModel(
+            queued=queued,
+            running=running,
+            staleRunning=stale_running,
+            isDrained=(queued + running + stale_running) == 0,
+            metricsSource="temporal",
+        )
 
     async def _state_row(self) -> SettingsOverride | None:
         result = await self._session.execute(
