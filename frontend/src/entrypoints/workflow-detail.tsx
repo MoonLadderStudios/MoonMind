@@ -107,15 +107,7 @@ type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs' | 'deb
 
 function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
   const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs|debug))?$/);
-  if (
-    match?.[1] === 'steps'
-    || match?.[1] === 'artifacts'
-    || match?.[1] === 'runs'
-    || match?.[1] === 'debug'
-  ) {
-    return match[1];
-  }
-  return 'overview';
+  return (match?.[1] as WorkflowDetailSubroute) || 'overview';
 }
 
 function workflowDetailSubrouteHref(
