@@ -6459,6 +6459,7 @@ describe('Workflow Detail Entrypoint', () => {
       initialData: {
         dashboardConfig: {
           features: {
+            temporalDashboard: { actionsEnabled: true },
             logStreamingEnabled: true,
             liveLogsSessionTimelineEnabled: true,
           },
@@ -7336,7 +7337,7 @@ describe('LiveLogsPanel', () => {
     const summaryCallsBeforeExpand = fetchSpy.mock.calls.filter(([input]) =>
       String(input).includes('/observability-summary'),
     ).length;
-    expect(summaryCallsBeforeExpand).toBeGreaterThanOrEqual(1);
+    expect(summaryCallsBeforeExpand).toBe(0);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 

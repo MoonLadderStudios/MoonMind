@@ -3291,6 +3291,7 @@ function LiveLogsPanel({
     enabled: !!agentRunId && expanded,
     // The summary indicates stream availability; refetch occasionally if not terminal
     staleTime: 1000 * 10,
+    refetchOnMount: 'always',
   });
 
   const historyQuery = useQuery({
@@ -6534,7 +6535,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          {detailSubroute === 'steps' && resolvedAgentRunId ? (
+          {detailSubroute === 'steps' && actionsOn && resolvedAgentRunId ? (
             <SessionContinuityPanel
               apiBase={payload.apiBase}
               agentRunId={resolvedAgentRunId}
