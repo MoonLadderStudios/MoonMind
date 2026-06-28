@@ -970,6 +970,7 @@ class MoonMindRunWorkflow:
         self._step_checkpoint_refs: dict[str, str] = {}
         self._previous_step_checkpoint_refs: dict[str, str] = {}
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
+        self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
         self._step_execution_launch_blocks: set[str] = set()
         self._step_dependency_effects: dict[str, dict[str, Any]] = {}
         self._step_terminal_dispositions: dict[str, str] = {}
@@ -3723,6 +3724,7 @@ class MoonMindRunWorkflow:
             workload=workload_metadata,
         ):
             return
+        self._record_step_workspace_capture_input(logical_step_id, outputs)
         if checkpoint_ref:
             try:
                 mark_step_checkpoint_evidence(
@@ -3839,25 +3841,136 @@ class MoonMindRunWorkflow:
             executionOrdinal=attempt,
         )
 
-    def _canonical_step_checkpoint_workspace(
+    @staticmethod
+    def _checkpoint_capture_text(
+        payload: Mapping[str, Any],
+        *keys: str,
+    ) -> str | None:
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def _record_step_workspace_capture_input(
         self,
         logical_step_id: str,
+        outputs: Mapping[str, Any],
+    ) -> None:
+        candidates: list[Mapping[str, Any]] = [outputs]
+        workload_metadata = outputs.get("workloadMetadata") or outputs.get(
+            "workload_metadata"
+        )
+        if isinstance(workload_metadata, Mapping):
+            candidates.append(workload_metadata)
+        workload_result = outputs.get("workloadResult") or outputs.get(
+            "workload_result"
+        )
+        if isinstance(workload_result, Mapping):
+            metadata = workload_result.get("metadata")
+            if isinstance(metadata, Mapping):
+                candidates.append(metadata)
+                nested_workload = metadata.get("workload")
+                if isinstance(nested_workload, Mapping):
+                    candidates.append(nested_workload)
+
+        capture_input: dict[str, Any] = {}
+        for candidate in candidates:
+            workspace_path = self._checkpoint_capture_text(
+                candidate,
+                "workspacePath",
+                "workspace_path",
+            )
+            workspace_root_ref = self._checkpoint_capture_text(
+                candidate,
+                "workspaceRootRef",
+                "workspace_root_ref",
+            )
+            if workspace_path:
+                capture_input["workspacePath"] = workspace_path
+            elif workspace_root_ref:
+                capture_input["workspaceRootRef"] = workspace_root_ref
+            else:
+                continue
+
+            base_commit = self._checkpoint_capture_text(
+                candidate,
+                "baseCommit",
+                "base_commit",
+            )
+            if base_commit:
+                capture_input["baseCommit"] = base_commit
+
+            checkpoint_kind = self._checkpoint_capture_text(
+                candidate,
+                "checkpointKind",
+                "checkpoint_kind",
+                "workspaceCheckpointKind",
+                "workspace_checkpoint_kind",
+            )
+            if checkpoint_kind:
+                capture_input["kind"] = checkpoint_kind
+            elif base_commit:
+                capture_input["kind"] = "git_patch"
+            else:
+                capture_input["kind"] = "worktree_archive"
+            break
+
+        if capture_input:
+            self._step_workspace_capture_inputs[logical_step_id] = capture_input
+
+    async def _capture_canonical_step_checkpoint_workspace(
+        self,
+        logical_step_id: str,
+        *,
+        identity: StepExecutionIdentityModel,
         boundary: StepExecutionCheckpointBoundary,
-    ) -> dict[str, Any]:
-        checkpoint_ref = (
-            self._step_checkpoint_refs.get(logical_step_id)
-            or self._previous_step_checkpoint_refs.get(logical_step_id)
-            or getattr(self, "_recovery_workspace_restored_ref", None)
+    ) -> dict[str, Any] | None:
+        capture_input = dict(
+            self._step_workspace_capture_inputs.get(logical_step_id) or {}
         )
-        workspace_ref = checkpoint_ref or (
-            "temporal://"
-            f"{workflow.info().workflow_id}/{workflow.info().run_id}/"
-            f"{logical_step_id}/{boundary}"
+        if not capture_input:
+            return None
+
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "workspace.capture_checkpoint"
         )
+        checkpoint_id = build_step_checkpoint_id(identity, boundary)
+        payload = {
+            "identity": identity.model_dump(by_alias=True, mode="json"),
+            "boundary": boundary,
+            "kind": capture_input.get("kind") or "worktree_archive",
+            "artifactNamespace": f"step-checkpoints/{identity.logical_step_id}",
+            "idempotencyKey": f"{checkpoint_id}:capture",
+        }
+        if capture_input.get("workspacePath"):
+            payload["workspacePath"] = capture_input["workspacePath"]
+        if capture_input.get("workspaceRootRef"):
+            payload["workspaceRootRef"] = capture_input["workspaceRootRef"]
+        if capture_input.get("baseCommit"):
+            payload["baseCommit"] = capture_input["baseCommit"]
+
+        result = await workflow.execute_activity(
+            route.activity_type,
+            payload,
+            **self._execute_kwargs_for_route(route),
+        )
+        if not isinstance(result, Mapping):
+            return None
+        if result.get("status") != "captured":
+            return None
+        workspace_evidence = result.get("workspace")
+        if not isinstance(workspace_evidence, Mapping):
+            return None
+        if workspace_evidence.get("kind") == "ephemeral_workspace_ref":
+            return None
         return {
-            "kind": "ephemeral_workspace_ref",
-            "workspaceRef": workspace_ref,
-            "createdAt": workflow.now().isoformat(),
+            "workspace": dict(workspace_evidence),
+            "diagnosticRefs": [
+                str(ref).strip()
+                for ref in result.get("diagnosticRefs", [])
+                if str(ref).strip()
+            ],
         }
 
     async def _record_canonical_step_checkpoint(
@@ -3878,14 +3991,19 @@ class MoonMindRunWorkflow:
             self._input_ref
             or f"temporal://{identity.workflow_id}/{identity.run_id}/task-input"
         )
+        capture = await self._capture_canonical_step_checkpoint_workspace(
+            logical_step_id,
+            identity=identity,
+            boundary=boundary,
+        )
+        if capture is None:
+            return None
+        capture_diagnostics = list(capture.get("diagnosticRefs") or [])
         result = await self._create_step_checkpoint_via_activity(
             identity=identity,
             boundary=boundary,
             task_input_snapshot_ref=task_input_snapshot_ref,
-            workspace=self._canonical_step_checkpoint_workspace(
-                logical_step_id,
-                boundary,
-            ),
+            workspace=capture["workspace"],
             created_at=updated_at,
             plan_ref=self._plan_ref
             or f"temporal://{identity.workflow_id}/{identity.run_id}/plan",
@@ -3893,7 +4011,7 @@ class MoonMindRunWorkflow:
             step_outputs=step_outputs or self._step_execution_compact_output_refs(
                 logical_step_id
             ),
-            diagnostic_refs=diagnostic_refs,
+            diagnostic_refs=[*capture_diagnostics, *diagnostic_refs],
         )
         checkpoint_ref = str(result.get("checkpointRef") or "").strip()
         if checkpoint_ref:
