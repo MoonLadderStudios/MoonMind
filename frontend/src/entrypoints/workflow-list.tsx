@@ -194,6 +194,7 @@ const ExecutionRowSchema = z
     scheduledFor: z.string().nullable().optional(),
     closedAt: z.string().nullable().optional(),
     createdAt: z.string(),
+    updatedAt: z.string().nullable().optional(),
     entry: z.string().optional(),
     dependsOn: z.array(z.string()).optional(),
     blockedOnDependencies: z.boolean().optional(),
@@ -299,7 +300,7 @@ function nextActionItems(row: ExecutionRow): string[] {
 }
 
 function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
-  return row.closedAt || row.scheduledFor || row.createdAt;
+  return row.updatedAt || row.closedAt || row.scheduledFor || row.createdAt;
 }
 
 const RELATIVE_TIME_UNITS: Array<[string, number]> = [

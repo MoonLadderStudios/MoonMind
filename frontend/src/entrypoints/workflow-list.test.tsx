@@ -301,6 +301,51 @@ describe('Workflows Entrypoint', () => {
     expect(updatedCell.getAttribute('title')).not.toContain('2026');
   });
 
+  it('uses the API updatedAt value for the Updated column before fallback timestamps', async () => {
+    const updatedAt = new Date(Date.now() - 60 * 1000).toISOString();
+    const createdAt = new Date(Date.now() - 8 * 3600 * 1000).toISOString();
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-active',
+            source: 'temporal',
+            title: 'Actively executing task',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt,
+            updatedAt,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Actively executing task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    const expectedExact = new Date(updatedAt).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const staleExact = new Date(createdAt).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(updatedCell.getAttribute('title')).toBe(expectedExact);
+    expect(updatedCell.getAttribute('title')).not.toBe(staleExact);
+  });
+
   it('floors relative Updated values so units roll over at the exact threshold', async () => {
     // 1h50m before now: Math.floor -> "1h ago"; Math.round would show "2h ago".
     // Computed against the real clock so the assertion is deterministic.
@@ -886,11 +931,50 @@ describe('Workflows Entrypoint', () => {
     const table = closedTitle.closest('table') as HTMLTableElement;
     const closedLink = within(table).getByRole('link', { name: 'Closed latest task' });
     const openLink = within(table).getByRole('link', { name: 'Open later task' });
-    // Default Updated sort is descending by rowUpdatedAt (closedAt || scheduledFor || createdAt),
-    // so the completed row whose closedAt is newest sorts first even though its
-    // scheduledFor is older than the open row's scheduledFor.
+    // When updatedAt is absent, the Updated sort keeps the fallback behavior:
+    // closedAt wins over scheduledFor/createdAt for completed rows.
     expect(
       closedLink.compareDocumentPosition(openLink) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('sorts the Updated column by API updatedAt when it is present', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-created-late',
+            source: 'temporal',
+            title: 'Created late task',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T19:00:00Z',
+            updatedAt: '2026-04-15T19:05:00Z',
+          },
+          {
+            taskId: 'task-updated-later',
+            source: 'temporal',
+            title: 'Updated later task',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-04-15T00:00:00Z',
+            updatedAt: '2026-04-15T20:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const updatedLaterTitle = (await screen.findAllByText('Updated later task'))[0]!;
+    const table = updatedLaterTitle.closest('table') as HTMLTableElement;
+    const updatedLaterLink = within(table).getByRole('link', { name: 'Updated later task' });
+    const createdLateLink = within(table).getByRole('link', { name: 'Created late task' });
+    expect(
+      updatedLaterLink.compareDocumentPosition(createdLateLink) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
