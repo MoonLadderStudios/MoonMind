@@ -85,11 +85,19 @@ def test_promote_resolves_image_name_for_both_targets() -> None:
 
 
 def test_promote_resolves_source_digest_with_optional_guard() -> None:
-    run = _promote_step("Resolve source digest")["run"]
+    step = _promote_step("Resolve source digest")
+    run = step["run"]
     assert 'docker buildx imagetools inspect "${source_ref}"' in run
     assert "--format '{{.Manifest.Digest}}'" in run
+    # Free-form dispatch inputs are routed through env vars so their values are
+    # never re-parsed as shell during ${{ }} expansion (script-injection guard).
+    assert step["env"]["SOURCE_TAG"] == "${{ inputs.source_tag }}"
+    assert step["env"]["EXPECTED_DIGEST"] == "${{ inputs.expected_digest }}"
+    assert "${{ inputs.source_tag }}" not in run
+    assert "${{ inputs.expected_digest }}" not in run
+    assert 'source_ref="${image}:${SOURCE_TAG}"' in run
     # Optional expected-digest guard: only enforced when provided, fails on drift.
-    assert 'expected="${{ inputs.expected_digest }}"' in run
+    assert 'expected="${EXPECTED_DIGEST}"' in run
     assert "Digest mismatch" in run
     assert 'echo "digest=${digest}" >> "$GITHUB_OUTPUT"' in run
 
