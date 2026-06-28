@@ -190,10 +190,16 @@ class OmnigentHttpClient:
     async def stop_session(self, session_id: str) -> dict[str, Any]:
         return await self.post_event(session_id, {"type": "stop_session"})
 
-    async def delete_session(self, session_id: str) -> dict[str, Any]:
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        delete_branch: bool = False,
+    ) -> dict[str, Any]:
+        query = "?delete_branch=true" if delete_branch else "?delete_branch=false"
         return await self._request(
             "DELETE",
-            f"/v1/sessions/{quote(session_id, safe='')}",
+            f"/v1/sessions/{quote(session_id, safe='')}{query}",
         )
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:

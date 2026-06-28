@@ -22,6 +22,9 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
                 200,
                 json={"agents": [{"id": "ag_1", "name": "codex"}]},
             )
+        if request.method == "DELETE":
+            assert request.url.path == "/v1/sessions/sess_1"
+            assert request.url.query == b"delete_branch=false"
         return httpx.Response(200, json={"ok": True})
 
     client = OmnigentHttpClient(
