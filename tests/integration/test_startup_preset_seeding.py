@@ -398,6 +398,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         )
         implement_composite_template = result.scalar_one_or_none()
         assert implement_composite_template is not None
+        assert "jira_board_id" not in {
+            item["name"] for item in implement_composite_template.inputs_schema
+        }
         assert [
             (step.get("skill") or step.get("tool"))["id"]
             for step in implement_composite_template.steps
@@ -411,6 +414,9 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         implement_downstream_step = (
             implement_composite_template.steps[4]
         )
+        implement_jira_step = implement_composite_template.steps[3]
+        assert "Selected Jira board ID" not in implement_jira_step["instructions"]
+        assert "boardId" not in implement_jira_step["storyOutput"]["jira"]
         assert (
             "Create one Jira Implement task"
             in implement_downstream_step["instructions"]
