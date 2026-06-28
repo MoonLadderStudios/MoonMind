@@ -1,0 +1,583 @@
+{
+  "source": {
+    "title": "MM-977: Build Omnigent-inspired chat session view for MoonMind managed-agent sessions",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "declarative-text",
+    "sourceIssueKey": "MM-977",
+    "selectedInput": "trusted Jira issue description / preset brief, supplemented by the identical workflow instruction text provided to this breakdown step",
+    "originalDesignText": "Build Omnigent-inspired chat session view for MoonMind managed-agent sessions\n\nType\n\nStory / Feature\n\nSummary\n\nImplement a MoonMind-native Chat Session View for session-capable managed agents by adapting the useful presentation/reducer ideas from Omnigent's chat UI, while preserving MoonMind's artifact-first runtime model.\n\nBe sure to git clone https://github.com/omnigent-ai/omnigent as a concrete reference. It is open-source Apache 2.0 license, so it is fine to use as an explicit reference.\n\nThis issue follows the earlier \"chat-like managed-agent observability and controls\" work. The prior issue focuses on emitting normalized MoonMind observability events and generic follow-up controls. This issue focuses on making the operator-facing UI feel much closer to Omnigent's chat session experience: user bubbles, assistant streaming, tool-call cards, tool-output cards, approval cards, turn boundaries, session status, and durable fallback.\n\nThis should not port Omnigent's full session server, runner tunnel, resource model, or host lifecycle. It should adapt the UI/reducer concepts that are useful on top of MoonMind's existing APIs.\n\nBackground\n\nOmnigent's chat UI is built around a session stream and a client-side event/block pipeline:\n\nGET /v1/sessions/{id}/stream -> parse SSE into typed StreamEvent values -> reduce StreamEvent values into display blocks -> render blocks as chat bubbles, tool cards, approvals, status chips, etc.\n\nOmnigent's ap-web/src/lib/sse.ts parses raw text/event-stream bytes from /v1/sessions/{id}/stream into typed StreamEvent values. It explicitly treats the stream as carrying both response.* task-scoped events and session.* session-scoped events.\n\nOmnigent's events.ts defines the useful event vocabulary: response lifecycle, text deltas, reasoning, tool calls, tool results, elicitation requests, output files, compaction, interrupts, todos, usage, session status, child sessions, changed files, and presence.\n\nOmnigent's blockStream.ts then reduces those events into UI blocks. It keeps reducer state for accumulated text, reasoning, pending tools, dedupe sets, agent name, turn number, and active response id. The reducer begins a response by closing prior open text/reasoning blocks, resetting per-response dedupe, setting the active response id, and emitting a response_start block. It also streams text deltas into text chunks and pairs tool calls/results into displayable tool blocks.\n\nMoonMind already has a comparable lower-level substrate:\n\nGET /api/agent-runs/{id}/observability-summary\nGET /api/agent-runs/{id}/observability/events\nGET /api/agent-runs/{id}/logs/stream\nPOST /api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control\n\nThe current Live Logs panel already fetches history, falls back to merged logs, opens an EventSource, appends parsed events, and updates session snapshot state. The backend already exposes observability summary, structured observability history, and SSE live logs.\n\nTherefore, the desired implementation is:\n\nMoonMind observability/events + logs/stream -> MoonMind ChatStreamEvent adapter -> MoonMind ChatBlock reducer inspired by Omnigent BlockStream -> Chat Session View in dashboard\n\nProblem\n\nMoonMind's current Live Logs timeline is good for observability, but it does not yet feel like a first-class chat session UI. Operators should be able to see and interact with session-capable managed agents in a way that resembles Omnigent: user messages as user bubbles, assistant output as assistant bubbles, streaming assistant deltas without visual duplication, tool calls as tool cards, tool results as expandable output cards, approvals as first-class cards, turn/session boundaries as clear visual markers, follow-up controls in the same session surface, and artifact-backed reconstruction after refresh.\n\nThe challenge is to achieve this while preserving MoonMind's architecture: artifacts and bounded metadata remain durable truth; live streams are convenience, not truth; UI consumes MoonMind-normalized events, not provider-native protocol; control actions go through MoonMind API/Temporal, not raw terminal input; one-shot managed agents do not pretend to be interactive sessions.\n\nGoals\n\nBuild a Chat Session View as a projection over MoonMind's existing observability/event stream. Adapt Omnigent's event -> block -> render design pattern without porting the whole Omnigent runtime model. Add a reducer that can group MoonMind observability events into chat-like display blocks. Support user bubbles, assistant bubbles, tool cards, approvals, turn boundaries, and session status rows. Keep Live Logs available as the raw chronological observability/debug projection. Add or prepare MoonMind session-oriented API aliases/naming that are closer to Omnigent's /v1/sessions contract. Keep the implementation compatible with existing artifact-backed history and SSE fallback.\n\nNon-goals\n\nThis issue does not include porting Omnigent's runner tunnel or host management, porting Omnigent's full /v1/conversations store, replacing MoonMind AgentRun / Temporal execution lifecycle, replacing MoonMind artifacts with Omnigent session resources, adding WebSocket transport, making one-shot runtimes interactive, exposing provider-native raw payloads directly to the browser, implementing Omnigent-style session forking in the first version, or implementing a full file/resource browser.\n\nRelevant Omnigent code to study/adapt\n\nap-web/src/lib/sse.ts: typed SSE parser, [DONE] sentinel handling, distinction between clean server close and transport drop, comments around stream reconnection hazards, and parsing into a typed StreamEvent union.\n\nap-web/src/lib/events.ts: response lifecycle events, text delta events, reasoning events, tool call / tool result events, elicitation request / resolved events, session status / usage / model / todos / interrupt events, child-session and resource invalidation events.\n\nap-web/src/lib/blockStream.ts: event reducer state, accumulated text and reasoning chunks, pending tool map, per-response dedupe sets, response/turn identity, response-start block, text chunk flushing, tool call/result pairing, and closing open blocks on lifecycle boundaries.\n\nap-web/src/lib/blocks.ts: display-oriented block types, separate user-message blocks, tool groups and tool-result blocks, text chunks and text-done blocks, response lifecycle blocks, and context attached to every block.\n\nap-web/src/pages/ChatPage.tsx: chat-column layout, optimistic pending bubbles, attachment handling, block renderer integration, status controls and composer behavior.\n\nProposed architecture\n\nAdd a MoonMind Chat Session projection layer using MoonMind names, not Omnigent-specific names. Suggested files include frontend/src/lib/chatSession/events.ts, blocks.ts, reducer.ts, render.tsx, frontend/src/components/ChatSessionView.tsx, and frontend/src/components/ChatSessionComposer.tsx.\n\nDefine ChatSessionEvent derived from MoonMind RunObservabilityEvent, not provider-native payloads. Suggested events include session_status, response_start, user_message, assistant_text_delta, assistant_message_done, tool_call, tool_result, approval_requested, approval_resolved, session_cleared, response_completed, and response_failed. The first implementation can map from existing RunObservabilityEvent.kind values, with thinner mapping later if MoonMind adds response.output_text.delta style event names.\n\nDefine ChatBlock as UserMessageBlock, AssistantTextBlock, ToolCallBlock, ToolResultBlock, ApprovalBlock, SessionStatusBlock, SessionBoundaryBlock, ErrorBlock, ResponseStartBlock, and ResponseEndBlock. Every block should carry context including agentRunId, sessionId, sessionEpoch, responseId, itemId, turnIndex, sequenceStart, and sequenceEnd.\n\nImplement reduceChatSessionEvents inspired by Omnigent's BlockStream but over MoonMind-normalized events. It must group text deltas, avoid duplicate final assistant messages, pair tool calls/results, preserve response/turn boundaries, maintain stable keys for optimistic user messages, close open sections on completion/failure, support replay and live append, and avoid depending on a single transport. Suggested state includes turnIndex, activeResponseId, activeAssistantText, activeAssistantBlockKey, pendingToolsByCallId, seenCallIds, seenResultKeys, pendingUserMessages, and lastSequence.\n\nAdd ChatSessionView inside the dashboard workflow detail/session surface. It should fetch observability-summary and observability/events, convert rows to ChatSessionEvent, reduce to ChatBlock[], connect to /logs/stream when active, convert live SSE rows through the same reducer, and fall back to Live Logs / merged logs when structured events are missing.\n\nAdd ChatSessionComposer only when session capabilities allow it. It should call MoonMind's control endpoint with send_follow_up and clear_session style actions and may use event-shaped payloads internally. It must not post directly to raw runtime input.\n\nAdd session-oriented API aliases/facades conceptually aligned with Omnigent while delegating to AgentRun/session artifacts. Recommended aliases include GET /api/sessions/{sessionId}, POST /api/sessions/{sessionId}/events, GET /api/sessions/{sessionId}/stream, GET /api/sessions/{sessionId}/items, POST /api/sessions/{sessionId}/elicitations/{elicitationId}/resolve, and session resources endpoints. Aliases should be feature-flagged with MOONMIND_SESSION_API_COMPAT_ENABLED=true and existing /api/agent-runs endpoints should remain stable.\n\nAcceptance criteria include chat projection, reducer correctness, API compatibility, durability, security, and test coverage. The dashboard must render chat-like managed-agent sessions, reconstruct from observability/events after refresh, keep Live Logs and artifacts working, support follow-up for at least one session-capable runtime, and implement at least core snapshot/events/stream session aliases behind a feature flag.\n\nTest plan includes frontend unit tests for fromObservability.ts, reducer.ts, ChatSessionView.tsx, and ChatSessionComposer.tsx; backend API tests for experimental aliases; and integration tests that launch a session-capable managed agent, emit user/assistant/tool/completion events, verify Live Logs and Chat Session View, refresh reconstruction, follow-up submission, and clear-session boundaries.\n\nRisks include porting Omnigent too literally, hiding diagnostics, runtime-specific event mapping sprawl, duplicate assistant output, one-shot agents appearing interactive, confusing new aliases, and weakening MoonMind semantics. Mitigations include porting concepts only, preserving Live Logs/Diagnostics/Artifacts, centralizing mapping, reducer dedupe, capability gating, feature flags, and keeping AgentRun, ArtifactRef, and RunObservabilityEvent canonical.\n\nOpen questions include whether Chat Session View is a tab or mode toggle, whether to add Omnigent-like eventType strings, whether omnigent_compat streaming should emit response.* / session.* names, whether optimistic user bubbles appear before backend acknowledgement, how pending inputs are represented, when to move approval resolution to a dedicated alias, and whether session resources should be read-only first or support uploads.\n\nDefinition of done: MoonMind has a Chat Session View powered by observability/history/SSE APIs; the reducer handles assistant text, user messages, tool calls, tool results, approvals, and session boundaries; existing Live Logs and artifacts continue to work; follow-up messages are available for at least one session-capable runtime; new session-oriented API aliases are designed and at least core snapshot/events/stream aliases are implemented behind a feature flag; and tests cover reducer behavior, UI rendering, API aliases, and runtime capability gating."
+  },
+  "extractedAt": "2026-06-28T11:11:52Z",
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "designSummary": "The design calls for a MoonMind-native chat session projection over existing managed-agent observability, history, SSE logs, controls, and artifacts. It borrows Omnigent's event-to-block-to-render pattern for typed events, block reduction, and chat presentation while explicitly preserving MoonMind AgentRun, RunObservabilityEvent, Temporal control, and artifact-first durability boundaries. The user-facing outcome is a dashboard Chat Session View with bubbles, streaming assistant output, tool and approval cards, boundaries, status, follow-up controls, and durable fallback, plus feature-flagged session-oriented API facades.",
+  "canonicalClaims": [],
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Chat session projection over MoonMind observability",
+      "type": "requirement",
+      "source_section": "Goals / Proposed architecture",
+      "explanation": "Build a MoonMind Chat Session View as a projection over observability events and live logs."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "MoonMind-normalized event adapter",
+      "type": "integration",
+      "source_section": "ChatSessionEvent",
+      "explanation": "Convert RunObservabilityEvent rows to ChatSessionEvent values without exposing provider-native payloads."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Display-oriented chat blocks with context",
+      "type": "state-model",
+      "source_section": "ChatBlock",
+      "explanation": "Represent user, assistant, tool, approval, status, boundary, and error blocks with session/run context."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Reducer groups assistant text without duplication",
+      "type": "requirement",
+      "source_section": "Reducer responsibilities",
+      "explanation": "Accumulate streaming deltas and dedupe final assistant messages."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Reducer pairs and dedupes tools",
+      "type": "requirement",
+      "source_section": "Reducer responsibilities",
+      "explanation": "Pair tool calls/results by call id and dedupe by call/result identity."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Reducer preserves turns and lifecycle boundaries",
+      "type": "state-model",
+      "source_section": "Reducer responsibilities",
+      "explanation": "Track response/turn identity, close blocks on completion or failure, and render failures."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Historical replay and live append converge",
+      "type": "requirement",
+      "source_section": "Reducer correctness",
+      "explanation": "Replay from history and append from SSE should produce the same final block sequence."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Dashboard chat rendering",
+      "type": "requirement",
+      "source_section": "Chat Session View",
+      "explanation": "Render user bubbles, assistant bubbles, tool cards, tool output, approvals, status rows, and boundaries."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Raw Live Logs remain available",
+      "type": "observability",
+      "source_section": "Goals / Risks",
+      "explanation": "Keep Live Logs as the chronological debug projection and provide an escape hatch from chat view."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Artifact-backed durable reconstruction",
+      "type": "artifact",
+      "source_section": "Durability",
+      "explanation": "Ended runs and refreshed pages reconstruct from observability/events and artifacts without requiring a live stream."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Session composer capability gating",
+      "type": "security",
+      "source_section": "ChatSessionComposer",
+      "explanation": "Show composer only for session-capable runtimes and allowed intervention capabilities."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Control actions through MoonMind API and Temporal",
+      "type": "integration",
+      "source_section": "Composer and controls",
+      "explanation": "Follow-up, clear, interrupt, and approval actions go through MoonMind APIs, not terminal injection."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Optimistic message reconciliation",
+      "type": "requirement",
+      "source_section": "Omnigent ChatPage concepts / Reducer",
+      "explanation": "Support stable optimistic user bubbles and reconcile them when confirmed by durable events."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "Feature-flagged session API facades",
+      "type": "integration",
+      "source_section": "API naming alignment",
+      "explanation": "Add /api/sessions aliases behind MOONMIND_SESSION_API_COMPAT_ENABLED without removing /api/agent-runs endpoints."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Bounded session snapshot alias",
+      "type": "artifact",
+      "source_section": "Session snapshot",
+      "explanation": "GET /api/sessions/{sessionId} returns bounded status, identity, capabilities, and artifact refs."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Session events alias",
+      "type": "integration",
+      "source_section": "Session event posting",
+      "explanation": "POST /api/sessions/{sessionId}/events maps message, interrupt, clear_session, and unsupported types correctly."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "Session stream alias",
+      "type": "integration",
+      "source_section": "Session stream",
+      "explanation": "GET /api/sessions/{sessionId}/stream exposes existing live information, including sequence/replay affordances and optional formats."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Session items history alias",
+      "type": "artifact",
+      "source_section": "Session items",
+      "explanation": "GET /api/sessions/{sessionId}/items exposes durable item-oriented history derived from observability and artifact refs."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Approval resolution alias",
+      "type": "integration",
+      "source_section": "Elicitation / approval resolution",
+      "explanation": "Resolve approval prompts through a dedicated session elicitation endpoint or compatible facade."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Session resources as artifact projection",
+      "type": "artifact",
+      "source_section": "Session resources",
+      "explanation": "Expose read-oriented session resource aliases over authorized MoonMind artifacts without duplicating blob storage."
+    },
+    {
+      "id": "DESIGN-REQ-021",
+      "title": "Security and authorization boundaries",
+      "type": "security",
+      "source_section": "Security",
+      "explanation": "Redact/drop secret-like metadata, enforce artifact authorization, and suppress one-shot runtime capabilities."
+    },
+    {
+      "id": "DESIGN-REQ-022",
+      "title": "Do not port Omnigent runtime model",
+      "type": "non-goal",
+      "source_section": "Non-goals",
+      "explanation": "Borrow UI/reducer concepts only; do not port runner tunnel, host lifecycle, conversations store, WebSockets, forking, or provider-native browser payloads."
+    },
+    {
+      "id": "DESIGN-REQ-023",
+      "title": "Omnigent reference study",
+      "type": "constraint",
+      "source_section": "Relevant Omnigent code",
+      "explanation": "Use Omnigent's Apache-2.0 code as concrete reference for concepts while preserving MoonMind naming and architecture."
+    },
+    {
+      "id": "DESIGN-REQ-024",
+      "title": "Tests cover frontend, API, and integration behavior",
+      "type": "requirement",
+      "source_section": "Test plan",
+      "explanation": "Add reducer, adapter, UI, composer, backend alias, capability, and integration coverage."
+    }
+  ],
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Create MoonMind chat event adapter and reducer",
+      "shortName": "chat-projection-reducer",
+      "description": "As a MoonMind operator, I need managed-session observability events reduced into stable chat blocks so history and live streams can power one coherent chat projection.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-977: Build Omnigent-inspired chat session view for MoonMind managed-agent sessions",
+        "sections": [
+          "Proposed architecture",
+          "ChatSessionEvent",
+          "ChatBlock",
+          "Reducer responsibilities",
+          "Reducer correctness"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-023",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Run frontend unit tests for fromObservability and reducer fixtures that replay historical events and then append equivalent live events, asserting identical ChatBlock sequences.",
+      "acceptanceCriteria": [
+        "RunObservabilityEvent rows map to ChatSessionEvent values for user messages, response starts, assistant deltas, final assistant messages, tool calls/results, approvals, session clear/reset, runtime status, completion, and failure.",
+        "Unknown or incomplete observability rows become system/status blocks or are safely downgraded without crashing.",
+        "Assistant deltas accumulate into a single active assistant text block and a final assistant message does not duplicate already streamed text.",
+        "Tool calls and results pair by callId when possible and duplicate call/result rows are ignored using stable response/turn-aware keys.",
+        "Response completion and failure close open assistant/tool sections and failures emit useful error blocks.",
+        "Reducer state supports replay from history and live append from SSE without requiring one transport to be authoritative.",
+        "Optimistic user message keys can be preserved and reconciled when durable user_message events arrive.",
+        "Implementation uses MoonMind-specific names and types and does not import Omnigent runtime/server assumptions."
+      ],
+      "requirements": [
+        "Add a frontend chatSession projection layer for events, blocks, reducer, and observability mapping.",
+        "Every ChatBlock carries agentRunId context and optional sessionId, sessionEpoch, responseId, itemId, turnIndex, sequenceStart, and sequenceEnd context where available.",
+        "Reducer fixture coverage must include text delta accumulation, final-message dedupe, tool pairing, approval events, boundaries, unknown events, optimistic reconciliation, and history-plus-live convergence."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Owns the core projection from observability/log stream inputs into chat events and blocks.",
+        "DESIGN-REQ-002": "Owns the RunObservabilityEvent-to-ChatSessionEvent adapter.",
+        "DESIGN-REQ-003": "Owns display block types and context model.",
+        "DESIGN-REQ-004": "Owns assistant streaming accumulation and final dedupe.",
+        "DESIGN-REQ-005": "Owns tool call/result pairing and dedupe.",
+        "DESIGN-REQ-006": "Owns reducer lifecycle boundary and failure behavior.",
+        "DESIGN-REQ-007": "Owns deterministic replay/live append equivalence.",
+        "DESIGN-REQ-013": "Owns optimistic user message identity and reconciliation primitives.",
+        "DESIGN-REQ-022": "Constrains the reducer to MoonMind-normalized concepts rather than Omnigent runtime porting.",
+        "DESIGN-REQ-023": "Requires using Omnigent only as reference material for event/block concepts.",
+        "DESIGN-REQ-024": "Owns frontend adapter and reducer test coverage."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "Existing RunObservabilityEvent rows contain enough kind/payload metadata to support an initial best-effort mapping."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Render dashboard Chat Session View with raw timeline fallback",
+      "shortName": "chat-session-view",
+      "description": "As a MoonMind operator, I need a chat-like session view beside the raw timeline so session-capable managed-agent runs are readable as turns, messages, tools, approvals, status, and boundaries while diagnostics remain accessible.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-977: Build Omnigent-inspired chat session view for MoonMind managed-agent sessions",
+        "sections": [
+          "Problem",
+          "Goals",
+          "Chat Session View",
+          "Acceptance criteria",
+          "Durability"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-007",
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Render ChatSessionView with mocked summary, history, and live SSE inputs and verify chat blocks, fallback messaging, raw timeline access, and refresh reconstruction behavior.",
+      "acceptanceCriteria": [
+        "The workflow detail/session surface can render user messages as user bubbles and assistant output as assistant bubbles.",
+        "Tool calls render as distinct tool cards and tool outputs render as attached or expandable output cards when paired.",
+        "Approval requests render as first-class cards or rows and resolved approvals update visibly.",
+        "Session reset/clear events render as obvious boundary banners and runtime/session status renders as status rows or chips.",
+        "The view fetches observability summary and events, connects to logs/stream for active sessions, and sends all historical and live rows through the same reducer path.",
+        "When structured chat projection is unavailable or live stream drops, the UI falls back to durable history, merged logs, or the existing Live Logs panel without failing the page.",
+        "Live Logs, diagnostics, and artifact views remain available as raw chronological/debug projections."
+      ],
+      "requirements": [
+        "Add ChatSessionView or equivalent dashboard integration using existing route plumbing where possible.",
+        "Expose a clear raw timeline escape hatch from the chat surface.",
+        "Do not expose provider-native raw payloads directly in rendered chat blocks."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-001": "Consumes the projection as the operator-facing chat view.",
+        "DESIGN-REQ-007": "Exercises the same reducer path for history and live rows.",
+        "DESIGN-REQ-008": "Owns visual rendering of chat bubbles, cards, approvals, status, and boundaries.",
+        "DESIGN-REQ-009": "Keeps Live Logs reachable and unreplaced.",
+        "DESIGN-REQ-010": "Owns refresh/end-state rendering from durable history.",
+        "DESIGN-REQ-021": "Prevents raw provider payload rendering and respects authorization-backed data surfaces.",
+        "DESIGN-REQ-024": "Owns ChatSessionView unit/render and integration assertions."
+      },
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "The dashboard already has reusable fetch/SSE plumbing from the Live Logs panel."
+      ],
+      "needsClarification": [
+        "Whether the initial UX should be a new tab beside Live Logs or a mode toggle inside the Live Logs area."
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Add capability-gated session composer and controls",
+      "shortName": "session-composer-controls",
+      "description": "As a MoonMind operator, I need follow-up, clear, interrupt, and approval actions in the same session surface only when the managed runtime explicitly supports them.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-977: Build Omnigent-inspired chat session view for MoonMind managed-agent sessions",
+        "sections": [
+          "ChatSessionComposer",
+          "Composer and controls",
+          "Security",
+          "Acceptance criteria"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Render the composer against capability combinations and mock control submissions, asserting hidden/read-only behavior for one-shot or terminal runs and correct MoonMind API payloads for supported sessions.",
+      "acceptanceCriteria": [
+        "The composer is shown only when a session id is present, the run is not terminal, and explicit intervention capabilities allow follow-up messages.",
+        "One-shot managed runs and runtimes without session controllers do not advertise or render interactive message/follow-up capability.",
+        "Submitting a message calls MoonMind's control/API surface and Temporal update path, not raw terminal stdin or provider-native endpoints.",
+        "The UI can insert an optimistic user bubble with a stable key and reconcile or clear it after durable confirmation/failure.",
+        "Clear session and interrupt controls are gated by capabilities and unsupported actions fail loudly with clear user-visible errors.",
+        "Approval resolution uses the existing control route initially or the dedicated elicitation facade when available, while preserving approval card state."
+      ],
+      "requirements": [
+        "Add ChatSessionComposer or equivalent controls component for session-capable managed agents.",
+        "Use an event-shaped internal payload for messages where practical while translating to existing send_follow_up/control actions until API aliases are available.",
+        "Capability and terminal-state tests must cover hidden, disabled, success, and unsupported-action paths."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-011": "Owns composer visibility and capability gating.",
+        "DESIGN-REQ-012": "Owns control submission through MoonMind API/Temporal rather than runtime injection.",
+        "DESIGN-REQ-013": "Owns optimistic user bubble behavior at submission time.",
+        "DESIGN-REQ-019": "Owns UI/control path for approval resolution until or after the alias lands.",
+        "DESIGN-REQ-021": "Owns one-shot suppression and secret/control safety in the interactive surface.",
+        "DESIGN-REQ-024": "Owns composer/control unit coverage."
+      },
+      "dependencies": [
+        "STORY-001",
+        "STORY-002"
+      ],
+      "assumptions": [
+        "Existing control route supports send_follow_up and clear_session for at least one session-capable runtime."
+      ],
+      "needsClarification": [
+        "Whether optimistic user bubbles should appear before backend acknowledgement in the first implementation."
+      ]
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Expose feature-flagged session API snapshot, items, stream, events, and elicitation aliases",
+      "shortName": "session-api-facades",
+      "description": "As a MoonMind API client or dashboard surface, I need session-oriented API facades that align with chat-session semantics while preserving AgentRun, artifacts, authorization, and existing endpoint stability.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-977: Build Omnigent-inspired chat session view for MoonMind managed-agent sessions",
+        "sections": [
+          "API naming alignment with Omnigent",
+          "Recommended MoonMind compatibility aliases",
+          "API compatibility"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Run backend API tests with the session compat feature flag enabled and disabled, asserting facade responses, action translation, authorization, unsupported-type errors, and unchanged /api/agent-runs behavior.",
+      "acceptanceCriteria": [
+        "Session API aliases are disabled unless MOONMIND_SESSION_API_COMPAT_ENABLED is enabled or the configured feature flag is active.",
+        "Existing /api/agent-runs/... summary, events, stream, and control endpoints continue to work unchanged.",
+        "GET /api/sessions/{sessionId} returns a bounded snapshot with id, agentRunId, workflowId/status where available, sessionEpoch, intervention capabilities, and artifact refs.",
+        "GET /api/sessions/{sessionId}/items returns a durable item-oriented history derived from observability events and artifact refs.",
+        "GET /api/sessions/{sessionId}/stream returns the same live information as the existing logs stream and preserves MoonMind sequence/replay affordances; optional format handling fails clearly for unsupported formats.",
+        "POST /api/sessions/{sessionId}/events supports at least message, interrupt, and clear_session where capabilities allow and rejects unsupported event types with clear errors.",
+        "POST /api/sessions/{sessionId}/elicitations/{elicitationId}/resolve maps approval resolution through the existing trusted MoonMind control path or a dedicated backend handler."
+      ],
+      "requirements": [
+        "Implement thin backend facades over existing AgentRun/session artifact APIs rather than replacing canonical contracts.",
+        "Session id to agent run mapping must be deterministic and authorization-checked.",
+        "Unsupported event types, terminal runs, and one-shot runtimes must fail loudly or suppress capabilities rather than silently falling back."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-014": "Owns feature-flagged /api/sessions facade strategy.",
+        "DESIGN-REQ-015": "Owns session snapshot alias.",
+        "DESIGN-REQ-016": "Owns session events alias and action translation.",
+        "DESIGN-REQ-017": "Owns session stream alias and format handling.",
+        "DESIGN-REQ-018": "Owns session items/history alias.",
+        "DESIGN-REQ-019": "Owns dedicated elicitation resolution alias.",
+        "DESIGN-REQ-021": "Owns authorization, capability suppression, and safe errors at API boundary.",
+        "DESIGN-REQ-022": "Keeps facades as MoonMind aliases, not an Omnigent runtime replacement.",
+        "DESIGN-REQ-024": "Owns backend API alias and capability tests."
+      },
+      "dependencies": [],
+      "assumptions": [
+        "A managed session store or existing observability metadata can resolve sessionId to agentRunId without introducing identity aliases."
+      ],
+      "needsClarification": [
+        "Whether omnigent_compat stream format should ship in the first facade story or be deferred behind a clearly unsupported format error."
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Project session resources from authorized artifacts",
+      "shortName": "session-resource-projection",
+      "description": "As a MoonMind operator, I need session-scoped resource views over artifacts so files and evidence associated with a chat session are discoverable without duplicating storage or bypassing artifact authorization.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-977: Build Omnigent-inspired chat session view for MoonMind managed-agent sessions",
+        "sections": [
+          "Session resources",
+          "Durability",
+          "Security",
+          "Non-goals"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-020",
+          "DESIGN-REQ-021",
+          "DESIGN-REQ-022",
+          "DESIGN-REQ-024"
+        ]
+      },
+      "independentTest": "Run backend and UI/resource projection tests that list session resources for authorized artifacts, deny unauthorized artifacts, and verify ended sessions still show resource evidence after refresh.",
+      "acceptanceCriteria": [
+        "GET /api/sessions/{sessionId}/resources and initial file/content aliases return session-scoped projections over MoonMind ArtifactRefs rather than new blob storage.",
+        "Artifact authorization is enforced for every resource listing and content/download path.",
+        "Secret-like metadata is redacted or dropped from resource summaries and rendered cards.",
+        "Ended sessions can still show resource/evidence references from durable artifacts without a live stream.",
+        "The implementation does not add a full file/resource browser or upload flow in the first version unless explicitly scoped later.",
+        "Chat Session View can link to or summarize resource/output-file evidence without hiding the existing artifact views."
+      ],
+      "requirements": [
+        "Represent session resources as read-oriented projections over existing ArtifactRefs.",
+        "Keep artifact storage authoritative and avoid duplicating blobs or replacing diagnostics/artifact views.",
+        "Tests must cover authorization boundaries, redaction, and terminal/refresh behavior."
+      ],
+      "sourceDesignCoverage": {
+        "DESIGN-REQ-010": "Owns durable artifact-backed resource visibility after refresh/end.",
+        "DESIGN-REQ-020": "Owns session resource aliases over artifacts.",
+        "DESIGN-REQ-021": "Owns artifact authorization and secret redaction for resource projections.",
+        "DESIGN-REQ-022": "Keeps first version read-oriented and avoids full Omnigent resource/browser porting.",
+        "DESIGN-REQ-024": "Owns resource API/UI/security tests."
+      },
+      "dependencies": [
+        "STORY-004"
+      ],
+      "assumptions": [
+        "Existing artifact metadata is sufficient to identify session-scoped resources or can be joined through run/session artifact refs."
+      ],
+      "needsClarification": [
+        "Whether session resources should remain read-only in the first version or support uploads later."
+      ]
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001",
+      "STORY-002"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-003"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-001",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-021": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-022": [
+      "STORY-001",
+      "STORY-004",
+      "STORY-005"
+    ],
+    "DESIGN-REQ-023": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-024": [
+      "STORY-001",
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005"
+    ]
+  },
+  "outOfScope": [
+    "Porting Omnigent's runner tunnel, host management, full conversations store, session forking, WebSocket transport, or provider-native browser protocol.",
+    "Replacing AgentRun, RunObservabilityEvent, Temporal execution lifecycle, ArtifactRef, existing /api/agent-runs endpoints, Live Logs, Diagnostics, or Artifacts.",
+    "Making one-shot managed runs appear interactive or bypassing MoonMind API/Temporal for control actions.",
+    "Adding a full file/resource browser or upload flow in the first version."
+  ],
+  "recommendedFirstStoryId": "STORY-001",
+  "notes": [
+    "No canonical declarative source path was provided or resolved, so source and story reference paths are null and claimIds are empty.",
+    "The trusted Jira sourceResolution status was not_found, which is not one of the configured fail-fast statuses.",
+    "Downstream /speckit.specify should preserve this original design text and use TDD through plan, tasks, and implementation."
+  ]
+}
