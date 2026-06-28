@@ -24,6 +24,20 @@ def test_projection_plan_reads_moonspec_submodule_manifest() -> None:
     assert ".gemini/commands/speckit.*.toml" in unexpected
 
 
+def test_top_level_directory_projection_manages_target_directory() -> None:
+    files, _unexpected = mod._planned_files(mod.DEFAULT_SOURCE, "moonmind")
+    gemini_command = next(
+        item
+        for item in files
+        if item.target.relative_to(mod.REPO_ROOT).as_posix()
+        == ".gemini/commands/moonspec.orchestrate.toml"
+    )
+
+    assert gemini_command.managed_root.relative_to(mod.REPO_ROOT).as_posix() == (
+        ".gemini/commands"
+    )
+
+
 def test_markdown_header_preserves_skill_front_matter() -> None:
     text = "---\nname: moonspec-test\n---\n# Body\n"
     result = mod._with_header(

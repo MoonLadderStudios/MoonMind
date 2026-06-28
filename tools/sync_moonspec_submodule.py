@@ -87,14 +87,18 @@ def _planned_files(
                 raise ValueError(f"mapped source directory does not exist: {source}")
             for child in sorted(source.rglob("*")):
                 if child.is_file():
-                    target_file = target / child.relative_to(source)
-                    top_level = child.relative_to(source).parts[0]
+                    relative_child = child.relative_to(source)
+                    target_file = target / relative_child
+                    if len(relative_child.parts) == 1:
+                        managed_root = target
+                    else:
+                        managed_root = target / relative_child.parts[0]
                     files.append(
                         PlannedFile(
                             source=child,
                             source_rel=child.relative_to(bundle_root),
                             target=target_file,
-                            managed_root=target / top_level,
+                            managed_root=managed_root,
                         )
                     )
         else:
@@ -168,7 +172,8 @@ def _remove_stale(
                 try:
                     path.rmdir()
                 except OSError:
-                    pass
+                    # Non-empty or in-use directories can remain during cleanup.
+                    continue
 
     for pattern in unexpected_patterns:
         for path in sorted(REPO_ROOT.glob(pattern)):
