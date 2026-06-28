@@ -95,12 +95,16 @@ def _omnigent_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _FakeOmnigentClient.instances.clear()
 
 
-def _request(parameters: dict[str, Any] | None = None) -> AgentExecutionRequest:
+def _request(
+    parameters: dict[str, Any] | None = None,
+    workspace_spec: dict[str, Any] | None = None,
+) -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
         agentId="omnigent",
         correlationId="corr-1",
         idempotencyKey="idem-1",
+        workspaceSpec=workspace_spec or {},
         parameters=parameters
         or {
             "title": "MM-994 task",
@@ -121,7 +125,11 @@ async def test_omnigent_execute_posts_streams_harvests_and_preserves_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", _FakeOmnigentClient)
-    monkeypatch.setattr("moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None)
+    heartbeats: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.activity.heartbeat",
+        lambda payload: heartbeats.append(payload),
+    )
 
     result = await run_omnigent_execution(_request())
 
@@ -136,6 +144,66 @@ async def test_omnigent_execute_posts_streams_harvests_and_preserves_session(
     assert result.metadata["sourceIssue"] == "MM-994"
     assert result.output_refs
     assert all(ref.startswith("file:") for ref in result.output_refs)
+    assert heartbeats
+    assert all("eventsCaptured" in payload for payload in heartbeats)
+    assert all("normalizedStatus" in payload for payload in heartbeats)
+
+
+@pytest.mark.asyncio
+async def test_omnigent_execution_derives_managed_workspace_from_workspace_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient", _FakeOmnigentClient
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None
+    )
+
+    await run_omnigent_execution(
+        _request(
+            {
+                "title": "MM-994 task",
+                "description": "Complete the bounded task.",
+                "omnigent": {
+                    "agent": {"agentId": "ag_1"},
+                    "session": {"hostType": "managed"},
+                },
+            },
+            workspace_spec={
+                "repository": "https://github.com/org/repo",
+                "branch": "feature-branch",
+            },
+        )
+    )
+
+    client = _FakeOmnigentClient.instances[0]
+    create_payload = next(
+        payload for name, payload in client.calls if name == "create_session"
+    )
+    assert create_payload["workspace"] == "https://github.com/org/repo#feature-branch"
+
+
+@pytest.mark.asyncio
+async def test_omnigent_terminal_initial_snapshot_preserves_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class CompletedImmediatelyClient(_FakeOmnigentClient):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.statuses = ["completed"]
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        CompletedImmediatelyClient,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None
+    )
+
+    result = await run_omnigent_execution(_request())
+
+    assert result.summary == "done"
 
 
 @pytest.mark.asyncio
@@ -168,7 +236,9 @@ async def test_omnigent_optional_delete_uses_explicit_delete_branch_false(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", _FakeOmnigentClient)
-    monkeypatch.setattr("moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None
+    )
 
     await run_omnigent_execution(
         _request(
@@ -182,7 +252,56 @@ async def test_omnigent_optional_delete_uses_explicit_delete_branch_false(
     )
 
     client = _FakeOmnigentClient.instances[0]
-    assert ("delete_session", {"session_id": "sess_123", "delete_branch": False}) in client.calls
+    assert (
+        "delete_session",
+        {"session_id": "sess_123", "delete_branch": False},
+    ) in client.calls
+
+
+@pytest.mark.asyncio
+async def test_omnigent_deletes_session_after_non_cancellation_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PostEventFailureClient(_FakeOmnigentClient):
+        async def post_event(
+            self,
+            session_id: str,
+            event: dict[str, Any],
+        ) -> dict[str, Any]:
+            self.calls.append(
+                ("post_event", {"session_id": session_id, "event": event})
+            )
+            raise RuntimeError("provider write failed")
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        PostEventFailureClient,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None
+    )
+
+    with pytest.raises(RuntimeError, match="provider write failed"):
+        await run_omnigent_execution(
+            _request(
+                {
+                    "omnigent": {
+                        "agent": {"agentId": "ag_1"},
+                        "session": {
+                            "hostType": "managed",
+                            "workspace": "https://github.com/org/repo#main",
+                        },
+                        "capture": {"deleteOmnigentSessionAfterHarvest": True},
+                    }
+                }
+            )
+        )
+
+    client = PostEventFailureClient.instances[0]
+    assert (
+        "delete_session",
+        {"session_id": "sess_123", "delete_branch": False},
+    ) in client.calls
 
 
 @pytest.mark.asyncio
@@ -190,7 +309,9 @@ async def test_omnigent_cancellation_interrupts_then_stops_active_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", _FakeOmnigentClient)
-    monkeypatch.setattr("moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None
+    )
     sleep_calls = 0
 
     async def fake_sleep(_delay: float) -> None:
@@ -250,6 +371,37 @@ async def test_omnigent_rejects_v1_session_reuse_boundary(
     assert result.failure_class == "user_error"
     assert result.provider_error_code == "omnigent_v1_non_goal"
     assert _FakeOmnigentClient.instances == []
+
+
+@pytest.mark.asyncio
+async def test_omnigent_harvest_preserves_binary_file_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_content = b"\x89PNG\r\n\x1a\n\xff\x00binary"
+
+    class BinaryHarvestClient(_FakeOmnigentClient):
+        async def get_workspace_file(self, session_id: str, path: str) -> bytes:
+            self.calls.append(
+                ("get_workspace_file", {"session_id": session_id, "path": path})
+            )
+            return binary_content
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.OmnigentHttpClient",
+        BinaryHarvestClient,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute.activity.heartbeat", lambda *_a, **_k: None
+    )
+
+    result = await run_omnigent_execution(_request())
+
+    workspace_ref = next(
+        ref
+        for ref in result.output_refs
+        if "output.workspace.files/README.md.current" in ref
+    )
+    assert Path(workspace_ref.removeprefix("file:")).read_bytes() == binary_content
 
 
 @pytest.mark.asyncio

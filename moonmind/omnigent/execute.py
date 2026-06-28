@@ -15,6 +15,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from temporalio import activity
 
@@ -141,6 +142,7 @@ async def _execute_with_client(
     }
     session_id = ""
     stream_task: asyncio.Task[list[dict[str, Any]]] | None = None
+    stream_events: list[dict[str, Any]] = []
     final_snapshot: dict[str, Any] = {}
 
     try:
@@ -151,7 +153,10 @@ async def _execute_with_client(
         diagnostics["omnigentAgentId"] = session_payload.get("agent_id")
 
         initial_snapshot = await _safe_get_session(client, session_id, diagnostics)
-        stream_task = asyncio.create_task(_collect_stream(client, session_id))
+        final_snapshot = initial_snapshot
+        stream_task = asyncio.create_task(
+            _collect_stream(client, session_id, stream_events)
+        )
         first_message = _build_first_message_event(request, spec)
         await client.post_event(session_id, first_message)
 
@@ -166,15 +171,14 @@ async def _execute_with_client(
                     "providerName": "omnigent",
                     "omnigentSessionId": session_id,
                     "normalizedStatus": status,
+                    "eventsCaptured": len(stream_events),
                 }
             )
 
         if stream_task is not None:
             stream_task.cancel()
             with suppress(asyncio.CancelledError):
-                stream_events = await stream_task
-        else:
-            stream_events = []
+                await stream_task
         diagnostics["transport"]["eventsCaptured"] = len(stream_events)
 
         harvest = await _harvest_artifacts(
@@ -230,6 +234,16 @@ async def _execute_with_client(
                 redactor=redactor,
             )
         raise
+    except Exception:
+        if session_id:
+            with suppress(Exception):
+                await _maybe_delete_session(
+                    client,
+                    session_id,
+                    spec=spec,
+                    diagnostics=diagnostics,
+                )
+        raise
     finally:
         if stream_task is not None and not stream_task.done():
             stream_task.cancel()
@@ -247,9 +261,9 @@ async def _cancel_session(
         await client.interrupt(session_id)
         diagnostics["cancellation"]["interruptSent"] = True
     await asyncio.sleep(spec.cancel_grace_seconds)
-    snapshot = await _safe_get_session(client, session_id, diagnostics)
-    if _normalize_status(snapshot) in {"launching", "running", "awaiting_approval"}:
-        with suppress(Exception):
+    with suppress(Exception):
+        snapshot = await _safe_get_session(client, session_id, diagnostics)
+        if _normalize_status(snapshot) in {"launching", "running", "awaiting_approval"}:
             await client.stop_session(session_id)
             diagnostics["cancellation"]["stopSessionSent"] = True
 
@@ -303,8 +317,8 @@ async def _resolve_agent_id(client: OmnigentHttpClient, agent_name: str) -> str:
 async def _collect_stream(
     client: OmnigentHttpClient,
     session_id: str,
+    events: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
     async for event in client.stream_events(session_id):
         events.append(
             {
@@ -315,13 +329,6 @@ async def _collect_stream(
                 "eventType": str(event.get("type") or event.get("event") or "unknown"),
                 "payload": redact_sensitive_payload(event),
                 "redaction": {"applied": True},
-            }
-        )
-        activity.heartbeat(
-            {
-                "providerName": "omnigent",
-                "omnigentSessionId": session_id,
-                "eventsCaptured": len(events),
             }
         )
     return events
@@ -470,6 +477,8 @@ def _build_execution_spec(
     host_type = str(session.get("hostType") or "managed").strip().lower()
     host_id = _clean(session.get("hostId"))
     workspace = _clean(session.get("workspace"))
+    if host_type == "managed" and not workspace:
+        workspace = _managed_workspace_from_request(request, params)
     if host_type not in {"managed", "external"}:
         raise OmnigentExecutionError(
             "Omnigent session.hostType must be managed or external.",
@@ -786,7 +795,56 @@ def _truthy(value: Any) -> bool:
 
 
 def _looks_like_local_path(value: str) -> bool:
-    return value.startswith(("/", "./", "../", "~")) or re.match(r"^[A-Za-z]:\\", value) is not None
+    return value.startswith(("/", "./", "../", "~")) or (
+        re.match(r"^[A-Za-z]:[/\\]", value) is not None
+    )
+
+
+def _managed_workspace_from_request(
+    request: AgentExecutionRequest,
+    params: Mapping[str, Any],
+) -> str:
+    repository = _find_repository_url(request.workspace_spec)
+    workspace_context = params.get("workspaceContext")
+    if not repository and isinstance(workspace_context, Mapping):
+        repository = _find_repository_url(workspace_context)
+    omnigent = params.get("omnigent")
+    if not repository and isinstance(omnigent, Mapping):
+        nested_context = omnigent.get("workspaceContext")
+        if isinstance(nested_context, Mapping):
+            repository = _find_repository_url(nested_context)
+    if not repository:
+        return ""
+    branch = _clean(request.workspace_spec.get("branch")) or _clean(
+        request.workspace_spec.get("startingBranch")
+    )
+    if branch and "#" not in repository:
+        return f"{repository}#{branch}"
+    return repository
+
+
+def _find_repository_url(payload: Mapping[str, Any] | None) -> str:
+    if not isinstance(payload, Mapping):
+        return ""
+    for key in ("repository", "repositoryUrl", "repoUrl", "gitUrl"):
+        value = payload.get(key)
+        if isinstance(value, str) and _is_git_url_with_optional_branch(value):
+            return value
+        if isinstance(value, Mapping):
+            nested = _find_repository_url(value)
+            if nested:
+                return nested
+    return ""
+
+
+def _is_git_url_with_optional_branch(value: str) -> bool:
+    candidate = value.split("#", 1)[0]
+    parsed = urlparse(candidate)
+    if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.netloc:
+        return True
+    if candidate.startswith("git@") and ":" in candidate:
+        return True
+    return False
 
 
 def _float_env(name: str, default: float) -> float:
@@ -863,7 +921,10 @@ def _write_bytes_artifact(
 ) -> str:
     target = spec.artifact_dir / name
     target.parent.mkdir(parents=True, exist_ok=True)
-    safe_data = redactor.scrub(data.decode("utf-8", errors="replace")).encode()
+    try:
+        safe_data = redactor.scrub(data.decode("utf-8", errors="strict")).encode()
+    except UnicodeDecodeError:
+        safe_data = data
     target.write_bytes(safe_data)
     return f"file:{target.as_posix()}"
 
