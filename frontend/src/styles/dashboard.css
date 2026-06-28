@@ -6482,6 +6482,10 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin-inline: auto;
 }
 
+.workflow-workspace-shell[data-sidebar-collapsed="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workflow-workspace-sidebar {
   position: sticky;
   top: 1rem;
@@ -6596,6 +6600,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-open-sidebar {
   justify-self: start;
   align-self: start;
+  margin-bottom: 0.75rem;
 }
 
 @media (max-width: 767px) {
@@ -6607,6 +6612,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   .workflow-workspace-sidebar,
   .workflow-workspace-open-sidebar {
     display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workflow-workspace-shell,
+  .workflow-workspace-sidebar,
+  .workflow-workspace-open-sidebar,
+  .workflow-workspace-detail {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
   }
 }
 

@@ -44,6 +44,7 @@ describe('dashboardPreferences', () => {
         liveUpdatesEnabled: false,
         createExpertMode: true,
         debugFieldsVisible: false,
+        workflowWorkspaceSidebarCollapsed: true,
         preferredDetailTab: 'steps',
         defaultRuntime: 'codex_cli',
       });
@@ -55,6 +56,7 @@ describe('dashboardPreferences', () => {
       expect(reloaded.workflowListColumnVisibility.progress).toBe(false);
       expect(reloaded.createExpertMode).toBe(true);
       expect(reloaded.debugFieldsVisible).toBe(false);
+      expect(reloaded.workflowWorkspaceSidebarCollapsed).toBe(true);
       expect(reloaded.preferredDetailTab).toBe('steps');
     });
 
@@ -107,6 +109,7 @@ describe('dashboardPreferences', () => {
             workflowListPageSize: 7, // unsupported page size
             preferredDetailTab: 'nope', // invalid enum
             liveUpdatesEnabled: 'yes', // wrong type
+            workflowWorkspaceSidebarCollapsed: 'yes', // wrong type
             createExpertMode: true, // valid
             workflowListColumnVisibility: { repository: false, bogus: true },
             workflowListDefaultStatuses: ['executing', 42, '  failed  ', ''],
@@ -119,6 +122,7 @@ describe('dashboardPreferences', () => {
       expect(prefs.workflowListPageSize).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListPageSize);
       expect(prefs.preferredDetailTab).toBe('overview'); // reset
       expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
+      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(false); // reset to default
       expect(prefs.createExpertMode).toBe(true); // kept
       expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
       expect(prefs.workflowListColumnVisibility).not.toHaveProperty('bogus'); // dropped
@@ -177,6 +181,14 @@ describe('dashboardPreferences', () => {
       const parsed = JSON.parse(storedRaw() ?? '{}');
       expect(parsed.preferences.workflowListColumnVisibility.progress).toBe(false);
       expect(parsed.preferences.workflowListColumnVisibility).not.toHaveProperty('nextAction');
+    });
+
+    it('MM-1000 keeps a valid persisted workflow workspace sidebar collapse preference', () => {
+      const prefs = sanitizeDashboardPreferences({
+        workflowWorkspaceSidebarCollapsed: true,
+      });
+
+      expect(prefs.workflowWorkspaceSidebarCollapsed).toBe(true);
     });
   });
 

@@ -393,7 +393,9 @@ function WorkflowWorkspaceShell({
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
   const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
+  );
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
@@ -437,7 +439,12 @@ function WorkflowWorkspaceShell({
   const fullListHref = `/workflows${search.toString() ? `?${search.toString()}` : ''}`;
 
   return (
-    <div className="workflow-workspace-shell" data-jira-issue="MM-999" data-source-issue="MM-975">
+    <div
+      className="workflow-workspace-shell"
+      data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
+      data-jira-issue="MM-997 MM-999 MM-1000"
+      data-source-issue="MM-975"
+    >
       {sidebarOpen ? (
         <WorkflowSidebar
           workflowId={workflowId}
@@ -447,6 +454,7 @@ function WorkflowWorkspaceShell({
           fullListHref={fullListHref}
           closeButtonRef={closeButtonRef}
           onClose={() => {
+            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
             setSidebarOpen(false);
             window.setTimeout(() => openButtonRef.current?.focus(), 0);
           }}
@@ -457,6 +465,7 @@ function WorkflowWorkspaceShell({
           type="button"
           className="secondary workflow-workspace-open-sidebar"
           onClick={() => {
+            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
             setSidebarOpen(true);
             window.setTimeout(() => closeButtonRef.current?.focus(), 0);
           }}
