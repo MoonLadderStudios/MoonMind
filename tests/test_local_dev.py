@@ -8,6 +8,43 @@ from pathlib import Path
 import yaml
 
 
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """PyYAML loader that rejects duplicate mapping keys."""
+
+
+def _construct_mapping_with_unique_keys(loader, node, deep=False):
+    seen_keys = set()
+    for key_node, _value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen_keys:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key ({key!r})",
+                key_node.start_mark,
+            )
+        seen_keys.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_with_unique_keys,
+)
+
+
+def _load_compose() -> dict:
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    return yaml.load(
+        compose_path.read_text(encoding="utf-8"),
+        Loader=UniqueKeySafeLoader,
+    )
+
+
 def _has_volume_mount(service_config: dict, source: str, target: str) -> bool:
     volumes = service_config.get("volumes", [])
     assert isinstance(volumes, list), "service volumes must be a list"
@@ -353,12 +390,7 @@ def test_agent_workspaces_init_avoids_recursive_permission_repair():
 
 def test_omnigent_compose_uses_shared_postgres_for_mm_970():
     """MM-970: Omnigent runs beside MoonMind using the shared Postgres service."""
-    compose_path = Path("docker-compose.yaml")
-    assert (
-        compose_path.exists()
-    ), "docker-compose.yaml must exist at the repository root"
-
-    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    compose_data = _load_compose()
     services = compose_data.get("services", {})
 
     assert "postgres" in services

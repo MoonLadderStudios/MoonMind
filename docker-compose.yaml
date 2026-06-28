@@ -838,21 +838,9 @@ services:
     networks:
       - local-network
 
-  omnigent:
-    profiles: ["omnigent-host"]
-    image: ${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}
-    command: ["omnigent", "server", "--host", "0.0.0.0", "--port", "8000", "--no-open"]
-    expose:
-      - "8000"
-    volumes:
-      - omnigent-server-state:/data
-    networks:
-      - local-network
-    restart: unless-stopped
-
   omnigent-host:
     profiles: ["omnigent-host"]
-    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
     command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -860,7 +848,8 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - omnigent-host-state:/root/.omnigent
       - ./omnigent_workspaces:/workspaces
@@ -1050,7 +1039,6 @@ services:
 
 volumes:
   qdrant-storage:
-  omnigent-server-state:
   omnigent-host-state:
   postgres-data:
   minio-data:
