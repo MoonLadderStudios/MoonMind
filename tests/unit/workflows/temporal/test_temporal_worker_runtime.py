@@ -2550,6 +2550,34 @@ def test_runtime_planner_pr_resolver_injects_branch_selector_into_instruction():
     assert '"pr": "fix/my-feature-branch"' in node_inputs["instructions"]
     assert plan["metadata"]["title"] == "fix/my-feature-branch"
 
+
+def test_runtime_planner_pr_resolver_uses_non_default_git_branch_as_selector():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                },
+                "git": {"branch": "feature/current-pr"},
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert '"pr": "feature/current-pr"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "feature/current-pr"
+
+
 def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(
@@ -2619,7 +2647,8 @@ def test_runtime_planner_requires_selector_for_pr_resolver_without_instructions(
         RuntimeError,
         match=(
             "pr-resolver workflow requires workflow.tool.inputs.pr, "
-            "workflow.tool.inputs.branch, or workflow.git.startingBranch"
+            "workflow.tool.inputs.branch, workflow.git.startingBranch, "
+            "or a non-default workflow.git.branch"
         ),
     ):
         planner(
@@ -3283,7 +3312,8 @@ def test_runtime_planner_rejects_pr_resolver_with_only_jira_instructions_and_bas
         RuntimeError,
         match=(
             "pr-resolver workflow requires workflow.tool.inputs.pr, "
-            "workflow.tool.inputs.branch, or workflow.git.startingBranch"
+            "workflow.tool.inputs.branch, workflow.git.startingBranch, "
+            "or a non-default workflow.git.branch"
         ),
     ):
         planner(

@@ -4822,7 +4822,8 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_structured_sel
         == "pr-resolver workflow requires a structured PR selector: "
         "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
         "payload.workflow.tool.inputs.pr/branch, or "
-        "payload.workflow.git.startingBranch."
+        "payload.workflow.git.startingBranch, or a non-default "
+        "payload.workflow.git.branch."
     )
     service.create_execution.assert_not_awaited()
 
@@ -4858,6 +4859,39 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr"
+    }
+
+
+def test_create_task_shaped_execution_allows_pr_resolver_with_non_default_git_branch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "runtime": {"mode": "gemini_cli"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                    },
+                    "git": {"branch": "feature/resolve-pr"},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "feature/resolve-pr"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
+    assert initial_parameters["workflow"]["git"] == {
+        "branch": "feature/resolve-pr"
     }
 
 

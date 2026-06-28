@@ -14,6 +14,15 @@ Workflow publishing controls how agent-produced changes reach the repository aft
 
 The agent runs in its workspace but no git operations occur after completion. Useful for read-only Workflow Executions (analysis, diagnostics, research) or for Workflow Executions with side effects other than a final publish action.
 
+Some self-managed skills own their own repository side effects while requiring
+MoonMind publish mode `none`. Standalone `pr-resolver` is the canonical case:
+it resolves and merges an existing pull request from inside the managed runtime.
+For these runs, an explicit PR selector in `inputs.pr` or `inputs.branch` is
+preferred. When the create-form single `git.branch` field names a non-default
+branch, MoonMind may use that branch as the resolver's PR selector; common
+default/base branch names such as `main` and `master` remain invalid as implicit
+resolver selectors.
+
 ### `branch`
 
 After the agent completes, the infrastructure pushes the current work branch to the remote. The agent is instructed to commit but **not** to push or create a PR — that is handled deterministically by the runtime.
