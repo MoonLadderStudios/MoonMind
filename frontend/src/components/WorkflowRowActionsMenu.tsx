@@ -4,7 +4,6 @@ import { z } from 'zod';
 
 import { DashboardActionDialog } from './DashboardActionDialog';
 import { formatStatusLabel } from '../utils/formatters';
-import { navigateTo } from '../lib/navigation';
 import {
   taskCompareHref,
   taskEditForRerunHref,
@@ -317,25 +316,7 @@ export function WorkflowRowActionsMenu({
         onRerun: () => {
           setActionError(null);
           if (busy || !workflowId) return;
-          updateMutation.mutate(
-            { updateName: 'RequestRerun' },
-            {
-              onSuccess: (result: unknown) => {
-                const payloadResult =
-                  result && typeof result === 'object'
-                    ? (result as {
-                        execution?: { workflowId?: string | null };
-                        workflow_id?: string | null;
-                      })
-                    : {};
-                const redirectWorkflowId =
-                  String(payloadResult.execution?.workflowId || '').trim() ||
-                  String(payloadResult.workflow_id || '').trim() ||
-                  workflowId;
-                navigateTo(`/workflows/${encodeURIComponent(redirectWorkflowId)}?source=temporal`);
-              },
-            },
-          );
+          updateMutation.mutate({ updateName: 'RequestRerun' });
         },
         onResumeFromFailedStep: () => {
           setActionError(null);

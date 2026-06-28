@@ -2529,6 +2529,12 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/workflows/test-123/steps');
+    expect(window.location.search).toBe('?source=temporal');
+    expect(
+      window.sessionStorage.getItem('moonmind.temporalTaskEditing.notice'),
+    ).toBeNull();
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

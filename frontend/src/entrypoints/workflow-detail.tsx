@@ -20,7 +20,6 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
-import { navigateTo } from '../lib/navigation';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -5408,30 +5407,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       mode: 'detail',
       workflowId,
     });
-    updateMutation.mutate(
-      { updateName: 'RequestRerun' },
-      {
-        onSuccess: (result: unknown) => {
-          const payloadResult = result as {
-            execution?: { workflowId?: string | null };
-            workflow_id?: string | null;
-          };
-          const redirectWorkflowId =
-            String(payloadResult.execution?.workflowId || '').trim() ||
-            String(payloadResult.workflow_id || '').trim() ||
-            workflowId;
-          try {
-            window.sessionStorage.setItem(
-              'moonmind.temporalTaskEditing.notice',
-              'Rerun was requested and the latest execution view is ready.',
-            );
-          } catch {
-            // Navigation should not depend on session storage availability.
-          }
-          navigateTo(`/workflows/${encodeURIComponent(redirectWorkflowId)}?source=temporal`);
-        },
-      },
-    );
+    updateMutation.mutate({ updateName: 'RequestRerun' });
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   // The remediation mode/authority/action-policy controls only render on the Artifacts
