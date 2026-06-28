@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
@@ -215,6 +215,12 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
 }
 
 type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
+type SegmentedNavItem<T extends string> = {
+  value: T;
+  label: string;
+  href: string;
+  badge?: ReactNode;
+};
 type WorkflowDialogKind =
   | 'rename'
   | 'resume-from-failed-step'
@@ -237,6 +243,28 @@ function workflowDetailSubrouteHref(
   const suffix = subroute === 'overview' ? '' : `/${subroute}`;
   const query = search.toString();
   return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
+}
+
+function useWorkflowDetailSubroute(): [WorkflowDetailSubroute, (next: WorkflowDetailSubroute, href: string) => void] {
+  const [subroute, setSubroute] = useState(() => workflowDetailSubrouteFromPath(window.location.pathname));
+
+  useEffect(() => {
+    const onPopState = () => {
+      setSubroute(workflowDetailSubrouteFromPath(window.location.pathname));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const navigate = (next: WorkflowDetailSubroute, href: string) => {
+    if (next === subroute && href === `${window.location.pathname}${window.location.search}`) {
+      return;
+    }
+    window.history.pushState({}, '', href);
+    setSubroute(next);
+  };
+
+  return [subroute, navigate];
 }
 
 function workflowWorkspaceListQuery(search: URLSearchParams): string {
@@ -1828,6 +1856,25 @@ function Card({
   );
 }
 
+function MetricStrip({
+  items,
+}: {
+  items: Array<{ label: string; value: ReactNode }>;
+}) {
+  const visibleItems = items.filter((item) => item.value !== null && item.value !== undefined && item.value !== '');
+  if (visibleItems.length === 0) return null;
+  return (
+    <dl className="metric-strip">
+      {visibleItems.map((item) => (
+        <div key={item.label} className="metric-strip-item">
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
@@ -1837,12 +1884,123 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function FlatFactGrid({ children }: { children: ReactNode }) {
+  return <dl className="flat-fact-grid">{children}</dl>;
+}
+
 function FactGroup({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="td-group">
       <h4>{title}</h4>
-      <dl>{children}</dl>
+      <FlatFactGrid>{children}</FlatFactGrid>
     </div>
+  );
+}
+
+function SegmentedNav<T extends string>({
+  items,
+  active,
+  ariaLabel,
+  onNavigate,
+}: {
+  items: Array<SegmentedNavItem<T>>;
+  active: T;
+  ariaLabel: string;
+  onNavigate: (value: T, href: string) => void;
+}) {
+  const activeIndex = Math.max(0, items.findIndex((item) => item.value === active));
+  return (
+    <nav
+      className="segmented-nav"
+      aria-label={ariaLabel}
+      style={{
+        '--segmented-nav-count': items.length,
+        '--segmented-nav-active-index': activeIndex,
+      } as CSSProperties}
+    >
+      {items.map((item) => (
+        <a
+          key={item.value}
+          className="segmented-nav-item"
+          href={item.href}
+          aria-current={active === item.value ? 'page' : undefined}
+          onClick={(event) => {
+            event.preventDefault();
+            onNavigate(item.value, item.href);
+          }}
+        >
+          <span>{item.label}</span>
+          {item.badge ? <span className="segmented-nav-badge">{item.badge}</span> : null}
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+const KEBAB_ICON = (
+  <svg
+    aria-hidden="true"
+    className="td-workflow-actions-trigger-icon"
+    viewBox="0 0 16 16"
+    focusable="false"
+  >
+    <circle cx="8" cy="3" r="1.5" />
+    <circle cx="8" cy="8" r="1.5" />
+    <circle cx="8" cy="13" r="1.5" />
+  </svg>
+);
+
+function IconMenuButton({
+  items,
+  ariaLabel,
+}: {
+  items: WorkflowActionMenuItem[];
+  ariaLabel: string;
+}) {
+  return (
+    <WorkflowActionsMenu
+      items={items}
+      triggerContent={KEBAB_ICON}
+      triggerAriaLabel={ariaLabel}
+      triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+    />
+  );
+}
+
+function workflowDuration(startedAt: string | null | undefined, closedAt: string | null | undefined): string {
+  if (!startedAt || !closedAt) return '—';
+  const started = new Date(startedAt).getTime();
+  const closed = new Date(closedAt).getTime();
+  if (Number.isNaN(started) || Number.isNaN(closed) || closed < started) return '—';
+  return formatDurationMs(closed - started);
+}
+
+function githubRepositoryHref(repository: string | null | undefined): string | null {
+  const normalized = String(repository || '').trim();
+  if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(normalized)) {
+    return `https://github.com/${normalized}`;
+  }
+  return null;
+}
+
+function RepositoryFact({ repository }: { repository: string }) {
+  const href = githubRepositoryHref(repository);
+  const content = (
+    <>
+      <svg aria-hidden="true" className="td-repository-icon" viewBox="0 0 16 16" focusable="false">
+        <path d="M4 2.5h6.5L13 5v8.5H4A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5Zm6 1.2V5.5h1.8L10 3.7ZM4 4a.5.5 0 0 0-.5.5V12a.5.5 0 0 0 .5.5h8V6.5H9V4H4Zm1.25 4h4.5v1h-4.5V8Zm0 2h3.5v1h-3.5v-1Z" />
+      </svg>
+      <span className="td-repository-name">{repository}</span>
+    </>
+  );
+  return (
+    <span className="td-repository-value">
+      {href ? (
+        <a href={href} target="_blank" rel="noreferrer">
+          {content}
+        </a>
+      ) : content}
+    </span>
   );
 }
 
@@ -5692,33 +5850,48 @@ function WorkflowDetailSubrouteNav({
   workflowId,
   current,
   search,
-  showDebug,
+  onNavigate,
+  stepCount,
+  artifactCount,
+  runCount,
 }: {
   workflowId: string;
   current: WorkflowDetailSubroute;
   search: URLSearchParams;
-  showDebug: boolean;
+  onNavigate: (next: WorkflowDetailSubroute, href: string) => void;
+  stepCount?: number | null;
+  artifactCount?: number | null;
+  runCount?: number | null;
 }) {
-  const items: Array<{ route: WorkflowDetailSubroute; label: string }> = [
-    { route: 'overview', label: 'Overview' },
-    { route: 'steps', label: 'Steps' },
-    { route: 'artifacts', label: 'Artifacts' },
-    { route: 'runs', label: 'Runs' },
-    // MM-964: the Debug tab is gated by the debug-fields visibility preference.
-    ...(showDebug ? [{ route: 'debug' as WorkflowDetailSubroute, label: 'Debug' }] : []),
+  const items: Array<SegmentedNavItem<WorkflowDetailSubroute>> = [
+    { value: 'overview', label: 'Overview', href: workflowDetailSubrouteHref(workflowId, 'overview', search) },
+    {
+      value: 'steps',
+      label: 'Steps',
+      href: workflowDetailSubrouteHref(workflowId, 'steps', search),
+      badge: stepCount ?? null,
+    },
+    {
+      value: 'artifacts',
+      label: 'Artifacts',
+      href: workflowDetailSubrouteHref(workflowId, 'artifacts', search),
+      badge: artifactCount ?? null,
+    },
+    {
+      value: 'runs',
+      label: 'Runs',
+      href: workflowDetailSubrouteHref(workflowId, 'runs', search),
+      badge: runCount ?? null,
+    },
+    { value: 'debug', label: 'Debug', href: workflowDetailSubrouteHref(workflowId, 'debug', search) },
   ];
   return (
-    <nav className="td-subroute-nav" aria-label="Workflow detail sections">
-      {items.map((item) => (
-        <a
-          key={item.route}
-          href={workflowDetailSubrouteHref(workflowId, item.route, search)}
-          aria-current={current === item.route ? 'page' : undefined}
-        >
-          {item.label}
-        </a>
-      ))}
-    </nav>
+    <SegmentedNav
+      items={items}
+      active={current}
+      ariaLabel="Workflow detail sections"
+      onNavigate={onNavigate}
+    />
   );
 }
 
@@ -5874,7 +6047,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     [search],
   );
   const showExpandToFullList = isDesktop || expandToFullListHref !== '/workflows';
-  const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
+  const [detailSubroute, setDetailSubroute] = useWorkflowDetailSubroute();
   const sourceTemporal = search.get('source') === 'temporal';
 
   const [actionError, setActionError] = useState<string | null>(null);
@@ -5960,11 +6133,17 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const missingAgentRunState = execution && !resolvedAgentRunId ? inferMissingAgentRunState(execution) : null;
 
+  const stepsTabActive = detailSubroute === 'steps';
+  const artifactsTabActive = detailSubroute === 'artifacts';
+  const overviewTabActive = detailSubroute === 'overview';
+  const runsTabActive = detailSubroute === 'runs';
+  const debugTabActive = detailSubroute === 'debug';
+
   const stepsQuery = useQuery({
     queryKey: ['workflow-detail-steps', workflowId, execution?.stepsHref],
     queryFn: () => fetchStepLedger(String(execution?.stepsHref || '')),
-    enabled: Boolean(execution?.stepsHref),
-    refetchInterval: execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
+    enabled: stepsTabActive && Boolean(execution?.stepsHref),
+    refetchInterval: stepsTabActive && execution?.stepsHref && !isTerminalExecution ? detailPoll : false,
   });
   const latestRunId = stepsQuery.data?.runId || runId;
   const selectedRecoveryOptions = useMemo(() => {
@@ -6034,11 +6213,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return StepExecutionDetailSchema.parse(await response.json());
     },
     enabled: Boolean(
-      workflowId &&
+      stepsTabActive &&
+        workflowId &&
         selectedRecoveryStep?.logicalStepId &&
         selectedRecoveryStep.executionOrdinal > 0,
     ),
-    refetchInterval: !isTerminalExecution ? detailPoll : false,
+    refetchInterval: stepsTabActive && !isTerminalExecution ? detailPoll : false,
   });
   const recoveryEligibility =
     execution?.recoveryEligibility ?? stepRecoveryQuery.data?.recoveryEligibility ?? null;
@@ -6054,8 +6234,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return ArtifactListSchema.parse(await response.json());
     },
     enabled:
-      Boolean(namespace && workflowId && latestRunId)
-      && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
+      artifactsTabActive &&
+      Boolean(namespace && workflowId && latestRunId),
     refetchInterval: namespace && workflowId && latestRunId && !isTerminalExecution
       ? detailPoll
       : false,
@@ -6072,8 +6252,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       return ArtifactListSchema.parse(await response.json());
     },
     enabled:
-      Boolean(namespace && workflowId && latestRunId)
-      && (!execution?.stepsHref || stepsQuery.isSuccess || stepsQuery.isError),
+      artifactsTabActive &&
+      Boolean(namespace && workflowId && latestRunId),
     refetchInterval: namespace && workflowId && latestRunId && !isTerminalExecution
       ? detailPoll
       : false,
@@ -6082,8 +6262,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const runSummaryQuery = useQuery({
     queryKey: ['workflow-detail-run-summary', summaryArtifactRef],
     queryFn: () => fetchRunSummaryArtifact(payload.apiBase, summaryArtifactRef),
-    enabled: Boolean(summaryArtifactRef),
-    refetchInterval: summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
+    enabled: overviewTabActive && Boolean(summaryArtifactRef),
+    refetchInterval: overviewTabActive && summaryArtifactRef && !isTerminalExecution ? detailPoll : false,
   });
   const inboundRemediationsQuery = useQuery({
     queryKey: ['workflow-detail-remediations', workflowId, 'inbound'],
@@ -6094,7 +6274,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
       return RemediationLinksSchema.parse(await response.json());
     },
-    enabled: shouldFetchRemediationLinks,
+    enabled: artifactsTabActive && shouldFetchRemediationLinks,
   });
   const outboundRemediationsQuery = useQuery({
     queryKey: ['workflow-detail-remediations', workflowId, 'outbound'],
@@ -6105,7 +6285,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       if (!response.ok) throw new Error(`Remediations: ${response.statusText}`);
       return RemediationLinksSchema.parse(await response.json());
     },
-    enabled: shouldFetchRemediationLinks,
+    enabled: artifactsTabActive && shouldFetchRemediationLinks,
   });
   const runSummary = runSummaryQuery.data;
   const displayedMergeAutomation =
@@ -6125,18 +6305,34 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     if (!execution) {
       return [];
     }
+    const uniqueByWorkflowId = <T extends { workflowId: string }>(items: T[]): T[] => {
+      const seen = new Set<string>();
+      return items.filter((item) => {
+        if (seen.has(item.workflowId)) return false;
+        seen.add(item.workflowId);
+        return true;
+      });
+    };
     if (execution.prerequisites.length > 0) {
-      return execution.prerequisites;
+      return uniqueByWorkflowId(execution.prerequisites);
     }
-    return ids.map((workflowId) => ({
+    return uniqueByWorkflowId(ids.map((workflowId) => ({
       workflowId,
       title: workflowId,
       summary: null,
       state: null,
       closeStatus: null,
       workflowType: 'MoonMind.UserWorkflow',
-    }));
+    })));
   }, [execution]);
+  const dependentRows = useMemo(() => {
+    const seen = new Set<string>();
+    return (execution?.dependents || []).filter((item) => {
+      if (seen.has(item.workflowId)) return false;
+      seen.add(item.workflowId);
+      return true;
+    });
+  }, [execution?.dependents]);
   const hasDependencySection = Boolean(
     execution &&
       (execution.hasDependencies ||
@@ -6462,7 +6658,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   // The remediation mode/authority/action-policy controls only render on the Artifacts
   // tab, so only expose the Remediate action there. Surfacing it on other tabs would let
   // the operator submit with default remediation settings without seeing those controls.
-  const remediationActionAvailable = canCreateRemediation && detailSubroute === 'artifacts';
+  const remediationActionAvailable = canCreateRemediation && artifactsTabActive;
   const canShowEditWorkflow = Boolean(actions?.canUpdateInputs || actions?.canEditForRerun);
   const editTaskUnavailableReason = canShowEditWorkflow
     ? null
@@ -6551,6 +6747,18 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       },
     },
   });
+  const toolbarMenuItems: WorkflowActionMenuItem[] = [
+    {
+      id: 'view-debug-details',
+      label: debugFieldsPref ? 'View: Hide debug details' : 'View: Show debug details',
+      onSelect: () => {
+        const next = !debugFieldsPref;
+        setDebugFieldsPref(next);
+        updateDashboardPreferences({ debugFieldsVisible: next });
+      },
+    },
+    ...workflowActionMenuItems,
+  ];
   const toggleStep = (logicalStepId: string) => {
     setExpandedSteps((prev) => ({
       ...prev,
@@ -6614,6 +6822,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   };
   const primaryReport = latestReportQuery.data?.artifacts[0] ?? null;
   const relatedReports = relatedReportArtifacts(artifactsQuery.data?.artifacts || []);
+  const stepTabCount = stepsQuery.data?.steps.length ?? null;
+  const artifactTabCount = artifactsQuery.data?.artifacts.length ?? null;
+  const runTabCount = execution ? (execution.relatedRuns?.length ?? 0) + 1 : null;
   return (
     <div className="stack workflow-detail-page">
       <div className="toolbar">
@@ -6635,6 +6846,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         <div className="toolbar-controls">
+          {!isTerminalExecution ? (
+            <span className="td-live-indicator" aria-label="Live updates enabled">
+              <span aria-hidden="true" />
+              Live
+            </span>
+          ) : null}
           {showExpandToFullList ? (
             <a
               className="button secondary"
@@ -6644,9 +6861,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               Expand to full list
             </a>
           ) : null}
-          <span className="small">
-            Live updates enabled. Polling every {Math.round(detailPoll / 1000)}s
-          </span>
+          {taskId ? (
+            <IconMenuButton
+              items={toolbarMenuItems}
+              ariaLabel="Workflow actions"
+            />
+          ) : null}
         </div>
       </div>
 
@@ -6656,21 +6876,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             workflowId={taskId}
             current={detailSubroute}
             search={search}
-            showDebug={debugVisible}
+            onNavigate={setDetailSubroute}
+            stepCount={stepTabCount}
+            artifactCount={artifactTabCount}
+            runCount={runTabCount}
           />
-          <label className="checkbox td-debug-visibility-toggle">
-            <input
-              type="checkbox"
-              checked={debugFieldsPref}
-              onChange={(event) => {
-                setDebugFieldsPref(event.target.checked);
-                updateDashboardPreferences({
-                  debugFieldsVisible: event.target.checked,
-                });
-              }}
-            />
-            Show debug details
-          </label>
         </div>
       ) : null}
 
@@ -6686,12 +6896,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             {execution.recurrence?.definitionId}
           </a>
         </div>
-      ) : null}
-
-      {actionsOn && actions ? (
-        <section className="td-workflow-actions-surface" aria-label="Workflow action controls">
-          <WorkflowActionsMenu items={workflowActionMenuItems} />
-        </section>
       ) : null}
 
       <DashboardActionDialog
@@ -6865,18 +7069,18 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             ) : null}
           </div>
 
-          {detailSubroute === 'overview' && shouldShowRuntimeCommand ? (
+          {overviewTabActive && shouldShowRuntimeCommand ? (
             <RuntimeCommandDetail command={runtimeCommand} />
           ) : null}
 
-          {detailSubroute === 'runs' ? (
+          {runsTabActive ? (
             <>
               <ExecutionHistoryPanel execution={execution} />
               <RunComparisonPanel execution={execution} />
             </>
           ) : null}
 
-          {detailSubroute === 'overview' ? (
+          {overviewTabActive ? (
             <>
           <div className="td-summary-block">
             <h4>Summary</h4>
@@ -6888,60 +7092,22 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             ) : null}
           </div>
 
-          <section className="stack td-overview-preview-region td-evidence-region">
-            <div>
-              <h3>Workflow Preview</h3>
-              <p className="small">
-                Latest run evidence by section.
-              </p>
-            </div>
-            <div className="grid-2">
-              <Card label="Steps">
-                <a href={workflowDetailSubrouteHref(workflowId, 'steps', search)}>
-                  {stepsQuery.isLoading
-                    ? 'Loading steps...'
-                    : stepsQuery.isError
-                      ? 'Steps unavailable'
-                      : stepsQuery.data
-                        ? `${stepsQuery.data.steps.length} step${stepsQuery.data.steps.length === 1 ? '' : 's'}`
-                        : hasStepsEndpoint
-                          ? 'No step ledger yet'
-                          : 'No steps endpoint'}
-                </a>
-              </Card>
-              <Card label="Artifacts">
-                <a href={workflowDetailSubrouteHref(workflowId, 'artifacts', search)}>
-                  {artifactsQuery.isLoading
-                    ? 'Loading artifacts...'
-                    : artifactsQuery.isError
-                      ? 'Artifacts unavailable'
-                      : `${artifactsQuery.data?.artifacts.length ?? 0} artifact${(artifactsQuery.data?.artifacts.length ?? 0) === 1 ? '' : 's'}`}
-                </a>
-              </Card>
-              <Card label="Report">
-                <a href={workflowDetailSubrouteHref(workflowId, 'artifacts', search)}>
-                  {latestReportQuery.isLoading
-                    ? 'Loading report...'
-                    : latestReportQuery.isError
-                      ? 'Report unavailable'
-                      : primaryReport
-                        ? reportArtifactTitle(primaryReport)
-                        : 'No canonical report'}
-                </a>
-              </Card>
-              <Card label="Runs">
-                <a href={workflowDetailSubrouteHref(workflowId, 'runs', search)}>
-                  {(execution.relatedRuns?.length ?? 0) > 0
-                    ? `${execution.relatedRuns?.length ?? 0} related run${(execution.relatedRuns?.length ?? 0) === 1 ? '' : 's'}`
-                    : 'Current run only'}
-                </a>
-              </Card>
-            </div>
-          </section>
+          <MetricStrip
+            items={[
+              {
+                label: 'Report',
+                value: summaryArtifactRef ? 'Summary available' : 'No canonical report',
+              },
+              {
+                label: 'Run scope',
+                value: runTabCount && runTabCount > 1 ? `${runTabCount} runs` : 'Current run only',
+              },
+            ]}
+          />
             </>
           ) : null}
 
-          {detailSubroute === 'overview' ? (
+          {overviewTabActive ? (
             <div className="td-facts-region">
               <SkillProvenanceBadge
                 resolvedSkillsetRef={execution.resolvedSkillsetRef}
@@ -6969,7 +7135,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               <FactGroup title="Git & Publish">
                 {execution.repository ? (
                   <Fact label="Repository">
-                    <code className="text-xs break-all">{execution.repository}</code>
+                    <RepositoryFact repository={execution.repository} />
                   </Fact>
                 ) : null}
                 {execution.publishMode ? (
@@ -6999,6 +7165,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               <FactGroup title="Lifecycle">
                 <Fact label="Created">{formatWhen(execution.createdAt)}</Fact>
                 <Fact label="Started">{formatWhen(execution.startedAt)}</Fact>
+                <Fact label="Duration">{workflowDuration(execution.startedAt, execution.closedAt)}</Fact>
                 <Fact label="Updated">{formatWhen(execution.updatedAt)}</Fact>
                 <Fact label="Closed">{formatWhen(execution.closedAt)}</Fact>
                 {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
@@ -7007,16 +7174,17 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </div>
           ) : null}
 
-          {detailSubroute === 'debug' && debugVisible ? (
+          {debugTabActive ? (
             <section className="stack td-debug-region" aria-label="Workflow debug details">
               <div>
                 <h3>Debug</h3>
                 <p className="small">
-                  Raw Temporal and runtime identifiers for this workflow. These details are
-                  diagnostic only and do not affect the default overview.
+                  {debugVisible
+                    ? 'Raw Temporal and runtime identifiers for this workflow. These details are diagnostic only and do not affect the default overview.'
+                    : 'Debug details are hidden by the current view preference.'}
                 </p>
               </div>
-              <div className="td-facts-region">
+              {debugVisible ? <div className="td-facts-region">
                 <FactGroup title="Temporal">
                   <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
                   <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
@@ -7043,45 +7211,47 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                     </Fact>
                   </FactGroup>
                 ) : null}
-              </div>
+              </div> : null}
             </section>
           ) : null}
 
-          {detailSubroute === 'overview' && runSummary ? (
+          {overviewTabActive && runSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Run Summary</h3>
-              {runSummary.finishOutcome ? (
-                <div className="grid-2">
-                  <Card label="Outcome Code">{runSummary.finishOutcome.code || '—'}</Card>
-                  <Card label="Outcome Stage">{runSummary.finishOutcome.stage || '—'}</Card>
-                </div>
-              ) : null}
-              {runSummary.publish ? (
-                <div className="grid-2">
-                  <Card label="Publish Status">{formatStatusLabel(runSummary.publish.status)}</Card>
-                  <Card label="Publish Mode">{runSummary.publish.mode || '—'}</Card>
-                </div>
-              ) : null}
+              <FlatFactGrid>
+                {runSummary.finishOutcome ? (
+                  <>
+                    <Fact label="Outcome Code">{runSummary.finishOutcome.code || '—'}</Fact>
+                    <Fact label="Outcome Stage">{runSummary.finishOutcome.stage || '—'}</Fact>
+                  </>
+                ) : null}
+                {runSummary.publish ? (
+                  <>
+                    <Fact label="Publish Status">{formatStatusLabel(runSummary.publish.status)}</Fact>
+                    <Fact label="Publish Mode">{runSummary.publish.mode || '—'}</Fact>
+                  </>
+                ) : null}
+              </FlatFactGrid>
               {runSummary.publish?.reason ? (
                 <p className="whitespace-pre-wrap">{runSummary.publish.reason}</p>
               ) : null}
               {runSummary.publishContext ? (
-                <div className="grid-2">
+                <FlatFactGrid>
                   {runSummary.publishContext.branch ? (
-                    <Card label="Publish Branch">
+                    <Fact label="Publish Branch">
                       <code className="text-xs break-all">{runSummary.publishContext.branch}</code>
-                    </Card>
+                    </Fact>
                   ) : null}
                   {runSummary.publishContext.baseRef ? (
-                    <Card label="Base Ref">
+                    <Fact label="Base Ref">
                       <code className="text-xs break-all">{runSummary.publishContext.baseRef}</code>
-                    </Card>
+                    </Fact>
                   ) : null}
                   {runSummary.publishContext.commitCount !== undefined &&
                   runSummary.publishContext.commitCount !== null ? (
-                    <Card label="Commit Count">{String(runSummary.publishContext.commitCount)}</Card>
+                    <Fact label="Commit Count">{String(runSummary.publishContext.commitCount)}</Fact>
                   ) : null}
-                </div>
+                </FlatFactGrid>
               ) : null}
               {runSummary.lastStep?.summary && runSummary.lastStep.summary !== displayedSummary ? (
                 <div>
@@ -7093,19 +7263,25 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'overview' && proposalSummary ? (
+          {overviewTabActive && proposalSummary ? (
             <section className="stack td-run-summary-region td-evidence-region">
               <h3>Proposal Outcomes</h3>
-              <div className="grid-2">
-                <Card label="Requested">{proposalSummary.requested ? 'Yes' : 'No'}</Card>
-                <Card label="Generated">{String(proposalSummary.generatedCount ?? 0)}</Card>
-                <Card label="Submitted">{String(proposalSummary.submittedCount ?? 0)}</Card>
-                <Card label="Delivered">{String(proposalSummary.deliveredCount ?? 0)}</Card>
-                <Card label="Updated">{String(proposalSummary.dedupUpdates?.length ?? 0)}</Card>
-                <Card label="Failed">
-                  {String((proposalSummary.validationErrors?.length ?? 0) + (proposalSummary.deliveryFailures?.length ?? 0))}
-                </Card>
-              </div>
+              <MetricStrip
+                items={[
+                  { label: 'Requested', value: proposalSummary.requested ? 'Yes' : 'No' },
+                  { label: 'Generated', value: String(proposalSummary.generatedCount ?? 0) },
+                  { label: 'Submitted', value: String(proposalSummary.submittedCount ?? 0) },
+                  { label: 'Delivered', value: String(proposalSummary.deliveredCount ?? 0) },
+                  { label: 'Updated', value: String(proposalSummary.dedupUpdates?.length ?? 0) },
+                  {
+                    label: 'Failed',
+                    value: String(
+                      (proposalSummary.validationErrors?.length ?? 0) +
+                        (proposalSummary.deliveryFailures?.length ?? 0),
+                    ),
+                  },
+                ]}
+              />
               {proposalSummary.externalLinks.length > 0 ? (
                 <div className="stack">
                   <strong>External Review Links</strong>
@@ -7173,11 +7349,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'overview' && displayedMergeAutomation ? (
+          {overviewTabActive && displayedMergeAutomation ? (
             <MergeAutomationPanel mergeAutomation={displayedMergeAutomation} />
           ) : null}
 
-          {detailSubroute === 'steps' ? (
+          {stepsTabActive ? (
             hasStepsEndpoint ? (
             <section className="stack td-steps-region td-evidence-region">
               <div className="step-tl-section-header">
@@ -7235,15 +7411,15 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             )
           ) : null}
 
-          {detailSubroute === 'steps' ? <InterventionMonitorPanel execution={execution} /> : null}
+          {stepsTabActive ? <InterventionMonitorPanel execution={execution} /> : null}
 
-          {detailSubroute === 'steps' && execution.attentionRequired ? (
+          {stepsTabActive && execution.attentionRequired ? (
             <section className="notice">
               <strong>Attention required.</strong> This workflow is waiting for external input before it can continue.
             </section>
           ) : null}
 
-          {detailSubroute === 'overview' && hasDependencySection ? (
+          {overviewTabActive && hasDependencySection ? (
             <section className="stack">
               <div>
                 <h3>Dependencies</h3>
@@ -7251,19 +7427,24 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                   Direct prerequisite runs gate this execution before planning or execution begins.
                 </p>
               </div>
-              <div className="grid-2">
-                <Card label="Declared Prerequisites">{String(execution.dependsOn.length)}</Card>
-                <Card label="Blocked On Dependencies">{execution.blockedOnDependencies ? 'Yes' : 'No'}</Card>
-                <Card label="Dependency Resolution">{formatDependencyResolution(execution.dependencyResolution)}</Card>
-                <Card label="Dependency Wait Duration">
-                  {formatDurationMs(execution.dependencyWaitDurationMs ?? null)}
-                </Card>
+              <MetricStrip
+                items={[
+                  { label: 'Declared Prerequisites', value: String(prerequisiteRows.length) },
+                  { label: 'Blocked On Dependencies', value: execution.blockedOnDependencies ? 'Yes' : 'No' },
+                  { label: 'Dependency Resolution', value: formatDependencyResolution(execution.dependencyResolution) },
+                  {
+                    label: 'Dependency Wait Duration',
+                    value: formatDurationMs(execution.dependencyWaitDurationMs ?? null),
+                  },
+                ]}
+              />
+              <FlatFactGrid>
                 {execution.failedDependencyId ? (
-                  <Card label="Failed Dependency">
+                  <Fact label="Failed Dependency">
                     <code className="text-xs break-all">{execution.failedDependencyId}</code>
-                  </Card>
+                  </Fact>
                 ) : null}
-              </div>
+              </FlatFactGrid>
               {execution.blockedOnDependencies ? (
                 <div className="notice">
                   <strong>Blocked on prerequisites.</strong> This run keeps waiting until every prerequisite reaches <code>completed</code>. Failed, canceled, terminated, or timed-out prerequisites do not fail this run automatically — rerun the prerequisite, cancel this run, or bypass the dependency.
@@ -7318,11 +7499,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               </div>
               <div className="stack">
                 <h4>Dependents</h4>
-                {execution.dependents.length === 0 ? (
+                {dependentRows.length === 0 ? (
                   <p className="small">No downstream dependents reference this run.</p>
                 ) : (
                   <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                    {execution.dependents.map((item) => (
+                    {dependentRows.map((item) => (
                       <li key={item.workflowId} className="card">
                         <div className="stack gap-1">
                           <a href={dependencyHref(item.workflowId)}>
@@ -7341,7 +7522,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'artifacts' ? (
+          {artifactsTabActive ? (
             <>
               <ReportPresentationSection
                 primaryReport={primaryReport}
@@ -7369,7 +7550,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          {detailSubroute === 'artifacts' ? (
+          {artifactsTabActive ? (
             <RemediationRelationshipsPanel
               inbound={inboundRemediationsQuery.data}
               outbound={outboundRemediationsQuery.data}
@@ -7427,7 +7608,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'steps' &&
+          {stepsTabActive &&
           actionsOn &&
           actions &&
           taskEditingOn &&
@@ -7460,13 +7641,13 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'steps' && actionsOn && actions && hasInterventionSection ? (
+          {stepsTabActive && actionsOn && actions && hasInterventionSection ? (
             <InterventionPanel
               audit={execution.interventionAudit || []}
             />
           ) : null}
 
-          {detailSubroute === 'steps' ? (
+          {stepsTabActive ? (
             <>
               <TargetDiagnosticsPanel diagnostics={execution.targetDiagnostics} />
               <RecoveryEvidencePanel
@@ -7481,7 +7662,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          {detailSubroute === 'steps' && actionsOn && resolvedAgentRunId ? (
+          {stepsTabActive && actionsOn && resolvedAgentRunId ? (
             <SessionContinuityPanel
               apiBase={payload.apiBase}
               agentRunId={resolvedAgentRunId}
@@ -7492,11 +7673,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             />
           ) : null}
 
-          {detailSubroute === 'steps' ? (
+          {stepsTabActive ? (
             <AuditTrailPanel execution={execution} steps={stepsQuery.data} />
           ) : null}
 
-          {detailSubroute === 'steps' && showExecutionObservationFallback ? (
+          {stepsTabActive && showExecutionObservationFallback ? (
             <section className="stack td-observation-region td-evidence-region">
               <div>
                 <h3>Observation</h3>
@@ -7552,7 +7733,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'debug' && debugOn && debugVisible && execution.debugFields ? (
+          {debugTabActive && debugOn && debugVisible && execution.debugFields ? (
             <section className="stack">
               <h3>Debug Metadata</h3>
               <div className="grid-2">

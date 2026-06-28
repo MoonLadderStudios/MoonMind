@@ -1199,7 +1199,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
   });
 
-  it('MM-801 renders Overview as a concise summary with route preview cards', async () => {
+  it('MM-801 renders Overview as a concise summary with stable segmented tabs', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
@@ -1207,12 +1207,12 @@ describe('Workflow Detail Entrypoint', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
-      expect(screen.getByText('Live updates enabled. Polling every 0s')).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
+      expect(screen.queryByText(/Live updates enabled\. Polling every/i)).toBeNull();
+      expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
       expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
       expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe('/workflows/test-123/steps?source=temporal');
-      expect(screen.getByText('3 steps')).toBeTruthy();
+      expect(screen.getByRole('link', { name: 'Runs 2' }).getAttribute('href')).toBe('/workflows/test-123/runs?source=temporal');
       expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Execution History' })).toBeNull();
@@ -1220,6 +1220,25 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByRole('heading', { name: 'Timeline' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
     });
+  });
+
+  it('MM-1020 switches Workflow Detail tabs with pushState without remounting or preloading tab data', async () => {
+    window.history.pushState({}, 'Client Tab Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Summary' })).toBeTruthy();
+    expect(fetchSpy.mock.calls.filter(([input]) => String(input).includes('/executions/test-123/steps')).length).toBe(0);
+    const detailFetchCount = fetchSpy.mock.calls.filter(([input]) => String(input).includes('/executions/test-123?source=temporal')).length;
+
+    fireEvent.click(screen.getByRole('link', { name: 'Steps' }));
+
+    expect(window.location.pathname).toBe('/workflows/test-123/steps');
+    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Steps 3' }).getAttribute('aria-current')).toBe('page');
+    expect(fetchSpy.mock.calls.filter(([input]) => String(input).includes('/executions/test-123?source=temporal')).length).toBe(detailFetchCount);
+    expect(fetchSpy.mock.calls.filter(([input]) => String(input).includes('/executions/test-123/steps')).length).toBe(1);
   });
 
   it('reconstructs the full workflow list from allowlisted detail-route context (MM-998, MM-975)', async () => {
@@ -1834,10 +1853,10 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      // Summary and evidence preview sections still render on the default overview.
+      // Summary renders on the default overview without the old preview cards.
       expect(screen.getByRole('heading', { name: 'Summary' })).toBeTruthy();
       expect(screen.getByText('Focused route summary')).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.getByRole('link', { name: 'Overview' }).getAttribute('aria-current')).toBe('page');
     });
 
@@ -1876,8 +1895,8 @@ describe('Workflow Detail Entrypoint', () => {
     }
     expect(screen.getAllByText('MoonMind.UserWorkflow').length).toBeGreaterThan(0);
 
-    // Deep-linking to the subroute selects the Debug tab, and tab navigation uses
-    // focusable anchor links (keyboard accessible by default).
+    // Deep-linking to the subroute selects the Debug tab, and tab navigation keeps
+    // focusable deep links.
     const debugLink = screen.getByRole('link', { name: 'Debug' });
     expect(debugLink.getAttribute('aria-current')).toBe('page');
     expect(debugLink.tagName).toBe('A');
@@ -1889,7 +1908,7 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
   });
 
-  it('MM-964 hides the Debug tab when the debug-visibility preference is turned off and remembers it', async () => {
+  it('MM-1020 keeps the Debug tab stable while the kebab menu toggles debug details', async () => {
     window.history.pushState({}, 'Debug Pref Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();
 
@@ -1898,12 +1917,11 @@ describe('Workflow Detail Entrypoint', () => {
     // Debug tab is visible by default.
     expect(await screen.findByRole('link', { name: 'Debug' })).toBeTruthy();
 
-    const toggle = screen.getByLabelText('Show debug details') as HTMLInputElement;
-    expect(toggle.checked).toBe(true);
-    fireEvent.click(toggle);
+    let menu = await openWorkflowActionsMenu();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'View: Hide debug details' }));
 
-    // The Debug tab disappears and the preference is persisted.
-    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
+    // The Debug tab remains visible and the preference is persisted.
+    expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
     expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toContain(
       '"debugFieldsVisible":false',
     );
@@ -1912,10 +1930,9 @@ describe('Workflow Detail Entrypoint', () => {
     view.unmount();
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
     await screen.findByRole('link', { name: 'Overview' });
-    expect(screen.queryByRole('link', { name: 'Debug' })).toBeNull();
-    expect(
-      (screen.getByLabelText('Show debug details') as HTMLInputElement).checked,
-    ).toBe(false);
+    expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
+    menu = await openWorkflowActionsMenu();
+    expect(within(menu).getByRole('menuitem', { name: 'View: Show debug details' })).toBeTruthy();
   });
 
   it('returns null for route templates with missing parameters', () => {
@@ -2074,7 +2091,7 @@ describe('Workflow Detail Entrypoint', () => {
       // The compact workflow ID stays accessible in the hero as secondary metadata.
       expect(screen.getAllByText('test-123').length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: 'Show Workflow Inputs' })).toBeTruthy();
-      expect(screen.getByRole('heading', { name: 'Workflow Preview' })).toBeTruthy();
+      expect(screen.queryByRole('heading', { name: 'Workflow Preview' })).toBeNull();
       expect(screen.getByRole('link', { name: 'Debug' })).toBeTruthy();
       expect(screen.queryByRole('heading', { name: 'Workflow Steps' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Workflow Artifacts' })).toBeNull();
@@ -2260,11 +2277,10 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
 
     await waitFor(() => {
-      const summaryCard = (label: string) => screen.getByText((_, element) => element?.textContent === `${label}:`).closest('.card');
       expect(screen.getByRole('heading', { name: 'Proposal Outcomes' })).toBeTruthy();
-      expect(summaryCard('Delivered')?.textContent).toContain('1');
-      expect(summaryCard('Updated')?.textContent).toContain('1');
-      expect(summaryCard('Failed')?.textContent).toContain('2');
+      expect(screen.getByText('Delivered').closest('.metric-strip-item')?.textContent).toContain('1');
+      expect(screen.getByText('Updated').closest('.metric-strip-item')?.textContent).toContain('1');
+      expect(screen.getByText('Failed').closest('.metric-strip-item')?.textContent).toContain('2');
       expect(screen.getByText('jira: MM-901')).toBeTruthy();
       expect(screen.getAllByText('Delivery Status').length).toBeGreaterThan(0);
       expect(screen.getByText('delivered')).toBeTruthy();
