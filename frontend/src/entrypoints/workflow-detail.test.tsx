@@ -2529,6 +2529,7 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
+    expect(navigateTo).not.toHaveBeenCalled();
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

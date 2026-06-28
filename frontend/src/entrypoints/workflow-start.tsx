@@ -8504,7 +8504,10 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           statusText,
         );
       } catch {
-        // Navigation should not depend on session storage availability.
+        // Success handling should not depend on session storage availability.
+      }
+      if (isRerun) {
+        return;
       }
       const redirectWorkflowId =
         String(result.execution?.workflowId || "").trim() || workflowId;

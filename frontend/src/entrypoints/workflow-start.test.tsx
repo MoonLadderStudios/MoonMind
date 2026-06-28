@@ -3969,11 +3969,7 @@ describe.skip("Task Create Entrypoint", () => {
         ([url, init]) => String(url) === "/api/executions" && init?.method === "POST",
       ),
     ).toBe(false);
-    await waitFor(() => {
-      expect(navigateTo).toHaveBeenCalledWith(
-        "/workflows/mm%3Arerun-created?source=temporal",
-      );
-    });
+    expect(navigateTo).not.toHaveBeenCalled();
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Rerun was requested and the latest execution view is ready.");
