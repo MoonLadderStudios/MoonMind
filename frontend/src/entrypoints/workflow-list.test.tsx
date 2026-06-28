@@ -1302,6 +1302,30 @@ describe('Workflows Entrypoint', () => {
     ).toBeNull();
   });
 
+  it('MM-1008 focuses the workflow list region when expanded from workspace detail', async () => {
+    window.history.pushState(
+      {},
+      'Workspace return focus',
+      '/workflows?stateIn=completed&limit=50&returnFromWorkflowDetail=1',
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const listRegion = screen.getByRole('region', { name: 'Workflow list' });
+    await waitFor(() => expect(document.activeElement).toBe(listRegion));
+    expect(listRegion.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('MM-1008 does not make the workflow list region focusable on normal list visits', async () => {
+    window.history.pushState({}, 'Normal workflows', '/workflows?stateIn=completed&limit=50');
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    expect(screen.getByRole('region', { name: 'Workflow list' }).getAttribute('tabindex')).toBeNull();
+  });
+
   it('supports skill and date filter chips with blank semantics', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,

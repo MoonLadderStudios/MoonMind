@@ -304,12 +304,12 @@ function WorkflowSidebarControls({
       <button
         ref={closeButtonRef}
         type="button"
-        className="secondary"
+        className="secondary workflow-workspace-close-sidebar"
         onClick={onClose}
       >
         Close sidebar
       </button>
-      <a className="button secondary" href={fullListHref}>
+      <a className="button workflow-workspace-expand-list" href={fullListHref}>
         Expand to full list
       </a>
     </div>
@@ -466,7 +466,7 @@ function WorkflowWorkspaceShell({
     <div
       className="workflow-workspace-shell"
       data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
-      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005"
+      data-jira-issue="MM-997 MM-999 MM-1000 MM-1002 MM-1005 MM-1008"
       data-source-issue="MM-975"
     >
       {sidebarOpen ? (

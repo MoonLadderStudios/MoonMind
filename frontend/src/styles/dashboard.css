@@ -6514,6 +6514,23 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   white-space: nowrap;
 }
 
+.workflow-workspace-close-sidebar {
+  border-style: dashed;
+}
+
+.workflow-workspace-expand-list {
+  background: rgb(var(--mm-accent) / 0.16);
+  border-color: rgb(var(--mm-accent) / 0.55);
+  color: rgb(var(--mm-ink));
+  font-weight: 800;
+}
+
+.workflow-workspace-expand-list:hover,
+.workflow-workspace-expand-list:focus-visible {
+  background: rgb(var(--mm-accent) / 0.24);
+  border-color: rgb(var(--mm-accent) / 0.82);
+}
+
 .workflow-workspace-sidebar-list {
   display: flex;
   flex-direction: column;

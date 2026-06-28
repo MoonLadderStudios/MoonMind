@@ -788,6 +788,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
   const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
+  const focusListOnWorkspaceReturn = useMemo(
+    () => initial.get(WORKFLOW_LIST_CONTEXT_RETURN_PARAM) === '1',
+    [initial],
+  );
   const [workspaceCursorResetNotice, setWorkspaceCursorResetNotice] = useState(false);
   const [workspaceReturnFromDetail, setWorkspaceReturnFromDetail] = useState(() =>
     initial.get(WORKFLOW_LIST_CONTEXT_RETURN_PARAM) === '1',
@@ -801,6 +805,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const drawerToggleRef = useRef<HTMLButtonElement | null>(null);
   const desktopFilterRef = useRef<HTMLDivElement | null>(null);
+  const workflowListRegionRef = useRef<HTMLElement | null>(null);
+  const didFocusWorkspaceReturnRef = useRef(false);
   // The element that opened the drawer (the Filters trigger or a chip). Focus is
   // returned here when the drawer closes so keyboard users keep their place.
   const filterTriggerRef = useRef<HTMLElement | null>(null);
@@ -959,6 +965,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     resetToFirstPage,
     workspaceReturnFromDetail,
   ]);
+
+  useEffect(() => {
+    if (!focusListOnWorkspaceReturn || didFocusWorkspaceReturnRef.current) return;
+    didFocusWorkspaceReturnRef.current = true;
+    const frame = window.requestAnimationFrame(() => {
+      workflowListRegionRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusListOnWorkspaceReturn]);
 
   // MM-964: column visibility. The workflow title column is the primary anchor
   // and is always shown; every other column honors the stored preference.
@@ -1913,8 +1928,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       ) : null}
 
       <section
+        ref={workflowListRegionRef}
         className="queue-layouts panel--data workflow-list-data-slab"
         aria-label="Workflow list"
+        tabIndex={focusListOnWorkspaceReturn ? -1 : undefined}
       >
         {showResultsHeader ? (
         <header className="workflow-list-results-header">
