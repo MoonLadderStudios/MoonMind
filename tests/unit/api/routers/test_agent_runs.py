@@ -79,7 +79,7 @@ def _standard_observability_event(kind: str, sequence: int) -> dict[str, object]
         "sequence": sequence,
         "stream": stream,
         "text": f"{kind} event\n",
-        "timestamp": f"2026-04-08T00:00:{sequence:02d}Z",
+        "timestamp": f"2026-04-08T00:{sequence // 60:02d}:{sequence % 60:02d}Z",
         "kind": kind,
         "metadata": {"sourceIssue": "MM-985", "sourceReference": "MM-976"},
     }
