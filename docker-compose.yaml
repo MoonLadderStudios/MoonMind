@@ -868,6 +868,83 @@ services:
       qdrant:
         condition: service_started
 
+  omnigent-db-init:
+    image: postgres:${POSTGRES_VERSION:-17}
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=${POSTGRES_USER:-postgres}
+      - PGPASSWORD=${POSTGRES_PASSWORD:-password}
+      - PGDATABASE=${POSTGRES_DB:-moonmind}
+      - OMNIGENT_POSTGRES_USER=${OMNIGENT_POSTGRES_USER:-omnigent}
+      - OMNIGENT_POSTGRES_PASSWORD=${OMNIGENT_POSTGRES_PASSWORD:-omnigent}
+      - OMNIGENT_POSTGRES_DB=${OMNIGENT_POSTGRES_DB:-omnigent}
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        set -eu
+        quote_ident() { printf '%s' "$$1" | sed 's/"/""/g'; }
+        quote_literal() { printf '%s' "$$1" | sed "s/'/''/g"; }
+
+        role_sql="\"$$(quote_ident "$$OMNIGENT_POSTGRES_USER")\""
+        db_sql="\"$$(quote_ident "$$OMNIGENT_POSTGRES_DB")\""
+        password_sql="'$$(quote_literal "$$OMNIGENT_POSTGRES_PASSWORD")'"
+        role_literal="'$$(quote_literal "$$OMNIGENT_POSTGRES_USER")'"
+        db_literal="'$$(quote_literal "$$OMNIGENT_POSTGRES_DB")'"
+
+        role_exists="$$(psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname = $$role_literal")"
+        if [ "$$role_exists" != "1" ]; then
+          psql -v ON_ERROR_STOP=1 -c "CREATE ROLE $$role_sql LOGIN PASSWORD $$password_sql"
+        fi
+        psql -v ON_ERROR_STOP=1 -c "ALTER ROLE $$role_sql PASSWORD $$password_sql"
+
+        db_exists="$$(psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname = $$db_literal")"
+        if [ "$$db_exists" != "1" ]; then
+          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE $$db_sql OWNER $$role_sql"
+        fi
+
+        psql -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON DATABASE $$db_sql TO $$role_sql"
+        psql -v ON_ERROR_STOP=1 --dbname="$$OMNIGENT_POSTGRES_DB" -c "GRANT ALL ON SCHEMA public TO $$role_sql"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - local-network
+    restart: "no"
+
+  omnigent:
+    image: ${OMNIGENT_IMAGE:-ghcr.io/moonladderstudios/omnigent}:${OMNIGENT_IMAGE_TAG:-latest}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - DATABASE_URL=postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/${OMNIGENT_POSTGRES_DB:-omnigent}
+      - OMNIGENT_CONFIG=${OMNIGENT_CONFIG:-}
+      - OMNIGENT_BUILTIN_ADMIN_EMAIL=${OMNIGENT_BUILTIN_ADMIN_EMAIL:-admin@example.local}
+      - OMNIGENT_BUILTIN_ADMIN_PASSWORD=${OMNIGENT_BUILTIN_ADMIN_PASSWORD:-admin}
+      - OMNIGENT_BUILTIN_USER_EMAIL=${OMNIGENT_BUILTIN_USER_EMAIL:-user@example.local}
+      - OMNIGENT_BUILTIN_USER_PASSWORD=${OMNIGENT_BUILTIN_USER_PASSWORD:-user}
+      - OMNIGENT_OIDC_ENABLED=${OMNIGENT_OIDC_ENABLED:-false}
+      - OMNIGENT_OIDC_ISSUER_URL=${OMNIGENT_OIDC_ISSUER_URL:-}
+      - OMNIGENT_OIDC_CLIENT_ID=${OMNIGENT_OIDC_CLIENT_ID:-}
+      - OMNIGENT_OIDC_CLIENT_SECRET=${OMNIGENT_OIDC_CLIENT_SECRET:-}
+      - OMNIGENT_OIDC_SCOPES=${OMNIGENT_OIDC_SCOPES:-openid profile email}
+      - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host}
+      - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    ports:
+      - "${OMNIGENT_PORT:-8000}:8000"
+    volumes:
+      - omnigent-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      omnigent-db-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
+    restart: unless-stopped
+
   agent-workspaces-init:
     image: alpine:3.20
     command: >-
@@ -957,6 +1034,7 @@ volumes:
     name: ${GEMINI_VOLUME_NAME:-gemini_auth_volume}
   claude_auth_volume:
     name: ${CLAUDE_VOLUME_NAME:-claude_auth_volume}
+  omnigent-data:
 
 networks:
   local-network:

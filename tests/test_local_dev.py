@@ -349,3 +349,107 @@ def test_agent_workspaces_init_avoids_recursive_permission_repair():
         "/work/agent_jobs/workspaces",
     ):
         assert expected_dir in command
+
+
+def test_omnigent_compose_uses_shared_postgres_for_mm_970():
+    """MM-970: Omnigent runs beside MoonMind using the shared Postgres service."""
+    compose_path = Path("docker-compose.yaml")
+    assert (
+        compose_path.exists()
+    ), "docker-compose.yaml must exist at the repository root"
+
+    compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    services = compose_data.get("services", {})
+
+    assert "postgres" in services
+    assert not any(
+        service_name != "postgres" and "postgres" in service_name
+        for service_name in services
+    ), "Omnigent must reuse the existing postgres service, not add another one"
+
+    init_service = services.get("omnigent-db-init")
+    assert isinstance(
+        init_service, dict
+    ), "omnigent-db-init service is missing from docker-compose.yaml"
+    assert init_service.get("restart") == "no"
+    assert init_service["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert _network_names(init_service) == {"local-network"}
+
+    init_env = _env_map(init_service.get("environment"))
+    assert init_env["OMNIGENT_POSTGRES_USER"] == (
+        "${OMNIGENT_POSTGRES_USER:-omnigent}"
+    )
+    assert init_env["OMNIGENT_POSTGRES_PASSWORD"] == (
+        "${OMNIGENT_POSTGRES_PASSWORD:-omnigent}"
+    )
+    assert init_env["OMNIGENT_POSTGRES_DB"] == "${OMNIGENT_POSTGRES_DB:-omnigent}"
+    assert "POSTGRES_USER" not in {
+        key for key in init_env if key.startswith("OMNIGENT_")
+    }
+
+    command_text = "\n".join(str(part) for part in init_service.get("command", []))
+    assert "SELECT 1 FROM pg_roles" in command_text
+    assert "CREATE ROLE" in command_text
+    assert "SELECT 1 FROM pg_database" in command_text
+    assert "CREATE DATABASE" in command_text
+    assert "DROP DATABASE" not in command_text
+    assert "DROP ROLE" not in command_text
+    assert "GRANT ALL PRIVILEGES ON DATABASE" in command_text
+
+    omnigent_service = services.get("omnigent")
+    assert isinstance(
+        omnigent_service, dict
+    ), "omnigent service is missing from docker-compose.yaml"
+    assert omnigent_service["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert (
+        omnigent_service["depends_on"]["omnigent-db-init"]["condition"]
+        == "service_completed_successfully"
+    )
+    assert _network_names(omnigent_service) == {"local-network"}
+    assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
+    assert _has_volume_mount(omnigent_service, "omnigent-data", "/data")
+    assert "omnigent-data" in compose_data.get("volumes", {})
+
+    omnigent_env = _env_map(omnigent_service.get("environment"))
+    assert omnigent_env["DATABASE_URL"] == (
+        "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
+        "${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/"
+        "${OMNIGENT_POSTGRES_DB:-omnigent}"
+    )
+    assert omnigent_env["OMNIGENT_CONFIG"] == "${OMNIGENT_CONFIG:-}"
+    assert "POSTGRES_USER" not in omnigent_env
+    assert "POSTGRES_PASSWORD" not in omnigent_env
+    assert "POSTGRES_DB" not in omnigent_env
+
+
+def test_omnigent_env_template_and_optional_config_for_mm_970():
+    env_template = Path(".env-template").read_text(encoding="utf-8")
+    for expected_name in (
+        "OMNIGENT_IMAGE",
+        "OMNIGENT_IMAGE_TAG",
+        "OMNIGENT_PORT",
+        "OMNIGENT_POSTGRES_USER",
+        "OMNIGENT_POSTGRES_PASSWORD",
+        "OMNIGENT_POSTGRES_DB",
+        "OMNIGENT_BUILTIN_ADMIN_EMAIL",
+        "OMNIGENT_BUILTIN_ADMIN_PASSWORD",
+        "OMNIGENT_BUILTIN_USER_EMAIL",
+        "OMNIGENT_BUILTIN_USER_PASSWORD",
+        "OMNIGENT_OIDC_ENABLED",
+        "OMNIGENT_OIDC_ISSUER_URL",
+        "OMNIGENT_OIDC_CLIENT_ID",
+        "OMNIGENT_OIDC_CLIENT_SECRET",
+        "OMNIGENT_OIDC_SCOPES",
+        "OMNIGENT_CONFIG",
+        "OMNIGENT_HOST_IMAGE",
+        "OMNIGENT_HOST_IMAGE_TAG",
+    ):
+        assert f"{expected_name}=" in env_template
+
+    config_path = Path("deploy/omnigent/server-config.example.yaml")
+    assert config_path.exists(), "Omnigent example server config is missing"
+
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert config["database"]["url_env"] == "DATABASE_URL"
+    assert config["server"]["data_dir"] == "/data"
+    assert config["sandbox"]["enabled"] is False
