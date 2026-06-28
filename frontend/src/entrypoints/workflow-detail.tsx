@@ -20,7 +20,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
-import { workflowListHrefFromContext } from '../lib/workflowListContext';
+import { workflowListContextParams, workflowListHrefFromContext } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -234,9 +234,8 @@ function workflowDetailSubrouteHref(
 }
 
 function workflowWorkspaceListQuery(search: URLSearchParams): string {
-  const params = new URLSearchParams(search);
-  params.delete('selectedWorkflowId');
-  const pageSize = params.get('limit') || params.get('pageSize') || '25';
+  const pageSize = search.get('limit') || search.get('pageSize') || '25';
+  const params = workflowListContextParams(search);
   params.delete('limit');
   params.set('pageSize', pageSize);
   return params.toString();
@@ -441,13 +440,13 @@ function WorkflowWorkspaceShell({
   const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
     ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
     : null;
-  const fullListHref = `/workflows${search.toString() ? `?${search.toString()}` : ''}`;
+  const fullListHref = workflowListHrefFromContext(search, { markDetailReturn: true });
 
   return (
     <div
       className="workflow-workspace-shell"
       data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
-      data-jira-issue="MM-997 MM-999 MM-1000"
+      data-jira-issue="MM-997 MM-999 MM-1000 MM-1005"
       data-source-issue="MM-975"
     >
       {sidebarOpen ? (
