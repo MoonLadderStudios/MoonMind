@@ -549,7 +549,8 @@ def test_invalid_dashboard_route_returns_404(client: TestClient) -> None:
     assert detail["message"] == (
         "Workflow console route was not found. Use /workflows, /workflows/new, "
         "/workflows/{workflowId}, /workflows/{workflowId}/steps, "
-        "/workflows/{workflowId}/artifacts, or /workflows/{workflowId}/runs."
+        "/workflows/{workflowId}/artifacts, /workflows/{workflowId}/runs, "
+        "or /workflows/{workflowId}/debug."
     )
 
 def test_skills_api_returns_available_skill_ids(

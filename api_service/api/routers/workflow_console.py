@@ -65,7 +65,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 _SAFE_DETAIL_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SAFE_WORKFLOW_ID_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:{}-]{0,254}$")
-_WORKFLOW_DETAIL_TABS = {"steps", "artifacts", "runs"}
+_WORKFLOW_DETAIL_TABS = {"steps", "artifacts", "runs", "debug"}
 _RESERVED_WORKFLOW_ROUTE_SEGMENTS = {
     "manifests",
     "new",
@@ -90,7 +90,8 @@ _DASHBOARD_ROUTE_NOT_FOUND_DETAIL = {
     "message": (
         "Workflow console route was not found. Use /workflows, /workflows/new, "
         "/workflows/{workflowId}, /workflows/{workflowId}/steps, "
-        "/workflows/{workflowId}/artifacts, or /workflows/{workflowId}/runs."
+        "/workflows/{workflowId}/artifacts, /workflows/{workflowId}/runs, "
+        "or /workflows/{workflowId}/debug."
     ),
 }
 
