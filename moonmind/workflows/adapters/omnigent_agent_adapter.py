@@ -43,10 +43,12 @@ def build_omnigent_first_message(request: AgentExecutionRequest) -> dict[str, An
     prompt = prompt if isinstance(prompt, dict) else {}
 
     text = str(prompt.get("text") or "").strip()
-    if not text:
-        text = str(prompt.get("instructionRef") or "").strip()
-    if not text and request.instruction_ref:
-        text = request.instruction_ref
+    instruction_ref = str(prompt.get("instructionRef") or "").strip()
+    if not text and (instruction_ref or request.instruction_ref):
+        raise ValueError(
+            "Omnigent prompt requires inline text; instructionRef cannot be sent "
+            "without artifact resolution"
+        )
     if not text:
         text = str(params.get("description") or "").strip()
     if not text:

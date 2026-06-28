@@ -6,6 +6,8 @@ import pytest
 
 from moonmind.omnigent.execute import (
     OmnigentContractError,
+    _agent_items,
+    _resolve_agent_id,
     build_omnigent_result,
     normalize_omnigent_observation,
     run_omnigent_execution,
@@ -59,6 +61,38 @@ def test_build_omnigent_result_is_compact_terminal_success() -> None:
     assert result.metadata["providerName"] == "omnigent"
     assert result.metadata["normalizedStatus"] == "completed"
     assert result.metadata["captureManifestRef"] == "artifact://capture"
+
+
+def test_build_omnigent_result_maps_snake_case_metadata() -> None:
+    result = build_omnigent_result(
+        request=_request(),
+        terminal_status="completed",
+        session_id="sess-1",
+        agent_id="agent-1",
+        final_snapshot={
+            "summary": "finished",
+            "host_type": "external",
+            "capture_manifest_ref": "artifact://capture",
+            "github_pr_url": "https://github.example/pr/1",
+        },
+        event_count=1,
+    )
+
+    assert result.metadata["hostType"] == "external"
+    assert result.metadata["captureManifestRef"] == "artifact://capture"
+    assert result.metadata["githubPrUrl"] == "https://github.example/pr/1"
+
+
+def test_agent_items_ignores_unexpected_payload_shape() -> None:
+    assert _agent_items({"items": "unexpected"}) == []
+
+
+def test_resolve_agent_id_rejects_unknown_requested_name() -> None:
+    with pytest.raises(OmnigentContractError, match="could not be resolved"):
+        _resolve_agent_id(
+            agents_payload={"items": [{"id": "agent-1", "name": "known"}]},
+            requested_name="missing",
+        )
 
 
 def test_build_omnigent_result_is_terminal_failure_with_provider_error() -> None:
@@ -224,6 +258,7 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
         {
             "agent_id": "agent-1",
             "title": "MoonMind Agent Task",
+            "idempotency_key": "idem-1",
             "labels": {
                 "moonmind.correlation_id": "corr-1",
                 "moonmind.idempotency_key": "idem-1",
@@ -238,3 +273,103 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
     ]
     assert result.metadata["hostType"] == "external"
     assert result.metadata["workspace"] == "/workspace/repo"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_returns_contract_failure_for_ref_only_prompt(
+    monkeypatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "prompt": {"instructionRef": "artifact://instruction"},
+                },
+            },
+        )
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "omnigent_contract_error"
+    assert "instructionRef cannot be sent" in result.summary
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            calls.append("create_session")
+            return {"id": "new-session"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            calls.append("post_event")
+            return {}
+
+        async def stream_events(self, session_id: str):
+            assert session_id == "existing-session"
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "completed", "summary": "reattached"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._heartbeat_state",
+        lambda: {
+            "omnigentSessionId": "existing-session",
+            "firstMessagePosted": True,
+        },
+    )
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "prompt": {"text": "continue"},
+                },
+            },
+        )
+    )
+
+    assert result.summary == "reattached"
+    assert calls == []
