@@ -102,6 +102,27 @@ def test_managed_repository_task_normalizes_repo_url_and_branch() -> None:
     )
 
 
+def test_managed_repository_task_uses_starting_branch_not_target_branch() -> None:
+    req = _request(
+        workspaceSpec={
+            "repository": "https://github.com/MoonLadderStudios/MoonMind.git",
+            "startingBranch": "main",
+            "targetBranch": "feature/mm-990",
+        },
+        parameters={
+            "title": "Edit repo",
+            "omnigent": {"session": {"hostType": "managed"}},
+        },
+    )
+
+    selection = build_omnigent_selection(req)
+
+    assert (
+        selection.session.workspace
+        == "https://github.com/MoonLadderStudios/MoonMind.git#main"
+    )
+
+
 def test_external_session_requires_host_id_absolute_path_and_rejects_repo_url() -> None:
     missing = _request(
         parameters={

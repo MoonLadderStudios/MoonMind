@@ -114,10 +114,10 @@ class TestBuildDefaultRegistry:
         registry = build_default_registry(env=env)
         assert "jules" not in registry
 
-    def test_omnigent_registered_when_enabled(self):
+    def test_omnigent_not_registered_without_execute_activity(self):
         env = {
             "OMNIGENT_ENABLED": "true",
             "OMNIGENT_SERVER_URL": "https://omnigent.test",
         }
         registry = build_default_registry(env=env)
-        assert registry.registered_ids == ["omnigent"]
+        assert "omnigent" not in registry

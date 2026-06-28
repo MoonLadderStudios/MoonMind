@@ -12,7 +12,7 @@ Source issue traceability: MM-981 -> MM-990.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -348,18 +348,7 @@ def _normalize_session_workspace(
         return session
 
     workspace = _repository_workspace_value(repository, request.workspace_spec)
-    return OmnigentSessionSelection(
-        host_type=session.host_type,
-        host_id=session.host_id,
-        workspace=workspace,
-        title=session.title,
-        labels=session.labels,
-        model_override=session.model_override,
-        reasoning_effort=session.reasoning_effort,
-        terminal_launch_args=session.terminal_launch_args,
-        collaboration_mode=session.collaboration_mode,
-        allow_empty_workspace=session.allow_empty_workspace,
-    )
+    return replace(session, workspace=workspace)
 
 
 def _validate_session(session: OmnigentSessionSelection) -> None:
@@ -446,7 +435,7 @@ def _repository_workspace_value(
     workspace_spec: Mapping[str, Any],
 ) -> str:
     branch = _clean(workspace_spec.get("branch")) or _clean(
-        workspace_spec.get("targetBranch")
+        workspace_spec.get("startingBranch")
     )
     if branch and "#" not in repository:
         return f"{repository}#{branch}"

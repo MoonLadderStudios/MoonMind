@@ -129,20 +129,6 @@ def build_default_registry(
         registry.register("openclaw", _openclaw_factory)
         logger.info("Registered OpenClaw external adapter")
 
-    # --- Omnigent (streaming gateway) ---
-    from moonmind.omnigent.settings import is_omnigent_enabled
-
-    if is_omnigent_enabled(env=env):
-        from moonmind.workflows.adapters.omnigent_agent_adapter import (
-            OmnigentExternalAdapter,
-        )
-
-        def _omnigent_factory() -> AgentAdapter:
-            return OmnigentExternalAdapter()
-
-        registry.register("omnigent", _omnigent_factory)
-        logger.info("Registered Omnigent external adapter")
-
     return registry
 
 __all__ = [
