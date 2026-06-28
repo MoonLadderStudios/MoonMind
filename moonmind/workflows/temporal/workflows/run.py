@@ -519,6 +519,9 @@ RUN_RESILIENCE_POLICY_PATCH = "run-resilience-policy-v1"
 # profile, so that step's manifest references the cooldown/rate-limit values that
 # actually governed its child runtime instead of the run-level policy.
 RUN_STEP_RESILIENCE_POLICY_PATCH = "run-step-resilience-policy-v1"
+RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH = (
+    "run-agent-runtime-retry-classification-v1"
+)
 # MM-884: stamp a stable correlation (trace) ref onto step-execution manifests
 # and emit a single incident reconstruction manifest before terminal failure so
 # policy, provider/profile/credential source, failed step, progress, workspace
@@ -6754,11 +6757,17 @@ class MoonMindRunWorkflow:
                             failure_message=failure_message,
                         )
 
-                        retryable = self._activity_result_retryable(
-                            execution_result,
-                            failure_message=failure_message,
-                            tool_type=tool_type,
-                        )
+                        if workflow.patched(RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH):
+                            retryable = self._activity_result_retryable(
+                                execution_result,
+                                failure_message=failure_message,
+                                tool_type=tool_type,
+                            )
+                        else:
+                            retryable = failure_message == "system_error" or (
+                                failure_message == "execution_error"
+                                and tool_type == "agent_runtime"
+                            )
                         if retryable and system_retries < 3:
                             self._mark_step_terminal(
                                 node_id,
