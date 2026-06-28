@@ -503,6 +503,121 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
+    const selectedExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-999 selected workflow outside filters',
+      summary: 'Workspace shell selected detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: 'detail-updated-marker',
+      scheduledFor: 'scheduled-marker',
+      actions: {},
+      relatedRuns: [],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: 'test-456',
+                taskId: 'test-456',
+                source: 'temporal',
+                title: 'Filtered workflow',
+                status: 'completed',
+                state: 'completed',
+                rawState: 'completed',
+                createdAt: '2026-04-08T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => selectedExecution,
+      } as Response);
+    });
+  }
+
+  function mockWorkflowWorkspaceSidebarFailure() {
+    const selectedExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-999 detail survives sidebar error',
+      summary: 'Workspace shell selected detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+
+    let sidebarAttempts = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        sidebarAttempts += 1;
+        return Promise.resolve({
+          ok: false,
+          statusText: sidebarAttempts === 1 ? 'Service Unavailable' : 'Gateway Timeout',
+          json: async () => ({}),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => selectedExecution,
+      } as Response);
+    });
+  }
+
   function mockDesktopViewport(matches = true) {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -537,6 +652,60 @@ describe('Workflow Detail Entrypoint', () => {
       '/workflows/test-456?source=temporal',
     );
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
+  });
+
+  it('MM-999 pins the selected workflow above sidebar rows when it is outside the filtered result', async () => {
+    window.history.pushState({}, 'Workspace Pinned Current Test', '/workflows/test-123?source=temporal&stateIn=completed');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetchesWithSelectedOutsideList();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const pinnedGroup = await within(sidebar).findByRole('list', { name: 'Current workflow' });
+    const pinned = within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i });
+    expect(pinned.getAttribute('aria-current')).toBe('page');
+    expect(pinned.getAttribute('data-pinned')).toBe('true');
+    expect(within(pinned).getByLabelText('executing')).toBeTruthy();
+    expect(within(pinned).getByText('scheduled-marker')).toBeTruthy();
+    expect(within(pinned).queryByText('detail-updated-marker')).toBeNull();
+    expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+  });
+
+  it('MM-999 does not show a pinned current row when the selected workflow is in the normal sidebar list', async () => {
+    window.history.pushState({}, 'Workspace No Pinned Current Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).queryByRole('list', { name: 'Current workflow' })).toBeNull();
+    expect((await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).getAttribute('aria-current')).toBe(
+      'page',
+    );
+  });
+
+  it('MM-999 keeps detail visible and retries only sidebar data after a recoverable sidebar error', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Error Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceSidebarFailure();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByText('Workflow navigation is unavailable.')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+
+    fireEvent.click(within(sidebar).getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      const sidebarFetches = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/executions?'));
+      expect(sidebarFetches.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
   });
 
   it('MM-997 translates workspace sidebar limit state to the executions API page size', async () => {

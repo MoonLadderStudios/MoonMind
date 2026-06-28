@@ -6519,6 +6519,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   margin: 0;
 }
 
+.workflow-workspace-sidebar-pinned-list {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
 .workflow-workspace-sidebar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -6531,6 +6536,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: rgb(var(--mm-panel) / 0.78);
   color: rgb(var(--mm-ink));
   text-decoration: none;
+}
+
+.workflow-workspace-sidebar-row-pinned {
+  border-style: dashed;
+  background: rgb(var(--mm-accent) / 0.08);
 }
 
 .workflow-workspace-sidebar-row:hover,
@@ -6552,6 +6562,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   gap: 0.18rem;
 }
 
+.workflow-workspace-sidebar-kicker {
+  color: rgb(var(--mm-accent));
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .workflow-workspace-sidebar-title {
   min-width: 0;
   overflow: hidden;
@@ -6565,18 +6582,11 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-size: 0.82rem;
 }
 
-.workflow-workspace-current-row,
 .workflow-workspace-sidebar-state {
   border: 1px dashed rgb(var(--mm-border) / 0.75);
   border-radius: 0.55rem;
   padding: 0.65rem;
   background: rgb(var(--mm-panel) / 0.62);
-}
-
-.workflow-workspace-current-row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
 }
 
 .workflow-workspace-detail {
