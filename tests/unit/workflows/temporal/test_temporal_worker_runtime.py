@@ -2578,6 +2578,36 @@ def test_runtime_planner_pr_resolver_uses_non_default_git_branch_as_selector():
     assert plan["metadata"]["title"] == "feature/current-pr"
 
 
+def test_runtime_planner_pr_resolver_includes_git_branch_selector_with_explicit_instructions():
+    planner = _build_runtime_planner()
+    snapshot = SimpleNamespace(
+        digest="reg:sha256:test",
+        artifact_ref="art_registry_123",
+    )
+
+    plan = planner(
+        inputs={
+            "task": {
+                "instructions": "Resolve the selected PR.",
+                "tool": {
+                    "type": "skill",
+                    "name": "pr-resolver",
+                },
+                "git": {"branch": "feature/current-pr"},
+                "runtime": {"mode": "gemini_cli"},
+            }
+        },
+        parameters={},
+        snapshot=snapshot,
+    )
+
+    node_inputs = plan["nodes"][0]["inputs"]
+    assert node_inputs["instructions"].startswith("Resolve the selected PR.")
+    assert "Selected skill inputs:" in node_inputs["instructions"]
+    assert '"pr": "feature/current-pr"' in node_inputs["instructions"]
+    assert plan["metadata"]["title"] == "feature/current-pr"
+
+
 def test_runtime_planner_pr_resolver_title_uses_case_insensitive_tool_inputs():
     planner = _build_runtime_planner()
     snapshot = SimpleNamespace(

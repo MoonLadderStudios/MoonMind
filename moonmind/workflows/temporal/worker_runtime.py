@@ -1372,19 +1372,23 @@ def _build_runtime_planner():
             # may come from git_payload rather than selected_skill_inputs, so
             # the generic " with inputs:" block above can miss it.
             effective_selector = pr_selector or pr_resolver_selector
-            if (
-                not has_explicit_instructions
-                and effective_selector
-                and not pr_selector
-            ):
+            if effective_selector and not pr_selector:
                 merged_inputs = (
                     dict(selected_skill_inputs) if selected_skill_inputs else {}
                 )
                 merged_inputs["pr"] = effective_selector
-                instructions = (
-                    f"Execute skill '{selected_skill_name}' with inputs:\n"
-                    + json.dumps(merged_inputs, indent=2, sort_keys=True)
-                )
+                selected_skill_inputs = merged_inputs
+                if has_explicit_instructions:
+                    instructions = (
+                        f"{str(instructions).strip()}\n\n"
+                        f"Selected skill inputs:\n"
+                        + json.dumps(merged_inputs, indent=2, sort_keys=True)
+                    )
+                else:
+                    instructions = (
+                        f"Execute skill '{selected_skill_name}' with inputs:\n"
+                        + json.dumps(merged_inputs, indent=2, sort_keys=True)
+                    )
 
         # --- Resolve runtime mode ---
         runtime_payload = _coerce_mapping(task_payload.get("runtime"))
