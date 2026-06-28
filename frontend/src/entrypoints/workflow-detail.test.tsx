@@ -637,6 +637,42 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  function mockWorkflowWorkspaceDetailFailure() {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: 'test-123',
+                taskId: 'test-123',
+                source: 'temporal',
+                title: 'MM-1010 sidebar remains loaded',
+                status: 'running',
+                state: 'executing',
+                rawState: 'executing',
+                createdAt: '2026-04-09T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: false,
+        statusText: 'Forbidden',
+        json: async () => ({}),
+      } as Response);
+    });
+  }
+
   function mockDesktopViewport(matches = true) {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -707,16 +743,51 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
+  it('MM-1010 keeps an empty filtered sidebar state, pinned current workflow, and detail content independent (MM-975)', async () => {
+    window.history.pushState({}, 'Workspace Empty Filter Test', '/workflows/test-123?source=temporal&stateIn=failed');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches({ rows: [] });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByText('No workflows match the current list filters.')).toBeTruthy();
+    const pinnedGroup = within(sidebar).getByRole('list', { name: 'Current workflow' });
+    const pinned = within(pinnedGroup).getByRole('link', { name: /MM-997 selected workflow/i });
+    expect(pinned.getAttribute('aria-current')).toBe('page');
+    expect(pinned.getAttribute('data-pinned')).toBe('true');
+    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
+      '/workflows?stateIn=failed&returnFromWorkflowDetail=1',
+    );
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&stateIn=failed&pageSize=25');
+  });
+
   it('MM-999 keeps detail visible and retries only sidebar data after a recoverable sidebar error', async () => {
     window.history.pushState({}, 'Workspace Sidebar Error Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);
     mockWorkflowWorkspaceSidebarFailure();
 
-    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000, list: 60000 },
+            },
+          },
+        }}
+      />,
+    );
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
     expect(await within(sidebar).findByText('Workflow navigation is unavailable.')).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    const detailCallsBeforeRetry = fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+    ).length;
 
     fireEvent.click(within(sidebar).getByRole('button', { name: 'Retry' }));
 
@@ -725,6 +796,26 @@ describe('Workflow Detail Entrypoint', () => {
       expect(sidebarFetches.length).toBeGreaterThanOrEqual(2);
     });
     expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+      ).length,
+    ).toBe(detailCallsBeforeRetry);
+  });
+
+  it('MM-1010 keeps a loaded desktop sidebar visible when the selected detail request fails (MM-975)', async () => {
+    window.history.pushState({}, 'Workspace Detail Failure Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceDetailFailure();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const active = await within(sidebar).findByRole('link', { name: /MM-1010 sidebar remains loaded/i });
+    expect(active.getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(await screen.findByText('Failed to fetch workflow: Forbidden')).toBeTruthy();
+    expect(within(sidebar).queryByText('Workflow navigation is unavailable.')).toBeNull();
   });
 
   it('MM-997 translates workspace sidebar limit state to the executions API page size', async () => {
