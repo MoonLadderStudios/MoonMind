@@ -113,3 +113,41 @@ class TestBuildDefaultRegistry:
         }
         registry = build_default_registry(env=env)
         assert "jules" not in registry
+
+    def test_omnigent_registered_only_when_runtime_gate_enabled(self):
+        disabled_registry = build_default_registry(env={})
+        assert "omnigent" not in disabled_registry
+
+        missing_url_registry = build_default_registry(
+            env={"OMNIGENT_ENABLED": "1"}
+        )
+        assert "omnigent" not in missing_url_registry
+
+        enabled_registry = build_default_registry(
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+                "OMNIGENT_API_TOKEN": "activity-boundary-only",
+            }
+        )
+
+        assert enabled_registry.registered_ids == ["omnigent"]
+
+    def test_omnigent_alias_agent_ids_are_not_registered(self):
+        registry = build_default_registry(
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+            }
+        )
+
+        assert "omnigent" in registry
+        for alias in (
+            "omnigent_session",
+            "omnigent_claude",
+            "omnigent_codex",
+            "omnigent_polly",
+        ):
+            assert alias not in registry
+            with pytest.raises(ValueError, match="No external adapter registered"):
+                registry.create(alias)
