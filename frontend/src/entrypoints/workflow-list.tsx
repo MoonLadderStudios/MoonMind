@@ -1650,6 +1650,43 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 
+  // Desktop entry point to the full advanced-filters drawer. When the results
+  // header row is dropped on desktop, the per-column buttons only cover
+  // TABLE_COLUMN_FILTER_FIELDS, so this keeps every drawer-only field (ID, Skill,
+  // Scheduled, Created, Finished, and any column hidden via View options)
+  // reachable and surfaces the active-filter count so those filters can still be
+  // reviewed and cleared without hand-editing the URL.
+  const renderAdvancedFiltersTrigger = () => (
+    <button
+      type="button"
+      className={`workflow-list-advanced-filters-trigger${hasActiveFilters ? ' is-active' : ''}`}
+      ref={drawerToggleRef}
+      aria-haspopup="dialog"
+      aria-expanded={drawerOpen}
+      aria-label={
+        hasActiveFilters
+          ? `Advanced filters. ${activeFilters.length} active.`
+          : 'Advanced filters'
+      }
+      title="Advanced filters"
+      onClick={(event) => openDrawer(null, event.currentTarget)}
+    >
+      <svg
+        aria-hidden="true"
+        className="workflow-list-advanced-filters-icon"
+        viewBox="0 0 16 16"
+        focusable="false"
+      >
+        <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+      </svg>
+      {hasActiveFilters ? (
+        <span className="workflow-list-advanced-filters-count" aria-hidden="true">
+          {activeFilters.length}
+        </span>
+      ) : null}
+    </button>
+  );
+
   // Desktop promotes the per-column filter buttons and an Actions-header "View
   // options" icon, dropping the results header row. The icon lives inside the
   // rendered table header, so it can only host "View options" when the table is
@@ -1999,6 +2036,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <th scope="col" className="queue-table-actions-header">
                           <div className="queue-table-actions-header-inner">
                             <span>Actions</span>
+                            {showViewOptionsIcon ? renderAdvancedFiltersTrigger() : null}
                             {showViewOptionsIcon ? renderViewOptions('icon') : null}
                           </div>
                         </th>

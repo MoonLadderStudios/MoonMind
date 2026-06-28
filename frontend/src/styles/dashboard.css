@@ -2113,6 +2113,59 @@ tbody tr:hover {
   z-index: 30;
 }
 
+/* Desktop advanced-filters entry point: a compact funnel icon in the Actions
+ * header that opens the full filter drawer once the results header row (and its
+ * Filters trigger) is dropped. Mirrors the per-column filter buttons so the two
+ * filter affordances read as one family. */
+.workflow-list-advanced-filters-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  height: 1.6rem;
+  min-width: 1.6rem;
+  padding: 0 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.workflow-list-advanced-filters-trigger:hover,
+.workflow-list-advanced-filters-trigger:focus-visible,
+.workflow-list-advanced-filters-trigger[aria-expanded="true"],
+.workflow-list-advanced-filters-trigger.is-active {
+  border-color: rgb(var(--mm-accent) / 0.55);
+  background: rgb(var(--mm-accent) / 0.1);
+  color: rgb(var(--mm-accent));
+  box-shadow: var(--mm-control-focus-ring);
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-advanced-filters-icon {
+  display: block;
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: currentColor;
+}
+
+.workflow-list-advanced-filters-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: rgb(var(--mm-accent) / 0.22);
+  color: rgb(var(--mm-accent));
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
 .workflow-list-view-options-popover {
   position: absolute;
   right: 0;
@@ -3558,7 +3611,8 @@ button.secondary:hover {
 button.workflow-list-filter-chip-open,
 button.workflow-list-filter-chip-remove,
 button.workflow-list-column-filter-button,
-button.workflow-list-view-options-trigger--icon {
+button.workflow-list-view-options-trigger--icon,
+button.workflow-list-advanced-filters-trigger {
   background-image: none;
   transform: none;
   filter: none;
@@ -6567,15 +6621,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-table-column-actions {
-  width: 6.5rem;
+  width: 8.5rem;
 }
 
 .queue-table-actions-header {
   text-align: right;
 }
 
-/* Keeps the "Actions" label and the small desktop "View options" icon button on
- * one right-aligned row. */
+/* Keeps the "Actions" label and the small desktop "Advanced filters" + "View
+ * options" icon buttons on one right-aligned row. */
 .queue-table-actions-header-inner {
   display: flex;
   align-items: center;
