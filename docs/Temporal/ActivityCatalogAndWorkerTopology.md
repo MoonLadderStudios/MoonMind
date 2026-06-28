@@ -387,6 +387,7 @@ Purpose: external provider interaction and delegated agent execution.
 - `integration.jules.*`
 - `integration.codex_cloud.*`
 - `integration.openclaw.execute`
+- `integration.omnigent.execute`
 
 ### Jules and Codex Cloud contract pattern
 
@@ -399,13 +400,14 @@ Current canonical pattern:
 
 and likewise for `integration.codex_cloud.*`
 
-### OpenClaw streaming-gateway contract pattern
+### Streaming-gateway contract pattern
 
-`integration.openclaw.execute(...)` is a special-case single-call external execution path for providers using the streaming-gateway execution style.
+`integration.openclaw.execute(...)` and `integration.omnigent.execute(...)` are special-case single-call external execution paths for providers using the streaming-gateway execution style.
 
 Contract:
 
 - `integration.openclaw.execute(...) -> AgentRunResult`
+- `integration.omnigent.execute(...) -> AgentRunResult`
 
 Worker queue: `mm.activity.integrations`
 

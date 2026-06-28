@@ -1,15 +1,21 @@
-"""Omnigent external-provider integration helpers."""
+"""Omnigent runtime integration settings."""
 
-from moonmind.omnigent.execute import run_omnigent_execution
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
+    OmnigentRuntimeGate,
     build_omnigent_gate,
     is_omnigent_enabled,
+    resolved_api_token,
+    resolved_default_agent_name,
+    resolved_server_url,
 )
 
 __all__ = [
     "OMNIGENT_DISABLED_MESSAGE",
+    "OmnigentRuntimeGate",
     "build_omnigent_gate",
     "is_omnigent_enabled",
-    "run_omnigent_execution",
+    "resolved_api_token",
+    "resolved_default_agent_name",
+    "resolved_server_url",
 ]

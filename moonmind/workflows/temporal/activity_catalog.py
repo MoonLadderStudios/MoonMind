@@ -878,8 +878,8 @@ def build_default_activity_catalog(
             capability_class="integration:omnigent",
             task_queue=cfg.activity_integrations_task_queue,
             fleet=INTEGRATIONS_FLEET,
-            timeouts=TemporalActivityTimeouts(3600, 3900, heartbeat_timeout_seconds=120),
-            retries=_activity_retries(max_attempts=3, max_interval_seconds=300),
+            timeouts=TemporalActivityTimeouts(3600, 3700, heartbeat_timeout_seconds=120),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
         # ---- General-purpose repo operations (provider-agnostic) ----
@@ -1309,6 +1309,7 @@ def build_default_activity_catalog(
                 "integration:jira",
                 "integration:codex_cloud",
                 "integration:openclaw",
+                "integration:omnigent",
             ),
             privileges=("provider_tokens",),
             scaling_notes="Protect with rate limiting and circuit breakers.",

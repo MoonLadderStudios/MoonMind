@@ -33,7 +33,7 @@ export type WorkflowDetailTab = 'overview' | 'steps' | 'artifacts' | 'runs' | 'd
 // from this set.
 export const TOGGLEABLE_WORKFLOW_LIST_COLUMNS = [
   'status',
-  'nextAction',
+  'progress',
   'repository',
   'targetRuntime',
   'updatedAt',
@@ -82,7 +82,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   workflowListDensity: 'comfortable',
   workflowListColumnVisibility: {
     status: true,
-    nextAction: true,
+    progress: true,
     repository: true,
     targetRuntime: true,
     updatedAt: true,

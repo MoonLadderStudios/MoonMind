@@ -64,7 +64,7 @@ def build_default_registry(
     *,
     env: dict[str, Any] | None = None,
 ) -> ExternalAdapterRegistry:
-    """Build the default registry with Jules and Codex Cloud adapters.
+    """Build the default registry with configured external adapters.
 
     Each adapter is only registered if its runtime gate is satisfied
     (i.e. the provider is enabled and configured).
