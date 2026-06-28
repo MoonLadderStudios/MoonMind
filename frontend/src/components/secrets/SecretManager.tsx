@@ -47,7 +47,7 @@ const _BROKEN_REFERENCE_STATUSES = new Set([
   'missing',
 ]);
 
-function isBrokenReferenceStatus(status: string | undefined): boolean {
+export function isBrokenReferenceStatus(status: string | undefined): boolean {
   return Boolean(status) && _BROKEN_REFERENCE_STATUSES.has(String(status));
 }
 
