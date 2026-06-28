@@ -737,6 +737,23 @@ describe('Workflow Detail Entrypoint', () => {
     );
   });
 
+  it('preserves API-style pageSize state when fetching the workspace sidebar', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Page Size Test',
+      '/workflows/test-123?source=temporal&pageSize=100&nextPageToken=page-2&selectedWorkflowId=test-123&sort=status&unsafe=1',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
+      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=100',
+    );
+  });
+
   it('MM-1000 persists collapsed sidebar state across desktop detail reloads without changing the route', async () => {
     window.history.pushState({}, 'Workspace Collapse Test', '/workflows/test-123?source=temporal');
     mockDesktopViewport(true);

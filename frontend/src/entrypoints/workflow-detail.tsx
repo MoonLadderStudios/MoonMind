@@ -229,8 +229,8 @@ function workflowDetailSubrouteHref(
 }
 
 function workflowWorkspaceListQuery(search: URLSearchParams): string {
+  const pageSize = search.get('limit') || search.get('pageSize') || '25';
   const params = workflowListContextParams(search);
-  const pageSize = params.get('limit') || params.get('pageSize') || '25';
   params.delete('limit');
   params.set('pageSize', pageSize);
   return params.toString();
