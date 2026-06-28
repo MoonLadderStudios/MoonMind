@@ -53,6 +53,7 @@ from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 from .github_auth_broker import GitHubAuthBrokerManager
 from .git_auth import build_github_token_git_environment
+from .managed_session_observability import ManagedSessionObservabilityBridge
 from .managed_session_store import ManagedSessionStore
 from .managed_session_supervisor import ManagedSessionSupervisor
 
@@ -384,6 +385,11 @@ class DockerCodexManagedSessionController:
         self._moonmind_url = str(moonmind_url or "").strip() or None
         self._session_store = session_store
         self._session_supervisor = session_supervisor
+        self._observability_bridge = (
+            ManagedSessionObservabilityBridge(session_supervisor)
+            if session_supervisor is not None
+            else None
+        )
         self._docker_binary = docker_binary
         self._docker_host = docker_host
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
@@ -2969,15 +2975,12 @@ class DockerCodexManagedSessionController:
             self._session_store.save(record)
             if self._session_supervisor is not None:
                 await self._session_supervisor.start(record)
-                await self._emit_session_event(
-                    record=record,
-                    kind="session_started",
-                    text=(
-                        f"Session started. Epoch {record.session_epoch} "
-                        f"thread {record.thread_id}."
-                    ),
-                    metadata={"action": "start_session"},
-                )
+                if self._observability_bridge is not None:
+                    self._observability_bridge.emit_session_available(
+                        record=record,
+                        resumed=False,
+                        metadata=handle.metadata,
+                    )
         return handle
 
     async def session_status(
@@ -3008,16 +3011,13 @@ class DockerCodexManagedSessionController:
                     )
                 }
             )
-            await self._emit_session_event(
-                record=record,
-                kind="session_resumed",
-                text=(
-                    f"Session resumed. Epoch {record.session_epoch} "
-                    f"thread {record.thread_id}."
-                ),
-                active_turn_id=handle.session_state.active_turn_id,
-                metadata={"action": "resume_session"},
-            )
+            if self._observability_bridge is not None:
+                self._observability_bridge.emit_session_available(
+                    record=record,
+                    resumed=True,
+                    metadata=handle.metadata,
+                    active_turn_id=handle.session_state.active_turn_id,
+                )
         return handle
 
     async def send_turn(
@@ -3078,31 +3078,52 @@ class DockerCodexManagedSessionController:
                     metadata=record_metadata,
                 )
                 if self._session_supervisor is not None:
-                    await self._emit_session_event(
-                        record=updated_record,
-                        kind="turn_started",
-                        text=f"Turn started: {response.turn_id}.",
-                        turn_id=response.turn_id,
-                        active_turn_id=response.turn_id,
-                        metadata={
-                            "action": "send_turn",
-                            "reason": request.reason,
-                        },
-                    )
-                    if terminal_response.status == "completed":
-                        await self._emit_session_event(
+                    if self._observability_bridge is not None:
+                        self._observability_bridge.emit_user_message_submitted(
                             record=updated_record,
-                            kind="turn_completed",
-                            text=f"Turn completed: {terminal_response.turn_id}.",
-                            turn_id=terminal_response.turn_id,
-                            active_turn_id=updated_record.active_turn_id,
-                            metadata={
-                                "action": "send_turn",
-                                "assistantText": terminal_response.metadata.get("assistantText"),
-                                "reason": request.reason,
-                            },
+                            turn_id=response.turn_id,
+                            instructions=request.instructions,
+                            reason=request.reason,
                         )
-                    elif empty_assistant_turn:
+                        self._observability_bridge.emit_turn_started(
+                            record=updated_record,
+                            turn_id=response.turn_id,
+                            reason=request.reason,
+                        )
+                        self._observability_bridge.emit_native_observations(
+                            record=updated_record,
+                            observations=terminal_response.metadata.get(
+                                "observabilityEvents"
+                            ),
+                            default_turn_id=response.turn_id,
+                        )
+                    if terminal_response.status == "completed":
+                        if self._observability_bridge is not None:
+                            self._observability_bridge.emit_assistant_output(
+                                record=updated_record,
+                                turn_id=terminal_response.turn_id,
+                                assistant_text=terminal_response.metadata.get(
+                                    "assistantText"
+                                ),
+                                reason=request.reason,
+                            )
+                            self._observability_bridge.emit_turn_completed(
+                                record=updated_record,
+                                turn_id=terminal_response.turn_id,
+                                assistant_text=terminal_response.metadata.get(
+                                    "assistantText"
+                                ),
+                                reason=request.reason,
+                            )
+                    elif terminal_response.status == "failed":
+                        if self._observability_bridge is not None:
+                            self._observability_bridge.emit_turn_failed(
+                                record=updated_record,
+                                turn_id=terminal_response.turn_id,
+                                response_metadata=terminal_response.metadata,
+                                reason=request.reason,
+                            )
+                    if empty_assistant_turn:
                         await self._emit_session_event(
                             record=updated_record,
                             kind="empty_assistant_turn_detected",

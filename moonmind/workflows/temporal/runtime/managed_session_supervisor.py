@@ -13,6 +13,7 @@ from typing import Protocol
 from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
 from .log_streamer import RuntimeLogStreamer
+from .managed_session_observability import ManagedSessionObservabilityBridge
 from .managed_session_store import ManagedSessionStore
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class ManagedSessionSupervisor:
         self._poll_interval_seconds = poll_interval_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
+        self._observability_bridge = ManagedSessionObservabilityBridge(self)
 
     @staticmethod
     def _stdout_path(record: CodexManagedSessionRecord) -> Path:
@@ -204,16 +206,11 @@ class ManagedSessionSupervisor:
             updated_at=datetime.now(tz=UTC),
         )
         if record.active_turn_id != active_turn_id:
-            self.emit_session_event(
+            self._observability_bridge.emit_turn_started(
                 record=updated,
-                kind="turn_started",
-                text=f"Turn started: {active_turn_id}.",
                 turn_id=active_turn_id,
-                active_turn_id=active_turn_id,
-                metadata={
-                    "action": "send_turn",
-                    "source": "managed_session_runtime_state",
-                },
+                reason=None,
+                source="managed_session_runtime_state",
             )
         return updated
 
