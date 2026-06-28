@@ -1637,8 +1637,8 @@ describe('Workflows Entrypoint', () => {
     const cardTitle = await within(cardList).findByRole('link', { name: 'Example task' });
     const detailsLink = within(cardList).getByRole('button', { name: 'View details' });
 
-    expect(cardTitle.getAttribute('href')).toBe('/workflows/task-123?source=temporal');
-    expect(detailsLink.getAttribute('href')).toBe('/workflows/task-123?source=temporal');
+    expect(cardTitle.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
+    expect(detailsLink.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
     expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
 
     openFilterDrawer();

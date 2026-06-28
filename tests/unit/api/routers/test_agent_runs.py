@@ -1793,6 +1793,79 @@ def test_get_agent_run_observability_events_reconstructs_complete_chat_vocabular
         event["metadata"]["sourceIssue"] == "MM-985" for event in body["events"]
     )
 
+def test_get_agent_run_observability_events_excludes_provider_native_payloads(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    # MM-988 / MM-976: browser history excludes provider-native and local-only state.
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 1,
+                        "stream": "session",
+                        "text": "provider-native event must not reach the browser",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "assistant_message",
+                        "metadata": {
+                            "providerPayload": {
+                                "messages": [{"role": "assistant", "content": "raw"}],
+                            },
+                            "rawEnv": {"OPENAI_API_KEY": "secret"},
+                            "transcript": "full unredacted transcript",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 2,
+                        "stream": "session",
+                        "text": "assistant message stored as artifact",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "assistant_message",
+                        "metadata": {
+                            "artifactRef": "art:sha256:assistant-message",
+                            "summaryRef": "art:sha256:summary",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.run_id = "run-1"
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [2]
+    assert body["events"][0]["metadata"] == {
+        "artifactRef": "art:sha256:assistant-message",
+        "summaryRef": "art:sha256:summary",
+    }
+    assert "providerPayload" not in json.dumps(body)
+    assert "OPENAI_API_KEY" not in json.dumps(body)
+    assert "full unredacted transcript" not in json.dumps(body)
+
 def test_get_agent_run_observability_events_applies_since_stream_and_kind_filters(
     client: tuple[TestClient, AsyncMock],
     tmp_path,

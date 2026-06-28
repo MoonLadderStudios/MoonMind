@@ -59,6 +59,7 @@ type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'al
 
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
 const SESSION_PROJECTION_POLL_MS = 5000;
+const SESSION_CAPABILITY_POLL_MS = 5000;
 const WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
 
 const WorkflowWorkspaceRowSchema = z
@@ -593,6 +594,17 @@ export function getSessionProjectionRefetchInterval(
     return false;
   }
   return SESSION_PROJECTION_POLL_MS;
+}
+
+export function getSessionCapabilityRefetchInterval(
+  isTerminal: boolean,
+  hasCapabilities: boolean,
+  hasError: boolean,
+): number | false {
+  if (isTerminal || hasCapabilities || hasError) {
+    return false;
+  }
+  return SESSION_CAPABILITY_POLL_MS;
 }
 
 function normalizeGitHubPullRequestUrl(value: string | null | undefined): string | null {
@@ -4387,24 +4399,33 @@ function RecoveryEvidencePanel({
 function SessionContinuityPanel({
   apiBase,
   agentRunId,
+  targetRuntime,
   isTerminal,
   invalidateWorkflowDetail,
   routes,
 }: {
   apiBase: string;
   agentRunId: string;
+  targetRuntime: string | null | undefined;
   isTerminal: boolean;
   invalidateWorkflowDetail: () => void;
   routes: AgentRunRouteTemplates;
 }) {
   const queryClient = useQueryClient();
+  const canPollSessionCapabilities = isCodexManagedRuntime(targetRuntime);
   const summaryQuery = useQuery({
     queryKey: ['observability-summary', agentRunId],
     queryFn: () => fetchObservabilitySummary(apiBase, agentRunId, routes.observabilitySummary),
     enabled: !!agentRunId,
     staleTime: 1000 * 10,
     refetchInterval: (query) => {
-      if (isTerminal || !query.state.data?.sessionSnapshot) {
+      if (!canPollSessionCapabilities || query.state.error) {
+        return false;
+      }
+      if (!query.state.data?.sessionSnapshot) {
+        return getSessionCapabilityRefetchInterval(isTerminal, false, false);
+      }
+      if (isTerminal) {
         return false;
       }
       return SESSION_PROJECTION_POLL_MS;
@@ -5341,6 +5362,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const debugVisible = debugFieldsPref;
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
+  const isDesktop = useWorkflowWorkspaceDesktop();
 
   const workflowIdMatch = window.location.pathname.match(
     /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/,
@@ -5352,6 +5374,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     () => workflowListHrefFromContext(search, { markDetailReturn: true }),
     [search],
   );
+  const showExpandToFullList = isDesktop || expandToFullListHref !== '/workflows';
   const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
   const sourceTemporal = search.get('source') === 'temporal';
 
@@ -6113,9 +6136,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         <div className="toolbar-controls">
-          <a className="button secondary" href={expandToFullListHref}>
-            Expand to full list
-          </a>
+          {showExpandToFullList ? (
+            <a className="button secondary" href={expandToFullListHref}>
+              Expand to full list
+            </a>
+          ) : null}
           <span className="small">
             Live updates enabled. Polling every {Math.round(detailPoll / 1000)}s
           </span>
@@ -6957,6 +6982,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             <SessionContinuityPanel
               apiBase={payload.apiBase}
               agentRunId={resolvedAgentRunId}
+              targetRuntime={execution.targetRuntime}
               isTerminal={isTerminalExecution}
               invalidateWorkflowDetail={invalidate}
               routes={agentRunRoutes}

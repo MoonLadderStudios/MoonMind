@@ -515,6 +515,80 @@ def test_build_canonical_status_safely_filters_metadata() -> None:
         "externalUrl": "https://dashboard.example.com",
     }
 
+def test_run_observability_event_rejects_provider_native_metadata() -> None:
+    # MM-988 / MM-976: browser observability must use MoonMind-normalized refs.
+    with pytest.raises(
+        ValidationError,
+        match="metadata must use MoonMind-normalized artifact refs",
+    ):
+        LiveLogChunk(
+            sequence=1,
+            stream="session",
+            timestamp="2026-04-08T00:00:00Z",
+            text="assistant message available as artifact",
+            kind="assistant_message",
+            metadata={
+                "providerPayload": {
+                    "messages": [{"role": "assistant", "content": "raw body"}],
+                },
+                "terminalScrollback": "container-local scrollback is not durable truth",
+                "threadDatabase": "/home/app/.codex/session.db",
+            },
+        )
+
+def test_run_observability_event_rejects_secret_like_metadata() -> None:
+    # MM-988 / MM-976: event metadata must not carry raw secrets.
+    with pytest.raises(
+        ValidationError,
+        match="metadata must not contain raw credential keys",
+    ):
+        LiveLogChunk(
+            sequence=1,
+            stream="system",
+            timestamp="2026-04-08T00:00:00Z",
+            text="metadata sanitized",
+            kind="system_annotation",
+            metadata={"oauthToken": "raw-token", "apiKey": "raw-key"},
+        )
+
+def test_run_observability_event_accepts_redacted_secret_like_metadata() -> None:
+    # MM-988: bridge-redacted metadata is safe to publish even when the source
+    # provider used secret-like metadata keys.
+    event = LiveLogChunk(
+        sequence=1,
+        stream="system",
+        timestamp="2026-04-08T00:00:00Z",
+        text="metadata sanitized",
+        kind="system_annotation",
+        metadata={
+            "apiToken": "[REDACTED]",
+            "authorization": "[REDACTED_AUTHORIZATION]",
+            "nested": [{"privateKey": "[REDACTED_PRIVATE_KEY]"}],
+        },
+    )
+
+    assert event.metadata["apiToken"] == "[REDACTED]"
+    assert event.metadata["authorization"] == "[REDACTED_AUTHORIZATION]"
+
+def test_run_observability_event_accepts_artifact_refs_for_provider_evidence() -> None:
+    event = LiveLogChunk(
+        runId="run-1",
+        sequence=1,
+        stream="session",
+        timestamp="2026-04-08T00:00:00Z",
+        text="assistant message stored as artifact",
+        kind="assistant_message",
+        metadata={
+            "artifactRef": "art:sha256:assistant-message",
+            "summaryRef": "art:sha256:summary",
+        },
+    )
+
+    assert event.metadata == {
+        "artifactRef": "art:sha256:assistant-message",
+        "summaryRef": "art:sha256:summary",
+    }
+
 def test_build_canonical_result_enforces_correct_schema() -> None:
     from moonmind.schemas.agent_runtime_models import build_canonical_result
     raw_payload = {
