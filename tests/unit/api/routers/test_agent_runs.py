@@ -315,6 +315,34 @@ def test_get_observability_summary_includes_active_turn_capabilities(
         "cancelSession": True,
     }
 
+def test_get_observability_summary_reports_false_capabilities_for_one_shot_run(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.session_id = ""
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._load_agent_run_session_record",
+            return_value=None,
+        ):
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    body = response.json()["summary"]
+    assert body["sessionSnapshot"] is None
+    assert body["interventionCapabilities"] == {
+        "sendFollowUp": False,
+        "clearSession": False,
+        "interruptTurn": False,
+        "cancelSession": False,
+    }
+
 def test_get_observability_summary_emits_latency_metric(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
