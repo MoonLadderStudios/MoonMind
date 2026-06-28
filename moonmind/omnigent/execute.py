@@ -264,6 +264,7 @@ async def _periodic_stream_heartbeat(
     *,
     session_id: str,
     event_count: dict[str, int],
+    status: dict[str, str],
     interval_seconds: float = 30.0,
 ) -> None:
     while True:
@@ -271,7 +272,8 @@ async def _periodic_stream_heartbeat(
         _safe_heartbeat(
             {
                 "omnigentSessionId": session_id,
-                "events": event_count.get("value", 0),
+                "normalizedStatus": status.get("value", "running"),
+                "eventsCaptured": event_count.get("value", 0),
                 "alive": True,
             }
         )
@@ -375,6 +377,49 @@ def build_omnigent_result(
     )
 
 
+async def _cancel_omnigent_session(
+    client: OmnigentHttpClient,
+    session_id: str,
+) -> None:
+    with suppress(Exception):
+        await client.interrupt(session_id)
+    with suppress(Exception):
+        snapshot = await client.get_session(session_id)
+        normalized = normalize_omnigent_observation(snapshot)
+        if normalized in {
+            "created",
+            "launching",
+            "provisioning",
+            "running",
+            "waiting",
+            "idle",
+            "awaiting_approval",
+            "intervention_requested",
+        }:
+            await client.stop_session(session_id)
+
+
+async def _delete_omnigent_session(
+    client: OmnigentHttpClient | None,
+    session_id: str,
+) -> None:
+    if client is None or not session_id:
+        return
+    with suppress(Exception):
+        await client.delete_session(session_id, delete_branch=False)
+
+
+async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        # Expected after requesting cancellation of a helper task.
+        pass
+
+
 async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
@@ -384,6 +429,10 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
         )
 
+    client: OmnigentHttpClient | None = None
+    session_id = ""
+    stream_task: asyncio.Task[None] | None = None
+    heartbeat_task: asyncio.Task[None] | None = None
     try:
         selection = build_omnigent_selection(request)
         async with httpx.AsyncClient() as httpx_client:
@@ -426,6 +475,8 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 _safe_heartbeat(
                     {
                         "omnigentSessionId": session_id,
+                        "normalizedStatus": "running",
+                        "eventsCaptured": 0,
                         "firstMessagePosted": False,
                     }
                 )
@@ -442,7 +493,6 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             ] = digest
             first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
             stream_queue: asyncio.Queue[dict[str, Any] | BaseException | None] | None = None
-            stream_task: asyncio.Task[None] | None = None
             if not first_message_posted:
                 stream_queue = asyncio.Queue()
                 stream_task = asyncio.create_task(
@@ -457,16 +507,20 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 _safe_heartbeat(
                     {
                         "omnigentSessionId": session_id,
+                        "normalizedStatus": "running",
+                        "eventsCaptured": 0,
                         "firstMessagePosted": True,
                         "firstMessageDigest": digest,
                     }
                 )
 
             event_count = {"value": 0}
+            heartbeat_status = {"value": "running"}
             heartbeat_task = asyncio.create_task(
                 _periodic_stream_heartbeat(
                     session_id=session_id,
                     event_count=event_count,
+                    status=heartbeat_status,
                 )
             )
             terminal_status: str | None = None
@@ -482,38 +536,42 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 async for event in stream_events:
                     event_count["value"] += 1
                     normalized = normalize_omnigent_observation(event)
+                    _safe_heartbeat(
+                        {
+                            "omnigentSessionId": session_id,
+                            "normalizedStatus": normalized or "running",
+                            "eventsCaptured": event_count["value"],
+                            "firstMessagePosted": True,
+                            "eventType": str(event.get("type") or "").strip(),
+                        }
+                    )
                     if normalized in {"awaiting_approval", "intervention_requested"}:
+                        heartbeat_status["value"] = normalized
                         _safe_heartbeat(
                             {
                                 "normalizedStatus": normalized,
                                 "omnigentSessionId": session_id,
-                                "events": event_count["value"],
+                                "eventsCaptured": event_count["value"],
                                 "firstMessagePosted": True,
                             }
                         )
                         continue
                     if normalized in {"completed", "failed", "canceled", "timed_out"}:
                         terminal_status = normalized
+                        heartbeat_status["value"] = normalized
                         break
                     if event_count["value"] % 8 == 0:
                         _safe_heartbeat(
                             {
                                 "omnigentSessionId": session_id,
-                                "events": event_count["value"],
+                                "normalizedStatus": normalized or "running",
+                                "eventsCaptured": event_count["value"],
                                 "firstMessagePosted": True,
                             }
                         )
             finally:
-                heartbeat_task.cancel()
-                try:
-                    await heartbeat_task
-                except asyncio.CancelledError:
-                    # Expected after cancelling the periodic heartbeat task.
-                    pass
-                if stream_task is not None and not stream_task.done():
-                    stream_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await stream_task
+                await _cancel_task(heartbeat_task)
+                await _cancel_task(stream_task)
 
             final_snapshot = await client.get_session(session_id)
             if terminal_status is None:
@@ -541,7 +599,16 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 final_snapshot=final_snapshot,
                 event_count=event_count["value"],
             )
+    except asyncio.CancelledError:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        if client is not None and session_id:
+            await _cancel_omnigent_session(client, session_id)
+        raise
     except (OmnigentContractError, OmnigentAdapterError, ValueError) as exc:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        await _delete_omnigent_session(client, session_id)
         return AgentRunResult(
             outputRefs=[],
             summary=_compact_summary(exc, fallback="Omnigent contract error"),
@@ -553,6 +620,9 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
     except OmnigentSessionStillRunningError:
         raise
     except (OmnigentClientError, httpx.HTTPError) as exc:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        await _delete_omnigent_session(client, session_id)
         status_code = exc.status_code if isinstance(exc, OmnigentClientError) else None
         return AgentRunResult(
             outputRefs=[],

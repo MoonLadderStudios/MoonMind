@@ -313,6 +313,68 @@ def test_get_observability_summary_includes_session_snapshot(
     assert snapshot["sessionId"] == "sess:wf-task-1:codex_cli"
     assert snapshot["sessionEpoch"] == 2
     assert snapshot["threadId"] == "thread-2"
+    assert response.json()["summary"]["interventionCapabilities"] == {
+        "sendFollowUp": True,
+        "clearSession": True,
+        "interruptTurn": False,
+        "cancelSession": False,
+    }
+
+def test_get_observability_summary_includes_active_turn_capabilities(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    session_record = _build_session_record().model_copy(
+        update={"status": "busy", "active_turn_id": "turn-1"}
+    )
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._load_agent_run_session_record",
+            return_value=session_record,
+        ):
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["interventionCapabilities"] == {
+        "sendFollowUp": False,
+        "clearSession": True,
+        "interruptTurn": True,
+        "cancelSession": True,
+    }
+
+def test_get_observability_summary_reports_false_capabilities_for_one_shot_run(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {"status": "running"}
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.session_id = ""
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._load_agent_run_session_record",
+            return_value=None,
+        ):
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    body = response.json()["summary"]
+    assert body["sessionSnapshot"] is None
+    assert body["interventionCapabilities"] == {
+        "sendFollowUp": False,
+        "clearSession": False,
+        "interruptTurn": False,
+        "cancelSession": False,
+    }
 
 def test_get_observability_summary_emits_latency_metric(
     client: tuple[TestClient, AsyncMock],
@@ -1731,6 +1793,79 @@ def test_get_agent_run_observability_events_reconstructs_complete_chat_vocabular
         event["metadata"]["sourceIssue"] == "MM-985" for event in body["events"]
     )
 
+def test_get_agent_run_observability_events_excludes_provider_native_payloads(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    # MM-988 / MM-976: browser history excludes provider-native and local-only state.
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 1,
+                        "stream": "session",
+                        "text": "provider-native event must not reach the browser",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "assistant_message",
+                        "metadata": {
+                            "providerPayload": {
+                                "messages": [{"role": "assistant", "content": "raw"}],
+                            },
+                            "rawEnv": {"OPENAI_API_KEY": "secret"},
+                            "transcript": "full unredacted transcript",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 2,
+                        "stream": "session",
+                        "text": "assistant message stored as artifact",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "assistant_message",
+                        "metadata": {
+                            "artifactRef": "art:sha256:assistant-message",
+                            "summaryRef": "art:sha256:summary",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.run_id = "run-1"
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [2]
+    assert body["events"][0]["metadata"] == {
+        "artifactRef": "art:sha256:assistant-message",
+        "summaryRef": "art:sha256:summary",
+    }
+    assert "providerPayload" not in json.dumps(body)
+    assert "OPENAI_API_KEY" not in json.dumps(body)
+    assert "full unredacted transcript" not in json.dumps(body)
+
 def test_get_agent_run_observability_events_applies_since_stream_and_kind_filters(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -3103,6 +3238,95 @@ def test_post_agent_run_artifact_session_control_routes_clear_session_and_return
     assert body["projection"]["session_epoch"] == 3
     assert body["projection"]["latest_control_event_ref"]["artifact_id"] == "art_control"
     assert body["projection"]["latest_reset_boundary_ref"]["artifact_id"] == "art_reset"
+
+def test_post_agent_run_artifact_session_control_routes_interrupt_turn(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, artifact_service = client
+    record = _build_session_record().model_copy(
+        update={"status": "busy", "active_turn_id": "turn-9"}
+    )
+    artifact_service.get_metadata.side_effect = lambda **kwargs: _build_artifact(
+        kwargs["artifact_id"],
+        "session.summary",
+        label="summary",
+    )
+    client_adapter = AsyncMock()
+    client_adapter.update_workflow.return_value = {"accepted": True}
+
+    with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=record):
+        with patch("api_service.api.routers.agent_runs.get_temporal_client_adapter", return_value=client_adapter):
+            response = test_client.post(
+                "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                json={
+                    "action": "interrupt_turn",
+                    "reason": "Stop this turn",
+                },
+            )
+
+    assert response.status_code == 200
+    client_adapter.update_workflow.assert_awaited_once_with(
+        "wf-task-1:session:codex_cli",
+        "InterruptTurn",
+        {
+            "sessionEpoch": 2,
+            "reason": "Stop this turn",
+        },
+    )
+    assert response.json()["action"] == "interrupt_turn"
+
+def test_post_agent_run_artifact_session_control_routes_cancel_session(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, artifact_service = client
+    record = _build_session_record().model_copy(
+        update={"status": "busy", "active_turn_id": "turn-9"}
+    )
+    artifact_service.get_metadata.side_effect = lambda **kwargs: _build_artifact(
+        kwargs["artifact_id"],
+        "session.summary",
+        label="summary",
+    )
+    client_adapter = AsyncMock()
+    client_adapter.update_workflow.return_value = {"accepted": True}
+
+    with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=record):
+        with patch("api_service.api.routers.agent_runs.get_temporal_client_adapter", return_value=client_adapter):
+            response = test_client.post(
+                "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                json={
+                    "action": "cancel_session",
+                    "reason": "Operator cancel",
+                },
+            )
+
+    assert response.status_code == 200
+    client_adapter.update_workflow.assert_awaited_once_with(
+        "wf-task-1:session:codex_cli",
+        "CancelSession",
+        {
+            "reason": "Operator cancel",
+        },
+    )
+    assert response.json()["action"] == "cancel_session"
+
+def test_post_agent_run_artifact_session_control_rejects_false_capability(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    test_client, _artifact_service = client
+    record = _build_session_record()
+    client_adapter = AsyncMock()
+
+    with patch("api_service.api.routers.agent_runs.ManagedSessionStore.load", return_value=record):
+        with patch("api_service.api.routers.agent_runs.get_temporal_client_adapter", return_value=client_adapter):
+            response = test_client.post(
+                "/api/agent-runs/wf-task-1/artifact-sessions/sess:wf-task-1:codex_cli/control",
+                json={"action": "interrupt_turn"},
+            )
+
+    assert response.status_code == 409
+    assert "interrupt_turn" in response.json()["detail"]
+    client_adapter.update_workflow.assert_not_awaited()
 
 def test_post_agent_run_artifact_session_control_rejects_blank_follow_up_message(
     client: tuple[TestClient, AsyncMock],
