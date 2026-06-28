@@ -317,6 +317,7 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     command_text = "\n".join(str(part) for part in init_service["command"])
     assert "SELECT 1 FROM pg_roles" in command_text
     assert "CREATE ROLE" in command_text
+    assert "ALTER ROLE $$role_sql PASSWORD $$password_sql" in command_text
     assert "SELECT 1 FROM pg_database" in command_text
     assert "CREATE DATABASE" in command_text
     assert "GRANT ALL PRIVILEGES ON DATABASE" in command_text

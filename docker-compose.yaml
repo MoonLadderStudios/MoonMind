@@ -897,6 +897,7 @@ services:
         if [ "$$role_exists" != "1" ]; then
           psql -v ON_ERROR_STOP=1 -c "CREATE ROLE $$role_sql LOGIN PASSWORD $$password_sql"
         fi
+        psql -v ON_ERROR_STOP=1 -c "ALTER ROLE $$role_sql PASSWORD $$password_sql"
 
         db_exists="$$(psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname = $$db_literal")"
         if [ "$$db_exists" != "1" ]; then
