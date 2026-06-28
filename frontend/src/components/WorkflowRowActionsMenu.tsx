@@ -361,10 +361,18 @@ export function WorkflowRowActionsMenu({
         },
         onBypassDependencies: () => {
           setActionError(null);
-          signalMutation.mutate({
-            signalName: 'BypassDependencies',
-            payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
-          });
+          setActionNotice(null);
+          signalMutation.mutate(
+            {
+              signalName: 'BypassDependencies',
+              payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
+            },
+            {
+              onSuccess: () => {
+                setActionNotice('Dependency wait bypass was requested.');
+              },
+            },
+          );
         },
         onCreateRemediation: () => {
           setActionError(null);

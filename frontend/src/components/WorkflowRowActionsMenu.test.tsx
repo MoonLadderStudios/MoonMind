@@ -120,10 +120,17 @@ describe('WorkflowRowActionsMenu', () => {
     await waitFor(() => {
       const signalCall = fetchSpy.mock.calls.find(([url, init]) => {
         if (String(url) !== '/api/executions/wf-123/signal') return false;
-        return JSON.parse(String((init as RequestInit).body)).signalName === 'BypassDependencies';
+        const body = (init as RequestInit | undefined)?.body;
+        if (!body) return false;
+        try {
+          return JSON.parse(String(body)).signalName === 'BypassDependencies';
+        } catch {
+          return false;
+        }
       });
       expect(signalCall).toBeTruthy();
-      expect(JSON.parse(String((signalCall?.[1] as RequestInit).body))).toMatchObject({
+      const signalInit = signalCall?.[1] as RequestInit | undefined;
+      expect(signalInit?.body ? JSON.parse(String(signalInit.body)) : null).toMatchObject({
         signalName: 'BypassDependencies',
         payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
       });
