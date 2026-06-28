@@ -15,6 +15,7 @@ type DashboardActionDialogProps = {
   compactId?: string | null;
   consequence: ReactNode;
   confirmLabel: string;
+  confirmPending?: boolean;
   cancelLabel?: string;
   danger?: boolean;
   destructive?: boolean;
@@ -47,6 +48,7 @@ export function DashboardActionDialog({
   compactId,
   consequence,
   confirmLabel,
+  confirmPending = false,
   cancelLabel = 'Cancel',
   danger = false,
   destructive = false,
@@ -95,7 +97,7 @@ export function DashboardActionDialog({
   const confirmationMissing = destructive && expectedConfirmation
     ? typedConfirmation.trim() !== expectedConfirmation
     : false;
-  const confirmDisabled = Boolean(disabledReason || valueMissing || confirmationMissing);
+  const confirmDisabled = Boolean(confirmPending || disabledReason || valueMissing || confirmationMissing);
 
   const focusableElements = () => Array.from(
     dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [],
@@ -222,6 +224,7 @@ export function DashboardActionDialog({
               type="submit"
               className={danger ? 'button dashboard-dialog-danger' : 'button'}
               disabled={confirmDisabled}
+              aria-busy={confirmPending}
             >
               {confirmLabel}
             </button>

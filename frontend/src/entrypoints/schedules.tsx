@@ -848,6 +848,7 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         compactId={definitionId}
         consequence="Delete this recurring schedule. Future runs will stop, but prior workflow executions and artifacts remain available."
         confirmLabel={deleteMutation.isPending ? 'Deleting' : 'Delete schedule'}
+        confirmPending={deleteMutation.isPending}
         danger
         destructive
         confirmationText="DELETE"

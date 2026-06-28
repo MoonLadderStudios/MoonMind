@@ -80,4 +80,29 @@ describe('DashboardActionDialog', () => {
     fireEvent.click(confirmButton);
     expect(onConfirm).toHaveBeenCalledWith('');
   });
+
+  it('disables confirmation while the action is pending', () => {
+    const onConfirm = vi.fn();
+    render(
+      <DashboardActionDialog
+        open
+        title="Cancel workflow"
+        subject="Workflow title"
+        compactId="wf-1"
+        consequence="Cancel this workflow."
+        confirmLabel="Cancelling"
+        confirmPending
+        onCancel={vi.fn()}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    const confirmButton = screen.getByRole('button', { name: 'Cancelling' }) as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    expect(confirmButton.getAttribute('aria-busy')).toBe('true');
+
+    fireEvent.click(confirmButton);
+    fireEvent.submit(confirmButton.closest('form') as HTMLFormElement);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
 });

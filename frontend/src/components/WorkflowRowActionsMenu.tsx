@@ -485,6 +485,7 @@ export function WorkflowRowActionsMenu({
         valueRequired
         initialValue={execution?.title || ''}
         confirmLabel={updateMutation.isPending ? 'Renaming' : 'Rename workflow'}
+        confirmPending={updateMutation.isPending}
         disabledReason={disabledReason('canSetTitle')}
         error={activeDialog === 'rename' ? actionError : null}
         onCancel={closeDialog}
@@ -497,6 +498,7 @@ export function WorkflowRowActionsMenu({
         compactId={workflowId}
         consequence="Resume from the failed step using the original workflow input snapshot."
         confirmLabel={failedStepResumeMutation.isPending ? 'Resuming' : 'Resume workflow'}
+        confirmPending={failedStepResumeMutation.isPending}
         disabledReason={disabledReason('canResumeFromFailedStep')}
         error={activeDialog === 'resume-from-failed-step' ? actionError : null}
         onCancel={closeDialog}
@@ -512,6 +514,7 @@ export function WorkflowRowActionsMenu({
         valuePlaceholder="Dependency wait bypassed by operator from the dashboard."
         valueMultiline
         confirmLabel={signalMutation.isPending ? 'Bypassing' : 'Bypass dependencies'}
+        confirmPending={signalMutation.isPending}
         danger
         disabledReason={disabledReason('canBypassDependencies')}
         error={activeDialog === 'bypass-dependencies' ? actionError : null}
@@ -528,6 +531,7 @@ export function WorkflowRowActionsMenu({
         valuePlaceholder="Optional operator reason"
         valueMultiline
         confirmLabel={cancelMutation.isPending ? 'Cancelling' : 'Cancel workflow'}
+        confirmPending={cancelMutation.isPending}
         danger
         disabledReason={disabledReason('canCancel')}
         error={activeDialog === 'cancel' ? actionError : null}
@@ -544,6 +548,7 @@ export function WorkflowRowActionsMenu({
         valuePlaceholder="Force canceled by operator from the dashboard."
         valueMultiline
         confirmLabel={cancelMutation.isPending ? 'Force cancelling' : 'Force cancel workflow'}
+        confirmPending={cancelMutation.isPending}
         danger
         destructive
         confirmationText="FORCE CANCEL"
@@ -562,6 +567,7 @@ export function WorkflowRowActionsMenu({
         valuePlaceholder="Rejected by operator."
         valueMultiline
         confirmLabel={cancelMutation.isPending ? 'Rejecting' : 'Reject workflow'}
+        confirmPending={cancelMutation.isPending}
         danger
         destructive
         confirmationText="REJECT"
@@ -580,6 +586,7 @@ export function WorkflowRowActionsMenu({
         valueRequired
         valueMultiline
         confirmLabel={signalMutation.isPending ? 'Sending' : 'Send message'}
+        confirmPending={signalMutation.isPending}
         disabledReason={disabledReason('canSendMessage')}
         error={activeDialog === 'send-message' ? actionError : null}
         onCancel={closeDialog}

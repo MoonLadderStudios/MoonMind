@@ -5433,11 +5433,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     signalMutation.mutate({ signalName: 'Approve', payload: {} });
   };
 
-  const onSendMessage = (message: string) => {
-    setActionError(null);
-    signalMutation.mutate({ signalName: 'SendMessage', payload: { message } });
-  };
-
   const onBypassDependencies = () => {
     setActionError(null);
     setActiveWorkflowDialog('bypass-dependencies');
@@ -5661,8 +5656,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         );
         break;
       case 'send-message':
-        onSendMessage(value);
-        setActiveWorkflowDialog(null);
+        signalMutation.mutate(
+          { signalName: 'SendMessage', payload: { message: value } },
+          closeOnSuccess,
+        );
         break;
       default:
         break;
@@ -5743,6 +5740,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         valueRequired
         initialValue={execution?.title || ''}
         confirmLabel={updateMutation.isPending ? 'Renaming' : 'Rename workflow'}
+        confirmPending={updateMutation.isPending}
         disabledReason={actionDisabledReason('canSetTitle')}
         error={activeWorkflowDialog === 'rename' ? actionError : null}
         onCancel={closeWorkflowDialog}
@@ -5755,6 +5753,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         compactId={workflowDialogId}
         consequence="Resume from the failed step using the original workflow input snapshot."
         confirmLabel={failedStepResumeMutation.isPending ? 'Resuming' : 'Resume workflow'}
+        confirmPending={failedStepResumeMutation.isPending}
         disabledReason={actionDisabledReason('canResumeFromFailedStep')}
         error={activeWorkflowDialog === 'resume-from-failed-step' ? actionError : null}
         onCancel={closeWorkflowDialog}
@@ -5767,6 +5766,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         compactId={workflowDialogId}
         consequence={`Recover from ${selectedRecoveryStepLabel} using checkpoint evidence from the source run.`}
         confirmLabel={selectedStepRecoveryMutation.isPending ? 'Recovering' : 'Recover workflow'}
+        confirmPending={selectedStepRecoveryMutation.isPending}
         disabledReason={
           selectedRecoveryStep?.eligible
             ? null
@@ -5788,6 +5788,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         valuePlaceholder="Dependency wait bypassed by operator from the dashboard."
         valueMultiline
         confirmLabel={signalMutation.isPending ? 'Bypassing' : 'Bypass dependencies'}
+        confirmPending={signalMutation.isPending}
         danger
         disabledReason={actionDisabledReason('canBypassDependencies')}
         error={activeWorkflowDialog === 'bypass-dependencies' ? actionError : null}
@@ -5804,6 +5805,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         valuePlaceholder="Optional operator reason"
         valueMultiline
         confirmLabel={cancelMutation.isPending ? 'Cancelling' : 'Cancel workflow'}
+        confirmPending={cancelMutation.isPending}
         danger
         disabledReason={actionDisabledReason('canCancel')}
         error={activeWorkflowDialog === 'cancel' ? actionError : null}
@@ -5820,6 +5822,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         valuePlaceholder="Force canceled by operator from the dashboard."
         valueMultiline
         confirmLabel={cancelMutation.isPending ? 'Force cancelling' : 'Force cancel workflow'}
+        confirmPending={cancelMutation.isPending}
         danger
         destructive
         confirmationText="FORCE CANCEL"
@@ -5838,6 +5841,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         valuePlaceholder="Rejected by operator."
         valueMultiline
         confirmLabel={cancelMutation.isPending ? 'Rejecting' : 'Reject workflow'}
+        confirmPending={cancelMutation.isPending}
         danger
         destructive
         confirmationText="REJECT"
@@ -5856,6 +5860,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         valueRequired
         valueMultiline
         confirmLabel={signalMutation.isPending ? 'Sending' : 'Send message'}
+        confirmPending={signalMutation.isPending}
         disabledReason={actionDisabledReason('canSendMessage')}
         error={activeWorkflowDialog === 'send-message' ? actionError : null}
         onCancel={closeWorkflowDialog}
