@@ -2535,6 +2535,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(
       window.sessionStorage.getItem('moonmind.temporalTaskEditing.notice'),
     ).toBeNull();
+    expect(
+      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('status')).toBeTruthy();
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

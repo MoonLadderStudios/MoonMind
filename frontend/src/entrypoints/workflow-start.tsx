@@ -5363,7 +5363,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     Record<string, string>
   >({});
   const [submitMessageState, setSubmitMessageState] = useState<
-    { text: string; tone: "error" | "pending" } | null
+    { text: string; tone: "error" | "pending" | "ok" } | null
   >(null);
   const submitMessage = submitMessageState?.text ?? null;
   const submitMessageTone = submitMessageState?.tone ?? "error";
@@ -5378,7 +5378,7 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
     rawError?: string | null;
   } | null>(null);
   const setSubmitMessage = useCallback(
-    (text: string | null, tone: "error" | "pending" = "error") => {
+    (text: string | null, tone: "error" | "pending" | "ok" = "error") => {
       setSubmitErrorDetail(null);
       setSubmitMessageState(text === null ? null : { text, tone });
     },
@@ -8498,13 +8498,17 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
           : applied === "continue_as_new"
             ? "Changes were accepted and will continue in a refreshed run."
             : "Changes were saved to this execution.";
+      if (isRerun) {
+        setSubmitMessage(statusText, "ok");
+        return;
+      }
       try {
         window.sessionStorage.setItem(
           "moonmind.temporalTaskEditing.notice",
           statusText,
         );
       } catch {
-        // Navigation should not depend on session storage availability.
+        // Success handling should not depend on session storage availability.
       }
       const redirectWorkflowId =
         String(result.execution?.workflowId || "").trim() || workflowId;
@@ -12087,7 +12091,9 @@ export function WorkflowStartPage({ payload }: { payload: BootPayload }) {
             className={
               submitMessageTone === "pending"
                 ? "queue-submit-message notice pending"
-                : "queue-submit-message notice error"
+                : submitMessageTone === "ok"
+                  ? "queue-submit-message notice ok"
+                  : "queue-submit-message notice error"
             }
           >
             {submitMessage}

@@ -42,7 +42,6 @@ describe('WorkflowRowActionsMenu', () => {
         taskEditingEnabled={false}
       />,
     );
-
   it('renders an icon trigger labeled "Actions" and does not fetch until opened', () => {
     renderMenu();
     expect(screen.getByRole('button', { name: 'Actions' })).toBeTruthy();
@@ -123,6 +122,11 @@ describe('WorkflowRowActionsMenu', () => {
     });
     expect(window.location.pathname).toBe('/workflows');
     expect(window.location.search).toBe('?source=temporal');
+    expect(
+      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('status').className).toContain('notice');
+    expect(screen.getByRole('status').className).toContain('ok');
   });
 
   it('opens a cancel dialog and posts to the cancel endpoint after confirmation', async () => {

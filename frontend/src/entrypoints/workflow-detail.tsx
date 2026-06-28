@@ -5407,7 +5407,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       mode: 'detail',
       workflowId,
     });
-    updateMutation.mutate({ updateName: 'RequestRerun' });
+    updateMutation.mutate(
+      { updateName: 'RequestRerun' },
+      {
+        onSuccess: () => {
+          setActionNotice('Rerun was requested and the latest execution view is ready.');
+        },
+      },
+    );
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   // The remediation mode/authority/action-policy controls only render on the Artifacts
