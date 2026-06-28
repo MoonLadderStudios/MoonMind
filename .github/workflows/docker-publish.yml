@@ -167,7 +167,28 @@ jobs:
             -t "${IMAGE_NAME}:latest" \
             $(printf "${IMAGE_NAME}@sha256:%s " *)
 
-      - name: Inspect image
+      - name: Inspect image and write build summary
         run: |
           IMAGE_NAME="${{ needs.metadata.outputs.image_name }}"
+          VERSION="${{ needs.metadata.outputs.version_tag }}"
+
           docker buildx imagetools inspect "${IMAGE_NAME}:latest"
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE_NAME}:latest" --format '{{.Manifest.Digest}}')"
+          if [ -z "${DIGEST}" ]; then
+            echo "::error::App image ${IMAGE_NAME}:latest is not published" >&2
+            exit 1
+          fi
+
+          # Mirror the PentestGPT runner summary so promotion is copy/paste low
+          # friction: `latest` is the current build channel, `stable` is moved
+          # later by the Promote GHCR image to stable workflow.
+          {
+            echo "### App image published"
+            echo ""
+            echo "- Version tag: \`${IMAGE_NAME}:${VERSION}\`"
+            echo "- Current build channel: \`${IMAGE_NAME}:latest\`"
+            echo "- Digest: \`${DIGEST}\`"
+            echo "- Digest-pinned reference: \`${IMAGE_NAME}:${VERSION}@${DIGEST}\`"
+            echo ""
+            echo "To promote this build, run **Actions → Promote GHCR image to stable** with image \`app\` and source tag \`${VERSION}\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
