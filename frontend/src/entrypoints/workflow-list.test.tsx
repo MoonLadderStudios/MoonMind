@@ -55,6 +55,15 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('Loading workflows...')).toBeTruthy();
   });
 
+  it('MM-997 keeps /workflows as the full-width list route instead of the workspace shell', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+    expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
+  });
+
   it('shows structured API validation detail when the workflow list request fails', async () => {
     fetchSpy.mockResolvedValue({
       ok: false,
@@ -240,6 +249,35 @@ describe('Workflows Entrypoint', () => {
       expect(url).not.toContain('sort=');
       expect(url).not.toContain('sortDir=');
     }
+  });
+
+  it('preserves allowlisted list context on workflow detail links and keeps browser back target intact (MM-998, MM-975)', async () => {
+    window.history.pushState(
+      {},
+      'Context list',
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&targetRuntimeIn=codex_cli&limit=25&nextPageToken=cursor-2&sort=status&sortDir=asc&selectedWorkflowId=task-123&unsafe=1',
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const previousListUrl = window.location.href;
+    const detailHref = screen.getAllByRole('link', { name: 'Example task' })[0]?.getAttribute('href');
+
+    expect(detailHref).toBe(
+      '/workflows/task-123?stateIn=completed&repoContains=moon%2Frepo&targetRuntimeIn=codex_cli&limit=25&nextPageToken=cursor-2&source=temporal',
+    );
+    expect(detailHref).not.toContain('sort=');
+    expect(detailHref).not.toContain('sortDir=');
+    expect(detailHref).not.toContain('selectedWorkflowId=');
+    expect(detailHref).not.toContain('unsafe=');
+
+    window.history.pushState({}, 'Detail', detailHref || '/workflows/task-123');
+    window.history.back();
+
+    await waitFor(() => {
+      expect(window.location.href).toBe(previousListUrl);
+    });
   });
 
   it('ignores sort/sortDir present in the initial URL so deep links never imply a global sort (MM-954)', async () => {
@@ -1209,6 +1247,61 @@ describe('Workflows Entrypoint', () => {
     expect(window.location.search).toBe('?limit=100');
   });
 
+  it('recovers stale cursor context when returning from workflow detail (MM-998, MM-975)', async () => {
+    window.history.pushState(
+      {},
+      'Workspace return',
+      '/workflows?stateIn=completed&limit=50&nextPageToken=stale-token&returnFromWorkflowDetail=1',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('nextPageToken=stale-token')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [], count: 1 }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+          count: 1,
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(executionListCalls().map(([url]) => String(url))).toContain(
+        '/api/executions?source=temporal&pageSize=50&nextPageToken=stale-token&stateIn=completed',
+      );
+    });
+    expect(await screen.findByText('Saved pagination was no longer available. Showing the first page.')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed',
+      );
+    });
+    expect(window.location.search).toBe('?stateIn=completed&limit=50');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(
+      screen.queryByText('Saved pagination was no longer available. Showing the first page.'),
+    ).toBeNull();
+  });
+
   it('supports skill and date filter chips with blank semantics', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -1517,6 +1610,47 @@ describe('Workflows Entrypoint', () => {
     expect(detailsLink.classList.contains('queue-card-details-action')).toBe(true);
     expect(detailsLink.closest('.queue-card-actions')).toBeTruthy();
   });
+
+  it('MM-1001 keeps mobile workflow cards, filters, and detail navigation available', async () => {
+    renderWithClient(
+      <WorkflowListPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            dashboardConfig: {
+              features: {
+                temporalDashboard: {
+                  workspaceShellEnabled: true,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    await screen.findAllByText('Example task');
+
+    const cardList = document.querySelector('.queue-card-list') as HTMLElement;
+    expect(cardList).toBeTruthy();
+
+    const cardTitle = await within(cardList).findByRole('link', { name: 'Example task' });
+    const detailsLink = within(cardList).getByRole('button', { name: 'View details' });
+
+    expect(cardTitle.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
+    expect(detailsLink.getAttribute('href')).toBe('/workflows/task-123?limit=50&source=temporal');
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+
+    openFilterDrawer();
+    fireEvent.change(await screen.findByLabelText('Status filter value'), {
+      target: { value: 'completed' },
+    });
+    applyFilterDrawer();
+
+    expect(await screen.findByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
+    expect(await within(cardList).findByRole('link', { name: 'Example task' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+  }, 10000);
 
   it('keeps mobile task cards constrained to the viewport width', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
@@ -1842,6 +1976,8 @@ describe('Workflows Entrypoint', () => {
     // The first desktop column is Workflow, not ID, and no standalone ID column remains.
     expect(headerLabels[0]).toBe('Workflow');
     expect(headerLabels).not.toContain('ID');
+    expect(headerLabels).not.toContain('Next action');
+    expect(headerLabels).toContain('Progress');
     // Status is visible before any timestamp column.
     expect(headerLabels.indexOf('Status')).toBeLessThan(headerLabels.indexOf('Updated'));
 
@@ -1852,14 +1988,14 @@ describe('Workflows Entrypoint', () => {
     const titleLink = workflowCell.querySelector('a.workflow-list-row-title');
     expect(titleLink?.textContent).toBe('Scan first task');
     expect(titleLink?.getAttribute('href')).toBe(
-      '/workflows/mm%3Arun%3Ascan-first-001?source=temporal',
+      '/workflows/mm%3Arun%3Ascan-first-001?limit=50&source=temporal',
     );
     // The compact workflow id stays present but secondary.
     const compactId = workflowCell.querySelector('code.workflow-list-row-id');
     expect(compactId?.textContent).toBe('mm:run:scan-first-001');
   });
 
-  it('surfaces dependency and intervention next-action signals in the status/next-action area', async () => {
+  it('renders status supplements and bounded progress without Next action surfaces', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1874,6 +2010,99 @@ describe('Workflows Entrypoint', () => {
             attentionRequired: true,
             dependsOn: ['mm:dep-1'],
             blockedOnDependencies: true,
+            progress: {
+              total: 6,
+              pending: 2,
+              ready: 0,
+              running: 1,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 3,
+              failed: 0,
+              skipped: 0,
+              canceled: 0,
+              currentStepTitle: 'Run test suite',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-failed',
+            source: 'temporal',
+            title: 'Failed task',
+            status: 'failed',
+            state: 'failed',
+            rawState: 'failed',
+            progress: {
+              total: 2,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 1,
+              failed: 1,
+              skipped: 0,
+              canceled: 0,
+              currentStepTitle: 'Publish result',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-completed-skipped',
+            source: 'temporal',
+            title: 'Completed task with skipped step',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            progress: {
+              total: 4,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 3,
+              failed: 0,
+              skipped: 1,
+              canceled: 0,
+              currentStepTitle: 'Skipped cleanup',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-failed-zero-counter',
+            source: 'temporal',
+            title: 'Failed task without failed counter',
+            status: 'failed',
+            state: 'failed',
+            rawState: 'failed',
+            progress: {
+              total: 2,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 1,
+              failed: 0,
+              skipped: 0,
+              canceled: 0,
+              currentStepTitle: 'Platform timeout',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-missing-progress',
+            source: 'temporal',
+            title: 'Missing progress task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            progress: null,
             createdAt: '2026-03-28T00:00:00Z',
           },
         ],
@@ -1883,19 +2112,27 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Attention task');
-    const nextActionCell = document.querySelector('.queue-table-cell-next-action');
-    expect(nextActionCell?.textContent).toContain('Intervention requested');
-    expect(nextActionCell?.textContent).toContain('Blocked by 1 prerequisite');
+    expect(document.querySelector('.queue-table-cell-next-action')).toBeNull();
+    expect(document.querySelector('.queue-card-next-action')).toBeNull();
+    expect(screen.queryByText('Next action')).toBeNull();
+    expect(screen.queryByText('Failed — needs review')).toBeNull();
+    expect(screen.getAllByText('Intervention requested').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Blocked by 1 prerequisite').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3/6 · Run test suite').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1/2 · Failed at Publish result').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3/4 complete').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1/2 · Failed at Platform timeout').length).toBeGreaterThan(0);
 
     // The signals are no longer buried under the workflow title cell.
     const workflowCell = document.querySelector('.queue-table-cell-workflow');
     expect(workflowCell?.textContent).not.toContain('Intervention requested');
     expect(workflowCell?.textContent).not.toContain('Blocked by 1 prerequisite');
 
-    // Mobile cards mirror the scan-first hierarchy with a dedicated next-action block.
-    const cardNextAction = document.querySelector('.queue-card-next-action');
-    expect(cardNextAction?.textContent).toContain('Intervention requested');
-    expect(cardNextAction?.textContent).toContain('Blocked by 1 prerequisite');
+    const missingProgressRow = screen
+      .getAllByText('Missing progress task')
+      .map((element) => element.closest('tr'))
+      .find((candidate): candidate is HTMLTableRowElement => Boolean(candidate));
+    expect(missingProgressRow?.querySelector('.queue-table-cell-progress')?.textContent).toContain('—');
   });
 });
 

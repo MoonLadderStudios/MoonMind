@@ -212,7 +212,7 @@ export function WorkflowActionsMenu({
                       id={disabledReasonId}
                       className="td-workflow-actions-disabled-reason"
                     >
-                      {item.label} unavailable: {item.disabledReason}
+                      {item.disabledReason}
                     </span>
                   ) : null}
                 </>

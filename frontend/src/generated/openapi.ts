@@ -3137,7 +3137,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "send_follow_up" | "clear_session";
+            action: "send_follow_up" | "clear_session" | "interrupt_turn" | "cancel_session";
             /** Message */
             message?: string | null;
             /** Reason */
@@ -3152,7 +3152,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "send_follow_up" | "clear_session";
+            action: "send_follow_up" | "clear_session" | "interrupt_turn" | "cancel_session";
             projection: components["schemas"]["ArtifactSessionProjectionModel"];
         };
         /**

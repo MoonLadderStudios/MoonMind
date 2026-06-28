@@ -13,6 +13,7 @@ from .codex_cloud_agent_adapter import CodexCloudAgentAdapter
 from .external_adapter_registry import ExternalAdapterRegistry, build_default_registry
 from .github_client import GitHubClient, GitHubPublishResult
 from .jules_agent_adapter import JulesAgentAdapter
+from .omnigent_agent_adapter import OmnigentExternalAdapter
 
 __all__ = [
     "AgentAdapter",
@@ -27,5 +28,6 @@ __all__ = [
     "GitHubClient",
     "GitHubPublishResult",
     "JulesAgentAdapter",
+    "OmnigentExternalAdapter",
     "build_default_registry",
 ]

@@ -46,6 +46,8 @@ FailureClass = Literal[
     "integration_error",
     "execution_error",
     "system_error",
+    "timed_out",
+    "canceled",
 ]
 RuntimeCommandRenderStatus = Literal["ok", "unsupported", "failed", "fallback"]
 RuntimeCommandRenderMode = Literal[

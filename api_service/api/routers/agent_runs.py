@@ -48,6 +48,7 @@ _HISTORICAL_EVENT_CHUNK_SIZE = 65536
 _OBSERVABILITY_TERMINAL_STATUSES = frozenset(
     {"completed", "failed", "canceled", "cancelled", "timed_out"}
 )
+_MANAGED_SESSION_TERMINAL_STATUSES = frozenset({"terminated", "degraded", "failed"})
 
 # Live Session legacy endpoints removed in Phase 6. Use /observability-summary and /logs/stream.
 
@@ -356,6 +357,28 @@ def _build_session_snapshot(
         "latestResetBoundaryRef": record.latest_reset_boundary_ref,
     }
 
+def _build_intervention_capabilities(
+    record: CodexManagedSessionRecord | None,
+) -> dict[str, bool]:
+    """Return compact operator controls supported by the current session record."""
+
+    if record is None or record.runtime_id != "codex_cli":
+        return {
+            "sendFollowUp": False,
+            "clearSession": False,
+            "interruptTurn": False,
+            "cancelSession": False,
+        }
+
+    active = record.status not in _MANAGED_SESSION_TERMINAL_STATUSES
+    has_active_turn = bool(record.active_turn_id)
+    return {
+        "sendFollowUp": active and record.status == "ready",
+        "clearSession": active and record.status in {"ready", "busy"},
+        "interruptTurn": active and record.status == "busy" and has_active_turn,
+        "cancelSession": active and record.status == "busy" and has_active_turn,
+    }
+
 def _build_record_session_snapshot(record: object) -> dict[str, object] | None:
     session_id = str(getattr(record, "session_id", "") or "").strip()
     if not session_id:
@@ -368,30 +391,28 @@ def _build_record_session_snapshot(record: object) -> dict[str, object] | None:
         "activeTurnId": getattr(record, "active_turn_id", None),
     }
 
-def _build_intervention_capabilities(
+def _require_session_control_capability(
     *,
-    record: object,
-    session_record: CodexManagedSessionRecord | None,
-    is_terminal: bool,
-) -> dict[str, object]:
-    session_control_available = (
-        session_record is not None
-        and not is_terminal
-        and session_record.status not in {"terminated", "degraded", "failed"}
-    )
-    return {
-        "sendFollowUp": session_control_available,
-        "clearSession": session_control_available,
-        "supportedActions": (
-            ["send_follow_up", "clear_session"] if session_control_available else []
-        ),
-        "requiresSessionProjection": session_control_available,
-        "runtimeId": (
-            session_record.runtime_id
-            if session_record is not None
-            else getattr(record, "runtime_id", None)
-        ),
+    action: str,
+    capabilities: dict[str, bool],
+) -> None:
+    capability_by_action = {
+        "send_follow_up": "sendFollowUp",
+        "clear_session": "clearSession",
+        "interrupt_turn": "interruptTurn",
+        "cancel_session": "cancelSession",
     }
+    capability = capability_by_action.get(action)
+    if capability is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported session control action: {action}",
+        )
+    if not capabilities.get(capability, False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Session control action {action} is not currently supported by this managed session.",
+        )
 
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
     if not workspace_path:
@@ -1192,11 +1213,7 @@ async def get_observability_summary(
         base["supportsLiveStreaming"] = supports_live
         base["liveStreamStatus"] = live_stream_status
         base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
-        base["interventionCapabilities"] = _build_intervention_capabilities(
-            record=record,
-            session_record=session_record,
-            is_terminal=is_terminal,
-        )
+        base["interventionCapabilities"] = _build_intervention_capabilities(session_record)
         return {"summary": base}
     finally:
         _emit_livelogs_metric_observe(
@@ -1253,7 +1270,12 @@ async def control_agent_run_artifact_session(
         record = None
     if record is None or record.agent_run_id != agent_run_id:
         _session_projection_not_found()
-    if record.status in {"terminated", "degraded", "failed"}:
+    capabilities = _build_intervention_capabilities(record)
+    _require_session_control_capability(
+        action=payload.action,
+        capabilities=capabilities,
+    )
+    if record.status in _MANAGED_SESSION_TERMINAL_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This managed session is not available for control actions.",
@@ -1277,6 +1299,23 @@ async def control_agent_run_artifact_session(
         await client.update_workflow(
             workflow_id,
             "ClearSession",
+            {
+                **({"reason": payload.reason} if payload.reason else {}),
+            },
+        )
+    elif payload.action == "interrupt_turn":
+        await client.update_workflow(
+            workflow_id,
+            "InterruptTurn",
+            {
+                "sessionEpoch": record.session_epoch,
+                **({"reason": payload.reason} if payload.reason else {}),
+            },
+        )
+    elif payload.action == "cancel_session":
+        await client.update_workflow(
+            workflow_id,
+            "CancelSession",
             {
                 **({"reason": payload.reason} if payload.reason else {}),
             },

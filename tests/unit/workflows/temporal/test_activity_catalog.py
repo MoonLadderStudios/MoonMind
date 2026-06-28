@@ -79,6 +79,14 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         catalog.resolve_activity("integration.jules.start").task_queue
         == INTEGRATIONS_TASK_QUEUE
     )
+    omnigent_route = catalog.resolve_activity("integration.omnigent.execute")
+    assert omnigent_route.task_queue == INTEGRATIONS_TASK_QUEUE
+    assert omnigent_route.capability_class == "integration:omnigent"
+    assert omnigent_route.heartbeat_required is True
+    assert (
+        catalog.resolve_activity("integration.omnigent.execute").task_queue
+        == INTEGRATIONS_TASK_QUEUE
+    )
     assert (
         catalog.resolve_activity("workload.run").task_queue
         == AGENT_RUNTIME_TASK_QUEUE
@@ -127,6 +135,9 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     integration_route = catalog.resolve_skill(
         _skill_definition(capabilities=["integration:jules"])
     )
+    omnigent_route = catalog.resolve_skill(
+        _skill_definition(capabilities=["integration:omnigent"])
+    )
     artifact_route = catalog.resolve_skill(
         _skill_definition(capabilities=["artifacts"])
     )
@@ -143,6 +154,8 @@ def test_resolve_skill_uses_capability_routing_for_mm_skill_execute():
     assert docker_workload_route.capability_class == "docker_workload"
     assert integration_route.fleet == INTEGRATIONS_FLEET
     assert integration_route.task_queue == INTEGRATIONS_TASK_QUEUE
+    assert omnigent_route.fleet == INTEGRATIONS_FLEET
+    assert omnigent_route.task_queue == INTEGRATIONS_TASK_QUEUE
     assert artifact_route.fleet == ARTIFACTS_FLEET
     assert artifact_route.task_queue == ARTIFACTS_TASK_QUEUE
     assert deployment_route.fleet == DEPLOYMENT_FLEET

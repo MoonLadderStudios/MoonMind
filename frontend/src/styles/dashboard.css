@@ -2015,7 +2015,7 @@ tbody tr:hover {
   width: 30%;
 }
 
-.queue-table-column-next-action {
+.queue-table-column-progress {
   width: 18%;
 }
 
@@ -2037,7 +2037,7 @@ tbody tr:hover {
 
 .queue-table-cell-compact,
 .queue-table-cell-date,
-.queue-table-cell-next-action {
+.queue-table-cell-progress {
   font-size: 0.82rem;
 }
 
@@ -2059,7 +2059,7 @@ tbody tr:hover {
 
 .queue-table-wrapper[data-density='compact'] .queue-table-cell-compact,
 .queue-table-wrapper[data-density='compact'] .queue-table-cell-date,
-.queue-table-wrapper[data-density='compact'] .queue-table-cell-next-action {
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-progress {
   font-size: 0.76rem;
 }
 
@@ -2227,12 +2227,29 @@ tbody tr:hover {
   word-break: break-word;
 }
 
-.workflow-list-next-action-empty {
+.workflow-list-status-supplement {
+  margin-top: 0.2rem;
+  color: rgb(var(--mm-muted));
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.workflow-list-progress {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: rgb(var(--mm-ink));
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.workflow-list-progress:empty::before {
+  content: '—';
   color: rgb(var(--mm-muted));
 }
 
-.workflow-list-next-action-item + .workflow-list-next-action-item {
-  margin-top: 0.15rem;
+.queue-table-cell-progress .workflow-list-progress {
+  word-break: break-word;
 }
 
 .data-table-slab {
@@ -2468,23 +2485,6 @@ tr[data-proposal-id].proposal-consuming td {
 .queue-card-header > .queue-card-status {
   flex-shrink: 0;
   max-width: 100%;
-}
-
-.queue-card-next-action {
-  margin: 0.4rem 0 0;
-  display: grid;
-  gap: 0.15rem;
-}
-
-.queue-card-next-action-label {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: rgb(var(--mm-muted));
-}
-
-.queue-card-next-action-item {
-  margin: 0;
-  font-weight: 500;
 }
 
 .queue-card-title {
@@ -4353,6 +4353,38 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   background: rgb(14 165 233 / 0.08);
 }
 
+.live-logs-row-user {
+  margin: 0.35rem 0.75rem;
+  border-left-color: rgb(59 130 246);
+  border-radius: 0.45rem;
+  background: rgb(59 130 246 / 0.12);
+}
+
+.live-logs-row-assistant {
+  margin: 0.25rem 0.75rem;
+  border-left-color: rgb(20 184 166);
+  border-radius: 0.45rem;
+  background: rgb(20 184 166 / 0.09);
+}
+
+.live-logs-row-tool {
+  margin: 0.25rem 0.75rem;
+  border: 1px solid rgb(148 163 184 / 0.24);
+  border-left: 4px solid rgb(148 163 184 / 0.82);
+  border-radius: 0.45rem;
+  background: rgb(148 163 184 / 0.08);
+}
+
+.live-logs-row-turn {
+  border-left-color: rgb(168 85 247);
+  background: rgb(168 85 247 / 0.08);
+}
+
+.live-logs-row-turn-failure {
+  border-left-color: rgb(239 68 68);
+  background: rgb(239 68 68 / 0.11);
+}
+
 .live-logs-row-boundary {
   margin: 0.5rem 0.6rem;
   border: 1px solid rgb(var(--mm-warn) / 0.8);
@@ -4367,6 +4399,27 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.live-logs-row-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.live-logs-treatment-label {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.14rem 0.5rem;
+  background: rgb(255 255 255 / 0.12);
+  color: rgb(255 255 255 / 0.9);
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .live-logs-kind-chip {
@@ -4499,6 +4552,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   padding: 0;
   font-size: 1.55rem;
   font-weight: 750;
+}
+
+.queue-step-attachment-add-button.queue-step-context-menu-button > span {
+  display: block;
+  line-height: 1;
+  transform: translateY(-0.04em);
 }
 
 .queue-step-context-menu-popover {
@@ -4639,17 +4698,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 1.35;
 }
 
-.queue-step-capability-chip-remove {
-  width: 1.1rem;
-  height: 1.1rem;
-  border-radius: 999px;
-}
-
-.queue-step-capability-chip-remove svg {
-  width: 0.68rem;
-  height: 0.68rem;
-}
-
 .queue-step-attachment-add-button {
   display: inline-grid;
   place-items: center;
@@ -4733,15 +4781,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-attachment-chip-remove {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 0.95rem;
+  height: 0.95rem;
   border-radius: 999px;
   flex: 0 0 auto;
 }
 
 .queue-step-attachment-chip-remove svg {
-  width: 0.68rem;
-  height: 0.68rem;
+  width: 0.58rem;
+  height: 0.58rem;
 }
 
 :is(.queue-step-attachments-list, #queue-dependency-list) li {
@@ -4766,6 +4814,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 :is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button svg {
   width: 1rem;
   height: 1rem;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-capability-chip-remove {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-capability-chip-remove svg {
+  width: 0.58rem;
+  height: 0.58rem;
 }
 
 .queue-attachment-preview {
@@ -6413,6 +6472,160 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   min-width: 0;
 }
 
+.workflow-workspace-shell {
+  display: grid;
+  grid-template-columns: minmax(17.5rem, 21rem) minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+  width: 100%;
+  max-width: min(118rem, calc(100vw - 2rem));
+  margin-inline: auto;
+}
+
+.workflow-workspace-shell[data-sidebar-collapsed="true"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workflow-workspace-sidebar {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: calc(100vh - 2rem);
+  overflow: hidden;
+  border: 1px solid var(--mm-glass-border);
+  border-radius: 0.8rem;
+  background: var(--mm-glass-fill);
+  box-shadow: var(--mm-elevation-panel);
+  padding: 0.75rem;
+}
+
+.workflow-workspace-sidebar-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.workflow-workspace-sidebar-controls .button,
+.workflow-workspace-sidebar-controls button {
+  white-space: nowrap;
+}
+
+.workflow-workspace-sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  overflow: auto;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.workflow-workspace-sidebar-pinned-list {
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.workflow-workspace-sidebar-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 3.75rem;
+  padding: 0.62rem;
+  border: 1px solid rgb(var(--mm-border) / 0.58);
+  border-radius: 0.55rem;
+  background: rgb(var(--mm-panel) / 0.78);
+  color: rgb(var(--mm-ink));
+  text-decoration: none;
+}
+
+.workflow-workspace-sidebar-row-pinned {
+  border-style: dashed;
+  background: rgb(var(--mm-accent) / 0.08);
+}
+
+.workflow-workspace-sidebar-row:hover,
+.workflow-workspace-sidebar-row:focus-visible {
+  border-color: rgb(var(--mm-accent) / 0.62);
+  background: rgb(var(--mm-accent) / 0.10);
+}
+
+.workflow-workspace-sidebar-row[aria-current="page"] {
+  border-color: rgb(var(--mm-accent) / 0.78);
+  box-shadow: inset 4px 0 0 rgb(var(--mm-accent));
+  background: rgb(var(--mm-accent) / 0.14);
+}
+
+.workflow-workspace-sidebar-row-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.workflow-workspace-sidebar-kicker {
+  color: rgb(var(--mm-accent));
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.workflow-workspace-sidebar-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.workflow-workspace-sidebar-meta {
+  color: rgb(var(--mm-muted));
+  font-size: 0.82rem;
+}
+
+.workflow-workspace-sidebar-state {
+  border: 1px dashed rgb(var(--mm-border) / 0.75);
+  border-radius: 0.55rem;
+  padding: 0.65rem;
+  background: rgb(var(--mm-panel) / 0.62);
+}
+
+.workflow-workspace-detail {
+  min-width: 0;
+}
+
+.workflow-workspace-open-sidebar {
+  justify-self: start;
+  align-self: start;
+  margin-bottom: 0.75rem;
+}
+
+@media (max-width: 767px) {
+  .workflow-workspace-shell {
+    display: block;
+    max-width: none;
+  }
+
+  .workflow-workspace-sidebar,
+  .workflow-workspace-open-sidebar {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workflow-workspace-shell,
+  .workflow-workspace-sidebar,
+  .workflow-workspace-open-sidebar,
+  .workflow-workspace-detail {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+  }
+}
+
 .td-subroute-nav {
   display: flex;
   flex-wrap: wrap;
@@ -6583,13 +6796,35 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 1.2;
   text-align: left;
   text-decoration: none;
+  /*
+   * These options are <button>/<a> elements, so without this they inherit the
+   * global control treatment — a resting purple drop-shadow, plus a hover
+   * scale/glow and an active press ring. In a tight menu that reads as a stack
+   * of primary buttons casting glow bands between rows. Flatten it: the popover
+   * is the elevated surface, the rows are not.
+   */
+  box-shadow: none;
+  transform: none;
+  filter: none;
+  transition: background 120ms ease, border-color 120ms ease;
 }
 
+/* Pointer hover / active and programmatic focus: one calm filled-row cue. */
 .td-workflow-actions-item:hover,
-.td-workflow-actions-item:focus-visible {
-  border-color: rgb(var(--mm-accent-2) / 0.55);
+.td-workflow-actions-item:focus,
+.td-workflow-actions-item:active {
+  border-color: rgb(var(--mm-accent) / 0.45);
   background: var(--mm-control-shell-hover);
+  box-shadow: none;
+  transform: none;
+  filter: none;
   outline: none;
+}
+
+/* Keyboard focus: the standard single accent ring, no competing border. */
+.td-workflow-actions-item:focus-visible {
+  border-color: transparent;
+  box-shadow: var(--mm-control-focus-ring);
 }
 
 .td-workflow-actions-item-danger {
@@ -6602,9 +6837,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .td-workflow-actions-item-disabled:hover,
-.td-workflow-actions-item-disabled:focus-visible {
-  border-color: rgb(var(--mm-border) / 0.72);
-  background: rgb(var(--mm-border) / 0.16);
+.td-workflow-actions-item-disabled:focus,
+.td-workflow-actions-item-disabled:focus-visible,
+.td-workflow-actions-item-disabled:active {
+  border-color: rgb(var(--mm-border) / 0.6);
+  background: rgb(var(--mm-border) / 0.14);
+  box-shadow: none;
+  transform: none;
+  filter: none;
 }
 
 .td-workflow-actions-disabled-reason,

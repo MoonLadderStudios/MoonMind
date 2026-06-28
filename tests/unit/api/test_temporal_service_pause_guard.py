@@ -1,4 +1,4 @@
-"""Unit tests for API guard: workflow submission blocked when system paused (DOC-REQ-001/004/005)."""
+"""Unit tests for API guard: workflow submission blocked when system paused."""
 
 from __future__ import annotations
 
@@ -13,12 +13,6 @@ from moonmind.workflows.temporal.service import (
 
 pytestmark = [pytest.mark.asyncio]
 
-def _make_pause_state(paused: bool):
-    """Create a minimal mock pause state object."""
-    state = MagicMock()
-    state.paused = paused
-    return state
-
 @pytest.fixture
 def mock_session():
     session = MagicMock()
@@ -31,30 +25,36 @@ def mock_session():
 def mock_client_adapter():
     return AsyncMock()
 
-# ---- check_system_paused ----
+class _ScalarResult:
+    def __init__(self, value):
+        self._value = value
 
-async def test_check_system_paused_returns_false_after_queue_removal(mock_session, mock_client_adapter):
-    """check_system_paused always returns False after Phase 3.5 queue removal (stub)."""
+    def scalar_one_or_none(self):
+        return self._value
+
+
+async def test_check_system_paused_returns_false_when_pause_state_missing(
+    mock_session, mock_client_adapter
+):
     svc = TemporalExecutionService(mock_session, client_adapter=mock_client_adapter)
+    mock_session.execute = AsyncMock(return_value=_ScalarResult(None))
 
     result = await svc.check_system_paused()
+
     assert result is False
 
-async def test_check_system_paused_returns_false(mock_session, mock_client_adapter):
-    """check_system_paused should return False when pause state is inactive."""
+
+async def test_check_system_paused_reads_persisted_pause_state(
+    mock_session, mock_client_adapter
+):
     svc = TemporalExecutionService(mock_session, client_adapter=mock_client_adapter)
+    mock_session.execute = AsyncMock(
+        return_value=_ScalarResult({"workersPaused": True, "mode": "drain"})
+    )
 
-    with patch(
-        "unittest.mock.MagicMock",
-    ) as MockRepo:
-        repo_instance = AsyncMock()
-        repo_instance.get_pause_state = AsyncMock(
-            return_value=_make_pause_state(paused=False)
-        )
-        MockRepo.return_value = repo_instance
+    result = await svc.check_system_paused()
 
-        result = await svc.check_system_paused()
-        assert result is False
+    assert result is True
 
 # ---- API Guard on create_execution ----
 

@@ -444,6 +444,21 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
         kind="session_cleared",
         metadata={"reason": "operator_reset"},
     )
+    supervisor.emit_session_event(
+        record=record,
+        text="User message submitted for turn vendor-turn-1.",
+        kind="user_message_submitted",
+        turn_id="vendor-turn-1",
+        active_turn_id="vendor-turn-1",
+        metadata={"action": "send_turn", "messageLength": 12},
+    )
+    supervisor.emit_session_event(
+        record=record,
+        text="Turn failed: vendor-turn-1.",
+        kind="turn_failed",
+        turn_id="vendor-turn-1",
+        metadata={"action": "send_turn", "failureClass": "permanent"},
+    )
 
     snapshot = await supervisor.publish_snapshot("sess-1")
     diagnostics_payload = json.loads(
@@ -459,6 +474,8 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
         event["kind"] for event in diagnostics_payload["observability_events"]
     ] == [
         "session_cleared",
+        "user_message_submitted",
+        "turn_failed",
         "summary_published",
         "checkpoint_published",
     ]
@@ -467,6 +484,8 @@ async def test_publish_snapshot_persists_run_keyed_session_events(tmp_path: Path
     assert journal.exists()
     journal_text = journal.read_text(encoding="utf-8")
     assert '"stream":"session"' in journal_text
+    assert '"kind":"user_message_submitted"' in journal_text
+    assert '"kind":"turn_failed"' in journal_text
     assert '"kind":"summary_published"' in journal_text
     assert '"kind":"checkpoint_published"' in journal_text
     assert log_streamer.consume_observability_events(record.agent_run_id) == []

@@ -199,7 +199,10 @@ async def test_controller_launches_container_and_returns_typed_handle(
                 "status": "ready",
                 "imageRef": "ghcr.io/moonladderstudios/moonmind:latest",
                 "controlUrl": "docker-exec://mm-codex-session-sess-1",
-                "metadata": {"vendorThreadId": "vendor-thread-1"},
+                "metadata": {
+                    "vendorThreadId": "vendor-thread-1",
+                    "model": "gpt-5.4",
+                },
             }
             return 0, json.dumps(payload), ""
         raise AssertionError(f"unexpected command: {command}")
@@ -246,6 +249,10 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert stored.container_id == "ctr-1"
     assert stored.runtime_id == "codex_cli"
     session_supervisor.start.assert_awaited_once()
+    assert [
+        call.kwargs["kind"]
+        for call in session_supervisor.emit_session_event.call_args_list
+    ] == ["session_started", "runtime_status", "model_status"]
 
 
 @pytest.mark.asyncio
@@ -3234,20 +3241,150 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         call.kwargs.get("kind")
         for call in session_supervisor.emit_session_event.call_args_list
     ]
-    assert emitted_kinds == ["turn_started", "turn_completed"]
+    assert emitted_kinds == [
+        "user_message_submitted",
+        "turn_started",
+        "assistant_message",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
     assert emitted_metadata == [
+        {
+            "action": "send_turn",
+            "messageLength": len("Reply with exactly the word OK"),
+            "reason": "Operator follow-up",
+        },
         {"action": "send_turn", "reason": "Operator follow-up"},
         {
             "action": "send_turn",
-            "assistantTextOmitted": True,
-            "assistantTextSha256": (
-                "565339bc4d33d72817b583024112eb7f5cdf3e5"
-                "eef0252d6ec1b9c9a94e12bb3"
-            ),
-            "assistantTextLengthChars": 2,
+            "contentLength": len("OK"),
+            "reason": "Operator follow-up",
+        },
+        {
+            "action": "send_turn",
+            "contentLength": len("OK"),
+            "reason": "Operator follow-up",
+        },
+        {
+            "action": "send_turn",
+            "assistantMessageLength": len("OK"),
             "reason": "Operator follow-up",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_controller_send_turn_maps_reliable_native_markers_and_turn_failure(
+    tmp_path: Path,
+) -> None:
+    store = ManagedSessionStore(tmp_path / "session-store")
+    store.save(
+        CodexManagedSessionRecord(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            agentRunId="task-1",
+            containerId="ctr-1",
+            threadId="thread-1",
+            runtimeId="codex_cli",
+            imageRef="img",
+            controlUrl="docker-exec://ctr-1",
+            status="ready",
+            workspacePath="/work/repo",
+            sessionWorkspacePath="/work/session",
+            artifactSpoolPath="/work/artifacts",
+            startedAt="2026-04-06T12:00:00Z",
+        )
+    )
+    session_supervisor = Mock()
+    session_supervisor.emit_session_event = Mock()
+
+    async def _fake_runner(
+        command: tuple[str, ...],
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> tuple[int, str, str]:
+        if command[:3] == ("docker", "exec", "-i") and "invoke" in command:
+            payload = {
+                "sessionState": {
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 1,
+                    "containerId": "ctr-1",
+                    "threadId": "thread-1",
+                    "activeTurnId": None,
+                },
+                "turnId": "vendor-turn-1",
+                "status": "failed",
+                "metadata": {
+                    "reason": "model provider rejected the request",
+                    "failureClass": "permanent",
+                    "observabilityEvents": [
+                        {
+                            "kind": "runtime_status",
+                            "text": "Runtime reported a provider error.",
+                            "metadata": {"status": "provider_error"},
+                        },
+                        {
+                            "kind": "tool_call_started",
+                            "text": "Tool call started.",
+                            "metadata": {
+                                "toolName": "shell",
+                                "arguments": {"command": "pytest"},
+                                "tags": ["test"],
+                                "empty": {},
+                                "blank": " ",
+                            },
+                        },
+                        {
+                            "kind": "unknown_native_marker",
+                            "text": "Ignored marker.",
+                        },
+                    ],
+                },
+            }
+            return 0, json.dumps(payload), ""
+        raise AssertionError(f"unexpected command: {command}")
+
+    controller = DockerCodexManagedSessionController(
+        workspace_volume_name="agent_workspaces",
+        codex_volume_name="codex_auth_volume",
+        workspace_root="/tmp/agent_jobs",
+        session_store=store,
+        session_supervisor=session_supervisor,
+        command_runner=_fake_runner,
+    )
+
+    await controller.send_turn(
+        SendCodexManagedSessionTurnRequest(
+            sessionId="sess-1",
+            sessionEpoch=1,
+            containerId="ctr-1",
+            threadId="thread-1",
+            instructions="Run the requested check",
+            reason="Operator follow-up",
+        )
+    )
+
+    emitted = session_supervisor.emit_session_event.call_args_list
+    emitted_kinds = [call.kwargs["kind"] for call in emitted]
+    assert emitted_kinds == [
+        "user_message_submitted",
+        "turn_started",
+        "runtime_status",
+        "tool_call_started",
+        "turn_failed",
+    ]
+    assert emitted[-1].kwargs["metadata"] == {
+        "action": "send_turn",
+        "reason": "Operator follow-up",
+        "failureClass": "permanent",
+        "error": "model provider rejected the request",
+    }
+    assert emitted[3].kwargs["metadata"] == {
+        "toolName": "shell",
+        "arguments": {"command": "pytest"},
+        "tags": ["test"],
+    }
 
 @pytest.mark.asyncio
 async def test_controller_session_status_emits_session_resumed_event(
@@ -3315,10 +3452,17 @@ async def test_controller_session_status_emits_session_resumed_event(
         )
     )
 
-    emitted_call = session_supervisor.emit_session_event.call_args
-    assert emitted_call.kwargs["kind"] == "session_resumed"
-    assert emitted_call.kwargs["active_turn_id"] == "turn-fresh"
-    assert emitted_call.kwargs["metadata"] == {"action": "resume_session"}
+    emitted_calls = session_supervisor.emit_session_event.call_args_list
+    assert [call.kwargs["kind"] for call in emitted_calls] == [
+        "session_resumed",
+        "runtime_status",
+    ]
+    assert emitted_calls[0].kwargs["active_turn_id"] == "turn-fresh"
+    assert emitted_calls[0].kwargs["metadata"] == {"action": "resume_session"}
+    assert emitted_calls[1].kwargs["metadata"] == {
+        "status": "resumed",
+        "action": "resume_session",
+    }
     refreshed = store.load("sess-1")
     assert refreshed is not None
     assert refreshed.active_turn_id == "turn-fresh"
@@ -5653,10 +5797,17 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
         call.kwargs.get("metadata")
         for call in session_supervisor.emit_session_event.call_args_list
     ]
-    assert emitted_kinds == ["turn_started", "turn_completed"]
-    assert emitted_metadata[1]["assistantTextOmitted"] is True
-    assert emitted_metadata[1]["assistantTextLengthChars"] == 8190
-    assert "assistantText" not in emitted_metadata[1]
+    assert emitted_kinds == [
+        "user_message_submitted",
+        "turn_started",
+        "assistant_message",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    assert emitted_metadata[2]["contentLength"] == 8190
+    assert emitted_metadata[3]["contentLength"] == 8190
+    assert emitted_metadata[4]["assistantMessageLength"] == 8190
+    assert all("assistantText" not in metadata for metadata in emitted_metadata)
 
 @pytest.mark.asyncio
 async def test_controller_interrupt_turn_preserves_failed_runtime_result(

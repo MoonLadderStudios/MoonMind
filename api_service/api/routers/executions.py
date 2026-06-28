@@ -1750,6 +1750,50 @@ def _normalize_merge_automation_visibility_payload(
         )
         return None
 
+def _bounded_execution_progress_from_sources(
+    *,
+    record: object,
+    memo: Mapping[str, object] | None,
+    finish_summary: Mapping[str, object] | None,
+) -> ExecutionProgressModel | None:
+    sources = (
+        getattr(record, "progress", None),
+        memo.get("progress") if isinstance(memo, Mapping) else None,
+        finish_summary.get("progress") if isinstance(finish_summary, Mapping) else None,
+    )
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        payload = {
+            "total": source.get("total"),
+            "pending": source.get("pending"),
+            "ready": source.get("ready"),
+            "running": source.get("running"),
+            "awaitingExternal": source.get("awaitingExternal")
+            if source.get("awaitingExternal") is not None
+            else source.get("awaiting_external"),
+            "reviewing": source.get("reviewing"),
+            "succeeded": source.get("succeeded"),
+            "failed": source.get("failed"),
+            "skipped": source.get("skipped"),
+            "canceled": source.get("canceled"),
+            "currentStepTitle": source.get("currentStepTitle")
+            if source.get("currentStepTitle") is not None
+            else source.get("current_step_title"),
+            "updatedAt": source.get("updatedAt")
+            or source.get("updated_at")
+            or getattr(record, "updated_at", None),
+        }
+        try:
+            return ExecutionProgressModel.model_validate(payload)
+        except ValidationError:
+            logger.warning(
+                "Invalid bounded progress payload for execution %s",
+                getattr(record, "workflow_id", "<unknown>"),
+                exc_info=True,
+            )
+    return None
+
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
 ) -> ExecutionModel:
@@ -2121,6 +2165,11 @@ def _serialize_execution(
         proposal_summary=proposal_summary,
         pr_url=pr_url,
     )
+    progress = _bounded_execution_progress_from_sources(
+        record=record,
+        memo=memo,
+        finish_summary=finish_summary if isinstance(finish_summary, Mapping) else None,
+    )
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -2129,7 +2178,7 @@ def _serialize_execution(
     return ExecutionModel(
         task_id=None,
         agent_run_id=agent_run_id,
-        progress=None,
+        progress=progress,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,
@@ -8474,13 +8523,22 @@ async def list_executions(
                         record_obj.updated_at = (
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
-                    items.append(
-                        _serialize_execution(
-                            record_obj,
-                            include_artifact_refs=False,
-                            user=user,
-                        )
+                    execution = _serialize_execution(
+                        record_obj,
+                        include_artifact_refs=False,
+                        user=user,
                     )
+                    if _execution_uses_live_workflow_queries(execution):
+                        progress, queried_run_id = await _load_execution_progress(
+                            temporal_client=temporal_client,
+                            workflow_id=wf.id,
+                        )
+                        update: dict[str, object] = {"progress": progress}
+                        if queried_run_id:
+                            update["run_id"] = queried_run_id
+                            update["temporal_run_id"] = queried_run_id
+                        execution = execution.model_copy(update=update)
+                    items.append(execution)
 
                 items.sort(
                     key=lambda item: (
