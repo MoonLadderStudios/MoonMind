@@ -1,7 +1,7 @@
 # Dashboard Design System
 Status: Active  
 Owners: MoonMind Engineering  
-Last updated: 2026-04-20
+Last updated: 2026-06-28
 
 ## 1. Purpose
 
@@ -348,6 +348,36 @@ These effects must remain low-amplitude.
 ### 9.4 Reduced motion
 
 A reduced-motion path is required. Pulses, shimmer, scanner effects, and highlight drift should be removed or significantly softened when the user requests reduced motion.
+
+The reduced-motion path covers every non-essential dashboard effect, not only the segmented-control shimmer:
+
+- panel enter animation (the slide/fade-in is suppressed)
+- step type / settings control shimmer and scan border
+- executing sweep effects and status-pill shimmer/glint
+- the masked conic border beam
+- submit ripple / arrow animation
+- LiquidGL hero surface transition and animation durations
+- hover scan / glint effects
+- general button transform/glow motion
+
+No readable text may depend on blur or refraction to be legible. LiquidGL is a decorative surface only; when it is disabled or unsupported it must fall back to the CSS glass/matte surface, and text remains readable on the fallback.
+
+### 9.5 Performance fallbacks
+
+Effects that are cheap on desktop can be expensive on mobile and touch/low-power devices:
+
+- `background-attachment: fixed` on the page atmosphere falls back to `scroll` on narrow viewports and on coarse-pointer / no-hover devices, where fixed attachment commonly causes scroll-repaint jank. The atmosphere stays visually intact.
+- LiquidGL is opt-in and must never be applied to dense default surfaces (panels, cards, tables, data slabs); it degrades to the CSS glass/matte fallback when backdrop filtering is unavailable.
+
+### 9.6 Manual QA checklist (motion and performance fallbacks)
+
+Run this checklist when changing dashboard motion, glass/LiquidGL surfaces, or atmosphere. Verify each combination on a representative route (e.g. the workflows home and a workflow details page):
+
+- **Normal motion (default):** panel enter animation plays once; executing sweeps, shimmer/glint, border beam, submit ripple, hover scans, and LiquidGL hero motion are present and low-amplitude.
+- **Reduced motion (`prefers-reduced-motion: reduce`):** no panel enter animation; sweeps, shimmer/glint, border beam, segmented-control shimmer/scan, submit ripple/arrow, and LiquidGL hero motion are stopped or softened; nothing pulses or drifts.
+- **Dark mode:** atmosphere, glass surfaces, and text contrast read correctly; no readable text relies on blur/refraction.
+- **Light mode:** same verification as dark mode through the light token swap.
+- **Narrow viewport (mobile width) and touch/low-power devices:** background atmosphere uses scroll attachment (no fixed-attachment scroll jank); layout and motion remain comfortable; LiquidGL falls back cleanly where unsupported.
 
 ---
 

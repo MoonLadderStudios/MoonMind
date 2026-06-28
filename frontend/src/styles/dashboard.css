@@ -164,6 +164,16 @@ samp {
   background-repeat: no-repeat;
 }
 
+/* MM-961: background-attachment: fixed is expensive to repaint on mobile and
+   touch/low-power devices, where it commonly causes scroll jank. Fall back to
+   the default scroll attachment there; the atmosphere stays visually intact. */
+@media (max-width: 767px), (hover: none) and (pointer: coarse) {
+  body,
+  .dark body {
+    background-attachment: scroll;
+  }
+}
+
 .dashboard-root {
   --dashboard-pt: 0;
 
@@ -531,6 +541,14 @@ h1 {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/* MM-961: the panel enter slide/fade is non-essential motion; show panels
+   immediately for reduced-motion users instead of animating them in. */
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none !important;
   }
 }
 

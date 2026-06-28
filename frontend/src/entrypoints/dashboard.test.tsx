@@ -517,6 +517,38 @@ describe('Dashboard shared entry', () => {
     expect(premiumEffectBlock).toContain('animation-duration: 0s !important');
   });
 
+  it('enforces MM-961 reduced-motion suppression for the panel entry animation', async () => {
+    const panelReducedMotionBlock = cssRuleBlockMatching(
+      dashboardCss,
+      (rule) =>
+        normalizeCssSelector(rule.selector) === '.panel' &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('prefers-reduced-motion: reduce'),
+    );
+    expect(panelReducedMotionBlock).toContain('animation: none !important');
+  });
+
+  it('disables MM-961 fixed background attachment on mobile and touch/low-power devices', async () => {
+    const mobileBackgroundBlock = cssRuleBlockMatching(
+      dashboardCss,
+      (rule) =>
+        rule.selector
+          .split(',')
+          .map(normalizeCssSelector)
+          .includes('body') &&
+        rule.parent?.type === 'atrule' &&
+        rule.parent.name === 'media' &&
+        rule.parent.params.includes('max-width: 767px') &&
+        rule.parent.params.includes('(hover: none) and (pointer: coarse)'),
+    );
+    expect(mobileBackgroundBlock).toContain('background-attachment: scroll');
+
+    // The default desktop atmosphere should still pin the background.
+    expect(cssRuleBlock(dashboardCss, 'body')).toContain('background-attachment: fixed');
+    expect(cssRuleBlock(dashboardCss, '.dark body')).toContain('background-attachment: fixed');
+  });
+
   it('enforces MM-429 fallback shells and premium-effect limits', async () => {
     expect(dashboardCss).toMatch(
       /@supports not \(\(backdrop-filter:\s*blur\(2px\)\) or \(-webkit-backdrop-filter:\s*blur\(2px\)\)\)\s*\{[^}]*\.surface--glass-control,[^}]*\.panel--controls,[^}]*\.panel--floating,[^}]*\.panel--utility,[^}]*\.surface--liquidgl-hero,[^}]*\.queue-floating-bar\s*\{[^}]*background:\s*rgb\(var\(--mm-panel\) \/ 0\.94\);[^}]*border-color:\s*rgb\(var\(--mm-border\) \/ 0\.84\);/s,
