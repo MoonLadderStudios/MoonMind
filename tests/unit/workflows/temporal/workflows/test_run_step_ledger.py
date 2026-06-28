@@ -2503,7 +2503,9 @@ async def test_run_blocks_canonical_checkpoint_create_when_capture_is_not_durabl
     assert result is None
     assert captured == ["workspace.capture_checkpoint"]
     step = workflow.get_step_ledger()["steps"][0]
-    assert "stepCheckpointRef" not in step
+    assert step.get("stepCheckpointRef") is None
+    assert step["refs"]["stepExecutionCheckpointRefs"] == []
+    assert step["refs"]["checkpointRefsByBoundary"] == {}
 
 
 @pytest.mark.asyncio
