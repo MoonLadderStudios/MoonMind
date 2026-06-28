@@ -93,9 +93,14 @@ describe('summarizeConfigurationHealth', () => {
     expect(summary.warnings.map((w) => w.id)).toContain('no-default-profile');
   });
 
-  it('blocks on broken secret references', () => {
+  it('blocks on broken secret references bound by an enabled profile', () => {
     const summary = summarizeConfigurationHealth({
-      providerProfiles: [makeProfile({ is_default: true })],
+      providerProfiles: [
+        makeProfile({
+          is_default: true,
+          secret_refs: { GH_TOKEN: 'db://GH_TOKEN' },
+        }),
+      ],
       secrets: [
         { slug: 'OPENAI_API_KEY', status: 'active' },
         { slug: 'GH_TOKEN', status: 'invalid' },
@@ -106,6 +111,63 @@ describe('summarizeConfigurationHealth', () => {
     expect(summary.level).toBe('blocked');
     expect(summary.brokenSecretCount).toBe(1);
     expect(summary.warnings.map((w) => w.id)).toContain('broken-secret-refs');
+  });
+
+  it('does not block on broken secrets that no enabled profile references', () => {
+    const summary = summarizeConfigurationHealth({
+      providerProfiles: [
+        makeProfile({
+          is_default: true,
+          secret_refs: { OPENAI_API_KEY: 'db://OPENAI_API_KEY' },
+        }),
+        // Disabled profile binding the broken secret must not block launches.
+        makeProfile({
+          profile_id: 'profile-2',
+          enabled: false,
+          secret_refs: { GH_TOKEN: 'db://GH_TOKEN' },
+        }),
+      ],
+      secrets: [
+        { slug: 'OPENAI_API_KEY', status: 'active' },
+        { slug: 'GH_TOKEN', status: 'invalid' },
+      ],
+      workerPauseConfigured: true,
+    });
+
+    expect(summary.level).toBe('ready');
+    // The broken secret is still surfaced as a metric, just not a blocker.
+    expect(summary.brokenSecretCount).toBe(1);
+    expect(summary.warnings.map((w) => w.id)).not.toContain('broken-secret-refs');
+  });
+
+  it('warns when workers are paused even if configuration is otherwise ready', () => {
+    const summary = summarizeConfigurationHealth({
+      providerProfiles: [makeProfile({ is_default: true })],
+      secrets: [{ slug: 'OPENAI_API_KEY', status: 'active' }],
+      workerPauseConfigured: true,
+      workersPaused: true,
+      workerMode: 'drain',
+    });
+
+    expect(summary.level).toBe('warning');
+    expect(summary.warnings.map((w) => w.id)).toContain('workers-paused');
+    expect(
+      summary.warnings.find((w) => w.id === 'workers-paused')?.message,
+    ).toMatch(/paused/i);
+  });
+
+  it('describes quiesced workers in the paused warning', () => {
+    const summary = summarizeConfigurationHealth({
+      providerProfiles: [makeProfile({ is_default: true })],
+      secrets: [{ slug: 'OPENAI_API_KEY', status: 'active' }],
+      workerPauseConfigured: true,
+      workersPaused: true,
+      workerMode: 'quiesce',
+    });
+
+    expect(
+      summary.warnings.find((w) => w.id === 'workers-paused')?.message,
+    ).toMatch(/quiesced/i);
   });
 });
 
@@ -136,7 +198,12 @@ describe('ConfigurationHealthSummary', () => {
 
   it('highlights missing/invalid defaults in the warning list', () => {
     renderSummary({
-      providerProfiles: [makeProfile({ is_default: false })],
+      providerProfiles: [
+        makeProfile({
+          is_default: false,
+          secret_refs: { GH_TOKEN: 'db://GH_TOKEN' },
+        }),
+      ],
       secrets: [{ slug: 'GH_TOKEN', status: 'missing' }],
       workerPauseConfig: null,
     });

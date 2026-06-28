@@ -53,21 +53,58 @@ function profileLabel(profile: ProviderProfile): string {
 }
 
 /**
+ * Extract the secret slug from a `<backend>://<locator>` secret reference.
+ * For managed (`db://`) references the locator is the secret slug; values
+ * without a scheme are treated as bare slugs.
+ */
+function secretSlugFromRef(ref: string): string | null {
+  const value = ref?.trim();
+  if (!value) {
+    return null;
+  }
+  const separator = value.indexOf('://');
+  const locator = separator >= 0 ? value.slice(separator + 3) : value;
+  return locator.trim() || null;
+}
+
+/**
  * Pure derivation of configuration health from already-loaded settings data.
  * Kept separate from the component so it can be unit-tested without React.
  */
 export function summarizeConfigurationHealth(
   input: ConfigurationHealthInput,
 ): ConfigurationHealthSummaryData {
-  const { providerProfiles, secrets, workerPauseConfigured } = input;
+  const {
+    providerProfiles,
+    secrets,
+    workerPauseConfigured,
+    workersPaused,
+    workerMode,
+  } = input;
 
   const enabledProfiles = providerProfiles.filter((profile) => profile.enabled);
   const defaultProfile =
     providerProfiles.find((profile) => profile.is_default && profile.enabled) ??
     providerProfiles.find((profile) => profile.is_default) ??
     null;
+
+  // Only secrets referenced by an enabled profile can block a launch; an
+  // unused disabled/rotated/deleted secret in the store is not a blocker.
+  const referencedSecretSlugs = new Set<string>();
+  for (const profile of enabledProfiles) {
+    for (const ref of Object.values(profile.secret_refs ?? {})) {
+      const slug = secretSlugFromRef(ref);
+      if (slug) {
+        referencedSecretSlugs.add(slug);
+      }
+    }
+  }
+
   const brokenSecrets = secrets.filter((secret) =>
     isBrokenReferenceStatus(secret.status),
+  );
+  const blockingBrokenSecrets = brokenSecrets.filter((secret) =>
+    referencedSecretSlugs.has(secret.slug),
   );
   const blockedReadinessProfiles = enabledProfiles.filter(
     (profile) => profile.readiness?.status === 'blocked',
@@ -100,13 +137,15 @@ export function summarizeConfigurationHealth(
     });
   }
 
-  if (brokenSecrets.length > 0) {
+  if (blockingBrokenSecrets.length > 0) {
     warnings.push({
       id: 'broken-secret-refs',
       level: 'blocked',
-      message: `${brokenSecrets.length} managed secret${
-        brokenSecrets.length === 1 ? '' : 's'
-      } are in a broken state (disabled, rotated, deleted, invalid, or missing). Profiles that bind them will fail launches.`,
+      message: `${blockingBrokenSecrets.length} managed secret${
+        blockingBrokenSecrets.length === 1 ? '' : 's'
+      } bound by enabled provider profiles ${
+        blockingBrokenSecrets.length === 1 ? 'is' : 'are'
+      } in a broken state (disabled, rotated, deleted, invalid, or missing). Profiles that bind them will fail launches.`,
     });
   }
 
@@ -126,6 +165,13 @@ export function summarizeConfigurationHealth(
       level: 'warning',
       message:
         'Worker operations controls are not configured for this deployment, so pause/resume state cannot be confirmed here.',
+    });
+  } else if (workersPaused) {
+    const pausedDescriptor = workerMode === 'quiesce' ? 'quiesced' : 'paused';
+    warnings.push({
+      id: 'workers-paused',
+      level: 'warning',
+      message: `Workers are currently ${pausedDescriptor}, so newly launched workflows will not start until workers resume.`,
     });
   }
 
@@ -242,7 +288,10 @@ export function ConfigurationHealthSummary({
   const { data: workerState } = useQuery<WorkerStateSnapshot>({
     queryKey: ['workers-snapshot'],
     queryFn: async () => {
-      const response = await fetch(workerPauseConfig!.get, {
+      if (!workerPauseConfig?.get) {
+        throw new Error('Worker pause GET endpoint is not configured.');
+      }
+      const response = await fetch(workerPauseConfig.get, {
         headers: { Accept: 'application/json' },
       });
       if (!response.ok) {
