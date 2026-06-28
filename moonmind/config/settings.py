@@ -2175,6 +2175,18 @@ class OIDCSettings(BaseSettings):
 class FeatureFlagsSettings(BaseSettings):
     """Feature flag toggles for runtime surfaces."""
 
+    session_api_compat_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "MOONMIND_SESSION_API_COMPAT_ENABLED",
+            "FEATURE_FLAGS__SESSION_API_COMPAT_ENABLED",
+            "SESSION_API_COMPAT_ENABLED",
+        ),
+        description=(
+            "Enable /api/sessions compatibility facades over canonical "
+            "AgentRun managed-session APIs."
+        ),
+    )
     live_logs_session_timeline_rollout: Literal[
         "off",
         "internal",
