@@ -40,6 +40,7 @@ type DashboardConfig = {
       temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
       debugFieldsEnabled?: boolean;
+      listEnabled?: boolean;
       workspaceShellEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
@@ -116,12 +117,7 @@ function formatWorkflowWorkspaceRelativeTime(iso: string | null | undefined): st
 }
 
 function useWorkflowWorkspaceDesktop(): boolean {
-  const [isDesktop, setIsDesktop] = useState(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      return true;
-    }
-    return window.matchMedia(WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY).matches;
-  });
+  const [isDesktop, setIsDesktop] = useState(true);
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -216,9 +212,9 @@ function workflowDetailSubrouteHref(
 function workflowWorkspaceListQuery(search: URLSearchParams): string {
   const params = new URLSearchParams(search);
   params.delete('selectedWorkflowId');
-  if (!params.has('limit')) {
-    params.set('limit', '25');
-  }
+  const pageSize = params.get('limit') || params.get('pageSize') || '25';
+  params.delete('limit');
+  params.set('pageSize', pageSize);
   return params.toString();
 }
 
@@ -264,6 +260,7 @@ function WorkflowWorkspaceShell({
 }) {
   const cfg = readDashboardConfig(payload);
   const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -277,7 +274,8 @@ function WorkflowWorkspaceShell({
       }
       return WorkflowWorkspaceListResponseSchema.parse(await response.json());
     },
-    refetchInterval: listPoll,
+    enabled: listEnabled,
+    refetchInterval: listEnabled ? listPoll : false,
   });
   const rows = workflowsQuery.data?.items || [];
   const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
@@ -6751,14 +6749,15 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) {
   const cfg = readDashboardConfig(payload);
   const isDesktop = useWorkflowWorkspaceDesktop();
-  const workflowIdMatch = window.location.pathname.match(
-    /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/,
-  );
+  const workflowIdMatch = typeof window !== 'undefined'
+    ? window.location.pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/)
+    : null;
   const workflowId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
-  const search = useMemo(() => new URLSearchParams(window.location.search), []);
+  const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
   const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
 
-  if (workspaceShellEnabled && isDesktop && workflowId) {
+  if (workspaceShellEnabled && listEnabled && isDesktop && workflowId) {
     return <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />;
   }
 

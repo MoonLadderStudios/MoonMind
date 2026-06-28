@@ -536,7 +536,52 @@ describe('Workflow Detail Entrypoint', () => {
     expect((await within(sidebar).findByRole('link', { name: /Another workflow/i })).getAttribute('href')).toBe(
       '/workflows/test-456?source=temporal',
     );
-    expect(String(lastFetchUrl(fetchSpy, '/api/executions?'))).not.toContain('selectedWorkflowId');
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
+  });
+
+  it('MM-997 translates workspace sidebar limit state to the executions API page size', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Query Test',
+      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2&selectedWorkflowId=test-123',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
+      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=10',
+    );
+  });
+
+  it('MM-997 keeps workflow detail standalone when the workflow list is disabled', async () => {
+    window.history.pushState({}, 'Workspace List Disabled Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              pollIntervalsMs: { detail: 1 },
+              features: {
+                temporalDashboard: {
+                  listEnabled: false,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
   });
 
   it.each([
