@@ -224,6 +224,8 @@ The current table row model includes these display fields:
 | `entry` | Entry kind, such as `run` or `manifest`. |
 | `dependsOn` | Dependency identifiers. |
 | `blockedOnDependencies` | Whether dependency blocking should be summarized. |
+| `attentionRequired` | Whether an intervention supplement should be shown under the status pill. |
+| `progress` | Optional bounded workflow-owned progress counters plus one `currentStepTitle`; never full step rows, logs, artifacts, stdout/stderr, or diagnostic payloads. |
 
 ### 5.6 Current desktop table
 
@@ -231,38 +233,37 @@ The current desktop table columns are:
 
 | Order | Column | Sort field |
 | --- | --- | --- |
-| 1 | ID | `taskId` |
-| 2 | Runtime | `targetRuntime` |
-| 3 | Skill | `targetSkill` |
+| 1 | Workflow | `title` |
+| 2 | Status | `status` |
+| 3 | Progress | none |
 | 4 | Repository | `repository` |
-| 5 | Status | `status` |
-| 6 | Title | `title` |
-| 7 | Scheduled | `scheduledFor` |
-| 8 | Created | `createdAt` |
-| 9 | Finished | `closedAt` |
+| 5 | Runtime | `targetRuntime` |
+| 6 | Updated | `updatedAt` |
+| 7 | Actions | none |
 
 Rules:
 
 1. Header buttons sort the current page.
-2. The default sort is `scheduledFor` descending.
-3. Timestamp columns sort by parsed timestamp. `scheduledFor` falls back to `createdAt` when no scheduled timestamp exists.
+2. The default sort is `updatedAt` descending.
+3. Timestamp columns sort by parsed timestamp. `updatedAt` falls back to the best available execution timestamp.
 4. Status sorting uses `rawState` or `state` when available.
 5. Non-timestamp columns sort as lowercase strings.
 6. Ties sort by `taskId` descending.
-7. Each status cell renders an `ExecutionStatusPill` using `rawState || state || status`.
-8. The `Started` timestamp is intentionally not shown in the list presentation.
-9. Rows blocked on dependencies show a compact dependency summary under the title.
+7. Each status cell renders an `ExecutionStatusPill` using `rawState || state || status`, followed by compact status supplement text when needed.
+8. Rows blocked on dependencies show dependency text under the status pill, for example `Blocked by 1 prerequisite`.
+9. Rows requiring intervention show `Intervention requested` under the status pill.
+10. Failed rows do not repeat `Failed - needs review`, and awaiting-external rows do not repeat `Waiting on external response` when the text merely restates the status.
+11. The Progress column renders compactly from `row.progress`: `{succeeded}/{total} · {currentStepTitle}`, `{succeeded}/{total} complete`, `{succeeded}/{total} · Failed at {currentStepTitle}`, or `—` when progress is missing or has no total.
+12. The list page must not fetch per-row step details to populate Progress.
+13. The `Started` timestamp is intentionally not shown in the list presentation.
 
 ### 5.7 Current mobile cards
 
 The current mobile layout renders a card list with:
 
 - title link;
-- Workflow ID;
-- runtime, skill, and workflow type metadata;
-- status pill;
-- field grid for ID, Runtime, Skill, Repository, Scheduled, Created, and Finished;
-- dependency summary when applicable;
+- status pill with the same dependency/intervention supplements used by the desktop status cell;
+- field grid for Progress, ID, Runtime, Repository, and Updated;
 - full-width `View details` card action.
 
 ### 5.8 Current empty, loading, error, and pagination states
@@ -316,15 +317,13 @@ The desired desktop table uses this default column model:
 
 | Default visibility | Column | Primary field | Sort | Filter |
 | --- | --- | --- | --- | --- |
-| Visible | ID | `taskId` | Yes | Text contains / exact IDs |
-| Visible | Runtime | `targetRuntime` | Yes | Value checklist, blanks |
-| Visible | Skill | `targetSkill` plus `taskSkills` | Yes | Value checklist, blanks |
+| Visible | Workflow | `title` plus compact workflow id | Yes | Text contains |
+| Visible | Status | `rawState || state || status` plus compact supplements | Yes | Canonical status checklist |
+| Visible | Progress | `progress` bounded counters and current step title | No | None |
 | Visible | Repository | `repository` | Yes | Value checklist, text search, blanks |
-| Visible | Status | `rawState || state || status` | Yes | Canonical status checklist |
-| Visible | Title | `title` | Yes | Text contains |
-| Visible | Scheduled | `scheduledFor` | Yes | Date range, relative dates, blanks |
-| Visible | Created | `createdAt` | Yes | Date range, relative dates |
-| Visible | Finished | `closedAt` | Yes | Date range, relative dates, blanks |
+| Visible | Runtime | `targetRuntime` | Yes | Value checklist, blanks |
+| Visible | Updated | `updatedAt` | Yes | Date range, relative dates |
+| Optional | Target skill | `targetSkill` plus `taskSkills` | Yes | Value checklist, blanks |
 | Optional | Integration | `integration` | Yes | Value checklist, blanks |
 
 Rules:

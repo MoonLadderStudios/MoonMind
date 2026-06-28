@@ -99,7 +99,7 @@ type TableColumnDef = {
 const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'title', label: 'Workflow', sortable: true, colClassName: 'queue-table-column-workflow' },
   { field: 'status', label: 'Status', sortable: true, colClassName: 'queue-table-column-status' },
-  { field: 'nextAction', label: 'Next action', sortable: false, colClassName: 'queue-table-column-next-action' },
+  { field: 'progress', label: 'Progress', sortable: false, colClassName: 'queue-table-column-progress' },
   { field: 'repository', label: 'Repository', sortable: true, colClassName: 'queue-table-column-repository' },
   { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
@@ -198,6 +198,23 @@ const ExecutionRowSchema = z
     dependsOn: z.array(z.string()).optional(),
     blockedOnDependencies: z.boolean().optional(),
     attentionRequired: z.boolean().optional(),
+    progress: z
+      .object({
+        total: z.number().nullable().optional(),
+        pending: z.number().nullable().optional(),
+        ready: z.number().nullable().optional(),
+        running: z.number().nullable().optional(),
+        awaitingExternal: z.number().nullable().optional(),
+        reviewing: z.number().nullable().optional(),
+        succeeded: z.number().nullable().optional(),
+        failed: z.number().nullable().optional(),
+        skipped: z.number().nullable().optional(),
+        canceled: z.number().nullable().optional(),
+        currentStepTitle: z.string().nullable().optional(),
+        updatedAt: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -281,21 +298,38 @@ function interventionListSummary(row: ExecutionRow): string {
   return '';
 }
 
-// Next-action signals for the scan-first status area. Reuses the dependency and
-// intervention summaries and falls back to a terminal/waiting reason so operators
-// can see what needs attention without opening the workflow.
-function nextActionItems(row: ExecutionRow): string[] {
+function statusSupplementItems(row: ExecutionRow): string[] {
   const items: string[] = [];
   const intervention = interventionListSummary(row);
   if (intervention) items.push(intervention);
   const deps = dependencyListSummary(row);
   if (deps) items.push(deps);
-  if (items.length === 0) {
-    const state = String(row.rawState || row.state || row.status || '').toLowerCase();
-    if (state === 'failed') items.push('Failed — needs review');
-    else if (state === 'awaiting_external') items.push('Waiting on external response');
-  }
   return items;
+}
+
+function formatProgress(row: ExecutionRow): { text: string; title?: string } {
+  const progress = row.progress;
+  const total = progress?.total ?? 0;
+  if (!progress || total <= 0) return { text: '—' };
+  const succeeded = progress.succeeded ?? 0;
+  const currentStepTitle = (progress.currentStepTitle || '').trim();
+  const state = String(row.rawState || row.state || row.status || '').toLowerCase();
+  const isCompleted = state === 'completed' || state === 'succeeded';
+  const isFailed = state === 'failed';
+
+  if (isCompleted) {
+    return { text: `${succeeded}/${total} complete` };
+  }
+  if (isFailed && currentStepTitle) {
+    return {
+      text: `${succeeded}/${total} · Failed at ${currentStepTitle}`,
+      title: currentStepTitle,
+    };
+  }
+  if (currentStepTitle) {
+    return { text: `${succeeded}/${total} · ${currentStepTitle}`, title: currentStepTitle };
+  }
+  return { text: `${succeeded}/${total}` };
 }
 
 function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
@@ -2045,7 +2079,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   </thead>
                   <tbody>
                     {sortedItems.map((row) => {
-                      const actionItems = nextActionItems(row);
+                      const statusSupplements = statusSupplementItems(row);
+                      const progress = formatProgress(row);
                       const updatedAt = rowUpdatedAt(row);
                       return (
                         <tr key={rowWorkflowId(row)}>
@@ -2061,19 +2096,18 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
                               <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                              {statusSupplements.map((item) => (
+                                <div key={item} className="workflow-list-status-supplement small">
+                                  {item}
+                                </div>
+                              ))}
                             </td>
                           ) : null}
-                          {isColumnVisible('nextAction') ? (
-                            <td className="queue-table-cell-next-action">
-                              {actionItems.length > 0 ? (
-                                actionItems.map((item) => (
-                                  <div key={item} className="workflow-list-next-action-item small">
-                                    {item}
-                                  </div>
-                                ))
-                              ) : (
-                                <span className="workflow-list-next-action-empty">—</span>
-                              )}
+                          {isColumnVisible('progress') ? (
+                            <td className="queue-table-cell-progress">
+                              <span className="workflow-list-progress" title={progress.title}>
+                                {progress.text}
+                              </span>
                             </td>
                           ) : null}
                           {isColumnVisible('repository') ? (
@@ -2105,7 +2139,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
-                      const actionItems = nextActionItems(row);
+                      const statusSupplements = statusSupplementItems(row);
+                      const progress = formatProgress(row);
                       const updatedAt = rowUpdatedAt(row);
                       return (
                   <li key={rowWorkflowId(row)} className="queue-card">
@@ -2120,19 +2155,20 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div className="queue-card-status">
                         <ExecutionStatusPill status={row.rawState || row.state || row.status} />
-                      </div>
-                    </div>
-                    {actionItems.length > 0 ? (
-                      <div className="queue-card-next-action">
-                        <span className="queue-card-next-action-label small">Next action</span>
-                        {actionItems.map((item) => (
-                          <p key={item} className="queue-card-next-action-item">
+                        {statusSupplements.map((item) => (
+                          <div key={item} className="workflow-list-status-supplement small">
                             {item}
-                          </p>
+                          </div>
                         ))}
                       </div>
-                    ) : null}
+                    </div>
                     <dl className="queue-card-fields">
+                      <div>
+                        <dt>Progress</dt>
+                        <dd title={progress.title}>
+                          <span className="workflow-list-progress">{progress.text}</span>
+                        </dd>
+                      </div>
                       <div>
                         <dt>ID</dt>
                         <dd>

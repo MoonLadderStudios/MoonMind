@@ -1842,6 +1842,8 @@ describe('Workflows Entrypoint', () => {
     // The first desktop column is Workflow, not ID, and no standalone ID column remains.
     expect(headerLabels[0]).toBe('Workflow');
     expect(headerLabels).not.toContain('ID');
+    expect(headerLabels).not.toContain('Next action');
+    expect(headerLabels).toContain('Progress');
     // Status is visible before any timestamp column.
     expect(headerLabels.indexOf('Status')).toBeLessThan(headerLabels.indexOf('Updated'));
 
@@ -1859,7 +1861,7 @@ describe('Workflows Entrypoint', () => {
     expect(compactId?.textContent).toBe('mm:run:scan-first-001');
   });
 
-  it('surfaces dependency and intervention next-action signals in the status/next-action area', async () => {
+  it('renders status supplements and bounded progress without Next action surfaces', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -1874,6 +1876,99 @@ describe('Workflows Entrypoint', () => {
             attentionRequired: true,
             dependsOn: ['mm:dep-1'],
             blockedOnDependencies: true,
+            progress: {
+              total: 6,
+              pending: 2,
+              ready: 0,
+              running: 1,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 3,
+              failed: 0,
+              skipped: 0,
+              canceled: 0,
+              currentStepTitle: 'Run test suite',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-failed',
+            source: 'temporal',
+            title: 'Failed task',
+            status: 'failed',
+            state: 'failed',
+            rawState: 'failed',
+            progress: {
+              total: 2,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 1,
+              failed: 1,
+              skipped: 0,
+              canceled: 0,
+              currentStepTitle: 'Publish result',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-completed-skipped',
+            source: 'temporal',
+            title: 'Completed task with skipped step',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            progress: {
+              total: 4,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 3,
+              failed: 0,
+              skipped: 1,
+              canceled: 0,
+              currentStepTitle: 'Skipped cleanup',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-failed-zero-counter',
+            source: 'temporal',
+            title: 'Failed task without failed counter',
+            status: 'failed',
+            state: 'failed',
+            rawState: 'failed',
+            progress: {
+              total: 2,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 1,
+              failed: 0,
+              skipped: 0,
+              canceled: 0,
+              currentStepTitle: 'Platform timeout',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-missing-progress',
+            source: 'temporal',
+            title: 'Missing progress task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            progress: null,
             createdAt: '2026-03-28T00:00:00Z',
           },
         ],
@@ -1883,19 +1978,27 @@ describe('Workflows Entrypoint', () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Attention task');
-    const nextActionCell = document.querySelector('.queue-table-cell-next-action');
-    expect(nextActionCell?.textContent).toContain('Intervention requested');
-    expect(nextActionCell?.textContent).toContain('Blocked by 1 prerequisite');
+    expect(document.querySelector('.queue-table-cell-next-action')).toBeNull();
+    expect(document.querySelector('.queue-card-next-action')).toBeNull();
+    expect(screen.queryByText('Next action')).toBeNull();
+    expect(screen.queryByText('Failed — needs review')).toBeNull();
+    expect(screen.getAllByText('Intervention requested').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Blocked by 1 prerequisite').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3/6 · Run test suite').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1/2 · Failed at Publish result').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3/4 complete').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1/2 · Failed at Platform timeout').length).toBeGreaterThan(0);
 
     // The signals are no longer buried under the workflow title cell.
     const workflowCell = document.querySelector('.queue-table-cell-workflow');
     expect(workflowCell?.textContent).not.toContain('Intervention requested');
     expect(workflowCell?.textContent).not.toContain('Blocked by 1 prerequisite');
 
-    // Mobile cards mirror the scan-first hierarchy with a dedicated next-action block.
-    const cardNextAction = document.querySelector('.queue-card-next-action');
-    expect(cardNextAction?.textContent).toContain('Intervention requested');
-    expect(cardNextAction?.textContent).toContain('Blocked by 1 prerequisite');
+    const missingProgressRow = screen
+      .getAllByText('Missing progress task')
+      .map((element) => element.closest('tr'))
+      .find((candidate): candidate is HTMLTableRowElement => Boolean(candidate));
+    expect(missingProgressRow?.querySelector('.queue-table-cell-progress')?.textContent).toContain('—');
   });
 });
 

@@ -2015,7 +2015,7 @@ tbody tr:hover {
   width: 30%;
 }
 
-.queue-table-column-next-action {
+.queue-table-column-progress {
   width: 18%;
 }
 
@@ -2037,7 +2037,7 @@ tbody tr:hover {
 
 .queue-table-cell-compact,
 .queue-table-cell-date,
-.queue-table-cell-next-action {
+.queue-table-cell-progress {
   font-size: 0.82rem;
 }
 
@@ -2059,7 +2059,7 @@ tbody tr:hover {
 
 .queue-table-wrapper[data-density='compact'] .queue-table-cell-compact,
 .queue-table-wrapper[data-density='compact'] .queue-table-cell-date,
-.queue-table-wrapper[data-density='compact'] .queue-table-cell-next-action {
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-progress {
   font-size: 0.76rem;
 }
 
@@ -2227,12 +2227,29 @@ tbody tr:hover {
   word-break: break-word;
 }
 
-.workflow-list-next-action-empty {
+.workflow-list-status-supplement {
+  margin-top: 0.2rem;
+  color: rgb(var(--mm-muted));
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.workflow-list-progress {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: rgb(var(--mm-ink));
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.workflow-list-progress:empty::before {
+  content: '—';
   color: rgb(var(--mm-muted));
 }
 
-.workflow-list-next-action-item + .workflow-list-next-action-item {
-  margin-top: 0.15rem;
+.queue-table-cell-progress .workflow-list-progress {
+  word-break: break-word;
 }
 
 .data-table-slab {
@@ -2468,23 +2485,6 @@ tr[data-proposal-id].proposal-consuming td {
 .queue-card-header > .queue-card-status {
   flex-shrink: 0;
   max-width: 100%;
-}
-
-.queue-card-next-action {
-  margin: 0.4rem 0 0;
-  display: grid;
-  gap: 0.15rem;
-}
-
-.queue-card-next-action-label {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: rgb(var(--mm-muted));
-}
-
-.queue-card-next-action-item {
-  margin: 0;
-  font-weight: 500;
 }
 
 .queue-card-title {
