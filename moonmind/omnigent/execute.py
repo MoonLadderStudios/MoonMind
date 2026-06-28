@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-from collections.abc import Callable
+from collections.abc import Iterator
 from typing import Any
 
 from temporalio import activity
@@ -34,6 +35,13 @@ from moonmind.workflows.adapters.omnigent_client import (
 
 class OmnigentFirstMessageAmbiguousError(RuntimeError):
     """Raised when a retry cannot prove first-message acceptance or absence."""
+
+
+class OmnigentSessionStillRunningError(OmnigentClientError):
+    """Raised when the stream ends while the provider session remains active."""
+
+
+_STREAM_HEARTBEAT_INTERVAL_SECONDS = 60.0
 
 
 async def run_omnigent_execution(
@@ -78,6 +86,8 @@ async def run_omnigent_execution(
             failure_class="integration_error",
             provider_error_code="omnigent_first_message_acceptance_ambiguous",
         )
+    except OmnigentSessionStillRunningError:
+        raise
     except OmnigentClientError as exc:
         return _failure_result(
             request=request,
@@ -119,7 +129,7 @@ async def _execute_with_dependencies(
     if not session_id:
         created = await client.create_session(session_payload)
         session_id = _extract_session_id(created)
-        row = await store.attach_session(request.idempotency_key, session_id)
+        await store.attach_session(request.idempotency_key, session_id)
 
     base_message = _build_first_message_text(request, omnigent=omnigent)
     digest = _first_message_digest(base_message)
@@ -139,6 +149,7 @@ async def _execute_with_dependencies(
     should_post = await _should_post_first_message(
         row=row,
         snapshot=initial_snapshot,
+        message_text=base_message,
         store=store,
         idempotency_key=request.idempotency_key,
     )
@@ -156,21 +167,11 @@ async def _execute_with_dependencies(
         )
         await store.mark_posted(request.idempotency_key, response=response)
 
-    events_captured = 0
-    terminal_event: dict[str, Any] | None = None
-    async for event in client.stream_events(session_id):
-        events_captured += 1
-        _heartbeat(
-            {
-                "provider": "omnigent",
-                "omnigentSessionId": session_id,
-                "eventsCaptured": events_captured,
-                "idempotencyKeyHash": _short_hash(request.idempotency_key),
-            }
-        )
-        if _is_terminal_event(event):
-            terminal_event = event
-            break
+    events_captured, terminal_event = await _stream_until_terminal(
+        client=client,
+        session_id=session_id,
+        idempotency_key=request.idempotency_key,
+    )
 
     final_snapshot = await client.get_session(session_id)
     status = _normalized_terminal_status(final_snapshot, terminal_event)
@@ -197,6 +198,10 @@ async def _execute_with_dependencies(
                 "implementationIssue": "MM-992",
             },
         )
+    if status == "running":
+        raise OmnigentSessionStillRunningError(
+            "Omnigent stream ended while the provider session is still running"
+        )
 
     await store.mark_terminal(
         request.idempotency_key,
@@ -220,6 +225,7 @@ async def _should_post_first_message(
     *,
     row: Any,
     snapshot: dict[str, Any],
+    message_text: str,
     store: OmnigentRunStore,
     idempotency_key: str,
 ) -> bool:
@@ -227,7 +233,12 @@ async def _should_post_first_message(
     if state in {FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}:
         return False
     if state == FIRST_MESSAGE_POSTING:
-        if _snapshot_contains_first_message(snapshot, row.first_message_marker, row.first_message_digest):
+        if _snapshot_contains_first_message(
+            snapshot,
+            row.first_message_marker,
+            row.first_message_digest,
+            message_text=message_text,
+        ):
             await store.mark_posted(idempotency_key)
             return False
         if _snapshot_proves_absence(snapshot):
@@ -299,6 +310,11 @@ def _build_first_message_text(
     text = _clean(prompt.get("text"))
     if text:
         return text
+    instruction_ref = _clean(prompt.get("instructionRef")) or _clean(
+        request.instruction_ref
+    )
+    if instruction_ref:
+        return instruction_ref
     params = request.parameters or {}
     description = _clean(params.get("description"))
     if description:
@@ -345,10 +361,38 @@ def _include_marker(omnigent: dict[str, Any]) -> bool:
 
 
 def _snapshot_contains_first_message(
-    snapshot: dict[str, Any], marker: str | None, digest: str | None
+    snapshot: dict[str, Any],
+    marker: str | None,
+    digest: str | None,
+    *,
+    message_text: str | None = None,
 ) -> bool:
+    return any(
+        _snapshot_contains_text(snapshot, candidate)
+        for candidate in (marker, digest, message_text)
+        if candidate
+    )
+
+
+def _snapshot_contains_text(snapshot: dict[str, Any], text: str) -> bool:
+    for value in _iter_snapshot_strings(snapshot):
+        if text in value:
+            return True
     blob = json.dumps(snapshot, sort_keys=True, default=str)
-    return bool((marker and marker in blob) or (digest and digest in blob))
+    return text in blob or text.replace("\n", "\\n") in blob
+
+
+def _iter_snapshot_strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_snapshot_strings(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            yield from _iter_snapshot_strings(item)
 
 
 def _snapshot_proves_absence(snapshot: dict[str, Any]) -> bool:
@@ -380,7 +424,78 @@ def _normalized_terminal_status(
         return "completed"
     if status in {"failed", "error"}:
         return "failed"
+    if status in {"running", "active", "pending", "queued", "in_progress"}:
+        return "running"
     return "failed"
+
+
+async def _stream_until_terminal(
+    *,
+    client: Any,
+    session_id: str,
+    idempotency_key: str,
+) -> tuple[int, dict[str, Any] | None]:
+    events_captured = 0
+    terminal_event: dict[str, Any] | None = None
+    iterator = client.stream_events(session_id).__aiter__()
+    pending: asyncio.Task[Any] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.create_task(anext(iterator))
+            done, _ = await asyncio.wait(
+                {pending}, timeout=_STREAM_HEARTBEAT_INTERVAL_SECONDS
+            )
+            if not done:
+                snapshot = await client.get_session(session_id)
+                payload = _heartbeat_payload(
+                    session_id=session_id,
+                    events_captured=events_captured,
+                    idempotency_key=idempotency_key,
+                )
+                provider_status = _clean(snapshot.get("status"))
+                if provider_status:
+                    payload["providerStatus"] = provider_status
+                _heartbeat(payload)
+                continue
+            try:
+                event = pending.result()
+            except StopAsyncIteration:
+                break
+            finally:
+                pending = None
+            events_captured += 1
+            _heartbeat(
+                _heartbeat_payload(
+                    session_id=session_id,
+                    events_captured=events_captured,
+                    idempotency_key=idempotency_key,
+                )
+            )
+            if _is_terminal_event(event):
+                terminal_event = event
+                break
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+        aclose = getattr(iterator, "aclose", None)
+        if callable(aclose):
+            await aclose()
+    return events_captured, terminal_event
+
+
+def _heartbeat_payload(
+    *,
+    session_id: str,
+    events_captured: int,
+    idempotency_key: str,
+) -> dict[str, Any]:
+    return {
+        "provider": "omnigent",
+        "omnigentSessionId": session_id,
+        "eventsCaptured": events_captured,
+        "idempotencyKeyHash": _short_hash(idempotency_key),
+    }
 
 
 def _final_summary(
@@ -454,5 +569,6 @@ def _heartbeat(details: dict[str, Any]) -> None:
 
 __all__ = [
     "OmnigentFirstMessageAmbiguousError",
+    "OmnigentSessionStillRunningError",
     "run_omnigent_execution",
 ]

@@ -74,7 +74,7 @@ class OmnigentRunStore:
                 if changed:
                     await session.commit()
             await session.refresh(row)
-            return _detached(row)
+            return _detached(session, row)
 
     async def attach_session(self, idempotency_key: str, session_id: str) -> OmnigentExternalRun:
         async with self._session_factory() as session:
@@ -86,7 +86,7 @@ class OmnigentRunStore:
             row.omnigent_session_id = session_id
             await session.commit()
             await session.refresh(row)
-            return _detached(row)
+            return _detached(session, row)
 
     async def mark_prepared(
         self, idempotency_key: str, *, digest: str, marker: str
@@ -103,7 +103,7 @@ class OmnigentRunStore:
             row.first_message_marker = marker
             await session.commit()
             await session.refresh(row)
-            return _detached(row)
+            return _detached(session, row)
 
     async def mark_posting(self, idempotency_key: str) -> OmnigentExternalRun:
         async with self._session_factory() as session:
@@ -112,7 +112,7 @@ class OmnigentRunStore:
             row.first_message_post_attempted_at = datetime.now(tz=UTC)
             await session.commit()
             await session.refresh(row)
-            return _detached(row)
+            return _detached(session, row)
 
     async def mark_posted(
         self,
@@ -130,7 +130,7 @@ class OmnigentRunStore:
             row.first_message_item_id = item_id or _string_or_none(response.get("item_id"))
             await session.commit()
             await session.refresh(row)
-            return _detached(row)
+            return _detached(session, row)
 
     async def mark_terminal(
         self,
@@ -147,7 +147,7 @@ class OmnigentRunStore:
                 row.terminal_refs = terminal_refs
             await session.commit()
             await session.refresh(row)
-            return _detached(row)
+            return _detached(session, row)
 
     async def _get(
         self, session: AsyncSession, idempotency_key: str
@@ -185,7 +185,8 @@ def _string_or_none(value: object) -> str | None:
     return text or None
 
 
-def _detached(row: OmnigentExternalRun) -> OmnigentExternalRun:
+def _detached(session: AsyncSession, row: OmnigentExternalRun) -> OmnigentExternalRun:
+    session.expunge(row)
     return row
 
 

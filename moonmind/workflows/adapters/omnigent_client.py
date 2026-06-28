@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -91,8 +92,8 @@ class OmnigentHttpClient:
                 if line.startswith("data:"):
                     line = line[5:].strip()
                 try:
-                    payload = httpx.Response(200, content=line).json()
-                except ValueError as exc:
+                    payload = json.loads(line)
+                except json.JSONDecodeError as exc:
                     raise OmnigentClientError("Malformed Omnigent SSE frame") from exc
                 if isinstance(payload, dict):
                     yield payload
