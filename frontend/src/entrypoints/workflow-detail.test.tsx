@@ -531,23 +531,27 @@ describe('Workflow Detail Entrypoint', () => {
     expect(sidebar).toBeTruthy();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
-    const active = within(sidebar).getByRole('link', { name: /MM-997 selected workflow/i });
+    const active = await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i });
     expect(active.getAttribute('aria-current')).toBe('page');
-    expect(within(sidebar).getByRole('link', { name: /Another workflow/i }).getAttribute('href')).toBe(
+    expect((await within(sidebar).findByRole('link', { name: /Another workflow/i })).getAttribute('href')).toBe(
       '/workflows/test-456?source=temporal',
     );
     expect(String(lastFetchUrl(fetchSpy, '/api/executions?'))).not.toContain('selectedWorkflowId');
   });
 
-  it('MM-997 keeps detail subroutes inside the desktop workspace shell', async () => {
-    window.history.pushState({}, 'Workspace Steps Test', '/workflows/test-123/steps?source=temporal');
+  it.each([
+    ['/workflows/test-123/steps?source=temporal', 'Workflow Steps'],
+    ['/workflows/test-123/artifacts?source=temporal', 'Workflow Artifacts'],
+    ['/workflows/test-123/runs?source=temporal', 'Execution History'],
+  ])('MM-997 keeps %s inside the desktop workspace shell', async (path, heading) => {
+    window.history.pushState({}, 'Workspace Subroute Test', path);
     mockDesktopViewport(true);
     mockWorkflowWorkspaceFetches();
 
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
-    expect(await screen.findByRole('heading', { name: 'Workflow Steps' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
   });
 
   it('MM-997 disables only the desktop workspace shell when the runtime flag is false', async () => {
