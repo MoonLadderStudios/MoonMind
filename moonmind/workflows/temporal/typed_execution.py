@@ -72,7 +72,7 @@ async def execute_typed_activity(
 
 @overload
 async def execute_typed_activity(
-    activity: Literal["integration.openclaw.execute"],
+    activity: Literal["integration.openclaw.execute", "integration.omnigent.execute"],
     arg: AgentExecutionRequest,
     *,
     task_queue: str | None = None,
