@@ -4,6 +4,7 @@ import { ApiError, getErrorStatus } from '../lib/api/client';
 import {
   CONFIG_STALE_TIME_MS,
   MAX_QUERY_RETRIES,
+  configQueryDefaults,
   createDashboardQueryClient,
   isTransientError,
   shouldRetryQuery,
@@ -57,13 +58,22 @@ describe('shouldRetryQuery', () => {
 });
 
 describe('createDashboardQueryClient', () => {
-  it('applies the shared default query options', () => {
+  it('applies only the retry policy client-wide so live queries keep their freshness', () => {
     const client = createDashboardQueryClient();
     const defaults = client.getDefaultOptions();
 
-    expect(defaults.queries?.staleTime).toBe(CONFIG_STALE_TIME_MS);
-    expect(defaults.queries?.refetchOnWindowFocus).toBe(false);
     expect(defaults.queries?.retry).toBe(shouldRetryQuery);
     expect(defaults.mutations?.retry).toBe(false);
+    // Stale-time / focus-refetch tuning must NOT be a client-wide default, or it
+    // would silently change the freshness of live queries.
+    expect(defaults.queries?.staleTime).toBeUndefined();
+    expect(defaults.queries?.refetchOnWindowFocus).toBeUndefined();
+  });
+});
+
+describe('configQueryDefaults', () => {
+  it('carries the opt-in config/catalog freshness policy', () => {
+    expect(configQueryDefaults.staleTime).toBe(CONFIG_STALE_TIME_MS);
+    expect(configQueryDefaults.refetchOnWindowFocus).toBe(false);
   });
 });

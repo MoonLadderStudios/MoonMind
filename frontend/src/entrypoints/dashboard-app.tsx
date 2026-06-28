@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ComponentType, type ReactNode } from 'react';
+import { Suspense, lazy, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { QueryErrorResetBoundary } from '@tanstack/react-query';
 
 import type { BootPayload } from '../boot/parseBootPayload';
@@ -8,27 +8,33 @@ import { DashboardRouteErrorBoundary } from '../components/DashboardRouteErrorBo
 import { DashboardAlerts } from './dashboard-alerts';
 
 type PageComponent = ComponentType<{ payload: BootPayload }>;
-const PAGE_COMPONENTS = {
-  'index-health': lazy(() => import('./index-health')),
-  manifests: lazy(() => import('./manifests')),
-  'oauth-terminal': lazy(() => import('./oauth-terminal')),
-  schedules: lazy(() => import('./schedules')),
-  settings: lazy(() => import('./settings')),
-  skills: lazy(() => import('./skills')),
-  'workflow-start': lazy(() => import('./workflow-start')),
-  'workflow-detail': lazy(() => import('./workflow-detail')),
-  'workflows-home': lazy(() => import('./workflows-home')),
-  'workflow-list': lazy(() => import('./workflow-list')),
-} satisfies Record<string, PageComponent>;
+type PageImport = () => Promise<{ default: PageComponent }>;
 
-type SupportedPage = keyof typeof PAGE_COMPONENTS;
+// Import factories (not memoized lazy components) so a retry can build a fresh
+// `lazy(...)` and re-attempt the dynamic import. A single shared lazy component
+// caches a rejected import (e.g. a transient chunk-load failure) and would
+// replay that rejection on every retry, making the Retry action unrecoverable.
+const PAGE_IMPORTS = {
+  'index-health': () => import('./index-health'),
+  manifests: () => import('./manifests'),
+  'oauth-terminal': () => import('./oauth-terminal'),
+  schedules: () => import('./schedules'),
+  settings: () => import('./settings'),
+  skills: () => import('./skills'),
+  'workflow-start': () => import('./workflow-start'),
+  'workflow-detail': () => import('./workflow-detail'),
+  'workflows-home': () => import('./workflows-home'),
+  'workflow-list': () => import('./workflow-list'),
+} satisfies Record<string, PageImport>;
+
+type SupportedPage = keyof typeof PAGE_IMPORTS;
 
 type SharedLayoutConfig = {
   dataWidePanel?: boolean;
 };
 
 function isSupportedPage(page: string): page is SupportedPage {
-  return Object.hasOwn(PAGE_COMPONENTS, page);
+  return Object.hasOwn(PAGE_IMPORTS, page);
 }
 
 function readSharedLayout(payload: BootPayload): SharedLayoutConfig {
@@ -95,6 +101,31 @@ function AppShell({
   );
 }
 
+function LazyPageView({ page, payload }: { page: SupportedPage; payload: BootPayload }) {
+  // Bumped on retry to rebuild the lazy component and remount the boundary, so a
+  // failed dynamic import is re-attempted rather than replaying its cached error.
+  const [reloadKey, setReloadKey] = useState(0);
+  const LazyPage = useMemo(() => lazy(PAGE_IMPORTS[page]), [page, reloadKey]);
+
+  return (
+    <QueryErrorResetBoundary>
+      {({ reset }) => (
+        <DashboardRouteErrorBoundary
+          key={reloadKey}
+          onReset={() => {
+            reset();
+            setReloadKey((value) => value + 1);
+          }}
+        >
+          <Suspense fallback={<LoadingPage />}>
+            <LazyPage payload={payload} />
+          </Suspense>
+        </DashboardRouteErrorBoundary>
+      )}
+    </QueryErrorResetBoundary>
+  );
+}
+
 function PageContent({ payload }: { payload: BootPayload }) {
   if (!isSupportedPage(payload.page)) {
     return <UnknownPage page={payload.page} />;
@@ -105,19 +136,7 @@ function PageContent({ payload }: { payload: BootPayload }) {
     return <ConfigurationErrorPage page={payload.page} message={validation.message} />;
   }
 
-  const LazyPage = PAGE_COMPONENTS[payload.page];
-
-  return (
-    <QueryErrorResetBoundary>
-      {({ reset }) => (
-        <DashboardRouteErrorBoundary onReset={reset}>
-          <Suspense fallback={<LoadingPage />}>
-            <LazyPage payload={payload} />
-          </Suspense>
-        </DashboardRouteErrorBoundary>
-      )}
-    </QueryErrorResetBoundary>
-  );
+  return <LazyPageView page={payload.page} payload={payload} />;
 }
 
 export function DashboardApp({ payload }: { payload: BootPayload }) {

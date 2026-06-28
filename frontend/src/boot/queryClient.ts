@@ -1,3 +1,4 @@
+import type { QueryObserverOptions } from '@tanstack/react-query';
 import { QueryClient } from '@tanstack/react-query';
 
 import { getErrorStatus } from '../lib/api/client';
@@ -8,9 +9,12 @@ import { getErrorStatus } from '../lib/api/client';
  * Goals:
  * - Retry only transient failures (network errors and 5xx responses).
  * - Never retry permission (401/403) or validation (400/422 and other 4xx) errors.
- * - Apply standard stale times for config/catalog style data so the shell does
- *   not refetch slowly-changing data on every mount.
- * - Use one consistent refetch-on-window-focus policy across pages.
+ *
+ * The retry policy is the only client-wide default: it is safe for every query.
+ * Stale-time / focus-refetch tuning is opt-in per query via {@link configQueryDefaults}
+ * so it applies only to slowly-changing config/catalog data and never silently
+ * changes the freshness of live queries (e.g. the schedules list), which keep
+ * React Query's standard stale-on-mount and refetch-on-focus behavior.
  */
 
 /** Maximum number of retries for transient query failures. */
@@ -41,14 +45,23 @@ export function shouldRetryQuery(failureCount: number, error: unknown): boolean 
   return failureCount < MAX_QUERY_RETRIES;
 }
 
+/**
+ * Per-query options for config/catalog style data. Spread into a `useQuery`
+ * call (`useQuery({ ...configQueryDefaults, queryKey, queryFn })`) to apply the
+ * 5-minute stale window and skip focus refetches for slowly-changing data.
+ * Live queries should omit this so they keep refetching as expected.
+ */
+export const configQueryDefaults = {
+  staleTime: CONFIG_STALE_TIME_MS,
+  refetchOnWindowFocus: false,
+} satisfies Pick<QueryObserverOptions, 'staleTime' | 'refetchOnWindowFocus'>;
+
 /** Build a QueryClient pre-configured with the shared dashboard defaults. */
 export function createDashboardQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
         retry: shouldRetryQuery,
-        staleTime: CONFIG_STALE_TIME_MS,
-        refetchOnWindowFocus: false,
       },
       mutations: {
         retry: false,
