@@ -15,7 +15,6 @@ Last updated: 2026-06-27
 - `docs/Temporal/ActivityCatalogAndWorkerTopology.md`
 - `docs/Temporal/ErrorTaxonomy.md`
 - `docs/MoonMindArchitecture.md`
-- `docs/Omnigent/MoonMindVsOmnigent.md`
 - Omnigent upstream API reference: `omnigent/server/API.md` in `omnigent-ai/omnigent`
 
 ---
@@ -75,7 +74,7 @@ The recommended v1 activity shape is:
 integration.omnigent.execute
 ```
 
-This mirrors the existing streaming-gateway external-provider pattern. The activity performs the entire Omnigent session execution and returns a canonical `AgentRunResult`.
+This mirrors the existing streaming-gateway external-provider pattern. The activity performs the entire Omnigent session execution and returns a terminal canonical `AgentRunResult`, or raises an activity error. It does not return non-terminal provider states in v1.
 
 The polling/session lifecycle may be added later as v2:
 
@@ -104,7 +103,7 @@ The honest v1 guarantee is therefore:
 - **Temporal durably records delegation and result.** Temporal durably remembers that the run was delegated to Omnigent and what the final canonical result was, and re-attaches on retry (§9.5, §10, §12.5).
 - **Retry re-attaches, it does not recreate.** A retry reconnects to the existing Omnigent session rather than provisioning a second host or reposting the first message.
 
-Out of scope for v1: durable checkpointing of intra-run progress, and Omnigent session continuity across MoonMind steps (a v2 concern — §21). "MoonMind with or without Temporal" is a separate architectural track, not part of this adapter contract.
+Out of scope for v1: durable checkpointing of intra-run progress, status-bearing streaming results consumed by `MoonMind.AgentRun`, and Omnigent session continuity across MoonMind steps (a v2 concern — §21). "MoonMind with or without Temporal" is a separate architectural track, not part of this adapter contract.
 
 ---
 
@@ -134,7 +133,8 @@ The v1 adapter does not attempt to:
 - guarantee perfect replay of transient Omnigent SSE events after the stream is disconnected;
 - implement multi-step, long-lived Omnigent session reuse across MoonMind steps in v1;
 - introduce provider-specific top-level MoonMind agent-id aliases such as `omnigent_session`, `omnigent_claude`, or `omnigent_codex`;
-- assume Omnigent exposes a stable public diff endpoint when the upstream OpenAPI does not advertise one.
+- assume Omnigent exposes a stable public diff endpoint when the upstream OpenAPI does not advertise one;
+- return non-terminal states from `integration.omnigent.execute` unless `MoonMind.AgentRun` is changed to consume status-bearing streaming results.
 
 ---
 
@@ -452,7 +452,7 @@ AgentRunResult
 12. Fetch final snapshot.
 13. Harvest workspace/session resources.
 14. Optionally discover GitHub PR metadata.
-15. Return canonical AgentRunResult.
+15. Return canonical terminal AgentRunResult, or raise activity error on unrecoverable adapter ambiguity.
 ```
 
 ### 9.3 Session creation
@@ -552,8 +552,10 @@ Rules:
 6. If a retry finds `posting`, it must reconcile before deciding whether to repost.
 7. Reconciliation checks Omnigent snapshot `items`, native `pending_inputs`, and any captured `session.input.consumed` events for the stored digest or idempotency marker.
 8. If reconciliation finds the first message, mark it `posted` and skip posting.
-9. If reconciliation cannot prove absence, do not blindly repost. Wait within the configured reconciliation grace period or surface a non-terminal `intervention_requested` status; if the activity must terminalize, use `failureClass=integration_error`.
+9. If reconciliation cannot prove absence, do not blindly repost and do not return a non-terminal state from `integration.omnigent.execute`. In v1, fail closed by raising a retryable activity error while the reconciliation grace period remains, then a non-retryable `integration_error` once retry/reconciliation policy is exhausted. If the implementation chooses to return instead of throwing at exhaustion, the returned `AgentRunResult` must be terminal with `failureClass=integration_error`.
 10. If the same `idempotencyKey` is reused with a different first-message digest, fail fast and require an explicit operator reset.
+
+V1 deliberately avoids returning `status=intervention_requested` from the streaming execute activity because the current streaming-gateway workflow path treats any returned result as completed. Supporting a status-bearing streaming result requires a `MoonMind.AgentRun` workflow change and belongs to v2.
 
 Representative event:
 
@@ -642,6 +644,8 @@ Map Omnigent observations into canonical MoonMind states.
 | `session.status = failed` | `failed` |
 | Activity timeout | `timed_out` |
 | Activity cancellation after interrupt/stop | `canceled` |
+
+These states may be used internally by the execute activity, diagnostics, and future polling/session activities. In the v1 streaming-gateway path, the execute activity still returns only a terminal `AgentRunResult` or raises an activity error.
 
 Unsupported or unknown provider states must be treated as adapter contract errors. Do not pass raw Omnigent statuses into workflow code as canonical states.
 
@@ -912,7 +916,7 @@ Rules:
 | Artifact harvest partial failure | completed with diagnostics or `system_error` | Policy-controlled. |
 | Unknown Omnigent stream event schema | `integration_error` | Contract drift. |
 | Idempotency key reused with different first-message digest | `user_error` | Caller attempted conflicting replay. |
-| Retry cannot prove whether first message was accepted | `integration_error` | While waiting, expose `status=intervention_requested`; if terminalized, use this valid `FailureClass`. |
+| Retry cannot prove whether first message was accepted | `integration_error` | V1 streaming execute must fail/throw or return a terminal result with this valid `FailureClass`; it must not return non-terminal `intervention_requested`. |
 
 ---
 
@@ -946,7 +950,7 @@ Example:
 }
 ```
 
-Provider-native payloads must not be returned as top-level fields.
+Provider-native payloads must not be returned as top-level fields. In the v1 streaming-gateway path, returned results are terminal; non-terminal state reporting requires a future workflow contract change.
 
 ---
 
@@ -1057,7 +1061,8 @@ Additional requirements:
 - stricter ownership and cleanup policies;
 - child-session mapping in MoonMind run ledger;
 - per-message idempotency records, not only first-message records;
-- re-evaluate whether external sessions may carry `host_id` / `workspace` while managed sessions still omit both.
+- re-evaluate whether external sessions may carry `host_id` / `workspace` while managed sessions still omit both;
+- if streaming-gateway execution should surface non-terminal states, change `MoonMind.AgentRun` to consume a status-bearing streaming result instead of treating every returned result as completed.
 
 ---
 
@@ -1105,6 +1110,7 @@ This helper must write to MoonMind's artifact API or artifact worker surface, no
 - first-message digest computation;
 - first-message skip-on-reuse behavior;
 - `posting` state reconciliation behavior;
+- ambiguous `posting` state fails/throws instead of returning non-terminal success;
 - digest mismatch fail-fast behavior;
 - no required `get_workspace_diff` transport call in v1.
 
@@ -1145,7 +1151,8 @@ Scenarios:
 12. idempotent retry after session create but before first message;
 13. idempotent retry after first message response but before terminal result;
 14. crash-window retry with `posting` state and snapshot reconciliation;
-15. conflicting first-message digest under the same idempotency key.
+15. ambiguous `posting` reconciliation fails closed rather than returning `intervention_requested` from execute;
+16. conflicting first-message digest under the same idempotency key.
 
 ### 23.4 Live smoke tests
 
@@ -1185,7 +1192,7 @@ The stable implementation milestones are:
 4. Should MoonMind patch Omnigent to emit webhooks or artifact callbacks instead of relying on SSE capture?
 5. How should clear/context-reset semantics map onto MoonMind step epochs in v2?
 6. *(Resolved — see §10.1.)* A shared `externalSession` table is not introduced in v1; `omnigent_external_runs` stays dedicated, and promotion to a shared table is deferred until a second provider needs durable session mapping.
-7. *(Resolved — fail closed.)* Ambiguous `posting` retries surface a non-terminal `intervention_requested` status while waiting for operator input; if the activity must terminalize, it returns `failureClass=integration_error` rather than an invalid failure class.
+7. *(Resolved — fail closed.)* Ambiguous `posting` retries do not return a non-terminal state from the streaming execute activity. They raise/retry while the reconciliation grace period remains, then fail with `failureClass=integration_error` or an equivalent non-retryable integration error once exhausted.
 8. Should MoonMind require a host-side helper for first-class patch artifacts, or is GitHub PR post-processing sufficient for v1?
 
 ---
