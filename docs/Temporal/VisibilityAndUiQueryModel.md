@@ -255,10 +255,14 @@ Allowed values for v1:
 Rules:
 
 - `mm_state` must be set immediately on workflow start
-- terminal mapping must remain consistent with Temporal close status:
+- terminal mapping must remain consistent with MoonMind `closeStatus`:
  - completed → `completed`
  - failed / terminated / timed out → `failed`
  - canceled → `canceled`
+- graceful workflow cancellation is represented by workflow-owned terminal
+  `mm_state=canceled` / `closeStatus=canceled` even when the raw Temporal
+  `ExecutionStatus` is `Completed` because the workflow finalized and returned
+  normally
 
 ### `mm_owner_type`
 
