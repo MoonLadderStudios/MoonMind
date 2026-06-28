@@ -276,6 +276,7 @@ _SENSITIVE_KEY_FRAGMENTS: tuple[str, ...] = (
     "secret",
     "credential",
     "api_key",
+    "apikey",
     "private_key",
 )
 _ALLOWED_SECRET_PASSTHROUGH_ENV_KEYS: frozenset[str] = frozenset(
@@ -313,6 +314,31 @@ _DURABLE_RETRIEVAL_METADATA_KEYS: tuple[str, ...] = (
 _BOOLEAN_DURABLE_RETRIEVAL_METADATA_KEYS: frozenset[str] = frozenset({
     "retrievalContextTruncated",
 })
+_OBSERVABILITY_PROVIDER_NATIVE_KEYS: frozenset[str] = frozenset(
+    {
+        "body",
+        "messages",
+        "provider_body",
+        "providerBody",
+        "provider_payload",
+        "providerPayload",
+        "raw_body",
+        "rawBody",
+        "raw_env",
+        "rawEnv",
+        "raw_log",
+        "rawLog",
+        "request",
+        "response",
+        "terminal_scrollback",
+        "terminalScrollback",
+        "thread_db",
+        "threadDb",
+        "thread_database",
+        "threadDatabase",
+        "transcript",
+    }
+)
 
 
 def extract_durable_retrieval_metadata(
@@ -410,6 +436,18 @@ def _contains_sensitive_key(
             )
             for item in value
         )
+    return False
+
+def _contains_provider_native_observability_key(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if str(key).strip() in _OBSERVABILITY_PROVIDER_NATIVE_KEYS:
+                return True
+            if _contains_provider_native_observability_key(nested):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(_contains_provider_native_observability_key(item) for item in value)
     return False
 
 class ProfileSelector(BaseModel):
@@ -1812,6 +1850,18 @@ class RunObservabilityEvent(BaseModel):
         default_factory=dict,
         description="Optional structured metadata for the event row",
     )
+
+    @field_validator("metadata", mode="after")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        compact = validate_compact_temporal_mapping(value, field_name="metadata")
+        if _contains_sensitive_key(compact):
+            raise ValueError("metadata must not contain raw credential keys")
+        if _contains_provider_native_observability_key(compact):
+            raise ValueError(
+                "metadata must use MoonMind-normalized artifact refs, not provider-native payloads"
+            )
+        return compact
 
 LiveLogChunk = RunObservabilityEvent
 

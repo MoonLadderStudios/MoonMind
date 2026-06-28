@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -280,6 +281,45 @@ def test_get_observability_summary_includes_session_snapshot(
     assert snapshot["sessionId"] == "sess:wf-task-1:codex_cli"
     assert snapshot["sessionEpoch"] == 2
     assert snapshot["threadId"] == "thread-2"
+    assert response.json()["summary"]["interventionCapabilities"] == {
+        "sendFollowUp": True,
+        "clearSession": True,
+        "supportedActions": ["send_follow_up", "clear_session"],
+        "requiresSessionProjection": True,
+        "runtimeId": "codex_cli",
+    }
+
+def test_get_observability_summary_does_not_advertise_one_shot_session_controls(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    # MM-988 / MM-976: one-shot managed runs must not advertise session controls.
+    test_client, _ = client
+    run_id = uuid4()
+    mock_record = MagicMock()
+    mock_record.model_dump.return_value = {
+        "runId": str(run_id),
+        "status": "running",
+        "runtimeId": "codex_cli",
+    }
+    mock_record.status = "running"
+    mock_record.runtime_id = "codex_cli"
+    mock_record.live_stream_capable = True
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._load_agent_run_session_record",
+            return_value=None,
+        ):
+            response = test_client.get(f"/api/agent-runs/{run_id}/observability-summary")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["interventionCapabilities"] == {
+        "sendFollowUp": False,
+        "clearSession": False,
+        "supportedActions": [],
+        "requiresSessionProjection": False,
+        "runtimeId": "codex_cli",
+    }
 
 def test_get_observability_summary_emits_latency_metric(
     client: tuple[TestClient, AsyncMock],
@@ -1642,6 +1682,87 @@ def test_get_agent_run_observability_events_prefers_persisted_event_artifact(
     assert body["events"][1]["sessionId"] == "sess-1"
     assert body["events"][1]["sessionEpoch"] == 2
     assert "run_id" not in body["events"][0]
+
+def test_get_agent_run_observability_events_excludes_provider_native_payloads(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    # MM-988 / MM-976: browser history excludes provider-native and local-only state.
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 1,
+                        "stream": "session",
+                        "text": "provider-native event must not reach the browser",
+                        "timestamp": "2026-04-08T00:00:00Z",
+                        "kind": "assistant_message",
+                        "metadata": {
+                            "providerPayload": {
+                                "messages": [{"role": "assistant", "content": "raw"}],
+                            },
+                            "rawEnv": {"OPENAI_API_KEY": "secret"},
+                            "transcript": "full unredacted transcript",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "runId": "run-1",
+                        "sequence": 2,
+                        "stream": "session",
+                        "text": "assistant message stored as artifact",
+                        "timestamp": "2026-04-08T00:00:01Z",
+                        "kind": "assistant_message",
+                        "metadata": {
+                            "artifactRef": "art:sha256:assistant-message",
+                            "summaryRef": "art:sha256:summary",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.run_id = "run-1"
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [2]
+    assert body["events"][0]["metadata"] == {
+        "artifactRef": "art:sha256:assistant-message",
+        "summaryRef": "art:sha256:summary",
+    }
+    assert "providerPayload" not in json.dumps(body)
+    assert "OPENAI_API_KEY" not in json.dumps(body)
+    assert "full unredacted transcript" not in json.dumps(body)
+
+def test_agent_run_observability_router_has_no_websocket_or_session_server_dependency() -> None:
+    source = Path(agent_runs_router.__file__).read_text(encoding="utf-8")
+
+    assert "WebSocket" not in source
+    assert "websocket" not in source.lower()
+    assert "session_server" not in source
+    assert "omnigent" not in source.lower()
 
 def test_get_agent_run_observability_events_applies_since_stream_and_kind_filters(
     client: tuple[TestClient, AsyncMock],

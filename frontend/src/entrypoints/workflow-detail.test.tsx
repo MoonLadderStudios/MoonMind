@@ -6271,6 +6271,31 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                supportedActions: ['send_follow_up', 'clear_session'],
+                requiresSessionProjection: true,
+                runtimeId: 'codex_cli',
+              },
+            },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
         return Promise.resolve({
           ok: true,
@@ -6338,6 +6363,7 @@ describe('Workflow Detail Entrypoint', () => {
       initialData: {
         dashboardConfig: {
           features: {
+            temporalDashboard: { actionsEnabled: true },
             logStreamingEnabled: true,
             liveLogsSessionTimelineEnabled: true,
           },
@@ -6375,6 +6401,19 @@ describe('Workflow Detail Entrypoint', () => {
               status: 'completed',
               supportsLiveStreaming: false,
               liveStreamStatus: 'ended',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                supportedActions: ['send_follow_up', 'clear_session'],
+                requiresSessionProjection: true,
+                runtimeId: 'codex_cli',
+              },
             },
           }),
         } as Response);
@@ -6462,6 +6501,31 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                supportedActions: ['send_follow_up', 'clear_session'],
+                requiresSessionProjection: true,
+                runtimeId: 'codex_cli',
+              },
+            },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
         return Promise.resolve({
           ok: true,
@@ -6591,6 +6655,31 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         } as Response);
       }
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                supportedActions: ['send_follow_up', 'clear_session'],
+                requiresSessionProjection: true,
+                runtimeId: 'codex_cli',
+              },
+            },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
         return Promise.resolve({
           ok: true,
@@ -6638,6 +6727,82 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
+  });
+
+  it('does not render follow-up or reset session controls when summary capabilities are absent', async () => {
+    // MM-988 / MM-976: one-shot runs fail closed even when runtime is Codex.
+    const oneShotPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'One-shot Codex run',
+      summary: 'Run-backed work',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              interventionCapabilities: {
+                sendFollowUp: false,
+                clearSession: false,
+                supportedActions: [],
+                requiresSessionProjection: false,
+                runtimeId: 'codex_cli',
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={oneShotPayload} />);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/observability-summary'),
+        expect.anything(),
+      );
+    });
+    expect(screen.queryByRole('heading', { name: 'Session Continuity' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send follow-up' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Clear / Reset' })).toBeNull();
+    expect(
+      fetchSpy.mock.calls.some(([url]) => String(url).includes('/artifact-sessions/')),
+    ).toBe(false);
   });
 
   it('keeps polling session continuity until a projection or terminal state exists', () => {

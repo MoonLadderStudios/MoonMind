@@ -368,6 +368,31 @@ def _build_record_session_snapshot(record: object) -> dict[str, object] | None:
         "activeTurnId": getattr(record, "active_turn_id", None),
     }
 
+def _build_intervention_capabilities(
+    *,
+    record: object,
+    session_record: CodexManagedSessionRecord | None,
+    is_terminal: bool,
+) -> dict[str, object]:
+    session_control_available = (
+        session_record is not None
+        and not is_terminal
+        and session_record.status not in {"terminated", "degraded", "failed"}
+    )
+    return {
+        "sendFollowUp": session_control_available,
+        "clearSession": session_control_available,
+        "supportedActions": (
+            ["send_follow_up", "clear_session"] if session_control_available else []
+        ),
+        "requiresSessionProjection": session_control_available,
+        "runtimeId": (
+            session_record.runtime_id
+            if session_record is not None
+            else getattr(record, "runtime_id", None)
+        ),
+    }
+
 def _iter_spool_chunks(workspace_path: str | None) -> Iterator[dict[str, object]]:
     if not workspace_path:
         return
@@ -1167,6 +1192,11 @@ async def get_observability_summary(
         base["supportsLiveStreaming"] = supports_live
         base["liveStreamStatus"] = live_stream_status
         base["sessionSnapshot"] = _build_session_snapshot(session_record) or _build_record_session_snapshot(record)
+        base["interventionCapabilities"] = _build_intervention_capabilities(
+            record=record,
+            session_record=session_record,
+            is_terminal=is_terminal,
+        )
         return {"summary": base}
     finally:
         _emit_livelogs_metric_observe(

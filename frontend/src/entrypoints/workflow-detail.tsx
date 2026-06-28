@@ -918,11 +918,27 @@ const SessionSnapshotSchema = z
   })
   .passthrough();
 
+const InterventionCapabilitiesSchema = z
+  .object({
+    sendFollowUp: z.boolean().default(false),
+    clearSession: z.boolean().default(false),
+    supportedActions: z.array(z.string()).default([]),
+    requiresSessionProjection: z.boolean().default(false),
+    runtimeId: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 const ObservabilitySummarySchema = z.object({
   supportsLiveStreaming: z.boolean().default(false),
   liveStreamStatus: z.string().default('unavailable'),
   status: z.string().default(''),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
+  interventionCapabilities: InterventionCapabilitiesSchema.default({
+    sendFollowUp: false,
+    clearSession: false,
+    supportedActions: [],
+    requiresSessionProjection: false,
+  }),
 });
 
 const RawObservabilityEventSchema = z
@@ -3956,9 +3972,20 @@ function SessionContinuityPanel({
   routes: AgentRunRouteTemplates;
 }) {
   const queryClient = useQueryClient();
-  const sessionId = deriveCodexSessionId(agentRunId, targetRuntime);
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
+  const summaryQuery = useQuery({
+    queryKey: ['session-intervention-capabilities', agentRunId],
+    queryFn: () => fetchObservabilitySummary(apiBase, agentRunId, routes.observabilitySummary),
+    enabled: Boolean(agentRunId),
+    retry: false,
+  });
+  const capabilities = summaryQuery.data?.interventionCapabilities;
+  const canSendFollowUp = capabilities?.sendFollowUp === true;
+  const canClearSession = capabilities?.clearSession === true;
+  const sessionId = canSendFollowUp || canClearSession
+    ? summaryQuery.data?.sessionSnapshot?.sessionId ?? deriveCodexSessionId(agentRunId, targetRuntime)
+    : null;
 
   const projectionQuery = useQuery({
     queryKey: ['agent-run-session-projection', agentRunId, sessionId],
@@ -3999,7 +4026,7 @@ function SessionContinuityPanel({
   if (!sessionId) {
     return null;
   }
-  if (projectionQuery.isLoading) {
+  if (summaryQuery.isLoading || projectionQuery.isLoading) {
     return (
       <section className="stack">
         <h3>Session Continuity</h3>
@@ -4007,11 +4034,11 @@ function SessionContinuityPanel({
       </section>
     );
   }
-  if (projectionQuery.isError) {
+  if (summaryQuery.isError || projectionQuery.isError) {
     return (
       <section className="stack">
         <h3>Session Continuity</h3>
-        <div className="notice error">{(projectionQuery.error as Error).message}</div>
+        <div className="notice error">{((summaryQuery.error || projectionQuery.error) as Error).message}</div>
       </section>
     );
   }
@@ -4111,13 +4138,13 @@ function SessionContinuityPanel({
           onChange={(event) => setFollowUpMessage(event.target.value)}
           rows={3}
           placeholder="Send a follow-up turn to the managed Codex session."
-          disabled={busy || isTerminal}
+          disabled={busy || isTerminal || !canSendFollowUp}
         />
         <div className="actions">
           <button
             type="button"
             className="secondary"
-            disabled={busy || isTerminal || !followUpMessage.trim()}
+            disabled={busy || isTerminal || !canSendFollowUp || !followUpMessage.trim()}
             onClick={submitFollowUp}
           >
             Send follow-up
@@ -4125,7 +4152,7 @@ function SessionContinuityPanel({
           <button
             type="button"
             className="secondary"
-            disabled={busy || isTerminal}
+            disabled={busy || isTerminal || !canClearSession}
             onClick={clearSession}
           >
             Clear / Reset
@@ -6465,7 +6492,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          {detailSubroute === 'steps' && resolvedAgentRunId ? (
+          {detailSubroute === 'steps' && actionsOn && resolvedAgentRunId ? (
             <SessionContinuityPanel
               apiBase={payload.apiBase}
               agentRunId={resolvedAgentRunId}
