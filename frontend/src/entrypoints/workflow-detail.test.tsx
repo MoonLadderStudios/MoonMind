@@ -6445,7 +6445,9 @@ describe('Workflow Detail Entrypoint', () => {
         expect.anything(),
       );
     });
-    expect(screen.queryByRole('heading', { name: 'Session Continuity' })).toBeNull();
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'Session Continuity' })).toBeNull();
+    });
     expect(
       fetchSpy.mock.calls.some(([input]) => String(input).includes('/artifact-sessions/')),
     ).toBe(false);
@@ -6675,6 +6677,9 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Continue with the existing session.' },
     });
+    const summaryCallsBeforeControl = fetchSpy.mock.calls.filter(([input]) =>
+      String(input).includes('/observability-summary'),
+    ).length;
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
 
     await waitFor(() => {
@@ -6693,6 +6698,11 @@ describe('Workflow Detail Entrypoint', () => {
       expect(
         fetchSpy.mock.calls.filter(([input]) => String(input) === executionDetailUrl).length,
       ).toBeGreaterThan(1);
+    });
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input).includes('/observability-summary')).length,
+      ).toBeGreaterThan(summaryCallsBeforeControl);
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));

@@ -3964,10 +3964,16 @@ function SessionContinuityPanel({
 }) {
   const queryClient = useQueryClient();
   const summaryQuery = useQuery({
-    queryKey: ['observability-summary', agentRunId, 'session-controls'],
+    queryKey: ['observability-summary', agentRunId],
     queryFn: () => fetchObservabilitySummary(apiBase, agentRunId, routes.observabilitySummary),
     enabled: !!agentRunId,
     staleTime: 1000 * 10,
+    refetchInterval: (query) => {
+      if (isTerminal || !query.state.data?.sessionSnapshot) {
+        return false;
+      }
+      return SESSION_PROJECTION_POLL_MS;
+    },
     retry: false,
   });
   const summary = summaryQuery.data;
@@ -4005,6 +4011,7 @@ function SessionContinuityPanel({
         ['agent-run-session-projection', agentRunId, sessionId],
         result.projection,
       );
+      void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
       invalidateWorkflowDetail();
       if (result.action === 'send_follow_up') {
         setFollowUpMessage('');
