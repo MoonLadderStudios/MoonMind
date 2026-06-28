@@ -3327,7 +3327,13 @@ async def test_controller_send_turn_maps_reliable_native_markers_and_turn_failur
                         {
                             "kind": "tool_call_started",
                             "text": "Tool call started.",
-                            "metadata": {"toolName": "shell"},
+                            "metadata": {
+                                "toolName": "shell",
+                                "arguments": {"command": "pytest"},
+                                "tags": ["test"],
+                                "empty": {},
+                                "blank": " ",
+                            },
                         },
                         {
                             "kind": "unknown_native_marker",
@@ -3373,6 +3379,11 @@ async def test_controller_send_turn_maps_reliable_native_markers_and_turn_failur
         "reason": "Operator follow-up",
         "failureClass": "permanent",
         "error": "model provider rejected the request",
+    }
+    assert emitted[3].kwargs["metadata"] == {
+        "toolName": "shell",
+        "arguments": {"command": "pytest"},
+        "tags": ["test"],
     }
 
 @pytest.mark.asyncio

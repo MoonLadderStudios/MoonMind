@@ -327,6 +327,11 @@ class ManagedSessionObservabilityBridge:
         for key, value in metadata.items():
             if not isinstance(key, str) or not key.strip():
                 continue
-            if isinstance(value, (str, int, float, bool)) and str(value).strip():
-                compact[key] = value
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, (Mapping, list)) and not value:
+                continue
+            compact[key] = value
         return compact
