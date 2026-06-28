@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import asyncio
+import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -10,7 +12,12 @@ from typing import Any
 import httpx
 import pytest
 
-from moonmind.omnigent.execute import InMemoryOmnigentRunStore, run_omnigent_execution
+from moonmind.omnigent.execute import (
+    InMemoryOmnigentRunStore,
+    OmnigentExecutionError,
+    OmnigentRunRecord,
+    run_omnigent_execution,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -175,12 +182,183 @@ async def test_fake_server_managed_workspace_validation_stops_before_transport(
     assert server.created_sessions == []
 
 
+async def test_fake_server_managed_empty_workspace_must_be_explicit() -> None:
+    server = FakeOmnigentServer(scenario="success")
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.fake",
+        transport=httpx.MockTransport(server.handle),
+    )
+    implicit_empty = _request(workspaceSpec={}, parameters={"omnigent": {}})
+
+    with pytest.raises(ValueError, match="allowEmptyWorkspace"):
+        await run_omnigent_execution(
+            implicit_empty,
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.fake",
+            },
+            client=client,
+            run_store=InMemoryOmnigentRunStore(),
+        )
+
+    explicit_empty = _request(
+        workspaceSpec={},
+        parameters={
+            "omnigent": {
+                "agent": {"agentId": "ag_codex"},
+                "session": {"hostType": "managed", "allowEmptyWorkspace": True},
+                "prompt": {"text": "empty workspace"},
+            }
+        },
+    )
+
+    result = await run_omnigent_execution(
+        explicit_empty,
+        env={"OMNIGENT_ENABLED": "1", "OMNIGENT_SERVER_URL": "https://omnigent.fake"},
+        client=client,
+        run_store=InMemoryOmnigentRunStore(),
+    )
+
+    assert result.failure_class is None
+    assert "workspace" not in server.created_sessions[-1]
+
+
+async def test_fake_server_idempotent_retry_crash_windows_and_digest_conflict() -> None:
+    request = _request()
+    prompt_digest = _prompt_digest("run fake server proof")
+    server = FakeOmnigentServer(scenario="success")
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.fake",
+        transport=httpx.MockTransport(server.handle),
+    )
+    store = InMemoryOmnigentRunStore()
+    store.put(
+        OmnigentRunRecord(
+            idempotency_key=request.idempotency_key,
+            session_id=server.session_id,
+            prompt_digest=prompt_digest,
+        )
+    )
+
+    after_create = await run_omnigent_execution(
+        request,
+        env={"OMNIGENT_ENABLED": "1", "OMNIGENT_SERVER_URL": "https://omnigent.fake"},
+        client=client,
+        run_store=store,
+    )
+
+    assert after_create.summary == "fake server completed"
+    assert server.created_sessions == []
+    assert server.posted_messages == 1
+
+    after_first_message_store = InMemoryOmnigentRunStore()
+    after_first_message_store.put(
+        OmnigentRunRecord(
+            idempotency_key=request.idempotency_key,
+            session_id=server.session_id,
+            prompt_digest=prompt_digest,
+            first_message_state="posted",
+        )
+    )
+
+    after_first_message = await run_omnigent_execution(
+        request,
+        env={"OMNIGENT_ENABLED": "1", "OMNIGENT_SERVER_URL": "https://omnigent.fake"},
+        client=client,
+        run_store=after_first_message_store,
+    )
+
+    assert after_first_message.summary == "fake server completed"
+    assert server.posted_messages == 1
+
+    conflict_store = InMemoryOmnigentRunStore()
+    conflict_store.put(
+        OmnigentRunRecord(
+            idempotency_key=request.idempotency_key,
+            session_id=server.session_id,
+            prompt_digest=_prompt_digest("different prompt"),
+        )
+    )
+
+    with pytest.raises(OmnigentExecutionError, match="Conflicting"):
+        await run_omnigent_execution(
+            request,
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.fake",
+            },
+            client=client,
+            run_store=conflict_store,
+        )
+
+
+async def test_fake_server_ambiguous_posting_reconciliation_fails_closed() -> None:
+    request = _request()
+    server = FakeOmnigentServer(scenario="success")
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.fake",
+        transport=httpx.MockTransport(server.handle),
+    )
+    store = InMemoryOmnigentRunStore()
+    store.put(
+        OmnigentRunRecord(
+            idempotency_key=request.idempotency_key,
+            session_id=server.session_id,
+            prompt_digest=_prompt_digest("run fake server proof"),
+            first_message_state="posting",
+        )
+    )
+
+    with pytest.raises(OmnigentExecutionError, match="failed closed") as exc:
+        await run_omnigent_execution(
+            request,
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.fake",
+            },
+            client=client,
+            run_store=store,
+        )
+
+    assert exc.value.failure_class == "integration_error"
+    assert server.posted_messages == 0
+
+
+async def test_fake_server_cancellation_interrupts_then_stops_session() -> None:
+    stream = HangingSseStream()
+    server = FakeOmnigentServer(scenario="success", stream=stream)
+    client = OmnigentHttpClient(
+        base_url="https://omnigent.fake",
+        transport=httpx.MockTransport(server.handle),
+    )
+    task = asyncio.create_task(
+        run_omnigent_execution(
+            _request(),
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.fake",
+            },
+            client=client,
+            run_store=InMemoryOmnigentRunStore(),
+        )
+    )
+
+    await stream.started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert server.cancel_events == ["interrupt", "stop_session"]
+
+
 @dataclass
 class FakeOmnigentServer:
     scenario: str
+    stream: httpx.AsyncByteStream | None = None
     created_sessions: list[dict[str, Any]] = field(default_factory=list)
     posted_messages: int = 0
     resolved_elicitations: list[str] = field(default_factory=list)
+    cancel_events: list[str] = field(default_factory=list)
     session_id: str = "sess_1"
     prompt_digest: str | None = None
 
@@ -197,6 +375,9 @@ class FakeOmnigentServer:
             return httpx.Response(200, json={"id": self.session_id})
         if request.method == "POST" and path.endswith("/events"):
             payload = _json_body(request)
+            if payload.get("type") in {"interrupt", "stop_session"}:
+                self.cancel_events.append(payload["type"])
+                return httpx.Response(200, json={"ok": True})
             if payload.get("type") == "message":
                 self.posted_messages += 1
                 metadata = payload.get("metadata") or {}
@@ -206,6 +387,12 @@ class FakeOmnigentServer:
         if request.method == "GET" and path == f"/v1/sessions/{self.session_id}/stream":
             if self.scenario == "stream_disconnect":
                 return httpx.Response(503, json={"error": "disconnect"})
+            if self.stream is not None:
+                return httpx.Response(
+                    200,
+                    stream=self.stream,
+                    headers={"content-type": "text/event-stream"},
+                )
             return httpx.Response(
                 200,
                 content="\n".join(self._stream_lines()).encode("utf-8"),
@@ -265,3 +452,17 @@ def _json_body(request: httpx.Request) -> dict[str, Any]:
 
 def _sse(payload: dict[str, Any]) -> str:
     return "data: " + json.dumps(payload)
+
+
+def _prompt_digest(prompt: str) -> str:
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+class HangingSseStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def __aiter__(self):
+        self.started.set()
+        yield b'data: {"type":"status","status":"running"}\n\n'
+        await asyncio.Event().wait()

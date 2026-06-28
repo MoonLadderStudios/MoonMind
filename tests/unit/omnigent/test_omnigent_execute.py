@@ -29,6 +29,7 @@ def _request(**overrides: object) -> AgentExecutionRequest:
             "title": "MM-995 task",
             "omnigent": {
                 "agent": {"agentId": "ag_1"},
+                "session": {"allowEmptyWorkspace": True},
                 "prompt": {"text": "prove the boundary"},
             },
         },

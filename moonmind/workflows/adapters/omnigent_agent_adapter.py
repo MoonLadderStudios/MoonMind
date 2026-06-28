@@ -358,6 +358,12 @@ def _validate_session(session: OmnigentSessionSelection) -> None:
                 "Managed Omnigent sessions reject caller-provided hostId",
                 failure_class="user_error",
             )
+        if not session.workspace and not session.allow_empty_workspace:
+            raise OmnigentAdapterError(
+                "Managed Omnigent sessions require a repository workspace or "
+                "parameters.omnigent.session.allowEmptyWorkspace=true",
+                failure_class="user_error",
+            )
         if session.workspace and not _is_git_url_with_optional_branch(
             session.workspace
         ):
