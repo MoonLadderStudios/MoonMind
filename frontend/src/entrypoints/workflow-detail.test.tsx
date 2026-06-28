@@ -1,12 +1,14 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, act, fireEvent, within } from '@testing-library/react';
+import { screen, waitFor, act, fireEvent, within, cleanup } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import {
   expandRouteTemplate,
+  getSessionCapabilityRefetchInterval,
   getSessionProjectionRefetchInterval,
   normalizeObservabilityEvent,
+  WorkflowDetailEntrypoint,
   WorkflowDetailPage,
 } from './workflow-detail';
 import {
@@ -17,6 +19,12 @@ import {
 import { navigateTo } from '../lib/navigation';
 import { BootPayload } from '../boot/parseBootPayload';
 import { MockInstance } from 'vitest';
+import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+} from '../utils/dashboardPreferences';
+
+declare const __dirname: string;
 
 type MockVirtuosoRow = { id: string };
 type MockVirtuosoProps<Row = MockVirtuosoRow> = {
@@ -47,6 +55,19 @@ vi.mock('react-virtuoso', () => ({
 vi.mock('../lib/navigation', () => ({
   navigateTo: vi.fn(),
 }));
+
+function lastFetchUrl(fetchSpy: MockInstance, prefix: string): string | undefined {
+  return fetchSpy.mock.calls
+    .map(([url]) => String(url))
+    .filter((url) => url.startsWith(prefix))
+    .at(-1);
+}
+
+async function readDashboardCss(): Promise<string> {
+  const { readFileSync } = await import('node:fs');
+  const { resolve } = await import('node:path');
+  return readFileSync(resolve(__dirname, '../styles/dashboard.css'), 'utf8');
+}
 
 // ---------------------------------------------------------------------------
 // Minimal EventSource mock
@@ -315,6 +336,7 @@ describe('Workflow Detail Entrypoint', () => {
     window.history.pushState({}, 'Test', '/workflows/test-123/steps?source=temporal');
     window.sessionStorage.clear();
     window.localStorage.clear();
+    mockDesktopViewport(true);
     fetchSpy = vi.spyOn(window, 'fetch');
     fetchSpy.mockClear();
     vi.mocked(navigateTo).mockReset();
@@ -423,6 +445,642 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  function mockWorkflowWorkspaceFetches({
+    rows,
+  }: {
+    rows?: Array<Record<string, unknown>>;
+  } = {}) {
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-997 selected workflow',
+      summary: 'Workspace shell selected detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: rows ?? [
+              {
+                workflowId: 'test-123',
+                taskId: 'test-123',
+                source: 'temporal',
+                title: 'MM-997 selected workflow',
+                status: 'running',
+                state: 'executing',
+                rawState: 'executing',
+                createdAt: '2026-04-09T00:00:00Z',
+              },
+              {
+                workflowId: 'test-456',
+                taskId: 'test-456',
+                source: 'temporal',
+                title: 'Another workflow',
+                status: 'completed',
+                state: 'completed',
+                rawState: 'completed',
+                createdAt: '2026-04-08T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+  }
+
+  function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
+    const selectedExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-999 selected workflow outside filters',
+      summary: 'Workspace shell selected detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: 'detail-updated-marker',
+      scheduledFor: 'scheduled-marker',
+      actions: {},
+      relatedRuns: [],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: 'test-456',
+                taskId: 'test-456',
+                source: 'temporal',
+                title: 'Filtered workflow',
+                status: 'completed',
+                state: 'completed',
+                rawState: 'completed',
+                createdAt: '2026-04-08T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => selectedExecution,
+      } as Response);
+    });
+  }
+
+  function mockWorkflowWorkspaceSidebarFailure() {
+    const selectedExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-999 detail survives sidebar error',
+      summary: 'Workspace shell selected detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+
+    let sidebarAttempts = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        sidebarAttempts += 1;
+        return Promise.resolve({
+          ok: false,
+          statusText: sidebarAttempts === 1 ? 'Service Unavailable' : 'Gateway Timeout',
+          json: async () => ({}),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => selectedExecution,
+      } as Response);
+    });
+  }
+
+  function mockDesktopViewport(matches = true) {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  }
+
+  it('MM-997 renders desktop workflow detail routes inside the workspace shell by default', async () => {
+    window.history.pushState({}, 'Workspace Detail Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(sidebar).toBeTruthy();
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    const active = await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i });
+    expect(active.getAttribute('aria-current')).toBe('page');
+    expect((await within(sidebar).findByRole('link', { name: /Another workflow/i })).getAttribute('href')).toBe(
+      '/workflows/test-456?source=temporal',
+    );
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
+  });
+
+  it('MM-999 pins the selected workflow above sidebar rows when it is outside the filtered result', async () => {
+    window.history.pushState({}, 'Workspace Pinned Current Test', '/workflows/test-123?source=temporal&stateIn=completed');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetchesWithSelectedOutsideList();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const pinnedGroup = await within(sidebar).findByRole('list', { name: 'Current workflow' });
+    const pinned = within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i });
+    expect(pinned.getAttribute('aria-current')).toBe('page');
+    expect(pinned.getAttribute('data-pinned')).toBe('true');
+    expect(within(pinned).getByLabelText('executing')).toBeTruthy();
+    expect(within(pinned).getByText('scheduled-marker')).toBeTruthy();
+    expect(within(pinned).queryByText('detail-updated-marker')).toBeNull();
+    expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+  });
+
+  it('MM-999 does not show a pinned current row when the selected workflow is in the normal sidebar list', async () => {
+    window.history.pushState({}, 'Workspace No Pinned Current Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).queryByRole('list', { name: 'Current workflow' })).toBeNull();
+    expect((await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).getAttribute('aria-current')).toBe(
+      'page',
+    );
+  });
+
+  it('MM-999 keeps detail visible and retries only sidebar data after a recoverable sidebar error', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Error Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceSidebarFailure();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByText('Workflow navigation is unavailable.')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+
+    fireEvent.click(within(sidebar).getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      const sidebarFetches = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/executions?'));
+      expect(sidebarFetches.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+  });
+
+  it('MM-997 translates workspace sidebar limit state to the executions API page size', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Query Test',
+      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2&selectedWorkflowId=test-123&sort=status&unsafe=1',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
+      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=10',
+    );
+  });
+
+  it('MM-1002 keeps sidebar API and full-list navigation within allowlisted workflow context', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Sidebar Security Test',
+      '/workflows/test-123?source=temporal&limit=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira&selectedWorkflowId=test-123&sort=status&token=secret&unsafe=1',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
+      '/api/executions?source=temporal&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira&pageSize=10',
+    );
+    const anotherWorkflow = await within(sidebar).findByRole('link', { name: /Another workflow/i });
+    expect(anotherWorkflow.getAttribute('href')).toBe(
+      '/workflows/test-456?source=temporal&limit=10&nextPageToken=page-2&repoContains=moon%2Frepo&integration=jira',
+    );
+    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
+    expect(expandLink.getAttribute('href')).toBe(
+      '/workflows?limit=10&repoContains=moon%2Frepo&integration=jira&returnFromWorkflowDetail=1',
+    );
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('selectedWorkflowId=');
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('sort=');
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).not.toContain('token=');
+    expect(expandLink.getAttribute('href')).not.toContain('token=');
+  });
+
+  it('preserves API-style pageSize state when fetching the workspace sidebar', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Page Size Test',
+      '/workflows/test-123?source=temporal&pageSize=100&nextPageToken=page-2&selectedWorkflowId=test-123&sort=status&unsafe=1',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe(
+      '/api/executions?source=temporal&nextPageToken=page-2&pageSize=100',
+    );
+  });
+
+  it('MM-1000 persists collapsed sidebar state across desktop detail reloads without changing the route', async () => {
+    window.history.pushState({}, 'Workspace Collapse Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const closeSidebar = await screen.findByRole('button', { name: 'Close sidebar' });
+    fireEvent.click(closeSidebar);
+
+    const openSidebar = await screen.findByRole('button', { name: 'Open workflow sidebar' });
+    expect(openSidebar).toBeTruthy();
+    expect(document.activeElement).toBe(openSidebar);
+    expect(window.location.pathname).toBe('/workflows/test-123');
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(true);
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+  });
+
+  it('MM-1000 opens desktop detail routes by default unless the sidebar collapse preference is persisted', async () => {
+    window.history.pushState({}, 'Workspace Reload Default Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+
+    cleanup();
+    window.localStorage.clear();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+  });
+
+  it('MM-1000 restores the sidebar from persisted collapse without refetching selected detail data', async () => {
+    window.history.pushState({}, 'Workspace Reopen Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: Record<string, unknown> }).dashboardConfig),
+              pollIntervalsMs: { detail: 60000, list: 60000 },
+            },
+          },
+        }}
+      />,
+    );
+
+    await screen.findByRole('button', { name: 'Open workflow sidebar' });
+    await screen.findByRole('heading', { name: 'Workflow Detail' });
+    const detailCallsBeforeOpen = fetchSpy.mock.calls.filter(
+      ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+    ).length;
+    fireEvent.click(screen.getByRole('button', { name: 'Open workflow sidebar' }));
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close sidebar' }));
+    expect(sidebar).toBeTruthy();
+    expect(readDashboardPreferences().workflowWorkspaceSidebarCollapsed).toBe(false);
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([input]) => String(input) === '/api/executions/test-123?source=temporal',
+      ).length,
+    ).toBe(detailCallsBeforeOpen);
+  });
+
+  it('MM-1000 keeps persisted collapsed state out of mobile standalone detail routing', async () => {
+    window.history.pushState({}, 'Workspace Mobile Collapse Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(false);
+    mockWorkflowWorkspaceFetches();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+  });
+
+  it('MM-1000 expands to the full list with preserved context and focusable list target', async () => {
+    window.history.pushState(
+      {},
+      'Workspace Expand Test',
+      '/workflows/test-123?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=10&nextPageToken=page-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+    );
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const expand = within(sidebar).getByRole('link', { name: 'Expand to full list' });
+    expect(expand.getAttribute('href')).toBe(
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=10&returnFromWorkflowDetail=1',
+    );
+    expect(expand.getAttribute('href')).not.toContain('source=');
+    expect(expand.getAttribute('href')).not.toContain('nextPageToken=');
+    expect(expand.getAttribute('href')).not.toContain('sort=');
+    expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
+    expect(expand.getAttribute('href')).not.toContain('unsafe=');
+    expect(expand.getAttribute('class') || '').toContain('button');
+  });
+
+  it('MM-1002 renders sidebar titles, repositories, runtimes, and statuses as React text', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Text Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches({
+      rows: [
+        {
+          workflowId: 'test-123',
+          taskId: 'test-123',
+          title: '<img src=x onerror=alert(1)>',
+          status: '<script>alert(1)</script>',
+          state: '<script>alert(1)</script>',
+          rawState: '<script>alert(1)</script>',
+          repository: '<b>owner/repo</b>',
+          targetRuntime: 'codex_cli',
+          createdAt: '2026-04-09T00:00:00Z',
+        },
+      ],
+    });
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByText('<img src=x onerror=alert(1)>')).toBeTruthy();
+    expect(within(sidebar).getByText('<b>owner/repo</b>')).toBeTruthy();
+    expect(within(sidebar).getByText('Codex CLI')).toBeTruthy();
+    expect(within(sidebar).getAllByText('<script>alert(1)</script>').length).toBeGreaterThan(0);
+    expect(within(sidebar).queryByRole('img')).toBeNull();
+    expect(sidebar.querySelector('script')).toBeNull();
+  });
+
+  it('MM-1005 expands to the plain workflow list from the desktop workspace when no list context exists', async () => {
+    window.history.pushState({}, 'Workspace Plain Expand Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
+      '/workflows',
+    );
+  });
+
+  it('MM-1000 uses a single-column collapsed workspace layout and reduced-motion guard', async () => {
+    window.history.pushState({}, 'Workspace Motion Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+    updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+
+    const { container } = renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('button', { name: 'Open workflow sidebar' })).toBeTruthy();
+    expect(container.querySelector('.workflow-workspace-shell')?.getAttribute('data-sidebar-collapsed')).toBe(
+      'true',
+    );
+
+    const dashboardCss = await readDashboardCss();
+    expect(dashboardCss).toMatch(
+      /\.workflow-workspace-shell\[data-sidebar-collapsed="true"\]\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);/,
+    );
+    expect(dashboardCss).toMatch(
+      /@media \(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*\.workflow-workspace-shell,[\s\S]*\.workflow-workspace-detail[\s\S]*transition:\s*none !important;[\s\S]*animation:\s*none !important;[\s\S]*transform:\s*none !important;/,
+    );
+  });
+
+  it('MM-997 keeps workflow detail standalone when the workflow list is disabled', async () => {
+    window.history.pushState({}, 'Workspace List Disabled Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              pollIntervalsMs: { detail: 1 },
+              features: {
+                temporalDashboard: {
+                  listEnabled: false,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
+  });
+
+  it.each([
+    ['/workflows/test-123/steps?source=temporal', 'Workflow Steps'],
+    ['/workflows/test-123/artifacts?source=temporal', 'Workflow Artifacts'],
+    ['/workflows/test-123/runs?source=temporal', 'Execution History'],
+  ])('MM-997 keeps %s inside the desktop workspace shell', async (path, heading) => {
+    window.history.pushState({}, 'Workspace Subroute Test', path);
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('complementary', { name: 'Workflow navigation' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: heading })).toBeTruthy();
+  });
+
+  it('MM-997 disables only the desktop workspace shell when the runtime flag is false', async () => {
+    window.history.pushState({}, 'Workspace Disabled Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              pollIntervalsMs: { detail: 1 },
+              features: {
+                temporalDashboard: {
+                  workspaceShellEnabled: false,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+  });
+
+  it('MM-997 keeps mobile detail navigation standalone even when the shell flag is enabled', async () => {
+    window.history.pushState({}, 'Workspace Mobile Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(false);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+  });
+
+  it('MM-1001 keeps mobile direct detail links standalone with no sidebar control leakage', async () => {
+    window.history.pushState({}, 'Workspace Mobile Direct Detail Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(false);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              ...((stepsPayload.initialData as { dashboardConfig: unknown }).dashboardConfig as Record<string, unknown>),
+              features: {
+                temporalDashboard: {
+                  workspaceShellEnabled: true,
+                  listEnabled: true,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Back to workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+    expect(document.querySelector('.workflow-workspace-sidebar')).toBeNull();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
+  });
+
   it('MM-801 renders Overview as a concise summary with route preview cards', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();
@@ -444,6 +1102,41 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByRole('heading', { name: 'Timeline' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
     });
+  });
+
+  it('reconstructs the full workflow list from allowlisted detail-route context (MM-998, MM-975)', async () => {
+    window.history.pushState(
+      {},
+      'Detail Context Test',
+      '/workflows/test-123?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+    );
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText('Focused route summary');
+    const expandLink = screen.getByRole('link', { name: 'Expand to full list' });
+    expect(expandLink.getAttribute('href')).toBe(
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=25&returnFromWorkflowDetail=1',
+    );
+    expect(expandLink.getAttribute('href')).not.toContain('source=');
+    expect(expandLink.getAttribute('href')).not.toContain('sort=');
+    expect(expandLink.getAttribute('href')).not.toContain('nextPageToken=');
+    expect(expandLink.getAttribute('href')).not.toContain('selectedWorkflowId=');
+    expect(expandLink.getAttribute('href')).not.toContain('unsafe=');
+    expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe(
+      '/workflows/test-123/steps?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+    );
+  });
+
+  it('expands to plain workflow list when no preserved list context exists (MM-998, MM-975)', async () => {
+    window.history.pushState({}, 'Plain Detail Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText('Focused route summary');
+    expect(screen.getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe('/workflows');
   });
 
   it('renders recovery evidence from the failed step execution detail payload', async () => {
@@ -2535,6 +3228,10 @@ describe('Workflow Detail Entrypoint', () => {
     expect(
       window.sessionStorage.getItem('moonmind.temporalTaskEditing.notice'),
     ).toBeNull();
+    expect(
+      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('status')).toBeTruthy();
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -4556,11 +5253,7 @@ describe('Workflow Detail Entrypoint', () => {
   });
 
   it('keeps remediation panels accessible and contained in dashboard CSS', async () => {
-    const { readFileSync } = await import('node:fs');
-    const dashboardCss = readFileSync(
-      `${process.cwd()}/frontend/src/styles/dashboard.css`,
-      'utf8',
-    );
+    const dashboardCss = await readDashboardCss();
 
     expect(dashboardCss).toMatch(/\.td-remediation-region:focus-within\s*\{[^}]*outline:\s*2px solid/s);
     expect(dashboardCss).toMatch(/\.td-remediation-list\s+\.card\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s);
@@ -5213,7 +5906,6 @@ describe('Workflow Detail Entrypoint', () => {
 
     const menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Bypass Dependencies' }));
-    confirmWorkflowDialog('Bypass dependencies');
 
     await waitFor(() => {
       expect(signalBodies).toEqual([
@@ -6279,6 +6971,40 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-2',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events: [], truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
         return Promise.resolve({
           ok: true,
@@ -6340,12 +7066,100 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('does not derive Session Continuity controls from Codex runtime names without a session snapshot', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex one-shot task',
+      summary: 'One-shot managed run',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: null,
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: true,
+                cancelSession: true,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events: [], truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/observability-summary'),
+        expect.anything(),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'Session Continuity' })).toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([input]) => String(input).includes('/artifact-sessions/')),
+    ).toBe(false);
+  });
+
   it('explains Live Logs as timeline history and Session Continuity as durable drill-down evidence', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: {
         dashboardConfig: {
           features: {
+            temporalDashboard: { actionsEnabled: true },
             logStreamingEnabled: true,
             liveLogsSessionTimelineEnabled: true,
           },
@@ -6383,6 +7197,19 @@ describe('Workflow Detail Entrypoint', () => {
               status: 'completed',
               supportsLiveStreaming: false,
               liveStreamStatus: 'ended',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-2',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: false,
+                clearSession: false,
+                interruptTurn: false,
+                cancelSession: false,
+              },
             },
           }),
         } as Response);
@@ -6470,6 +7297,31 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
         return Promise.resolve({
           ok: true,
@@ -6526,6 +7378,9 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Continue with the existing session.' },
     });
+    const summaryCallsBeforeControl = fetchSpy.mock.calls.filter(([input]) =>
+      String(input).includes('/observability-summary'),
+    ).length;
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
 
     await waitFor(() => {
@@ -6545,6 +7400,11 @@ describe('Workflow Detail Entrypoint', () => {
         fetchSpy.mock.calls.filter(([input]) => String(input) === executionDetailUrl).length,
       ).toBeGreaterThan(1);
     });
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input).includes('/observability-summary')).length,
+      ).toBeGreaterThan(summaryCallsBeforeControl);
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
 
@@ -6561,7 +7421,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('reuses the existing execution cancel route from the Session Continuity panel', async () => {
+  it('routes active-turn interrupt and cancel controls through the agent-run session control API', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -6587,15 +7447,48 @@ describe('Workflow Detail Entrypoint', () => {
       },
     };
 
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith('/cancel')) {
+      if (url.includes('/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            ...mockExecution,
-            state: 'canceled',
-            rawState: 'canceled',
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: 'turn-1',
+              },
+              interventionCapabilities: {
+                sendFollowUp: false,
+                clearSession: true,
+                interruptTurn: true,
+                cancelSession: true,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            action: JSON.parse(String(init?.body || '{}')).action,
+            projection: {
+              agent_run_id: 'wf-task-1',
+              session_id: 'sess:wf-task-1:codex_cli',
+              session_epoch: 1,
+              grouped_artifacts: [],
+              latest_summary_ref: null,
+              latest_checkpoint_ref: null,
+              latest_control_event_ref: { artifact_id: 'art-control' },
+              latest_reset_boundary_ref: null,
+            },
           }),
         } as Response);
       }
@@ -6631,17 +7524,29 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Execution' }));
-    confirmWorkflowDialog('Cancel workflow');
+    fireEvent.click(await screen.findByRole('button', { name: 'Interrupt turn' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/executions/test-123/cancel',
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
-            action: 'cancel',
-            graceful: true,
+            action: 'interrupt_turn',
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel session' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'cancel_session',
           }),
         }),
       );
@@ -6653,6 +7558,13 @@ describe('Workflow Detail Entrypoint', () => {
     expect(getSessionProjectionRefetchInterval(false, true, false)).toBe(false);
     expect(getSessionProjectionRefetchInterval(false, false, true)).toBe(false);
     expect(getSessionProjectionRefetchInterval(true, false, false)).toBe(false);
+  });
+
+  it('keeps polling session capabilities until a managed session is visible or terminal', () => {
+    expect(getSessionCapabilityRefetchInterval(false, false, false)).toBe(5000);
+    expect(getSessionCapabilityRefetchInterval(false, true, false)).toBe(false);
+    expect(getSessionCapabilityRefetchInterval(false, false, true)).toBe(false);
+    expect(getSessionCapabilityRefetchInterval(true, false, false)).toBe(false);
   });
 });
 
@@ -7129,14 +8041,18 @@ describe('LiveLogsPanel', () => {
     // Wait until the initial execute fetch finishes so task is loaded
     await waitFor(() => expect(screen.getByText('Active task')).toBeTruthy());
 
-    // Before click, it shouldn't have fetched the summary
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+    const summaryCallsBeforeExpand = fetchSpy.mock.calls.filter(([input]) =>
+      String(input).includes('/observability-summary'),
+    ).length;
+    expect(summaryCallsBeforeExpand).toBe(0);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    // Now it should fetch
+    // Now the Live Logs panel should perform its own summary fetch.
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input).includes('/observability-summary')).length,
+      ).toBeGreaterThan(summaryCallsBeforeExpand);
     });
   });
 
@@ -7423,6 +8339,316 @@ describe('LiveLogsPanel', () => {
     const publicationRow = screen.getByText(/Session summary artifact published/).closest('div');
     expect(approvalRow?.getAttribute('data-row-type')).toBe('approval');
     expect(publicationRow?.getAttribute('data-row-type')).toBe('publication');
+  });
+
+  it('renders standardized chat timeline event families with distinct treatments', async () => {
+    const events = [
+      {
+        sequence: 1,
+        timestamp: '2026-04-08T00:00:01Z',
+        stream: 'session',
+        kind: 'user_message_submitted',
+        text: 'User asked for implementation.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 2,
+        timestamp: '2026-04-08T00:00:02Z',
+        stream: 'session',
+        kind: 'assistant_message_delta',
+        text: 'Assistant draft output.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 3,
+        timestamp: '2026-04-08T00:00:03Z',
+        stream: 'session',
+        kind: 'assistant_message_completed',
+        text: 'Assistant completed output.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 4,
+        timestamp: '2026-04-08T00:00:04Z',
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'Assistant full message.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 5,
+        timestamp: '2026-04-08T00:00:05Z',
+        stream: 'session',
+        kind: 'tool_call_started',
+        text: 'Tool call started.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 6,
+        timestamp: '2026-04-08T00:00:06Z',
+        stream: 'session',
+        kind: 'tool_call_output',
+        text: 'Tool call output.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 7,
+        timestamp: '2026-04-08T00:00:07Z',
+        stream: 'session',
+        kind: 'tool_call_completed',
+        text: 'Tool call completed.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 8,
+        timestamp: '2026-04-08T00:00:08Z',
+        stream: 'session',
+        kind: 'tool_call_failed',
+        text: 'Tool call failed.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 9,
+        timestamp: '2026-04-08T00:00:09Z',
+        stream: 'session',
+        kind: 'intervention_requested',
+        text: 'Operator intervention requested.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 10,
+        timestamp: '2026-04-08T00:00:10Z',
+        stream: 'session',
+        kind: 'turn_started',
+        text: 'Turn started.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 11,
+        timestamp: '2026-04-08T00:00:11Z',
+        stream: 'session',
+        kind: 'turn_completed',
+        text: 'Turn completed.',
+        turn_id: 'turn-1',
+      },
+      {
+        sequence: 12,
+        timestamp: '2026-04-08T00:00:12Z',
+        stream: 'session',
+        kind: 'turn_failed',
+        text: 'Turn failed.',
+        turn_id: 'turn-2',
+      },
+      {
+        sequence: 13,
+        timestamp: '2026-04-08T00:00:13Z',
+        stream: 'session',
+        kind: 'turn_interrupted',
+        text: 'Turn interrupted.',
+        turn_id: 'turn-3',
+      },
+    ];
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'completed',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'ended',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events, truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => terminalExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByText('User asked for implementation.')).toBeTruthy();
+      expect(screen.getByText('Assistant full message.')).toBeTruthy();
+      expect(screen.getByText('Tool call failed.')).toBeTruthy();
+      expect(screen.getByText('Operator intervention requested.')).toBeTruthy();
+      expect(screen.getByText('Turn interrupted.')).toBeTruthy();
+    });
+
+    const expectedRowTypes = new Map([
+      ['user_message_submitted', 'user'],
+      ['assistant_message_delta', 'assistant'],
+      ['assistant_message_completed', 'assistant'],
+      ['assistant_message', 'assistant'],
+      ['tool_call_started', 'tool'],
+      ['tool_call_output', 'tool'],
+      ['tool_call_completed', 'tool'],
+      ['tool_call_failed', 'tool'],
+      ['intervention_requested', 'approval'],
+      ['turn_started', 'turn'],
+      ['turn_completed', 'turn'],
+      ['turn_failed', 'turn-failure'],
+      ['turn_interrupted', 'turn-failure'],
+    ]);
+
+    for (const [kind, rowType] of expectedRowTypes) {
+      expect(document.querySelector(`[data-kind="${kind}"]`)?.getAttribute('data-row-type')).toBe(rowType);
+    }
+    expect(screen.getByText('User turn')).toBeTruthy();
+    expect(screen.getAllByText('Assistant output')).toHaveLength(3);
+    expect(screen.getByText('Tool call')).toBeTruthy();
+    expect(screen.getByText('Tool output')).toBeTruthy();
+    expect(screen.getByText('Tool completed')).toBeTruthy();
+    expect(screen.getByText('Tool failed')).toBeTruthy();
+    expect(screen.getByText('Operator intervention')).toBeTruthy();
+    expect(screen.getByText('Turn started')).toBeTruthy();
+    expect(screen.getByText('Turn completed')).toBeTruthy();
+    expect(screen.getByText('Turn failed')).toBeTruthy();
+    expect(screen.getByText('Turn interrupted')).toBeTruthy();
+  });
+
+  it('MM-1014 renders chat session blocks, updates paired rows, streams live rows through the same projection, and exposes raw timeline', async () => {
+    const events = [
+      {
+        sequence: 1,
+        timestamp: '2026-04-08T00:00:01Z',
+        stream: 'session',
+        kind: 'user_message_submitted',
+        text: 'Please inspect the run.',
+        turn_id: 'turn-mm-1014',
+      },
+      {
+        sequence: 2,
+        timestamp: '2026-04-08T00:00:02Z',
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'I will inspect the run.',
+        turn_id: 'turn-mm-1014',
+      },
+      {
+        sequence: 3,
+        timestamp: '2026-04-08T00:00:03Z',
+        stream: 'session',
+        kind: 'tool_call_started',
+        text: 'exec_command: rg -n MM-1014',
+        turn_id: 'turn-mm-1014',
+        metadata: { toolCallId: 'tool-1', toolName: 'exec_command' },
+      },
+      {
+        sequence: 4,
+        timestamp: '2026-04-08T00:00:04Z',
+        stream: 'session',
+        kind: 'tool_call_output',
+        text: 'MM-1014 evidence line',
+        turn_id: 'turn-mm-1014',
+        metadata: { toolCallId: 'tool-1' },
+      },
+      {
+        sequence: 5,
+        timestamp: '2026-04-08T00:00:05Z',
+        stream: 'session',
+        kind: 'approval_requested',
+        text: 'Approval requested for command execution.',
+        turn_id: 'turn-mm-1014',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 6,
+        timestamp: '2026-04-08T00:00:06Z',
+        stream: 'session',
+        kind: 'approval_resolved',
+        text: 'Approval resolved by operator.',
+        turn_id: 'turn-mm-1014',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 7,
+        timestamp: '2026-04-08T00:00:07Z',
+        stream: 'session',
+        kind: 'session_cleared',
+        text: 'Session cleared before the next turn.',
+        metadata: { controlEventRef: 'art-control' },
+      },
+    ];
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: true,
+              liveStreamStatus: 'available',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events, truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+      expect(screen.getByText('Please inspect the run.')).toBeTruthy();
+      expect(screen.getByText('I will inspect the run.')).toBeTruthy();
+      expect(screen.getByText('exec_command')).toBeTruthy();
+      expect(screen.getByText('MM-1014 evidence line')).toBeTruthy();
+      expect(screen.getByText('Approval requested for command execution.')).toBeTruthy();
+      expect(screen.getByText('Approval resolved by operator.')).toBeTruthy();
+      expect(screen.getByText('Session cleared before the next turn.')).toBeTruthy();
+    });
+
+    expect(screen.getByText('Raw Timeline')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+    fireEvent.click(screen.getByText('Raw Timeline'));
+    await waitFor(() => expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy());
+
+    await waitForEventSourceInstance();
+    const es = MockEventSource.instances.at(-1)!;
+    act(() => es.triggerOpen());
+    act(() =>
+      es.triggerLogChunk({
+        sequence: 8,
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'Live assistant update.',
+        turn_id: 'turn-mm-1014-live',
+      }),
+    );
+
+    await waitFor(() => expect(screen.getAllByText('Live assistant update.').length).toBeGreaterThan(0));
+    expect(document.querySelectorAll('[data-chat-block-type="approval"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-chat-block-type="tool"]')).toHaveLength(1);
   });
 
   it('renders inline artifact links for publication and clear-reset timeline rows', async () => {

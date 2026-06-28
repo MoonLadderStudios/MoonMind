@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, call, patch
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -18,6 +18,7 @@ from temporalio.client import WorkflowExecutionDescription, WorkflowExecutionSta
 from api_service.db.models import (
     Base,
     MoonMindWorkflowState,
+    SettingsOverride,
     TemporalArtifact,
     TemporalArtifactEncryption,
     TemporalArtifactRedactionLevel,
@@ -3942,6 +3943,77 @@ async def test_signal_pause_allows_awaiting_slot(tmp_path, mock_client_adapter):
         assert paused.state is MoonMindWorkflowState.AWAITING_SLOT
         assert paused.paused is True
         assert paused.memo["waiting_reason"] == "operator_paused"
+
+
+@pytest.mark.asyncio
+async def test_signal_pause_allows_waiting_on_dependencies(
+    tmp_path, mock_client_adapter
+):
+    """MM-978: AWAITING dependency waits accept lifecycle Pause."""
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+        service._client_adapter = mock_client_adapter
+
+        created = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title=None,
+            input_artifact_ref=None,
+            plan_artifact_ref="artifact://plan/1",
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters=_valid_user_workflow_parameters(),
+            idempotency_key=None,
+        )
+        source = await service._require_source_execution(created.workflow_id)
+        service._set_state(source, MoonMindWorkflowState.WAITING_ON_DEPENDENCIES)
+        await session.commit()
+
+        await service.signal_execution(
+            workflow_id=created.workflow_id,
+            signal_name="Pause",
+            payload={},
+            payload_artifact_ref=None,
+        )
+
+        mock_client_adapter.update_workflow.assert_awaited_once_with(
+            created.workflow_id,
+            "Pause",
+        )
+        paused = await service.describe_execution(created.workflow_id)
+        assert paused.state is MoonMindWorkflowState.WAITING_ON_DEPENDENCIES
+        assert paused.paused is True
+        assert paused.memo["waiting_reason"] == "operator_paused"
+
+
+@pytest.mark.asyncio
+async def test_check_system_paused_reads_persisted_worker_pause_state(tmp_path):
+    """MM-978: new execution creation uses persisted system pause state."""
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        assert await service.check_system_paused() is False
+
+        subject_id = UUID("00000000-0000-0000-0000-000000000000")
+        session.add(
+            SettingsOverride(
+                scope="workspace",
+                workspace_id=subject_id,
+                user_id=subject_id,
+                key="operations.workers.pause_state",
+                value_json={
+                    "workersPaused": True,
+                    "mode": "drain",
+                    "reason": "MM-978 maintenance",
+                    "version": 1,
+                },
+                schema_version=1,
+                value_version=1,
+            )
+        )
+        await session.commit()
+
+        assert await service.check_system_paused() is True
 
 
 @pytest.mark.asyncio

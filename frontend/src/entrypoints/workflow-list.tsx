@@ -8,6 +8,10 @@ import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
+  WORKFLOW_LIST_CONTEXT_RETURN_PARAM,
+  workflowDetailHref,
+} from '../lib/workflowListContext';
+import {
   TOGGLEABLE_WORKFLOW_LIST_COLUMNS,
   readDashboardPreferences,
   resetDashboardPreferences,
@@ -99,7 +103,7 @@ type TableColumnDef = {
 const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'title', label: 'Workflow', sortable: true, colClassName: 'queue-table-column-workflow' },
   { field: 'status', label: 'Status', sortable: true, colClassName: 'queue-table-column-status' },
-  { field: 'nextAction', label: 'Next action', sortable: false, colClassName: 'queue-table-column-next-action' },
+  { field: 'progress', label: 'Progress', sortable: false, colClassName: 'queue-table-column-progress' },
   { field: 'repository', label: 'Repository', sortable: true, colClassName: 'queue-table-column-repository' },
   { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
@@ -199,6 +203,23 @@ const ExecutionRowSchema = z
     dependsOn: z.array(z.string()).optional(),
     blockedOnDependencies: z.boolean().optional(),
     attentionRequired: z.boolean().optional(),
+    progress: z
+      .object({
+        total: z.number().nullable().optional(),
+        pending: z.number().nullable().optional(),
+        ready: z.number().nullable().optional(),
+        running: z.number().nullable().optional(),
+        awaitingExternal: z.number().nullable().optional(),
+        reviewing: z.number().nullable().optional(),
+        succeeded: z.number().nullable().optional(),
+        failed: z.number().nullable().optional(),
+        skipped: z.number().nullable().optional(),
+        canceled: z.number().nullable().optional(),
+        currentStepTitle: z.string().nullable().optional(),
+        updatedAt: z.string().nullable().optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -282,20 +303,12 @@ function interventionListSummary(row: ExecutionRow): string {
   return '';
 }
 
-// Next-action signals for the scan-first status area. Reuses the dependency and
-// intervention summaries and falls back to a terminal/waiting reason so operators
-// can see what needs attention without opening the workflow.
-function nextActionItems(row: ExecutionRow): string[] {
+function statusSupplementItems(row: ExecutionRow): string[] {
   const items: string[] = [];
   const intervention = interventionListSummary(row);
   if (intervention) items.push(intervention);
   const deps = dependencyListSummary(row);
   if (deps) items.push(deps);
-  if (items.length === 0) {
-    const state = String(row.rawState || row.state || row.status || '').toLowerCase();
-    if (state === 'failed') items.push('Failed — needs review');
-    else if (state === 'awaiting_external') items.push('Waiting on external response');
-  }
   return items;
 }
 
@@ -312,6 +325,31 @@ function laterTimestamp(preferred: string | null | undefined, fallback: string):
   if (Number.isNaN(preferredMs)) return fallback;
   if (Number.isNaN(fallbackMs)) return preferred;
   return preferredMs >= fallbackMs ? preferred : fallback;
+}
+
+function formatProgress(row: ExecutionRow): { text: string; title?: string } {
+  const progress = row.progress;
+  const total = progress?.total ?? 0;
+  if (!progress || total <= 0) return { text: '—' };
+  const succeeded = progress.succeeded ?? 0;
+  const currentStepTitle = (progress.currentStepTitle || '').trim();
+  const state = String(row.rawState || row.state || row.status || '').toLowerCase();
+  const isCompleted = state === 'completed' || state === 'succeeded';
+  const isFailed = state === 'failed';
+
+  if (isCompleted) {
+    return { text: `${succeeded}/${total} complete` };
+  }
+  if (isFailed && currentStepTitle) {
+    return {
+      text: `${succeeded}/${total} · Failed at ${currentStepTitle}`,
+      title: currentStepTitle,
+    };
+  }
+  if (currentStepTitle) {
+    return { text: `${succeeded}/${total} · ${currentStepTitle}`, title: currentStepTitle };
+  }
+  return { text: `${succeeded}/${total}` };
 }
 
 function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
@@ -773,6 +811,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
   const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
+  const [workspaceCursorResetNotice, setWorkspaceCursorResetNotice] = useState(false);
+  const [workspaceReturnFromDetail, setWorkspaceReturnFromDetail] = useState(() =>
+    initial.get(WORKFLOW_LIST_CONTEXT_RETURN_PARAM) === '1',
+  );
   const [ignoredWorkflowScopeState] = useState(() => hasUnsupportedWorkflowScopeState(initial));
   const [filters, setFilters] = useState(() => parseInitialFilters(initial));
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
@@ -837,6 +879,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
+    params.delete(WORKFLOW_LIST_CONTEXT_RETURN_PARAM);
     // MM-954: do not persist sort/sortDir to the URL. Sorting only reorders the
     // currently loaded page, so writing it to the URL would falsely imply a
     // global server-side sort across the full filtered result set.
@@ -921,6 +964,24 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setListCursor(null);
     setCursorStack([]);
   }, []);
+
+  useEffect(() => {
+    if (!workspaceReturnFromDetail || !listCursor || isLoading || isError || !data) return;
+    if (data.items.length > 0 || data.nextPageToken) {
+      setWorkspaceReturnFromDetail(false);
+      return;
+    }
+    setWorkspaceReturnFromDetail(false);
+    setWorkspaceCursorResetNotice(true);
+    resetToFirstPage();
+  }, [
+    data,
+    isError,
+    isLoading,
+    listCursor,
+    resetToFirstPage,
+    workspaceReturnFromDetail,
+  ]);
 
   // MM-964: column visibility. The workflow title column is the primary anchor
   // and is always shown; every other column honors the stored preference.
@@ -1115,6 +1176,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     const items = data?.items || [];
     return sortRows(items, sortField, sortDir);
   }, [data?.items, sortField, sortDir]);
+  const detailListContext = useMemo(() => {
+    const params = new URLSearchParams();
+    appendFilterParams(params, filters);
+    params.set('limit', String(pageSize));
+    if (listCursor) params.set('nextPageToken', listCursor);
+    return params;
+  }, [filters, listCursor, pageSize]);
 
   const pageIndex = cursorStack.length;
   const pageStart = sortedItems.length > 0 ? pageIndex * pageSize + 1 : 0;
@@ -1232,7 +1300,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const hasWorkflowListNotices =
     !listEnabled ||
     Boolean(ignoredWorkflowScopeState) ||
-    filterValidationErrors.length > 0;
+    filterValidationErrors.length > 0 ||
+    workspaceCursorResetNotice;
 
   const updateDraftText = (field: 'workflowId' | 'title', value: string) => {
     setDraftFilters((current) => ({
@@ -1700,7 +1769,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         viewBox="0 0 16 16"
         focusable="false"
       >
-        <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+        <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
       </svg>
       {hasActiveFilters ? (
         <span className="workflow-list-advanced-filters-count" aria-hidden="true">
@@ -1738,6 +1807,18 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               {filterValidationErrors.map((message) => (
                 <div key={message}>{message}</div>
               ))}
+            </div>
+          ) : null}
+          {workspaceCursorResetNotice ? (
+            <div className="notice" role="status">
+              Saved pagination was no longer available. Showing the first page.
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setWorkspaceCursorResetNotice(false)}
+              >
+                Dismiss
+              </button>
             </div>
           ) : null}
         </section>
@@ -1875,7 +1956,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 viewBox="0 0 16 16"
                 focusable="false"
               >
-                <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
               </svg>
               <span>Filters</span>
               {hasActiveFilters ? (
@@ -1995,7 +2076,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                       viewBox="0 0 16 16"
                                       focusable="false"
                                     >
-                                      <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                                      <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
                                     </svg>
                                   </button>
                                   {isFilterOpen ? (
@@ -2068,13 +2149,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                   </thead>
                   <tbody>
                     {sortedItems.map((row) => {
-                      const actionItems = nextActionItems(row);
+                      const statusSupplements = statusSupplementItems(row);
+                      const progress = formatProgress(row);
                       const updatedAt = rowUpdatedAt(row);
                       return (
                         <tr key={rowWorkflowId(row)}>
                           <td className="queue-table-cell-workflow">
                             <a
-                              href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                              href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                               className="workflow-list-row-title"
                             >
                               {row.title}
@@ -2084,19 +2166,18 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                           {isColumnVisible('status') ? (
                             <td className="queue-table-cell-status">
                               <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                              {statusSupplements.map((item) => (
+                                <div key={item} className="workflow-list-status-supplement small">
+                                  {item}
+                                </div>
+                              ))}
                             </td>
                           ) : null}
-                          {isColumnVisible('nextAction') ? (
-                            <td className="queue-table-cell-next-action">
-                              {actionItems.length > 0 ? (
-                                actionItems.map((item) => (
-                                  <div key={item} className="workflow-list-next-action-item small">
-                                    {item}
-                                  </div>
-                                ))
-                              ) : (
-                                <span className="workflow-list-next-action-empty">—</span>
-                              )}
+                          {isColumnVisible('progress') ? (
+                            <td className="queue-table-cell-progress">
+                              <span className="workflow-list-progress" title={progress.title}>
+                                {progress.text}
+                              </span>
                             </td>
                           ) : null}
                           {isColumnVisible('repository') ? (
@@ -2128,14 +2209,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
               <ul className="queue-card-list" data-layout="card" role="list">
                 {sortedItems.map((row) => {
-                      const actionItems = nextActionItems(row);
+                      const statusSupplements = statusSupplementItems(row);
+                      const progress = formatProgress(row);
                       const updatedAt = rowUpdatedAt(row);
                       return (
                   <li key={rowWorkflowId(row)} className="queue-card">
                     <div className="queue-card-header">
                       <div>
                         <a
-                          href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                          href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                           className="queue-card-title"
                         >
                           {row.title}
@@ -2143,19 +2225,20 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                       </div>
                       <div className="queue-card-status">
                         <ExecutionStatusPill status={row.rawState || row.state || row.status} />
-                      </div>
-                    </div>
-                    {actionItems.length > 0 ? (
-                      <div className="queue-card-next-action">
-                        <span className="queue-card-next-action-label small">Next action</span>
-                        {actionItems.map((item) => (
-                          <p key={item} className="queue-card-next-action-item">
+                        {statusSupplements.map((item) => (
+                          <div key={item} className="workflow-list-status-supplement small">
                             {item}
-                          </p>
+                          </div>
                         ))}
                       </div>
-                    ) : null}
+                    </div>
                     <dl className="queue-card-fields">
+                      <div>
+                        <dt>Progress</dt>
+                        <dd title={progress.title}>
+                          <span className="workflow-list-progress">{progress.text}</span>
+                        </dd>
+                      </div>
                       <div>
                         <dt>ID</dt>
                         <dd>
@@ -2177,7 +2260,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                     </dl>
                     <div className="queue-card-actions">
                       <a
-                        href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                        href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                         className="button secondary queue-card-details-action"
                         role="button"
                       >

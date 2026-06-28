@@ -16,6 +16,8 @@ The page is available from Workflows lists, Workflow notifications, remediation 
 
 The page accepts a Workflow Execution identifier and loads a single Workflow Execution detail record.
 
+Addendum: `docs/UI/WorkflowWorkspaceSidebar.md` defines the desktop workspace presentation that can host this same detail page next to the workflow sidebar. This document remains canonical for detail content, subroutes, primary actions, dialogs, logs, artifacts, and recovery behavior.
+
 ## Page-level goals
 
 The page enables a user to:

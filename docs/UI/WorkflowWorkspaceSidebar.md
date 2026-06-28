@@ -7,6 +7,8 @@ Canonical for: desktop workflow workspace layout, workflow sidebar navigation, l
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs. This document defines the product and UI contract for the workspace/sidebar behavior that connects the Workflows list and Workflow Details page.
 
+**Implementation note:** MM-997 wires the desktop detail presentation through `WorkflowWorkspaceShell` behind the dashboard runtime config flag `features.temporalDashboard.workspaceShellEnabled`, which defaults to enabled. Setting the flag to `false` restores standalone desktop detail rendering without changing mobile behavior.
+
 ---
 
 ## 1. Purpose

@@ -92,6 +92,15 @@ class TestBuildDefaultRegistry:
         registry = build_default_registry(env=env)
         assert "codex_cloud" in registry
 
+    def test_omnigent_registered_when_enabled(self):
+        env = {
+            "OMNIGENT_ENABLED": "true",
+            "OMNIGENT_SERVER_URL": "https://omnigent.test",
+        }
+        registry = build_default_registry(env=env)
+        assert "omnigent" in registry
+        assert "omnigent_session" not in registry
+
     def test_both_registered_when_both_enabled(self):
         env = {
             "JULES_ENABLED": "true",
@@ -113,3 +122,60 @@ class TestBuildDefaultRegistry:
         }
         registry = build_default_registry(env=env)
         assert "jules" not in registry
+
+    def test_omnigent_registered_only_when_runtime_gate_enabled(self):
+        disabled_registry = build_default_registry(env={})
+        assert "omnigent" not in disabled_registry
+
+        missing_url_registry = build_default_registry(
+            env={"OMNIGENT_ENABLED": "1"}
+        )
+        assert "omnigent" not in missing_url_registry
+
+        enabled_registry = build_default_registry(
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+                "OMNIGENT_API_TOKEN": "activity-boundary-only",
+            }
+        )
+
+        assert enabled_registry.registered_ids == ["omnigent"]
+
+    def test_omnigent_registry_adapter_does_not_expose_api_token(self):
+        secret = "activity-boundary-only-secret"
+        registry = build_default_registry(
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+                "OMNIGENT_API_TOKEN": secret,
+            }
+        )
+
+        adapter = registry.create("omnigent")
+        capability_payload = adapter.provider_capability.model_dump(
+            mode="json",
+            by_alias=True,
+        )
+
+        assert secret not in repr(adapter)
+        assert secret not in repr(capability_payload)
+
+    def test_omnigent_alias_agent_ids_are_not_registered(self):
+        registry = build_default_registry(
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+            }
+        )
+
+        assert "omnigent" in registry
+        for alias in (
+            "omnigent_session",
+            "omnigent_claude",
+            "omnigent_codex",
+            "omnigent_polly",
+        ):
+            assert alias not in registry
+            with pytest.raises(ValueError, match="No external adapter registered"):
+                registry.create(alias)
