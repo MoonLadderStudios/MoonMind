@@ -23,6 +23,8 @@ import {
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
 
+declare const __dirname: string;
+
 type MockVirtuosoRow = { id: string };
 type MockVirtuosoProps<Row = MockVirtuosoRow> = {
   data?: Row[];
