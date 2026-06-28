@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from moonmind.omnigent.execute import (
     OmnigentContractError,
+    OmnigentSessionStillRunningError,
     _agent_items,
     _resolve_agent_id,
     build_omnigent_result,
@@ -277,9 +280,11 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
 
 
 @pytest.mark.asyncio
-async def test_run_omnigent_execution_returns_contract_failure_for_ref_only_prompt(
+async def test_run_omnigent_execution_posts_instruction_ref_when_prompt_text_is_absent(
     monkeypatch,
 ) -> None:
+    posted_events: list[dict[str, Any]] = []
+
     class FakeClient:
         def __init__(self, **_: object) -> None:
             pass
@@ -289,6 +294,23 @@ async def test_run_omnigent_execution_returns_contract_failure_for_ref_only_prom
 
         async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
             return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            assert session_id == "session-1"
+            posted_events.append(payload)
+            return {}
+
+        async def stream_events(self, session_id: str):
+            assert session_id == "session-1"
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "session-1"
+            return {"status": "completed", "summary": "done"}
 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
@@ -309,9 +331,61 @@ async def test_run_omnigent_execution_returns_contract_failure_for_ref_only_prom
         )
     )
 
-    assert result.failure_class == "integration_error"
-    assert result.provider_error_code == "omnigent_contract_error"
-    assert "instructionRef cannot be sent" in result.summary
+    assert result.failure_class is None
+    assert result.summary == "done"
+    text = posted_events[0]["data"]["content"][0]["text"]
+    assert text == "artifact://instruction"
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
+    monkeypatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {}
+
+        async def stream_events(self, session_id: str):
+            assert session_id == "session-1"
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "session-1"
+            return {"status": "running"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "codex-native-ui"},
+                        "prompt": {"text": "Do the task"},
+                    },
+                },
+            )
+        )
 
 
 @pytest.mark.asyncio

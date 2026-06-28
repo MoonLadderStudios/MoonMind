@@ -55,6 +55,10 @@ class OmnigentContractError(RuntimeError):
     """Raised when Omnigent emits an unsupported adapter contract value."""
 
 
+class OmnigentSessionStillRunningError(OmnigentClientError):
+    """Raised when the stream ends while the provider session is still active."""
+
+
 def _compact_summary(value: object | None, *, fallback: str) -> str:
     text = str(value or fallback).strip() or fallback
     return text[:4096]
@@ -169,12 +173,11 @@ def _build_omnigent_first_message(
     prompt: dict[str, Any],
 ) -> dict[str, Any]:
     text = str(prompt.get("text") or "").strip()
-    instruction_ref = str(prompt.get("instructionRef") or "").strip()
-    if not text and (instruction_ref or request.instruction_ref):
-        raise OmnigentContractError(
-            "Omnigent prompt requires inline text; instructionRef cannot be sent "
-            "without artifact resolution"
-        )
+    instruction_ref = str(
+        prompt.get("instructionRef") or request.instruction_ref or ""
+    ).strip()
+    if not text and instruction_ref:
+        text = instruction_ref
     if not text:
         text = str((request.parameters or {}).get("description") or "").strip()
     if not text:
@@ -456,6 +459,10 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                     "timed_out",
                 }:
                     terminal_status = normalized_snapshot
+                elif normalized_snapshot in _NON_TERMINAL_STATUSES:
+                    raise OmnigentSessionStillRunningError(
+                        "Omnigent stream ended while the provider session is still running"
+                    )
             if terminal_status is None:
                 raise OmnigentContractError(
                     "Omnigent stream ended before a terminal session outcome"
@@ -477,6 +484,8 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             providerErrorCode="omnigent_contract_error",
             metadata={"normalizedStatus": "failed", "providerName": "omnigent"},
         )
+    except OmnigentSessionStillRunningError:
+        raise
     except OmnigentClientError as exc:
         return AgentRunResult(
             outputRefs=[],
@@ -490,6 +499,7 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
 
 __all__ = [
     "OmnigentContractError",
+    "OmnigentSessionStillRunningError",
     "build_omnigent_result",
     "normalize_omnigent_observation",
     "run_omnigent_execution",
