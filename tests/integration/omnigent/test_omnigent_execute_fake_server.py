@@ -346,7 +346,7 @@ async def test_fake_server_cancellation_interrupts_then_stops_session() -> None:
     await stream.started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        _ = await task
 
     assert server.cancel_events == ["interrupt", "stop_session"]
 

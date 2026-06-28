@@ -8,9 +8,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
+
+from temporalio import activity
 
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
@@ -47,6 +49,7 @@ OmnigentRunState = Literal[
 ]
 
 _TERMINAL_STATES = {"completed", "failed", "canceled"}
+_HEARTBEAT_RECORD_TYPE = "omnigent_run_record"
 
 
 class OmnigentExecutionError(RuntimeError):
@@ -76,6 +79,7 @@ class InMemoryOmnigentRunStore:
 
     def __init__(self) -> None:
         self._records: dict[str, OmnigentRunRecord] = {}
+        self._lock = asyncio.Lock()
 
     def get(self, key: str) -> OmnigentRunRecord | None:
         return self._records.get(key)
@@ -86,6 +90,21 @@ class InMemoryOmnigentRunStore:
 
     def clear(self) -> None:
         self._records.clear()
+
+    async def get_or_create(
+        self,
+        *,
+        key: str,
+        create_session: Callable[[], Awaitable[Mapping[str, Any]]],
+        create_record: Callable[[Mapping[str, Any]], OmnigentRunRecord],
+    ) -> tuple[OmnigentRunRecord, bool]:
+        async with self._lock:
+            record = self.get(key)
+            if record is not None:
+                return record, False
+            created = await create_session()
+            record = self.put(create_record(created))
+            return record, True
 
 
 _DEFAULT_RUN_STORE = InMemoryOmnigentRunStore()
@@ -123,67 +142,90 @@ async def run_omnigent_execution(
     prompt = _resolve_prompt(request)
     prompt_digest = _prompt_digest(prompt)
 
-    record = store.get(request.idempotency_key)
-    created_session = False
+    record = store.get(request.idempotency_key) or _record_from_activity_heartbeat(
+        request.idempotency_key,
+        prompt_digest,
+    )
+    if record is not None:
+        store.put(record)
     if record is None:
         create_payload = build_omnigent_session_create_payload(
             request=request,
             selection=selection,
             target=target,
         )
-        created = await client.create_session(create_payload)
-        session_id = _extract_session_id(created)
-        record = store.put(
-            OmnigentRunRecord(
+
+        async def _create_session() -> Mapping[str, Any]:
+            return await client.create_session(create_payload)
+
+        def _create_record(created: Mapping[str, Any]) -> OmnigentRunRecord:
+            session_id = _extract_session_id(created)
+            return OmnigentRunRecord(
                 idempotency_key=request.idempotency_key,
                 session_id=session_id,
                 prompt_digest=prompt_digest,
             )
+
+        record, created_session = await store.get_or_create(
+            key=request.idempotency_key,
+            create_session=_create_session,
+            create_record=_create_record,
         )
-        created_session = True
+        _heartbeat_omnigent("session_created", record)
     elif record.prompt_digest != prompt_digest:
         raise OmnigentExecutionError(
             "Conflicting Omnigent first-message digest for idempotency key",
             failure_class="user_error",
         )
+    else:
+        created_session = False
 
     events: list[dict[str, Any]] = []
     child_sessions: list[str] = []
     try:
-        if record.first_message_state == "posting":
-            snapshot = await client.get_session(record.session_id)
-            if _snapshot_contains_first_message(snapshot, record.prompt_digest):
-                record.first_message_state = "posted"
-            else:
-                raise OmnigentExecutionError(
-                    "Ambiguous Omnigent posting reconciliation failed closed",
-                    failure_class="integration_error",
-                )
+        async with store._lock:
+            if record.first_message_state == "posting":
+                snapshot = await client.get_session(record.session_id)
+                if _snapshot_contains_first_message(snapshot, record.prompt_digest):
+                    record.first_message_state = "posted"
+                else:
+                    raise OmnigentExecutionError(
+                        "Ambiguous Omnigent posting reconciliation failed closed",
+                        failure_class="integration_error",
+                    )
 
-        if record.first_message_state != "posted":
-            record.first_message_state = "posting"
-            posted = await client.post_event(
-                record.session_id,
-                {
-                    "type": "message",
-                    "text": prompt,
-                    "metadata": {
-                        "moonmindIdempotencyKey": request.idempotency_key,
-                        "moonmindCorrelationId": request.correlation_id,
-                        "moonmindPromptDigest": record.prompt_digest,
+            if record.first_message_state != "posted":
+                record.first_message_state = "posting"
+                _heartbeat_omnigent("first_message_posting", record)
+                posted = await client.post_event(
+                    record.session_id,
+                    {
+                        "type": "message",
+                        "text": prompt,
+                        "metadata": {
+                            "moonmindIdempotencyKey": request.idempotency_key,
+                            "moonmindCorrelationId": request.correlation_id,
+                            "moonmindPromptDigest": record.prompt_digest,
+                        },
                     },
-                },
-            )
-            record.pending_id = _clean(posted.get("pending_id")) or _clean(
-                posted.get("pendingId")
-            )
-            record.first_message_state = "posted"
+                )
+                record.pending_id = _clean(posted.get("pending_id")) or _clean(
+                    posted.get("pendingId")
+                )
+                record.first_message_state = "posted"
+                _heartbeat_omnigent("first_message_posted", record)
 
         stream_disconnected = False
         try:
             async for event in client.stream_events(record.session_id):
                 events.append(event)
                 event_type = _event_type(event)
+                _heartbeat_omnigent(
+                    "stream_event",
+                    record,
+                    event_type=event_type or None,
+                    events_captured=len(events),
+                )
                 if event_type == "child_session_created":
                     child_id = _clean(event.get("session_id")) or _clean(
                         event.get("sessionId")
@@ -205,6 +247,11 @@ async def run_omnigent_execution(
 
         snapshot = await client.get_session(record.session_id)
         state = _normalize_omnigent_state(_snapshot_status(snapshot))
+        if state not in _TERMINAL_STATES:
+            raise OmnigentExecutionError(
+                "Omnigent stream ended before terminal session state",
+                failure_class="integration_error",
+            )
         output_refs = await _harvest_output_refs(client, record.session_id)
         metadata: dict[str, Any] = {
             "providerName": "omnigent",
@@ -294,8 +341,27 @@ def _snapshot_contains_first_message(
     snapshot: Mapping[str, Any],
     prompt_digest: str,
 ) -> bool:
-    haystack = str(snapshot)
-    return prompt_digest in haystack
+    return _metadata_contains_prompt_digest(snapshot, prompt_digest)
+
+
+def _metadata_contains_prompt_digest(value: object, prompt_digest: str) -> bool:
+    if isinstance(value, Mapping):
+        metadata = value.get("metadata")
+        if isinstance(metadata, Mapping) and (
+            metadata.get("moonmindPromptDigest") == prompt_digest
+            or metadata.get("prompt_digest") == prompt_digest
+        ):
+            return True
+        return any(
+            _metadata_contains_prompt_digest(child, prompt_digest)
+            for key, child in value.items()
+            if key != "metadata"
+        )
+    if isinstance(value, list):
+        return any(
+            _metadata_contains_prompt_digest(child, prompt_digest) for child in value
+        )
+    return False
 
 
 def _state_from_event(event: Mapping[str, Any]) -> OmnigentRunState | None:
@@ -379,20 +445,12 @@ async def _harvest_output_refs(
         changes = {}
     for path in _changed_file_paths(changes):
         refs.append(f"omnigent://sessions/{session_id}/workspace/{path}")
-        try:
-            await client.get_workspace_file(session_id, path)
-        except OmnigentClientError:
-            continue
     try:
         files = await client.list_session_files(session_id)
     except OmnigentClientError:
         files = {}
     for file_id in _session_file_ids(files):
         refs.append(f"omnigent://sessions/{session_id}/files/{file_id}")
-        try:
-            await client.get_session_file_content(session_id, file_id)
-        except OmnigentClientError:
-            continue
     return refs
 
 
@@ -429,8 +487,75 @@ def _session_file_ids(payload: Mapping[str, Any]) -> list[str]:
 async def _best_effort_cancel(client: OmnigentHttpClient, session_id: str) -> None:
     try:
         await client.interrupt(session_id)
-    finally:
+    except Exception:
+        pass
+    try:
         await client.stop_session(session_id)
+    except Exception:
+        pass
+
+
+def _heartbeat_omnigent(
+    phase: str,
+    record: OmnigentRunRecord,
+    *,
+    event_type: str | None = None,
+    events_captured: int | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "type": _HEARTBEAT_RECORD_TYPE,
+        "phase": phase,
+        "idempotencyKey": record.idempotency_key,
+        "sessionId": record.session_id,
+        "promptDigest": record.prompt_digest,
+        "firstMessageState": record.first_message_state,
+    }
+    if record.pending_id:
+        payload["pendingId"] = record.pending_id
+    if event_type:
+        payload["eventType"] = event_type
+    if events_captured is not None:
+        payload["eventsCaptured"] = events_captured
+    try:
+        activity.heartbeat(payload)
+    except RuntimeError:
+        return
+
+
+def _record_from_activity_heartbeat(
+    idempotency_key: str,
+    prompt_digest: str,
+) -> OmnigentRunRecord | None:
+    try:
+        heartbeat_details = activity.info().heartbeat_details
+    except RuntimeError:
+        return None
+    for detail in reversed(heartbeat_details):
+        if not isinstance(detail, Mapping):
+            continue
+        if detail.get("type") != _HEARTBEAT_RECORD_TYPE:
+            continue
+        if detail.get("idempotencyKey") != idempotency_key:
+            continue
+        if detail.get("promptDigest") != prompt_digest:
+            raise OmnigentExecutionError(
+                "Conflicting Omnigent first-message digest for heartbeat idempotency key",
+                failure_class="user_error",
+            )
+        session_id = _clean(detail.get("sessionId"))
+        if not session_id:
+            continue
+        first_message_state = detail.get("firstMessageState")
+        if first_message_state not in {"none", "posting", "posted"}:
+            first_message_state = "none"
+        return OmnigentRunRecord(
+            idempotency_key=idempotency_key,
+            session_id=session_id,
+            prompt_digest=prompt_digest,
+            first_message_state=first_message_state,
+            pending_id=_clean(detail.get("pendingId")),
+        )
+    return None
 
 
 def _summary_from_snapshot(snapshot: Mapping[str, Any]) -> str | None:
