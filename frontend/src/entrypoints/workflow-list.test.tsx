@@ -41,8 +41,8 @@ describe('Workflows Entrypoint', () => {
 
   const lastExecutionListUrl = () => executionListCalls().at(-1)?.[0];
 
-  // The advanced filter drawer is the single surface that exposes the full
-  // filter UI. These helpers open it and apply the staged draft.
+  // The mobile filter drawer exposes the full filter UI. These helpers open it
+  // and apply the staged draft.
   const openFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
   const applyFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
@@ -72,15 +72,18 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByLabelText('Live updates')).toBeNull();
   });
 
-  it('moves advanced filters out of every desktop table header', async () => {
+  it('renders desktop column filters and keeps the mobile filter drawer available', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    // No per-column filter icon button remains in the table headers.
-    expect(document.querySelectorAll('.workflow-list-column-filter-button')).toHaveLength(0);
-    expect(screen.queryByRole('button', { name: /No filter applied\./i })).toBeNull();
-    // A single visible Filters control opens the full filter UI instead.
+    expect(document.querySelectorAll('.workflow-list-column-filter-button')).toHaveLength(5);
+    const workflowFilter = screen.getByRole('button', {
+      name: 'Workflow filter. No filter applied.',
+    });
+    fireEvent.click(workflowFilter);
+    expect(screen.getByRole('dialog', { name: 'Workflow filter' })).toBeTruthy();
+
     const filtersTrigger = screen.getByRole('button', { name: 'Filters' });
     expect(filtersTrigger).toBeTruthy();
     expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
@@ -1343,7 +1346,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('21 total entries')).toBeTruthy();
   });
 
-  it('places filters in the Workflows header and uses the data slab composition', async () => {
+  it('uses the data slab composition without a duplicate Workflows header title', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -1358,7 +1361,9 @@ describe('Workflows Entrypoint', () => {
 
     expect(noticesDeck).toBeNull();
     expect(resultsHeader?.querySelector('.workflow-list-filter-trigger')).toBeTruthy();
-    expect(resultsHeader?.textContent).toContain('Workflows');
+    expect(resultsHeader?.querySelector('.page-title')).toBeNull();
+    expect(resultsHeader?.textContent).not.toContain('Workflows');
+    expect(tableHead?.textContent).toContain('Workflow');
     expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();

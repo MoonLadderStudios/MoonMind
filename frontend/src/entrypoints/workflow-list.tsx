@@ -73,9 +73,8 @@ type FilterField =
 
 // Scan-first desktop columns, ordered left-to-right. `field` is the sort/identity
 // key and `sortable` controls whether the header renders a sort button or a static
-// label. Filtering no longer lives in the headers; it is driven entirely by the
-// advanced filter drawer. Workflow title leads as the primary anchor; raw/debug
-// identifiers move out of the default table.
+// label. Workflow title leads as the primary anchor; raw/debug identifiers move
+// out of the default table.
 type TableColumnDef = {
   field: string;
   label: string;
@@ -90,6 +89,13 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
 ];
+const TABLE_COLUMN_FILTER_FIELDS: Partial<Record<string, FilterField>> = {
+  title: 'title',
+  status: 'status',
+  repository: 'repository',
+  targetRuntime: 'targetRuntime',
+  updatedAt: 'createdAt',
+};
 
 // All filterable columns. This is the durable filter data model and feeds the
 // advanced filter drawer sections and the active filter chips.
@@ -716,11 +722,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const [filters, setFilters] = useState(() => parseInitialFilters(initial));
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [hasEditedFilters, setHasEditedFilters] = useState(false);
-  // The advanced filter drawer is the single surface that exposes the full
-  // filter UI. `drawerOpen` controls visibility.
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [desktopFilterField, setDesktopFilterField] = useState<FilterField | null>(null);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const drawerToggleRef = useRef<HTMLButtonElement | null>(null);
+  const desktopFilterRef = useRef<HTMLDivElement | null>(null);
   // The element that opened the drawer (the Filters trigger or a chip). Focus is
   // returned here when the drawer closes so keyboard users keep their place.
   const filterTriggerRef = useRef<HTMLElement | null>(null);
@@ -788,16 +794,18 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
-    refetchInterval: listEnabled && !drawerOpen ? listPollMs : false,
+    refetchInterval: listEnabled && !drawerOpen && desktopFilterField === null ? listPollMs : false,
   });
 
-  // Facets enrich the include/exclude dropdowns. The drawer shows every value
-  // field at once, so we fetch each field's facet values while the drawer is
-  // open. This reuses the existing single-facet backend contract (one request
-  // per facet) without any API changes.
+  // Facets enrich the include/exclude dropdowns. The mobile drawer can show
+  // every value field at once; desktop column popovers request the active field.
+  // This reuses the existing single-facet backend contract without API changes.
   const getFacetQueryOptions = (facet: ExecutionFacetResponse['facet']) => ({
     queryKey: ['workflow-list-facet', facet, filters] as const,
-    enabled: listEnabled && filterValidationErrors.length === 0 && drawerOpen,
+    enabled:
+      listEnabled &&
+      filterValidationErrors.length === 0 &&
+      (drawerOpen || facetForFilterField(desktopFilterField) === facet),
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
@@ -837,6 +845,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     });
   }, []);
 
+  const closeDesktopFilter = useCallback(() => {
+    setDesktopFilterField(null);
+    setDraftFilters(filters);
+  }, [filters]);
+
   const openDrawer = useCallback(
     (field: FilterField | null, trigger: HTMLElement | null) => {
       filterTriggerRef.current = trigger;
@@ -863,6 +876,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setFilters(draftFilters);
     resetToFirstPage();
     setDrawerOpen(false);
+    setDesktopFilterField(null);
     restoreTriggerFocus();
   }, [draftFilters, resetToFirstPage, restoreTriggerFocus]);
 
@@ -872,6 +886,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters(cleared);
     setFilters(cleared);
     resetToFirstPage();
+    setDesktopFilterField(null);
   }, [resetToFirstPage]);
 
   const removeActiveFilter = useCallback(
@@ -881,9 +896,32 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       setFilters(next);
       setDraftFilters(next);
       resetToFirstPage();
+      setDesktopFilterField(null);
     },
     [filters, resetToFirstPage],
   );
+
+  useEffect(() => {
+    if (desktopFilterField === null) return;
+    const onMouseDown = (event: MouseEvent) => {
+      const root = desktopFilterRef.current;
+      if (root && !root.contains(event.target as Node)) {
+        closeDesktopFilter();
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [closeDesktopFilter, desktopFilterField]);
+
+  useEffect(() => {
+    if (desktopFilterField === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      desktopFilterRef.current
+        ?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), button:not([disabled])')
+        ?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [desktopFilterField]);
 
   // When the drawer opens, move focus to the first control of the requested
   // field (or the first control overall). This drives the keyboard "open the
@@ -1130,9 +1168,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return null;
   };
 
-  // Renders one filter's controls bound to the draft filter state. The drawer is
-  // the only surface that renders these now; edits stage into `draftFilters`
-  // until the user applies them.
+  // Renders one filter's controls bound to the draft filter state. Edits stage
+  // into `draftFilters` until the user applies them.
   const renderFilterControl = (field: FilterField) => {
     if (field === 'workflowId' || field === 'title') {
       const label = field === 'workflowId' ? 'ID' : 'Title';
@@ -1481,10 +1518,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
       <section
         className="queue-layouts panel--data workflow-list-data-slab"
-        aria-labelledby="workflow-list-title"
+        aria-label="Workflow list"
       >
         <header className="workflow-list-results-header">
-          <h2 className="page-title" id="workflow-list-title">Workflows</h2>
           <div className="workflow-list-filter-bar">
             <button
               type="button"
@@ -1567,27 +1603,114 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                     <tr>
                       {TABLE_COLUMNS.map(({ field, label, sortable }) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
+                        const filterField = TABLE_COLUMN_FILTER_FIELDS[field];
+                        const filterValue = filterField ? filterSummary(filterField, filters) : '';
+                        const isFilterOpen = filterField === desktopFilterField;
                         return (
                           <th
                             key={field}
                             aria-sort={sortable ? ariaSort : undefined}
                             className="workflow-list-header-cell"
                           >
-                            {sortable ? (
-                              <button
-                                type="button"
-                                className="table-sort-button"
-                                onClick={() => onHeaderClick(field)}
-                                aria-label={ariaLabel}
-                                title={CURRENT_PAGE_SORT_NOTICE}
-                              >
-                                {label}
-                                {sortIndicator(field)}
-                                <span className="sr-only">{sortHint}</span>
-                              </button>
-                            ) : (
-                              <span className="workflow-list-static-header">{label}</span>
-                            )}
+                            <div className="workflow-list-column-header">
+                              {sortable ? (
+                                <button
+                                  type="button"
+                                  className="table-sort-button"
+                                  onClick={() => onHeaderClick(field)}
+                                  aria-label={ariaLabel}
+                                  title={CURRENT_PAGE_SORT_NOTICE}
+                                >
+                                  {label}
+                                  {sortIndicator(field)}
+                                  <span className="sr-only">{sortHint}</span>
+                                </button>
+                              ) : (
+                                <span className="workflow-list-static-header">{label}</span>
+                              )}
+                              {filterField ? (
+                                <div
+                                  className="workflow-list-column-filter"
+                                  ref={isFilterOpen ? desktopFilterRef : null}
+                                >
+                                  <button
+                                    type="button"
+                                    className={`workflow-list-column-filter-button${filterValue ? ' is-active' : ''}`}
+                                    aria-label={
+                                      filterValue
+                                        ? `${label} filter: ${filterValue}`
+                                        : `${label} filter. No filter applied.`
+                                    }
+                                    aria-haspopup="dialog"
+                                    aria-expanded={isFilterOpen}
+                                    onClick={() => {
+                                      setDraftFilters(filters);
+                                      setDesktopFilterField((current) => (current === filterField ? null : filterField));
+                                    }}
+                                  >
+                                    <svg
+                                      aria-hidden="true"
+                                      className="workflow-list-column-filter-icon"
+                                      viewBox="0 0 16 16"
+                                      focusable="false"
+                                    >
+                                      <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                                    </svg>
+                                  </button>
+                                  {isFilterOpen ? (
+                                    <div
+                                      className="workflow-list-column-filter-popover"
+                                      role="dialog"
+                                      aria-label={`${label} filter`}
+                                      onKeyDown={(event) => {
+                                        if (event.key === 'Escape') {
+                                          event.stopPropagation();
+                                          closeDesktopFilter();
+                                        }
+                                        if (
+                                          event.key === 'Enter' &&
+                                          event.target instanceof HTMLInputElement &&
+                                          !event.defaultPrevented
+                                        ) {
+                                          event.preventDefault();
+                                          applyDraftFilters();
+                                        }
+                                      }}
+                                    >
+                                      <div className="workflow-list-column-filter-title">{label} filter</div>
+                                      {renderFilterControl(filterField)}
+                                      <div className="workflow-list-filter-actions">
+                                        <button
+                                          type="button"
+                                          className="secondary"
+                                          onClick={() => removeActiveFilter(filterField)}
+                                          disabled={!listEnabled || !filterValue}
+                                          aria-label={`Reset ${label} filter`}
+                                        >
+                                          Reset
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="secondary"
+                                          onClick={closeDesktopFilter}
+                                          aria-label={`Cancel ${label} filter`}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={applyDraftFilters}
+                                          disabled={!listEnabled}
+                                          aria-label={`Apply ${label} filter`}
+                                        >
+                                          Apply
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
                           </th>
                         );
                       })}
