@@ -851,17 +851,20 @@ Required derived fields:
 | `progressCanceled` | `progress.canceled`. |
 | `progressBucket` | Derived bucket such as `not_started`, `in_progress`, or `complete`. |
 | `progressSignals` | Derived keyword list for signal filters. |
-| `progressCurrentStepTitle` or tokens | Bounded current step title search field. |
+| `progressCurrentStepTitleSearch` | Projection or bounded query-model text/token field for `progress.currentStepTitle`; not a Temporal Visibility Search Attribute. |
 | `progressUpdatedAt` | Last meaningful progress mutation. |
 | `progressBlank` | Whether progress is missing or has no usable total. |
 
 Rules:
 
-1. Derived Progress fields may be stored in the projection, indexed as Temporal Visibility search attributes where available, or served from another bounded query model.
-2. The list page must not call `GET /api/executions/{workflowId}/steps` to compute Progress sort/filter.
-3. The list page must not fetch every page and sort/filter in the browser to simulate global Progress behavior.
-4. The bounded `progress` summary remains display-safe. It must not inline full step rows, logs, artifacts, stdout/stderr, provider payloads, or diagnostics.
-5. Running workflows may still refresh live Progress display data, but server filters and counts must use a stable queryable representation.
+1. Numeric and categorical derived Progress fields may be stored in the projection, indexed as Temporal Visibility Search Attributes only where explicitly approved by the Visibility registry, or served from another bounded query model.
+2. `progress.currentStepTitle`, `progressCurrentStepTitleSearch`, and any title tokens are not eligible for Temporal Visibility indexing because they are high-cardinality display prose that may come from workflow plans or user input.
+3. Current-step-title search must use projection storage or another bounded query model that is not operator-visible Temporal metadata.
+4. Any future Visibility registry update for Progress must explicitly exclude free-text, display-only prose, and high-cardinality user/plan text.
+5. The list page must not call `GET /api/executions/{workflowId}/steps` to compute Progress sort/filter.
+6. The list page must not fetch every page and sort/filter in the browser to simulate global Progress behavior.
+7. The bounded `progress` summary remains display-safe. It must not inline full step rows, logs, artifacts, stdout/stderr, provider payloads, or diagnostics.
+8. Running workflows may still refresh live Progress display data, but server filters and counts must use a stable queryable representation.
 
 ---
 
@@ -918,26 +921,17 @@ Rules:
 
 ---
 
-## 17. Progress implementation checklist
+## 17. Progress test contract
 
-To make the Progress column sort and filter like the other columns, update the implementation in this order:
+The Progress sort/filter implementation should preserve these testable behaviors:
 
-1. Extend the frontend filter model with a structured Progress filter:
-   - completion range;
-   - bucket include/exclude;
-   - signal include/exclude;
-   - current-step title text;
-   - blank include/exclude.
-2. Add Progress to the desktop header filter map, advanced drawer fields, mobile filter sheet, active filter chips, URL parser, URL serializer, reset logic, and filter summaries.
-3. Add current-page Progress sorting as an interim behavior only if the UI keeps the current-page-only notice.
-4. Add server-side Progress query parameters and validation.
-5. Materialize/index derived Progress fields so Progress sorting and filtering are deterministic across pages.
-6. Promote Progress sorting to server-authoritative URL/API state only after the backend can apply `sort=progressPct` before pagination.
-7. Add tests that cover:
-   - Progress header filter visibility;
-   - Progress current-page sort with blanks last;
-   - Progress URL/API serialization;
-   - active Progress chips;
-   - mobile filter drawer Progress controls;
-   - no list-page step-detail fetches;
-   - backend validation for contradictory Progress include/exclude params.
+1. The Progress column exposes the same separate sort and filter affordances used by other sortable/filterable columns.
+2. Progress sort uses derived completion percent, not rendered cell text or current-step title text.
+3. Progress blanks sort last in both ascending and descending directions.
+4. Progress filter state serializes to canonical query params for completion range, buckets, signals, current-step title search, and blanks.
+5. Active Progress filters render product-labeled chips and reopen the Progress filter when activated.
+6. Mobile filters expose Progress controls even when desktop table headers are not visible.
+7. The Workflows List page does not request per-row step details or full step ledgers to compute Progress display, sort, or filter behavior.
+8. Current-page-only Progress sorting, if used before server-authoritative rollout, keeps sort out of URL/API state and keeps the current-page-only notice visible.
+9. Server-authoritative Progress sorting, once enabled, resets pagination and includes `sort=progressPct` plus `sortDir` in URL/API state.
+10. Backend validation rejects contradictory Progress include/exclude filters with a clear validation error.
