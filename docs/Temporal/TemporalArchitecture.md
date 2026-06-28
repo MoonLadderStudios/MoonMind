@@ -616,12 +616,16 @@ Rules:
 
 - workflows own `mm_state` transitions
 - projections may mirror `mm_state`, but must not redefine it
-- terminal Temporal statuses must reconcile to terminal domain states:
+- native terminal Temporal statuses must reconcile to terminal domain states:
   - completed → `completed`
   - failed / timed out / terminated → `failed`
   - canceled → `canceled`
-- if Temporal status and projection state conflict, Temporal wins and projection repair must correct the row
-- if Temporal close status and `mm_state` conflict, the lifecycle contract must define the correction behavior and alert when it indicates a workflow bug
+- raw Temporal `Completed` with a workflow-owned terminal `mm_state` must preserve
+  the workflow-owned terminal state, so graceful cancellation that finalized and
+  returned normally projects as `canceled` rather than success
+- if a native failure/cancellation Temporal close status and `mm_state` conflict, Temporal
+  wins and projection repair must correct the row; the lifecycle contract must
+  define correction behavior and alert when the conflict indicates a workflow bug
 
 ---
 

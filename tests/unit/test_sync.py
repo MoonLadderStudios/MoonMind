@@ -80,6 +80,41 @@ def test_map_temporal_state_to_projection_success():
     assert result["search_attributes"]["mm_custom"] == {"key": "value"}
     assert result["updated_at"] == updated_at
 
+def test_map_temporal_completed_with_canceled_mm_state_projects_canceled():
+    start_time = datetime.now(UTC)
+    updated_at = datetime(2026, 6, 27, 17, 0, tzinfo=UTC)
+    desc = Mock(spec=WorkflowExecutionDescription)
+    desc.id = "mm:canceled-via-update"
+    desc.run_id = "run-canceled-via-update"
+    desc.namespace = "moonmind"
+    desc.workflow_type = "MoonMind.UserWorkflow"
+    desc.status = WorkflowExecutionStatus.COMPLETED
+    desc.start_time = start_time
+    desc.execution_time = start_time
+    desc.close_time = updated_at
+    desc.search_attributes = {
+        "mm_state": "canceled",
+        "mm_entry": "run",
+        "mm_updated_at": updated_at.isoformat(),
+    }
+
+    async def _memo() -> dict[str, object]:
+        return {
+            "entry": "run",
+            "owner_id": "owner-1",
+            "owner_type": "user",
+            "summary": "Execution canceled.",
+        }
+
+    desc.memo = _memo
+
+    result = asyncio.run(map_temporal_state_to_projection(desc))
+
+    assert result["state"] == MoonMindWorkflowState.CANCELED
+    assert result["close_status"] == TemporalExecutionCloseStatus.CANCELED
+    assert result["memo"]["summary"] == "Execution canceled."
+    assert result["updated_at"] == updated_at
+
 def test_map_temporal_state_to_projection_extracts_finish_summary():
     start_time = datetime.now(UTC)
     desc = Mock(spec=WorkflowExecutionDescription)
@@ -451,6 +486,109 @@ async def test_sync_execution_projection_refreshes_canonical_summary_and_started
             assert canonical.last_update_response == {"status": "accepted"}
             assert _as_utc(canonical.started_at) == started_at
             assert _as_utc(canonical.updated_at) == updated_at
+    finally:
+        await engine.dispose()
+
+@pytest.mark.asyncio
+async def test_sync_execution_projection_repairs_completed_projection_for_graceful_cancel(
+    tmp_path,
+):
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
+    engine = create_async_engine(db_url, future=True)
+    session_factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    try:
+        async with session_factory() as session:
+            created_at = datetime(2026, 6, 27, 16, 55, tzinfo=UTC)
+            canceled_at = datetime(2026, 6, 27, 17, 0, tzinfo=UTC)
+            canonical = TemporalExecutionCanonicalRecord(
+                workflow_id="mm:graceful-cancel-refresh",
+                run_id="run-1",
+                namespace="moonmind",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id="owner-1",
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.CANCELED,
+                close_status=TemporalExecutionCloseStatus.CANCELED,
+                entry="run",
+                search_attributes={"mm_state": "canceled", "mm_entry": "run"},
+                memo={"title": "Task", "summary": "Execution canceled."},
+                artifact_refs=[],
+                parameters={"targetRuntime": "codex_cli"},
+                started_at=created_at,
+                updated_at=canceled_at,
+                closed_at=canceled_at,
+            )
+            projection = TemporalExecutionRecord(
+                workflow_id=canonical.workflow_id,
+                run_id="run-1",
+                namespace="moonmind",
+                workflow_type=TemporalWorkflowType.USER_WORKFLOW,
+                owner_id="owner-1",
+                owner_type=TemporalExecutionOwnerType.USER,
+                state=MoonMindWorkflowState.COMPLETED,
+                close_status=TemporalExecutionCloseStatus.COMPLETED,
+                entry="run",
+                search_attributes={"mm_state": "completed", "mm_entry": "run"},
+                memo={"title": "Task", "summary": "Execution canceled."},
+                artifact_refs=[],
+                parameters={"targetRuntime": "codex_cli"},
+                projection_version=1,
+                last_synced_at=created_at,
+                sync_state=TemporalExecutionProjectionSyncState.FRESH,
+                sync_error=None,
+                started_at=created_at,
+                updated_at=canceled_at,
+                closed_at=canceled_at,
+            )
+            session.add(canonical)
+            session.add(projection)
+            await session.commit()
+
+            desc = Mock(spec=WorkflowExecutionDescription)
+            desc.id = canonical.workflow_id
+            desc.run_id = "run-1"
+            desc.namespace = "moonmind"
+            desc.workflow_type = "MoonMind.UserWorkflow"
+            desc.status = WorkflowExecutionStatus.COMPLETED
+            desc.start_time = created_at
+            desc.execution_time = created_at
+            desc.close_time = canceled_at
+            desc.search_attributes = {
+                "mm_state": "canceled",
+                "mm_entry": "run",
+                "mm_updated_at": canceled_at.isoformat(),
+            }
+
+            async def _memo() -> dict[str, object]:
+                return {
+                    "entry": "run",
+                    "owner_id": "owner-1",
+                    "owner_type": "user",
+                    "title": "Task",
+                    "summary": "Execution canceled.",
+                }
+
+            desc.memo = _memo
+
+            refreshed = await sync_execution_projection(session, desc)
+            await session.commit()
+            await session.refresh(refreshed)
+            await session.refresh(canonical)
+
+            assert refreshed.state == MoonMindWorkflowState.CANCELED
+            assert refreshed.close_status == TemporalExecutionCloseStatus.CANCELED
+            assert refreshed.memo["summary"] == "Execution canceled."
+            assert canonical.state == MoonMindWorkflowState.CANCELED
+            assert canonical.close_status == TemporalExecutionCloseStatus.CANCELED
+            assert canonical.memo["summary"] == "Execution canceled."
     finally:
         await engine.dispose()
 
