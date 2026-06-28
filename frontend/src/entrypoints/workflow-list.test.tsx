@@ -1933,7 +1933,7 @@ describe('Workflows Entrypoint', () => {
     const titleLink = workflowCell.querySelector('a.workflow-list-row-title');
     expect(titleLink?.textContent).toBe('Scan first task');
     expect(titleLink?.getAttribute('href')).toBe(
-      '/workflows/mm%3Arun%3Ascan-first-001?source=temporal',
+      '/workflows/mm%3Arun%3Ascan-first-001?limit=50&source=temporal',
     );
     // The compact workflow id stays present but secondary.
     const compactId = workflowCell.querySelector('code.workflow-list-row-id');
