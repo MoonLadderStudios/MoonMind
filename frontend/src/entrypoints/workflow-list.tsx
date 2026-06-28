@@ -306,7 +306,6 @@ function formatProgress(row: ExecutionRow): { text: string; title?: string } {
   const total = progress?.total ?? 0;
   if (!progress || total <= 0) return { text: '—' };
   const succeeded = progress.succeeded ?? 0;
-  const failed = progress.failed ?? 0;
   const currentStepTitle = (progress.currentStepTitle || '').trim();
   const state = String(row.rawState || row.state || row.status || '').toLowerCase();
   const isCompleted = state === 'completed' || state === 'succeeded';
