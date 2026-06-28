@@ -7,6 +7,14 @@ import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
+import {
+  TOGGLEABLE_WORKFLOW_LIST_COLUMNS,
+  readDashboardPreferences,
+  resetDashboardPreferences,
+  updateDashboardPreferences,
+  type ToggleableWorkflowListColumn,
+  type WorkflowListDensity,
+} from '../utils/dashboardPreferences';
 
 const POLL_MS_DEFAULT = 5000;
 
@@ -68,14 +76,14 @@ type FilterField =
   | 'targetSkill'
   | 'title'
   | 'scheduledFor'
+  | 'updatedAt'
   | 'createdAt'
   | 'closedAt';
 
 // Scan-first desktop columns, ordered left-to-right. `field` is the sort/identity
 // key and `sortable` controls whether the header renders a sort button or a static
-// label. Filtering no longer lives in the headers; it is driven entirely by the
-// advanced filter drawer. Workflow title leads as the primary anchor; raw/debug
-// identifiers move out of the default table.
+// label. Workflow title leads as the primary anchor; raw/debug identifiers move
+// out of the default table.
 type TableColumnDef = {
   field: string;
   label: string;
@@ -90,6 +98,13 @@ const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
 ];
+const TABLE_COLUMN_FILTER_FIELDS: Partial<Record<string, FilterField>> = {
+  title: 'title',
+  status: 'status',
+  repository: 'repository',
+  targetRuntime: 'targetRuntime',
+  updatedAt: 'updatedAt',
+};
 
 // All filterable columns. This is the durable filter data model and feeds the
 // advanced filter drawer sections and the active filter chips.
@@ -100,6 +115,7 @@ const FILTER_FIELDS = [
   ['repository', 'Repository'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
+  ['updatedAt', 'Updated'],
   ['scheduledFor', 'Scheduled'],
   ['createdAt', 'Created'],
   ['closedAt', 'Finished'],
@@ -112,6 +128,7 @@ const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'targetRuntime',
   'targetSkill',
   'title',
+  'updatedAt',
   'scheduledFor',
   'createdAt',
   'closedAt',
@@ -127,6 +144,7 @@ const DRAWER_FILTER_FIELDS: Array<[FilterField, string]> = [
   ['repository', 'Repository'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
+  ['updatedAt', 'Updated'],
   ['scheduledFor', 'Scheduled'],
   ['createdAt', 'Created'],
   ['closedAt', 'Finished'],
@@ -145,6 +163,7 @@ type ColumnFilters = {
   targetRuntime: ValueFilter;
   targetSkill: ValueFilter;
   title: TextFilter;
+  updatedAt: DateFilter;
   scheduledFor: DateFilter;
   createdAt: DateFilter;
   closedAt: DateFilter;
@@ -402,6 +421,7 @@ function emptyFilters(): ColumnFilters {
     targetRuntime: emptyValueFilter(),
     targetSkill: emptyValueFilter(),
     title: {},
+    updatedAt: {},
     scheduledFor: {},
     createdAt: {},
     closedAt: {},
@@ -503,6 +523,10 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
     to: params.get('scheduledTo') || '',
     blank: (params.get('scheduledBlank') as DateFilter['blank']) || '',
   };
+  filters.updatedAt = {
+    from: params.get('updatedFrom') || '',
+    to: params.get('updatedTo') || '',
+  };
   filters.createdAt = {
     from: params.get('createdFrom') || '',
     to: params.get('createdTo') || '',
@@ -553,6 +577,7 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
   appendValueParams(params, filters.targetSkill, 'targetSkillIn', 'targetSkillNotIn', 'targetSkillBlank');
   if (filters.title.contains?.trim()) params.set('titleContains', filters.title.contains.trim());
   appendDateParams(params, filters.scheduledFor, 'scheduledFrom', 'scheduledTo', 'scheduledBlank');
+  appendDateParams(params, filters.updatedAt, 'updatedFrom', 'updatedTo');
   appendDateParams(params, filters.createdAt, 'createdFrom', 'createdTo');
   appendDateParams(params, filters.closedAt, 'finishedFrom', 'finishedTo', 'finishedBlank');
 }
@@ -676,7 +701,14 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     return summarizeValues(filters.repository);
   }
   if (field === 'title') return filters.title.contains?.trim() || '';
-  const dateFilter = field === 'scheduledFor' ? filters.scheduledFor : field === 'createdAt' ? filters.createdAt : filters.closedAt;
+  const dateFilter =
+    field === 'scheduledFor'
+      ? filters.scheduledFor
+      : field === 'updatedAt'
+        ? filters.updatedAt
+        : field === 'createdAt'
+          ? filters.createdAt
+          : filters.closedAt;
   if (dateFilter.blank === 'include' && !dateFilter.from && !dateFilter.to) return 'blank';
   if (dateFilter.blank === 'exclude' && !dateFilter.from && !dateFilter.to) return 'not blank';
   const parts = [];
@@ -691,7 +723,7 @@ function clearFilterField(filters: ColumnFilters, field: FilterField): ColumnFil
   const next = { ...filters };
   if (field === 'workflowId' || field === 'title') next[field] = {};
   else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
-  else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
+  else if (field === 'scheduledFor' || field === 'updatedAt' || field === 'createdAt' || field === 'closedAt') next[field] = {};
   else next[field] = emptyValueFilter();
   return next;
 }
@@ -716,17 +748,32 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const [filters, setFilters] = useState(() => parseInitialFilters(initial));
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
   const [hasEditedFilters, setHasEditedFilters] = useState(false);
-  // The advanced filter drawer is the single surface that exposes the full
-  // filter UI. `drawerOpen` controls visibility.
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [desktopFilterField, setDesktopFilterField] = useState<FilterField | null>(null);
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const drawerToggleRef = useRef<HTMLButtonElement | null>(null);
+  const desktopFilterRef = useRef<HTMLDivElement | null>(null);
   // The element that opened the drawer (the Filters trigger or a chip). Focus is
   // returned here when the drawer closes so keyboard users keep their place.
   const filterTriggerRef = useRef<HTMLElement | null>(null);
   // Field whose first control should receive focus when the drawer opens.
   const pendingDrawerFocusRef = useRef<FilterField | null>(null);
-  const [pageSize, setPageSize] = useState(() => parsePageSize(initial.get('limit')));
+  // MM-964: local-first dashboard preferences. Read once on mount; mutations are
+  // mirrored back to localStorage so they survive reload. An explicit `limit` in
+  // the URL still wins over the stored page-size preference so shared links keep
+  // their page size.
+  const initialPrefs = useMemo(() => readDashboardPreferences(), []);
+  const [density, setDensity] = useState<WorkflowListDensity>(initialPrefs.workflowListDensity);
+  const [columnVisibility, setColumnVisibility] = useState(
+    initialPrefs.workflowListColumnVisibility,
+  );
+  const [liveUpdatesPref, setLiveUpdatesPref] = useState(initialPrefs.liveUpdatesEnabled);
+  const [prefsMenuOpen, setPrefsMenuOpen] = useState(false);
+  const prefsMenuRef = useRef<HTMLDivElement | null>(null);
+  const [pageSize, setPageSize] = useState(() => {
+    const limitParam = initial.get('limit');
+    return limitParam !== null ? parsePageSize(limitParam) : initialPrefs.workflowListPageSize;
+  });
   const [listCursor, setListCursor] = useState<string | null>(() =>
     ignoredWorkflowScopeState ? null : initial.get('nextPageToken')?.trim() || null,
   );
@@ -788,16 +835,25 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       }
       return ExecutionListResponseSchema.parse(await response.json());
     },
-    refetchInterval: listEnabled && !drawerOpen ? listPollMs : false,
+    refetchInterval:
+      listEnabled && liveUpdatesPref && !drawerOpen && desktopFilterField === null
+        ? listPollMs
+        : false,
+    // Honour the live-updates pause on tab focus too: without this the shared
+    // dashboard query client falls back to React Query's stale-on-focus default
+    // and would refetch /executions when returning to the tab even while paused.
+    refetchOnWindowFocus: liveUpdatesPref,
   });
 
-  // Facets enrich the include/exclude dropdowns. The drawer shows every value
-  // field at once, so we fetch each field's facet values while the drawer is
-  // open. This reuses the existing single-facet backend contract (one request
-  // per facet) without any API changes.
+  // Facets enrich the include/exclude dropdowns. The mobile drawer can show
+  // every value field at once; desktop column popovers request the active field.
+  // This reuses the existing single-facet backend contract without API changes.
   const getFacetQueryOptions = (facet: ExecutionFacetResponse['facet']) => ({
     queryKey: ['workflow-list-facet', facet, filters] as const,
-    enabled: listEnabled && filterValidationErrors.length === 0 && drawerOpen,
+    enabled:
+      listEnabled &&
+      filterValidationErrors.length === 0 &&
+      (drawerOpen || facetForFilterField(desktopFilterField) === facet),
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('source', 'temporal');
@@ -826,6 +882,57 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setCursorStack([]);
   }, []);
 
+  // MM-964: column visibility. The workflow title column is the primary anchor
+  // and is always shown; every other column honors the stored preference.
+  const isColumnVisible = useCallback(
+    (field: string): boolean => {
+      if (field === 'title') return true;
+      if (!(TOGGLEABLE_WORKFLOW_LIST_COLUMNS as readonly string[]).includes(field)) return true;
+      return columnVisibility[field as ToggleableWorkflowListColumn] !== false;
+    },
+    [columnVisibility],
+  );
+  const visibleColumns = useMemo(
+    () => TABLE_COLUMNS.filter((column) => isColumnVisible(column.field)),
+    [isColumnVisible],
+  );
+
+  const handleDensityChange = useCallback((next: WorkflowListDensity) => {
+    setDensity(next);
+    updateDashboardPreferences({ workflowListDensity: next });
+  }, []);
+
+  const handleToggleColumn = useCallback((field: ToggleableWorkflowListColumn, visible: boolean) => {
+    setColumnVisibility((current) => {
+      const next = { ...current, [field]: visible };
+      updateDashboardPreferences({ workflowListColumnVisibility: next });
+      return next;
+    });
+  }, []);
+
+  const handleLiveUpdatesChange = useCallback((enabled: boolean) => {
+    setLiveUpdatesPref(enabled);
+    updateDashboardPreferences({ liveUpdatesEnabled: enabled });
+  }, []);
+
+  const handlePageSizeChange = useCallback(
+    (size: number) => {
+      setPageSize(size);
+      updateDashboardPreferences({ workflowListPageSize: size });
+      resetToFirstPage();
+    },
+    [resetToFirstPage],
+  );
+
+  const handleResetPreferences = useCallback(() => {
+    const defaults = resetDashboardPreferences();
+    setDensity(defaults.workflowListDensity);
+    setColumnVisibility(defaults.workflowListColumnVisibility);
+    setLiveUpdatesPref(defaults.liveUpdatesEnabled);
+    setPageSize(defaults.workflowListPageSize);
+    resetToFirstPage();
+  }, [resetToFirstPage]);
+
   const restoreTriggerFocus = useCallback(() => {
     const trigger = filterTriggerRef.current;
     window.requestAnimationFrame(() => {
@@ -836,6 +943,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       }
     });
   }, []);
+
+  const closeDesktopFilter = useCallback(() => {
+    setDesktopFilterField(null);
+    setDraftFilters(filters);
+  }, [filters]);
 
   const openDrawer = useCallback(
     (field: FilterField | null, trigger: HTMLElement | null) => {
@@ -863,6 +975,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setFilters(draftFilters);
     resetToFirstPage();
     setDrawerOpen(false);
+    setDesktopFilterField(null);
     restoreTriggerFocus();
   }, [draftFilters, resetToFirstPage, restoreTriggerFocus]);
 
@@ -872,6 +985,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters(cleared);
     setFilters(cleared);
     resetToFirstPage();
+    setDesktopFilterField(null);
   }, [resetToFirstPage]);
 
   const removeActiveFilter = useCallback(
@@ -881,9 +995,45 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       setFilters(next);
       setDraftFilters(next);
       resetToFirstPage();
+      setDesktopFilterField(null);
     },
     [filters, resetToFirstPage],
   );
+
+  useEffect(() => {
+    if (desktopFilterField === null) return;
+    const onMouseDown = (event: MouseEvent) => {
+      const root = desktopFilterRef.current;
+      if (root && !root.contains(event.target as Node)) {
+        closeDesktopFilter();
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [closeDesktopFilter, desktopFilterField]);
+
+  // MM-964: close the dashboard preferences popover on an outside click.
+  useEffect(() => {
+    if (!prefsMenuOpen) return;
+    const onMouseDown = (event: MouseEvent) => {
+      const root = prefsMenuRef.current;
+      if (root && !root.contains(event.target as Node)) {
+        setPrefsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [prefsMenuOpen]);
+
+  useEffect(() => {
+    if (desktopFilterField === null) return;
+    const frame = window.requestAnimationFrame(() => {
+      desktopFilterRef.current
+        ?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), button:not([disabled])')
+        ?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [desktopFilterField]);
 
   // When the drawer opens, move focus to the first control of the requested
   // field (or the first control overall). This drives the keyboard "open the
@@ -972,9 +1122,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     <div className="queue-results-toolbar workflow-list-results-footer">
       <div className="workflow-list-footer-live">
         <span className="small">
-          {listEnabled
-            ? `Live updates enabled. Polling every ${Math.round(listPollMs / 1000)}s`
-            : 'Live updates unavailable while the list is disabled.'}
+          {!listEnabled
+            ? 'Live updates unavailable while the list is disabled.'
+            : liveUpdatesPref
+              ? `Live updates enabled. Polling every ${Math.round(listPollMs / 1000)}s`
+              : 'Live updates paused.'}
         </span>
         {sortedItems.length > 0 ? (
           <span className="small workflow-list-sort-scope-note">{CURRENT_PAGE_SORT_NOTICE}</span>
@@ -984,10 +1136,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         <PageSizeSelector
           pageSize={pageSize}
           disabled={!listEnabled}
-          onPageSizeChange={(size) => {
-            setPageSize(size);
-            resetToFirstPage();
-          }}
+          onPageSizeChange={handlePageSizeChange}
         />
         <div className="workflow-list-footer-page-summary" aria-label="Pagination summary">
           <span className="small">{pageRangeSummary}</span>
@@ -1073,7 +1222,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }));
   };
 
-  const updateDraftDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+  const updateDraftDate = (field: 'scheduledFor' | 'updatedAt' | 'createdAt' | 'closedAt', patch: DateFilter) => {
     setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
   };
 
@@ -1130,9 +1279,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return null;
   };
 
-  // Renders one filter's controls bound to the draft filter state. The drawer is
-  // the only surface that renders these now; edits stage into `draftFilters`
-  // until the user applies them.
+  // Renders one filter's controls bound to the draft filter state. Edits stage
+  // into `draftFilters` until the user applies them.
   const renderFilterControl = (field: FilterField) => {
     if (field === 'workflowId' || field === 'title') {
       const label = field === 'workflowId' ? 'ID' : 'Title';
@@ -1300,8 +1448,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       );
     }
 
-    if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') {
-      const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
+    if (field === 'scheduledFor' || field === 'updatedAt' || field === 'createdAt' || field === 'closedAt') {
+      const label =
+        field === 'scheduledFor'
+          ? 'Scheduled'
+          : field === 'updatedAt'
+            ? 'Updated'
+            : field === 'createdAt'
+              ? 'Created'
+              : 'Finished';
       const draft = draftFilters[field];
       return (
         <div className="queue-inline-filter workflow-list-filter-control">
@@ -1323,7 +1478,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               onChange={(event) => updateDraftDate(field, { to: event.target.value })}
             />
           </label>
-          {field !== 'createdAt' ? (
+          {field !== 'createdAt' && field !== 'updatedAt' ? (
             <label>
               {label} blank values
               <select
@@ -1481,10 +1636,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
 
       <section
         className="queue-layouts panel--data workflow-list-data-slab"
-        aria-labelledby="workflow-list-title"
+        aria-label="Workflow list"
       >
         <header className="workflow-list-results-header">
-          <h2 className="page-title" id="workflow-list-title">Workflows</h2>
           <div className="workflow-list-filter-bar">
             <button
               type="button"
@@ -1536,6 +1690,93 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               </div>
             ) : null}
           </div>
+          <div className="workflow-list-view-options" ref={prefsMenuRef}>
+            <button
+              type="button"
+              className="secondary workflow-list-view-options-trigger"
+              aria-haspopup="dialog"
+              aria-expanded={prefsMenuOpen}
+              onClick={() => setPrefsMenuOpen((open) => !open)}
+            >
+              View options
+            </button>
+            {prefsMenuOpen ? (
+              <div
+                className="workflow-list-view-options-popover"
+                role="dialog"
+                aria-label="Workflow list view options"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.stopPropagation();
+                    setPrefsMenuOpen(false);
+                  }
+                }}
+              >
+                <fieldset className="workflow-list-view-options-group">
+                  <legend>Density</legend>
+                  <label className="checkbox">
+                    <input
+                      type="radio"
+                      name="workflow-list-density"
+                      checked={density === 'comfortable'}
+                      onChange={() => handleDensityChange('comfortable')}
+                    />
+                    Comfortable
+                  </label>
+                  <label className="checkbox">
+                    <input
+                      type="radio"
+                      name="workflow-list-density"
+                      checked={density === 'compact'}
+                      onChange={() => handleDensityChange('compact')}
+                    />
+                    Compact
+                  </label>
+                </fieldset>
+                <fieldset className="workflow-list-view-options-group">
+                  <legend>Columns</legend>
+                  {TABLE_COLUMNS.filter((column) =>
+                    (TOGGLEABLE_WORKFLOW_LIST_COLUMNS as readonly string[]).includes(column.field),
+                  ).map((column) => (
+                    <label className="checkbox" key={column.field}>
+                      <input
+                        type="checkbox"
+                        checked={isColumnVisible(column.field)}
+                        onChange={(event) =>
+                          handleToggleColumn(
+                            column.field as ToggleableWorkflowListColumn,
+                            event.target.checked,
+                          )
+                        }
+                      />
+                      {column.label}
+                    </label>
+                  ))}
+                </fieldset>
+                <fieldset className="workflow-list-view-options-group">
+                  <legend>Live updates</legend>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={liveUpdatesPref}
+                      onChange={(event) => handleLiveUpdatesChange(event.target.checked)}
+                    />
+                    Poll for live updates
+                  </label>
+                </fieldset>
+                <div className="workflow-list-view-options-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={handleResetPreferences}
+                    aria-label="Reset dashboard preferences to defaults"
+                  >
+                    Reset to defaults
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         </header>
         {isLoading ? (
           <p className="loading workflow-list-empty-message">Loading workflows...</p>
@@ -1555,39 +1796,126 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
           </>
         ) : (
           <>
-            <div className="queue-table-wrapper" data-layout="table">
+            <div className="queue-table-wrapper" data-layout="table" data-density={density}>
                 <table>
                   <colgroup>
-                    {TABLE_COLUMNS.map((column) => (
+                    {visibleColumns.map((column) => (
                       <col key={column.field} className={column.colClassName} />
                     ))}
                     {actionsEnabled ? <col className="queue-table-column-actions" /> : null}
                   </colgroup>
                   <thead>
                     <tr>
-                      {TABLE_COLUMNS.map(({ field, label, sortable }) => {
+                      {visibleColumns.map(({ field, label, sortable }) => {
                         const { ariaSort, ariaLabel, sortHint } = sortAccessibilityProps(field, label);
+                        const filterField = TABLE_COLUMN_FILTER_FIELDS[field];
+                        const filterValue = filterField ? filterSummary(filterField, filters) : '';
+                        const isFilterOpen = filterField === desktopFilterField;
                         return (
                           <th
                             key={field}
                             aria-sort={sortable ? ariaSort : undefined}
                             className="workflow-list-header-cell"
                           >
-                            {sortable ? (
-                              <button
-                                type="button"
-                                className="table-sort-button"
-                                onClick={() => onHeaderClick(field)}
-                                aria-label={ariaLabel}
-                                title={CURRENT_PAGE_SORT_NOTICE}
-                              >
-                                {label}
-                                {sortIndicator(field)}
-                                <span className="sr-only">{sortHint}</span>
-                              </button>
-                            ) : (
-                              <span className="workflow-list-static-header">{label}</span>
-                            )}
+                            <div className="workflow-list-column-header">
+                              {sortable ? (
+                                <button
+                                  type="button"
+                                  className="table-sort-button"
+                                  onClick={() => onHeaderClick(field)}
+                                  aria-label={ariaLabel}
+                                  title={CURRENT_PAGE_SORT_NOTICE}
+                                >
+                                  {label}
+                                  {sortIndicator(field)}
+                                  <span className="sr-only">{sortHint}</span>
+                                </button>
+                              ) : (
+                                <span className="workflow-list-static-header">{label}</span>
+                              )}
+                              {filterField ? (
+                                <div
+                                  className="workflow-list-column-filter"
+                                  ref={isFilterOpen ? desktopFilterRef : null}
+                                >
+                                  <button
+                                    type="button"
+                                    className={`workflow-list-column-filter-button${filterValue ? ' is-active' : ''}`}
+                                    aria-label={
+                                      filterValue
+                                        ? `${label} column filter: ${filterValue}`
+                                        : `${label} filter. No filter applied.`
+                                    }
+                                    aria-haspopup="dialog"
+                                    aria-expanded={isFilterOpen}
+                                    onClick={() => {
+                                      setDraftFilters(filters);
+                                      setDesktopFilterField((current) => (current === filterField ? null : filterField));
+                                    }}
+                                  >
+                                    <svg
+                                      aria-hidden="true"
+                                      className="workflow-list-column-filter-icon"
+                                      viewBox="0 0 16 16"
+                                      focusable="false"
+                                    >
+                                      <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                                    </svg>
+                                  </button>
+                                  {isFilterOpen ? (
+                                    <div
+                                      className="workflow-list-column-filter-popover"
+                                      role="dialog"
+                                      aria-label={`${label} filter`}
+                                      onKeyDown={(event) => {
+                                        if (event.key === 'Escape') {
+                                          event.stopPropagation();
+                                          closeDesktopFilter();
+                                        }
+                                        if (
+                                          event.key === 'Enter' &&
+                                          event.target instanceof HTMLInputElement &&
+                                          !event.defaultPrevented
+                                        ) {
+                                          event.preventDefault();
+                                          applyDraftFilters();
+                                        }
+                                      }}
+                                    >
+                                      <div className="workflow-list-column-filter-title">{label} filter</div>
+                                      {renderFilterControl(filterField)}
+                                      <div className="workflow-list-filter-actions">
+                                        <button
+                                          type="button"
+                                          className="secondary"
+                                          onClick={() => removeActiveFilter(filterField)}
+                                          disabled={!listEnabled || !filterValue}
+                                          aria-label={`Reset ${label} filter`}
+                                        >
+                                          Reset
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="secondary"
+                                          onClick={closeDesktopFilter}
+                                          aria-label={`Cancel ${label} filter`}
+                                        >
+                                          Cancel
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={applyDraftFilters}
+                                          disabled={!listEnabled}
+                                          aria-label={`Apply ${label} filter`}
+                                        >
+                                          Apply
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
                           </th>
                         );
                       })}
@@ -1613,25 +1941,35 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                             </a>
                             <code className="workflow-list-row-id">{rowWorkflowId(row)}</code>
                           </td>
-                          <td className="queue-table-cell-status">
-                            <ExecutionStatusPill status={row.rawState || row.state || row.status} />
-                          </td>
-                          <td className="queue-table-cell-next-action">
-                            {actionItems.length > 0 ? (
-                              actionItems.map((item) => (
-                                <div key={item} className="workflow-list-next-action-item small">
-                                  {item}
-                                </div>
-                              ))
-                            ) : (
-                              <span className="workflow-list-next-action-empty">—</span>
-                            )}
-                          </td>
-                          <td className="queue-table-cell-compact">{row.repository || '—'}</td>
-                          <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
-                          <td className="queue-table-cell-date" title={formatWhen(updatedAt)}>
-                            {formatRelative(updatedAt)}
-                          </td>
+                          {isColumnVisible('status') ? (
+                            <td className="queue-table-cell-status">
+                              <ExecutionStatusPill status={row.rawState || row.state || row.status} />
+                            </td>
+                          ) : null}
+                          {isColumnVisible('nextAction') ? (
+                            <td className="queue-table-cell-next-action">
+                              {actionItems.length > 0 ? (
+                                actionItems.map((item) => (
+                                  <div key={item} className="workflow-list-next-action-item small">
+                                    {item}
+                                  </div>
+                                ))
+                              ) : (
+                                <span className="workflow-list-next-action-empty">—</span>
+                              )}
+                            </td>
+                          ) : null}
+                          {isColumnVisible('repository') ? (
+                            <td className="queue-table-cell-compact">{row.repository || '—'}</td>
+                          ) : null}
+                          {isColumnVisible('targetRuntime') ? (
+                            <td className="queue-table-cell-compact">{formatRuntimeLabel(row.targetRuntime)}</td>
+                          ) : null}
+                          {isColumnVisible('updatedAt') ? (
+                            <td className="queue-table-cell-date" title={formatWhen(updatedAt)}>
+                              {formatRelative(updatedAt)}
+                            </td>
+                          ) : null}
                           {actionsEnabled ? (
                             <td className="queue-table-cell-actions">
                               <WorkflowRowActionsMenu

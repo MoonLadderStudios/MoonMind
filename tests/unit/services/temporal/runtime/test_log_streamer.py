@@ -368,6 +368,32 @@ def test_emit_observability_event_publishes_session_metadata(streamer):
     assert persisted_events[0]["sessionEpoch"] == 2
     assert "session_id" not in persisted_events[0]
 
+
+def test_empty_assistant_turn_event_kind_is_schema_valid(streamer):
+    log_streamer, _storage = streamer
+
+    log_streamer.emit_observability_event(
+        run_id="run-empty-turn",
+        workspace_path=None,
+        stream="session",
+        text="Codex app-server completed a turn without assistant output.",
+        kind="empty_assistant_turn_detected",
+        session_id="sess-1",
+        session_epoch=1,
+        container_id="ctr-1",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        active_turn_id=None,
+        metadata={
+            "failureCause": "app_server_protocol_empty_turn",
+            "retryRecommendedAction": "clear_session",
+        },
+    )
+
+    persisted_events = log_streamer.consume_observability_events("run-empty-turn")
+    assert persisted_events[0]["kind"] == "empty_assistant_turn_detected"
+
+
 def test_persist_observability_events_promotes_spool_to_artifact(
     streamer,
     tmp_path: Path,

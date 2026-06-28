@@ -23,7 +23,7 @@ services:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     ports:
-      - "8000:8000"
+      - "${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -59,7 +59,8 @@ services:
       - OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme} # For 'local', matches realm-export.json
       - JWT_SECRET=${JWT_SECRET:-devsecret} # For 'disabled' auth provider (legacy JWT)
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./model_data:/app/model_data
       - ./api_service:/app/api_service
@@ -104,7 +105,7 @@ services:
     image: postgres:${POSTGRES_VERSION:-17}
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-moonmind}
       TEMPORAL_POSTGRES_USER: ${TEMPORAL_POSTGRES_USER:-temporal}
       TEMPORAL_POSTGRES_PASSWORD: ${TEMPORAL_POSTGRES_PASSWORD:-temporal}
@@ -290,7 +291,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -346,7 +348,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -400,7 +403,8 @@ services:
         moonmind.workflows.temporal.worker_runtime}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -459,7 +463,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -537,7 +542,8 @@ services:
       - NO_PROXY=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
       - no_proxy=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -645,7 +651,8 @@ services:
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
@@ -726,7 +733,8 @@ services:
       - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-temporal-worker-deployment-control}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
@@ -788,7 +796,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -829,6 +838,39 @@ services:
     networks:
       - local-network
 
+  omnigent:
+    profiles: ["omnigent-host"]
+    image: ${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}
+    command: ["omnigent", "server", "--host", "0.0.0.0", "--port", "8000", "--no-open"]
+    expose:
+      - "8000"
+    volumes:
+      - omnigent-server-state:/data
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  omnigent-host:
+    profiles: ["omnigent-host"]
+    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    env_file:
+      - .env
+    volumes:
+      - omnigent-host-state:/root/.omnigent
+      - ./omnigent_workspaces:/workspaces
+    depends_on:
+      omnigent:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
+
   init-db:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
@@ -839,7 +881,8 @@ services:
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./tools:/app/tools:ro
@@ -857,6 +900,83 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+
+  omnigent-db-init:
+    image: postgres:${POSTGRES_VERSION:-17}
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=${POSTGRES_USER:-postgres}
+      - PGPASSWORD=${POSTGRES_PASSWORD:-password}
+      - PGDATABASE=${POSTGRES_DB:-moonmind}
+      - OMNIGENT_POSTGRES_USER=${OMNIGENT_POSTGRES_USER:-omnigent}
+      - OMNIGENT_POSTGRES_PASSWORD=${OMNIGENT_POSTGRES_PASSWORD:-omnigent}
+      - OMNIGENT_POSTGRES_DB=${OMNIGENT_POSTGRES_DB:-omnigent}
+    command:
+      - /bin/sh
+      - -lc
+      - |
+        set -eu
+        quote_ident() { printf '%s' "$$1" | sed 's/"/""/g'; }
+        quote_literal() { printf '%s' "$$1" | sed "s/'/''/g"; }
+
+        role_sql="\"$$(quote_ident "$$OMNIGENT_POSTGRES_USER")\""
+        db_sql="\"$$(quote_ident "$$OMNIGENT_POSTGRES_DB")\""
+        password_sql="'$$(quote_literal "$$OMNIGENT_POSTGRES_PASSWORD")'"
+        role_literal="'$$(quote_literal "$$OMNIGENT_POSTGRES_USER")'"
+        db_literal="'$$(quote_literal "$$OMNIGENT_POSTGRES_DB")'"
+
+        role_exists="$$(psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_roles WHERE rolname = $$role_literal")"
+        if [ "$$role_exists" != "1" ]; then
+          psql -v ON_ERROR_STOP=1 -c "CREATE ROLE $$role_sql LOGIN PASSWORD $$password_sql"
+        fi
+        psql -v ON_ERROR_STOP=1 -c "ALTER ROLE $$role_sql PASSWORD $$password_sql"
+
+        db_exists="$$(psql -v ON_ERROR_STOP=1 -tAc "SELECT 1 FROM pg_database WHERE datname = $$db_literal")"
+        if [ "$$db_exists" != "1" ]; then
+          psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE $$db_sql OWNER $$role_sql"
+        fi
+
+        psql -v ON_ERROR_STOP=1 -c "GRANT ALL PRIVILEGES ON DATABASE $$db_sql TO $$role_sql"
+        psql -v ON_ERROR_STOP=1 --dbname="$$OMNIGENT_POSTGRES_DB" -c "GRANT ALL ON SCHEMA public TO $$role_sql"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - local-network
+    restart: "no"
+
+  omnigent:
+    image: ${OMNIGENT_IMAGE:-ghcr.io/moonladderstudios/omnigent}:${OMNIGENT_IMAGE_TAG:-latest}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - DATABASE_URL=postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/${OMNIGENT_POSTGRES_DB:-omnigent}
+      - OMNIGENT_CONFIG=${OMNIGENT_CONFIG:-}
+      - OMNIGENT_BUILTIN_ADMIN_EMAIL=${OMNIGENT_BUILTIN_ADMIN_EMAIL:-admin@example.local}
+      - OMNIGENT_BUILTIN_ADMIN_PASSWORD=${OMNIGENT_BUILTIN_ADMIN_PASSWORD:-admin}
+      - OMNIGENT_BUILTIN_USER_EMAIL=${OMNIGENT_BUILTIN_USER_EMAIL:-user@example.local}
+      - OMNIGENT_BUILTIN_USER_PASSWORD=${OMNIGENT_BUILTIN_USER_PASSWORD:-user}
+      - OMNIGENT_OIDC_ENABLED=${OMNIGENT_OIDC_ENABLED:-false}
+      - OMNIGENT_OIDC_ISSUER_URL=${OMNIGENT_OIDC_ISSUER_URL:-}
+      - OMNIGENT_OIDC_CLIENT_ID=${OMNIGENT_OIDC_CLIENT_ID:-}
+      - OMNIGENT_OIDC_CLIENT_SECRET=${OMNIGENT_OIDC_CLIENT_SECRET:-}
+      - OMNIGENT_OIDC_SCOPES=${OMNIGENT_OIDC_SCOPES:-openid profile email}
+      - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host}
+      - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    ports:
+      - "${OMNIGENT_PORT:-8000}:8000"
+    volumes:
+      - omnigent-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      omnigent-db-init:
+        condition: service_completed_successfully
+    networks:
+      - local-network
+    restart: unless-stopped
 
   agent-workspaces-init:
     image: alpine:3.20
@@ -930,6 +1050,8 @@ services:
 
 volumes:
   qdrant-storage:
+  omnigent-server-state:
+  omnigent-host-state:
   postgres-data:
   minio-data:
   workflow_workspaces:
@@ -947,6 +1069,7 @@ volumes:
     name: ${GEMINI_VOLUME_NAME:-gemini_auth_volume}
   claude_auth_volume:
     name: ${CLAUDE_VOLUME_NAME:-claude_auth_volume}
+  omnigent-data:
 
 networks:
   local-network:

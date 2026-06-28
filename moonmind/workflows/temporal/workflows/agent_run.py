@@ -153,6 +153,9 @@ SYNC_PROFILES_BEFORE_SLOT_REQUEST_PATCH_ID = (
 PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID = (
     "agent-run-pin-provider-profile-before-slot-request-v1"
 )
+STICKY_PINNED_PROFILE_COOLDOWN_RETRY_PATCH_ID = (
+    "agent-run-sticky-pinned-profile-cooldown-retry-v1"
+)
 RUNTIME_SELECTION_PROFILE_CLEAR_PATCH_ID = (
     "agent-run-runtime-selection-profile-clear-v1"
 )
@@ -2689,6 +2692,9 @@ class MoonMindAgentRun:
         try:
             while True:
                 skip_poll_and_fetch = False
+                sticky_pinned_profile_on_cooldown_retry = workflow.patched(
+                    STICKY_PINNED_PROFILE_COOLDOWN_RETRY_PATCH_ID
+                )
                 uses_codex_session_adapter = self._uses_codex_session_adapter(request)
                 parent_info = workflow.info().parent
                 elapsed = (workflow.now() - overall_start).total_seconds()
@@ -2723,7 +2729,8 @@ class MoonMindAgentRun:
                         exclude_none=True,
                     )
                     if (
-                        self._skip_default_profile_pin_once
+                        not sticky_pinned_profile_on_cooldown_retry
+                        and self._skip_default_profile_pin_once
                         and not request.execution_profile_ref
                         and not self._profile_selector_has_constraints(
                             request.profile_selector
@@ -2742,12 +2749,20 @@ class MoonMindAgentRun:
                         )
                         if workflow.patched(
                             PIN_PROVIDER_PROFILE_BEFORE_SLOT_REQUEST_PATCH_ID
-                        ) and not self._skip_default_profile_pin_once:
+                        ) and (
+                            sticky_pinned_profile_on_cooldown_retry
+                            or not self._skip_default_profile_pin_once
+                        ):
                             pinned_profile_id = self._default_execution_profile_ref(
                                 request
                             )
                             if pinned_profile_id:
                                 request.execution_profile_ref = pinned_profile_id
+                                if (
+                                    sticky_pinned_profile_on_cooldown_retry
+                                    and requested_execution_profile_ref is None
+                                ):
+                                    requested_execution_profile_ref = pinned_profile_id
                         self._skip_default_profile_pin_once = False
                         manager_handle = await self._ensure_manager_and_signal(
                             manager_id,
@@ -3827,9 +3842,21 @@ class MoonMindAgentRun:
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
-                        request.execution_profile_ref = requested_execution_profile_ref
+                        retry_execution_profile_ref = requested_execution_profile_ref
+                        if (
+                            sticky_pinned_profile_on_cooldown_retry
+                            and retry_execution_profile_ref is None
+                        ):
+                            retry_execution_profile_ref = profile_id
+                        if (
+                            sticky_pinned_profile_on_cooldown_retry
+                            and retry_execution_profile_ref is not None
+                        ):
+                            requested_execution_profile_ref = retry_execution_profile_ref
+                        request.execution_profile_ref = retry_execution_profile_ref
                         self._skip_default_profile_pin_once = (
-                            requested_execution_profile_ref is None
+                            not sticky_pinned_profile_on_cooldown_retry
+                            and requested_execution_profile_ref is None
                         )
                         self.run_status = RunStatus.awaiting_slot
                         continue  # Retries loop
@@ -3848,12 +3875,32 @@ class MoonMindAgentRun:
                                 request=request,
                             ),
                         )
+                        active_profile_id = (
+                            str(
+                                request.execution_profile_ref
+                                or self._assigned_profile_id
+                                or ""
+                            ).strip()
+                            or None
+                        )
                         self.completion_event.clear()
                         self.final_result = None
                         self._assigned_profile_id = None
-                        request.execution_profile_ref = requested_execution_profile_ref
+                        retry_execution_profile_ref = requested_execution_profile_ref
+                        if (
+                            sticky_pinned_profile_on_cooldown_retry
+                            and retry_execution_profile_ref is None
+                        ):
+                            retry_execution_profile_ref = active_profile_id
+                        if (
+                            sticky_pinned_profile_on_cooldown_retry
+                            and retry_execution_profile_ref is not None
+                        ):
+                            requested_execution_profile_ref = retry_execution_profile_ref
+                        request.execution_profile_ref = retry_execution_profile_ref
                         self._skip_default_profile_pin_once = (
-                            requested_execution_profile_ref is None
+                            not sticky_pinned_profile_on_cooldown_retry
+                            and requested_execution_profile_ref is None
                         )
                         continue  # Retries loop
 

@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -66,6 +68,78 @@ def test_temporal_compose_topology_and_private_exposure():
         assert "local-network" in temporal_networks
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
+
+def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
+    compose = _load_compose()
+    services = compose["services"]
+
+    api_service = services["api"]
+    assert api_service["ports"] == ["${MOONMIND_API_HOST_PORT:-7000}:8000"]
+
+    healthcheck = " ".join(str(part) for part in api_service["healthcheck"]["test"])
+    assert "http://localhost:8000/healthz" in healthcheck
+
+    api_env = _env_map(api_service["environment"])
+    assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"
+
+    assert services["postgres"]["environment"]["POSTGRES_PASSWORD"] == (
+        "${POSTGRES_PASSWORD:-password}"
+    )
+
+    runtime_service_names = [
+        "temporal-worker-workflow",
+        "temporal-worker-workflow-merge-automation",
+        "temporal-worker-agent-runtime",
+    ]
+    for service_name in runtime_service_names:
+        service_env = _env_map(services[service_name]["environment"])
+        assert service_env["MOONMIND_URL"] == "${MOONMIND_URL:-http://api:8000}"
+
+    for service in services.values():
+        for env_file in service.get("env_file", []):
+            if isinstance(env_file, dict) and env_file.get("path") == ".env":
+                assert env_file.get("required") is False
+
+    env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
+    assert any(
+        line.strip() == "MOONMIND_API_HOST_PORT=7000"
+        for line in env_template.splitlines()
+    )
+
+def test_documented_compose_startup_config_succeeds_without_env_file(tmp_path):
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI is not available")
+
+    compose_version = subprocess.run(
+        ["docker", "compose", "version"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if compose_version.returncode != 0:
+        pytest.skip("docker compose plugin is not available")
+
+    env_path = REPO_ROOT / ".env"
+    hidden_env_path = tmp_path / ".env"
+    env_was_hidden = False
+    if env_path.exists():
+        shutil.move(str(env_path), str(hidden_env_path))
+        env_was_hidden = True
+
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", "docker-compose.yaml", "config"],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        if env_was_hidden:
+            shutil.move(str(hidden_env_path), str(env_path))
+
+    assert result.returncode == 0, result.stderr
 
 def test_merge_automation_workflow_worker_polls_dedicated_user_workflow_queue():
     compose = _load_compose()
@@ -175,6 +249,52 @@ def test_local_compose_enables_temporal_workflow_editing_readiness():
         for line in env_template.splitlines()
     )
 
+
+def test_omnigent_host_profile_service_is_wired_for_mm_971():
+    # MM-971 carries the optional host-service slice from source issue MM-968.
+    compose = _load_compose()
+    services = compose["services"]
+    volumes = compose["volumes"]
+
+    assert "omnigent" in services
+    assert "omnigent-host" in services
+
+    server_service = services["omnigent"]
+    assert server_service["profiles"] == ["omnigent-host"]
+    assert server_service["command"] == [
+        "omnigent",
+        "server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--no-open",
+    ]
+    assert _network_names(server_service) == {"local-network"}
+
+    host_service = services["omnigent-host"]
+    assert host_service["profiles"] == ["omnigent-host"]
+    assert host_service["command"] == [
+        "omnigent",
+        "host",
+        "--server",
+        "http://omnigent:8000",
+        "--non-interactive",
+    ]
+    assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
+    assert _network_names(host_service) == {"local-network"}
+
+    host_env = _env_map(host_service["environment"])
+    assert host_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY:-}"
+    assert host_env["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
+    assert host_env["GEMINI_API_KEY"] == "${GEMINI_API_KEY:-}"
+    assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
+
+    host_volumes = set(host_service["volumes"])
+    assert "omnigent-host-state:/root/.omnigent" in host_volumes
+    assert "./omnigent_workspaces:/workspaces" in host_volumes
+    assert "omnigent-host-state" in volumes
+
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
     services = compose["services"]
@@ -214,3 +334,95 @@ def test_runtime_image_includes_agent_skill_sources():
     )
 
     assert "COPY .agents /app/.agents/" in dockerfile
+
+
+def test_omnigent_shared_postgres_compose_topology_for_mm_970():
+    compose = _load_compose()
+    services = compose["services"]
+
+    assert "postgres" in services
+    assert not any(
+        service_name != "postgres" and "postgres" in service_name
+        for service_name in services
+    )
+
+    init_service = services["omnigent-db-init"]
+    assert init_service["restart"] == "no"
+    assert init_service["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert _network_names(init_service) == {"local-network"}
+
+    init_env = _env_map(init_service["environment"])
+    assert init_env["OMNIGENT_POSTGRES_USER"] == (
+        "${OMNIGENT_POSTGRES_USER:-omnigent}"
+    )
+    assert init_env["OMNIGENT_POSTGRES_PASSWORD"] == (
+        "${OMNIGENT_POSTGRES_PASSWORD:-omnigent}"
+    )
+    assert init_env["OMNIGENT_POSTGRES_DB"] == "${OMNIGENT_POSTGRES_DB:-omnigent}"
+
+    command_text = "\n".join(str(part) for part in init_service["command"])
+    assert "SELECT 1 FROM pg_roles" in command_text
+    assert "CREATE ROLE" in command_text
+    assert "ALTER ROLE $$role_sql PASSWORD $$password_sql" in command_text
+    assert "SELECT 1 FROM pg_database" in command_text
+    assert "CREATE DATABASE" in command_text
+    assert "GRANT ALL PRIVILEGES ON DATABASE" in command_text
+    assert "DROP DATABASE" not in command_text
+    assert "DROP ROLE" not in command_text
+
+    omnigent_service = services["omnigent"]
+    assert omnigent_service["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert (
+        omnigent_service["depends_on"]["omnigent-db-init"]["condition"]
+        == "service_completed_successfully"
+    )
+    assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
+    assert _network_names(omnigent_service) == {"local-network"}
+    assert "omnigent-data:/data" in omnigent_service["volumes"]
+    assert "omnigent-data" in compose["volumes"]
+
+    omnigent_env = _env_map(omnigent_service["environment"])
+    assert omnigent_env["DATABASE_URL"] == (
+        "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
+        "${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/"
+        "${OMNIGENT_POSTGRES_DB:-omnigent}"
+    )
+    assert "POSTGRES_USER" not in omnigent_env
+    assert "POSTGRES_PASSWORD" not in omnigent_env
+    assert "POSTGRES_DB" not in omnigent_env
+
+
+def test_omnigent_env_template_and_example_config_for_mm_970():
+    env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
+    for expected_name in (
+        "OMNIGENT_IMAGE",
+        "OMNIGENT_IMAGE_TAG",
+        "OMNIGENT_PORT",
+        "OMNIGENT_POSTGRES_USER",
+        "OMNIGENT_POSTGRES_PASSWORD",
+        "OMNIGENT_POSTGRES_DB",
+        "OMNIGENT_BUILTIN_ADMIN_EMAIL",
+        "OMNIGENT_BUILTIN_ADMIN_PASSWORD",
+        "OMNIGENT_BUILTIN_USER_EMAIL",
+        "OMNIGENT_BUILTIN_USER_PASSWORD",
+        "OMNIGENT_OIDC_ENABLED",
+        "OMNIGENT_OIDC_ISSUER_URL",
+        "OMNIGENT_OIDC_CLIENT_ID",
+        "OMNIGENT_OIDC_CLIENT_SECRET",
+        "OMNIGENT_OIDC_SCOPES",
+        "OMNIGENT_CONFIG",
+        "OMNIGENT_HOST_IMAGE",
+        "OMNIGENT_HOST_IMAGE_TAG",
+    ):
+        assert f"{expected_name}=" in env_template
+
+    config = yaml.safe_load(
+        (REPO_ROOT / "deploy" / "omnigent" / "server-config.example.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert config["database"]["url_env"] == "DATABASE_URL"
+    assert config["accounts"]["built_in"]["admin_email_env"] == (
+        "OMNIGENT_BUILTIN_ADMIN_EMAIL"
+    )
+    assert config["sandbox"]["host_image_env"] == "OMNIGENT_HOST_IMAGE"

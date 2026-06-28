@@ -369,6 +369,7 @@ type RunObservabilityEvent = {
     | "session_terminated"
     | "turn_started"
     | "turn_completed"
+    | "empty_assistant_turn_detected"
     | "turn_interrupted"
     | "approval_requested"
     | "approval_resolved"
@@ -416,6 +417,7 @@ MoonMind should normalize at least these event classes:
 ### Turn lifecycle events
 - `turn_started`
 - `turn_completed`
+- `empty_assistant_turn_detected`
 - `turn_interrupted`
 
 ### Control-boundary and continuity events
@@ -498,6 +500,7 @@ The normalized event stream should represent at least these MoonMind-side semant
 - `send_turn` → `turn_started`
 - `interrupt_turn` → `turn_interrupted`
 - successful turn completion → `turn_completed`
+- completed turn with no assistant output → `empty_assistant_turn_detected`
 - `clear_session` → `session_cleared` plus `reset_boundary_published`
 - continuity artifact publication → `summary_published` or `checkpoint_published`
 - approval-required workflow pauses → `approval_requested`

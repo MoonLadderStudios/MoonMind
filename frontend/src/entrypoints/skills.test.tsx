@@ -206,6 +206,140 @@ describe('Skills Entrypoint', () => {
     });
   });
 
+  it('filters available skills by ID', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    expect(await screen.findByRole('button', { name: 'speckit-orchestrate' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Filter skills by ID'), {
+      target: { value: 'pr-' },
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'speckit-orchestrate' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'pr-resolver' })).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText('Filter skills by ID'), {
+      target: { value: 'does-not-exist' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('No skills match your filter.')).toBeTruthy();
+    });
+  });
+
+  it('shows the raw markdown and metadata preview tabs', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'speckit-orchestrate' }));
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Raw Markdown' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('skill-raw-markdown').textContent).toContain('# Speckit');
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Metadata' }));
+    await waitFor(() => {
+      const metadata = screen.getByTestId('skill-metadata');
+      expect(metadata.textContent).toContain('speckit-orchestrate');
+    });
+  });
+
+  it('validates the skill name before submitting a create request', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    fireEvent.change(screen.getByLabelText('Skill Markdown'), {
+      target: { value: '# Body\n\nNeeds a name.' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Skill' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Skill name is required.')).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText('Skill Name'), {
+      target: { value: 'bad name!' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Skill' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText('Skill name may only contain letters, numbers, dots, dashes, and underscores.'),
+      ).toBeTruthy();
+    });
+
+    const createCall = fetchSpy.mock.calls.find(
+      ([url, init]) => String(url) === '/api/workflows/skills' && init?.method === 'POST',
+    );
+    expect(createCall).toBeUndefined();
+  });
+
+  it('shows an error when uploading a zip without choosing a file', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Upload Zip' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Choose a skill zip file to upload.')).toBeTruthy();
+    });
+
+    const importCall = fetchSpy.mock.calls.find(
+      ([url, init]) => String(url) === '/api/skills/imports' && init?.method === 'POST',
+    );
+    expect(importCall).toBeUndefined();
+  });
+
+  it('sends the collision policy when uploading a zip and does not expose the unsupported new-version mode', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    const file = new File(['zip-content'], 'zip-skill.zip', { type: 'application/zip' });
+    fireEvent.change(screen.getByLabelText('Skill Zip'), {
+      target: { files: [file] },
+    });
+
+    const collisionSelect = screen.getByLabelText('Collision Policy') as HTMLSelectElement;
+    const optionValues = Array.from(collisionSelect.options).map((option) => option.value);
+    expect(optionValues).toEqual(['reject']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Upload Zip' }));
+
+    await waitFor(() => {
+      const importCall = fetchSpy.mock.calls.find(
+        ([url, init]) => String(url) === '/api/skills/imports' && init?.method === 'POST',
+      );
+      expect(importCall).toBeTruthy();
+      const body = importCall![1]?.body as FormData;
+      expect(body.get('collision_policy')).toBe('reject');
+    });
+  });
+
+  it('closes the create drawer when cancel or escape is used', async () => {
+    renderWithClient(<SkillsPage payload={mockPayload} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
+    expect(screen.getByRole('dialog', { name: 'Create or upload skill' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Create or upload skill' })).toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create New Skill' }));
+    const dialog = screen.getByRole('dialog', { name: 'Create or upload skill' });
+    expect(dialog).toBeTruthy();
+
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Create or upload skill' })).toBeNull();
+    });
+  });
+
   it('renders markdown without unsafe HTML or links', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

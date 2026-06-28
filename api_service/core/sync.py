@@ -65,6 +65,12 @@ PRE_WORK_STATES = frozenset(
     }
 )
 
+TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS = {
+    MoonMindWorkflowState.COMPLETED: TemporalExecutionCloseStatus.COMPLETED,
+    MoonMindWorkflowState.FAILED: TemporalExecutionCloseStatus.FAILED,
+    MoonMindWorkflowState.CANCELED: TemporalExecutionCloseStatus.CANCELED,
+}
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -109,6 +115,16 @@ def _coerce_temporal_scalar(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+def _coerce_mm_state(search_attributes: dict[str, Any]) -> MoonMindWorkflowState | None:
+    raw_state = _coerce_temporal_scalar(search_attributes.get("mm_state"))
+    if raw_state is None:
+        return None
+    try:
+        return MoonMindWorkflowState(raw_state)
+    except ValueError:
+        logger.warning("Invalid value for mm_state search attribute: '%s'", raw_state)
+        return None
 
 def _parse_temporal_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
@@ -265,17 +281,15 @@ async def map_temporal_state_to_projection(
     except ValueError:
         owner_type = TemporalExecutionOwnerType.USER
 
-    if desc.status == WorkflowExecutionStatus.RUNNING:
-        mm_state = search_attributes.get("mm_state")
-        if isinstance(mm_state, list) and mm_state:
-            mm_state = mm_state[0]
-        if mm_state:
-            try:
-                state_value = MoonMindWorkflowState(str(mm_state))
-            except ValueError:
-                logger.warning(
-                    "Invalid value for mm_state search attribute: '%s'", mm_state
-                )
+    mm_state = _coerce_mm_state(search_attributes)
+    if mm_state is not None:
+        if desc.status == WorkflowExecutionStatus.RUNNING:
+            state_value = mm_state
+        elif desc.status == WorkflowExecutionStatus.COMPLETED:
+            domain_close_status = TERMINAL_DOMAIN_STATE_TO_CLOSE_STATUS.get(mm_state)
+            if domain_close_status is not None:
+                state_value = mm_state
+                close_status = domain_close_status
 
     artifact_refs = memo.get("artifact_refs", [])
     if not isinstance(artifact_refs, list):

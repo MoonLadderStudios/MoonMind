@@ -221,7 +221,7 @@ The shape of `result` is tool-specific (for Jules tools, workflow execution payl
 
 ### Configuring Codex (and similar clients)
 
-Point your tool server at the **MoonMind API base** (for example `http://localhost:8000` from the host, or `http://api:8000` from another compose service). Use:
+Point your tool server at the **MoonMind API base** (for example `http://localhost:7000` from the host, or `http://api:8000` from another compose service). Use:
 
 - **List tools**: `GET {base}/mcp/tools`
 - **List resources**: `GET {base}/mcp/resources`
@@ -247,7 +247,7 @@ Those labels describe the MCP transport surface. The legacy `/context` route rem
 
 ## Example client (`examples/context_protocol_client.py`)
 
-The repository includes a small Python script that `POST`s to `/context` with a default base URL of `http://localhost:8000` (override with `MOONMIND_API_URL`). As above, add auth headers if your environment requires them.
+The repository includes a small Python script that `POST`s to `/context` with a default base URL of `http://localhost:7000` (override with `MOONMIND_API_URL`). As above, add auth headers if your environment requires them.
 
 ```bash
 python examples/context_protocol_client.py
@@ -265,7 +265,7 @@ http://api:8000/context
 From the host:
 
 ```
-http://localhost:8000/context
+http://localhost:7000/context
 ```
 
 For tool use, the same host and port apply to `/mcp/tools` and `/mcp/tools/call`.

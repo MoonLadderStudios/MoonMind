@@ -117,6 +117,7 @@ async def async_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Async
         ("/workflows/mm:workflow-123/steps", "workflow-detail"),
         ("/workflows/mm:workflow-123/artifacts", "workflow-detail"),
         ("/workflows/mm:workflow-123/runs", "workflow-detail"),
+        ("/workflows/mm:workflow-123/debug", "workflow-detail"),
     ),
 )
 async def test_supported_workflow_routes_render_console_shell(

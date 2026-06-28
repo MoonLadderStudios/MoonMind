@@ -11971,6 +11971,8 @@ export interface operations {
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;
+                updatedFrom?: string | null;
+                updatedTo?: string | null;
                 createdFrom?: string | null;
                 createdTo?: string | null;
                 finishedFrom?: string | null;
@@ -12071,6 +12073,8 @@ export interface operations {
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;
+                updatedFrom?: string | null;
+                updatedTo?: string | null;
                 createdFrom?: string | null;
                 createdTo?: string | null;
                 finishedFrom?: string | null;
@@ -12130,6 +12134,8 @@ export interface operations {
                 scheduledFrom?: string | null;
                 scheduledTo?: string | null;
                 scheduledBlank?: string | null;
+                updatedFrom?: string | null;
+                updatedTo?: string | null;
                 createdFrom?: string | null;
                 createdTo?: string | null;
                 finishedFrom?: string | null;

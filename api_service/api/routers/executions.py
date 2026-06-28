@@ -583,6 +583,49 @@ def _datetime_range_parts(
     return parts
 
 
+def _datetime_range_clause_from_values(
+    attr: str,
+    start_value: str | None,
+    end_value: str | None,
+) -> str:
+    parts: list[str] = []
+    if start_value:
+        parts.append(f'{attr}>="{_escape_temporal_value(start_value)}"')
+    if end_value:
+        parts.append(f'{attr}<="{_escape_temporal_value(end_value)}"')
+    return " AND ".join(parts)
+
+
+def _append_updated_temporal_filter(
+    query_parts: list[str],
+    start_raw: str | None,
+    end_raw: str | None,
+) -> None:
+    start_value = _normalize_date_bound(start_raw, alias="updatedFrom")
+    end_value = _normalize_date_bound(end_raw, alias="updatedTo", end_of_day=True)
+    if start_value and end_value:
+        start_dt = datetime.fromisoformat(start_value.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end_value.replace("Z", "+00:00"))
+        if start_dt > end_dt:
+            raise TemporalExecutionValidationError(
+                "updatedFrom must be before or equal to updatedTo."
+            )
+    if not start_value and not end_value:
+        return
+    close_clause = _datetime_range_clause_from_values("CloseTime", start_value, end_value)
+    scheduled_clause = _datetime_range_clause_from_values("mm_scheduled_for", start_value, end_value)
+    start_clause = _datetime_range_clause_from_values("StartTime", start_value, end_value)
+    query_parts.append(
+        "("
+        f"(CloseTime IS NOT NULL AND {close_clause})"
+        " OR "
+        f"(CloseTime IS NULL AND mm_scheduled_for IS NOT NULL AND {scheduled_clause})"
+        " OR "
+        f"(CloseTime IS NULL AND mm_scheduled_for IS NULL AND {start_clause})"
+        ")"
+    )
+
+
 def _any_temporal_query(attr: str, values: list[str]) -> str | None:
     if not values:
         return None
@@ -794,6 +837,8 @@ def _build_temporal_execution_query(
     scheduled_from: str | None,
     scheduled_to: str | None,
     scheduled_blank: str | None,
+    updated_from: str | None,
+    updated_to: str | None,
     created_from: str | None,
     created_to: str | None,
     finished_from: str | None,
@@ -923,6 +968,8 @@ def _build_temporal_execution_query(
         end_alias="scheduledTo",
         blank_mode=None if excluded("scheduledBlank") else scheduled_blank,
     )
+    if not excluded("updatedFrom") and not excluded("updatedTo"):
+        _append_updated_temporal_filter(query_parts, updated_from, updated_to)
     _append_datetime_temporal_filter(
         query_parts,
         "StartTime",
@@ -6284,8 +6331,60 @@ _PR_RESOLVER_SELECTOR_ERROR = (
     "pr-resolver workflow requires a structured PR selector: "
     "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
     "payload.workflow.tool.inputs.pr/branch, or "
-    "payload.workflow.git.startingBranch."
+    "payload.workflow.git.startingBranch, or a non-default "
+    "payload.workflow.git.branch."
 )
+_PR_RESOLVER_DEFAULT_BRANCH_NAMES = frozenset(
+    {"main", "master", "develop", "development", "trunk"}
+)
+
+
+def _pr_resolver_default_branch_names(
+    *payloads: Mapping[str, Any],
+) -> set[str]:
+    names = set(_PR_RESOLVER_DEFAULT_BRANCH_NAMES)
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            continue
+        for key in (
+            "defaultBranch",
+            "default_branch",
+            "repositoryDefaultBranch",
+            "repository_default_branch",
+        ):
+            value = str(payload.get(key) or "").strip().lower()
+            if value:
+                names.add(value)
+    return names
+
+
+def _pr_resolver_authored_branch_selector(
+    *,
+    task_payload: Mapping[str, Any],
+    normalized_task: Mapping[str, Any],
+    task_inputs: Mapping[str, Any],
+    normalized_inputs: Mapping[str, Any],
+    task_git: Mapping[str, Any],
+    normalized_git: Mapping[str, Any],
+) -> str:
+    default_names = _pr_resolver_default_branch_names(
+        task_payload,
+        normalized_task,
+        task_inputs,
+        normalized_inputs,
+        task_git,
+        normalized_git,
+    )
+    for value in (
+        task_git.get("branch"),
+        normalized_git.get("branch"),
+        task_payload.get("branch"),
+        normalized_task.get("branch"),
+    ):
+        text = str(value or "").strip()
+        if text and text.lower() not in default_names:
+            return text
+    return ""
 
 
 def _pr_resolver_structured_selector(
@@ -6328,6 +6427,14 @@ def _pr_resolver_structured_selector(
         normalized_inputs.get("branch"),
         tool_inputs.get("branch"),
         skill_inputs.get("branch"),
+        _pr_resolver_authored_branch_selector(
+            task_payload=task_payload,
+            normalized_task=normalized_task,
+            task_inputs=task_inputs,
+            normalized_inputs=normalized_inputs,
+            task_git=task_git,
+            normalized_git=normalized_git,
+        ),
     ):
         text = str(value or "").strip()
         if text:
@@ -8247,6 +8354,8 @@ async def list_executions(
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
+    updated_from: Optional[str] = Query(None, alias="updatedFrom"),
+    updated_to: Optional[str] = Query(None, alias="updatedTo"),
     created_from: Optional[str] = Query(None, alias="createdFrom"),
     created_to: Optional[str] = Query(None, alias="createdTo"),
     finished_from: Optional[str] = Query(None, alias="finishedFrom"),
@@ -8297,6 +8406,8 @@ async def list_executions(
                 scheduled_from=scheduled_from,
                 scheduled_to=scheduled_to,
                 scheduled_blank=scheduled_blank,
+                updated_from=updated_from,
+                updated_to=updated_to,
                 created_from=created_from,
                 created_to=created_to,
                 finished_from=finished_from,
@@ -8577,6 +8688,8 @@ async def get_execution_metrics(
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
+    updated_from: Optional[str] = Query(None, alias="updatedFrom"),
+    updated_to: Optional[str] = Query(None, alias="updatedTo"),
     created_from: Optional[str] = Query(None, alias="createdFrom"),
     created_to: Optional[str] = Query(None, alias="createdTo"),
     finished_from: Optional[str] = Query(None, alias="finishedFrom"),
@@ -8659,6 +8772,8 @@ async def get_execution_metrics(
             scheduled_from=scheduled_from,
             scheduled_to=scheduled_to,
             scheduled_blank=scheduled_blank,
+            updated_from=updated_from,
+            updated_to=updated_to,
             created_from=created_from,
             created_to=created_to,
             finished_from=finished_from,
@@ -8796,6 +8911,8 @@ async def list_execution_facets(
     scheduled_from: Optional[str] = Query(None, alias="scheduledFrom"),
     scheduled_to: Optional[str] = Query(None, alias="scheduledTo"),
     scheduled_blank: Optional[str] = Query(None, alias="scheduledBlank"),
+    updated_from: Optional[str] = Query(None, alias="updatedFrom"),
+    updated_to: Optional[str] = Query(None, alias="updatedTo"),
     created_from: Optional[str] = Query(None, alias="createdFrom"),
     created_to: Optional[str] = Query(None, alias="createdTo"),
     finished_from: Optional[str] = Query(None, alias="finishedFrom"),
@@ -8868,6 +8985,8 @@ async def list_execution_facets(
             scheduled_from=scheduled_from,
             scheduled_to=scheduled_to,
             scheduled_blank=scheduled_blank,
+            updated_from=updated_from,
+            updated_to=updated_to,
             created_from=created_from,
             created_to=created_to,
             finished_from=finished_from,

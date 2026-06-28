@@ -1318,6 +1318,8 @@ def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None
                 "source": "temporal",
                 "scheduledFrom": "2026-05-01",
                 "scheduledTo": "2026-05-05",
+                "updatedFrom": "2026-05-04",
+                "updatedTo": "2026-05-08",
                 "createdFrom": "2026-05-02",
                 "createdTo": "2026-05-06",
                 "finishedFrom": "2026-05-03",
@@ -1332,6 +1334,20 @@ def test_list_executions_temporal_query_includes_canonical_date_bounds() -> None
     assert "mm_scheduled_for IS NOT NULL" in query
     assert 'mm_scheduled_for>="2026-05-01T00:00:00Z"' in query
     assert 'mm_scheduled_for<="2026-05-05T23:59:59.999999Z"' in query
+    assert (
+        '(CloseTime IS NOT NULL AND CloseTime>="2026-05-04T00:00:00Z" '
+        'AND CloseTime<="2026-05-08T23:59:59.999999Z")'
+    ) in query
+    assert (
+        '(CloseTime IS NULL AND mm_scheduled_for IS NOT NULL '
+        'AND mm_scheduled_for>="2026-05-04T00:00:00Z" '
+        'AND mm_scheduled_for<="2026-05-08T23:59:59.999999Z")'
+    ) in query
+    assert (
+        '(CloseTime IS NULL AND mm_scheduled_for IS NULL '
+        'AND StartTime>="2026-05-04T00:00:00Z" '
+        'AND StartTime<="2026-05-08T23:59:59.999999Z")'
+    ) in query
     assert 'StartTime>="2026-05-02T00:00:00Z"' in query
     assert 'StartTime<="2026-05-06T23:59:59.999999Z"' in query
     assert "CloseTime IS NOT NULL" in query
@@ -1542,6 +1558,14 @@ def test_list_executions_temporal_query_rejects_invalid_filter_bounds() -> None:
                 "createdTo": "2026-05-01",
             },
         )
+        invalid_updated_range = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "updatedFrom": "2026-05-06",
+                "updatedTo": "2026-05-01",
+            },
+        )
         invalid_sort = test_client.get(
             "/api/executions",
             params={"source": "temporal", "sort": "workflowType"},
@@ -1552,6 +1576,8 @@ def test_list_executions_temporal_query_rejects_invalid_filter_bounds() -> None:
     assert "include, exclude" in invalid_blank.json()["detail"]["message"]
     assert invalid_range.status_code == 422
     assert "createdFrom must be before or equal to createdTo" in invalid_range.json()["detail"]["message"]
+    assert invalid_updated_range.status_code == 422
+    assert "updatedFrom must be before or equal to updatedTo" in invalid_updated_range.json()["detail"]["message"]
     assert invalid_sort.status_code == 422
     assert "sort must be one of" in invalid_sort.json()["detail"]["message"]
     temporal_client.count_workflows.assert_not_called()
@@ -4822,7 +4848,8 @@ def test_create_task_shaped_execution_rejects_pr_resolver_without_structured_sel
         == "pr-resolver workflow requires a structured PR selector: "
         "payload.workflow.inputs.pr, payload.workflow.inputs.branch, "
         "payload.workflow.tool.inputs.pr/branch, or "
-        "payload.workflow.git.startingBranch."
+        "payload.workflow.git.startingBranch, or a non-default "
+        "payload.workflow.git.branch."
     )
     service.create_execution.assert_not_awaited()
 
@@ -4858,6 +4885,39 @@ def test_create_task_shaped_execution_allows_pr_resolver_with_starting_branch(
     assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
     assert initial_parameters["workflow"]["git"] == {
         "startingBranch": "feature/resolve-pr"
+    }
+
+
+def test_create_task_shaped_execution_allows_pr_resolver_with_non_default_git_branch(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, _user = client
+    service.create_execution.return_value = _build_execution_record()
+
+    response = test_client.post(
+        "/api/executions",
+        json={
+            "type": "workflow",
+            "payload": {
+                "workflow": {
+                    "runtime": {"mode": "gemini_cli"},
+                    "tool": {
+                        "type": "skill",
+                        "name": "pr-resolver",
+                    },
+                    "git": {"branch": "feature/resolve-pr"},
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    called_kwargs = service.create_execution.await_args.kwargs
+    assert called_kwargs["title"] == "feature/resolve-pr"
+    initial_parameters = called_kwargs["initial_parameters"]
+    assert initial_parameters["workflow"]["title"] == "feature/resolve-pr"
+    assert initial_parameters["workflow"]["git"] == {
+        "branch": "feature/resolve-pr"
     }
 
 

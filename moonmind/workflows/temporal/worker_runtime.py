@@ -753,8 +753,52 @@ def _derive_pr_branch_prefix(
 
 _PR_RESOLVER_SELECTOR_ERROR = (
     "pr-resolver workflow requires workflow.tool.inputs.pr, "
-    "workflow.tool.inputs.branch, or workflow.git.startingBranch"
+    "workflow.tool.inputs.branch, workflow.git.startingBranch, "
+    "or a non-default workflow.git.branch"
 )
+_PR_RESOLVER_DEFAULT_BRANCH_NAMES = frozenset(
+    {"main", "master", "develop", "development", "trunk"}
+)
+
+
+def _pr_resolver_default_branch_names(
+    *payloads: Mapping[str, Any],
+) -> set[str]:
+    names = set(_PR_RESOLVER_DEFAULT_BRANCH_NAMES)
+    for payload in payloads:
+        if not isinstance(payload, Mapping):
+            continue
+        for key in (
+            "defaultBranch",
+            "default_branch",
+            "repositoryDefaultBranch",
+            "repository_default_branch",
+        ):
+            value = str(payload.get(key) or "").strip().lower()
+            if value:
+                names.add(value)
+    return names
+
+
+def _pr_resolver_authored_branch_selector(
+    *,
+    task_payload: Mapping[str, Any],
+    selected_skill_inputs: Mapping[str, Any],
+    git_payload: Mapping[str, Any],
+) -> str:
+    default_names = _pr_resolver_default_branch_names(
+        task_payload,
+        selected_skill_inputs,
+        git_payload,
+    )
+    for value in (
+        git_payload.get("branch"),
+        task_payload.get("branch"),
+    ):
+        text = str(value or "").strip()
+        if text and text.lower() not in default_names:
+            return text
+    return ""
 
 
 def _pr_resolver_structured_selector(
@@ -783,6 +827,11 @@ def _pr_resolver_structured_selector(
         str(selected_skill_inputs.get("branch") or "").strip(),
         str(tool_inputs.get("branch") or "").strip(),
         str(skill_inputs.get("branch") or "").strip(),
+        _pr_resolver_authored_branch_selector(
+            task_payload=task_payload,
+            selected_skill_inputs=selected_skill_inputs,
+            git_payload=git_payload,
+        ),
     )
 
 
@@ -1323,19 +1372,23 @@ def _build_runtime_planner():
             # may come from git_payload rather than selected_skill_inputs, so
             # the generic " with inputs:" block above can miss it.
             effective_selector = pr_selector or pr_resolver_selector
-            if (
-                not has_explicit_instructions
-                and effective_selector
-                and not pr_selector
-            ):
+            if effective_selector and not pr_selector:
                 merged_inputs = (
                     dict(selected_skill_inputs) if selected_skill_inputs else {}
                 )
                 merged_inputs["pr"] = effective_selector
-                instructions = (
-                    f"Execute skill '{selected_skill_name}' with inputs:\n"
-                    + json.dumps(merged_inputs, indent=2, sort_keys=True)
-                )
+                selected_skill_inputs = merged_inputs
+                if has_explicit_instructions:
+                    instructions = (
+                        f"{str(instructions).strip()}\n\n"
+                        f"Selected skill inputs:\n"
+                        + json.dumps(merged_inputs, indent=2, sort_keys=True)
+                    )
+                else:
+                    instructions = (
+                        f"Execute skill '{selected_skill_name}' with inputs:\n"
+                        + json.dumps(merged_inputs, indent=2, sort_keys=True)
+                    )
 
         # --- Resolve runtime mode ---
         runtime_payload = _coerce_mapping(task_payload.get("runtime"))

@@ -16,6 +16,7 @@ describe('Workflows Entrypoint', () => {
   let fetchSpy: MockInstance;
 
   beforeEach(() => {
+    window.localStorage.clear();
     window.history.pushState({}, 'Test', '/workflows');
     fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue({
       ok: true,
@@ -41,8 +42,8 @@ describe('Workflows Entrypoint', () => {
 
   const lastExecutionListUrl = () => executionListCalls().at(-1)?.[0];
 
-  // The advanced filter drawer is the single surface that exposes the full
-  // filter UI. These helpers open it and apply the staged draft.
+  // The mobile filter drawer exposes the full filter UI. These helpers open it
+  // and apply the staged draft.
   const openFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
   const applyFilterDrawer = () => fireEvent.click(screen.getByRole('button', { name: 'Apply filters' }));
 
@@ -72,15 +73,18 @@ describe('Workflows Entrypoint', () => {
     expect(screen.queryByLabelText('Live updates')).toBeNull();
   });
 
-  it('moves advanced filters out of every desktop table header', async () => {
+  it('renders desktop column filters and keeps the mobile filter drawer available', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
 
-    // No per-column filter icon button remains in the table headers.
-    expect(document.querySelectorAll('.workflow-list-column-filter-button')).toHaveLength(0);
-    expect(screen.queryByRole('button', { name: /No filter applied\./i })).toBeNull();
-    // A single visible Filters control opens the full filter UI instead.
+    expect(document.querySelectorAll('.workflow-list-column-filter-button')).toHaveLength(5);
+    const workflowFilter = screen.getByRole('button', {
+      name: 'Workflow filter. No filter applied.',
+    });
+    fireEvent.click(workflowFilter);
+    expect(screen.getByRole('dialog', { name: 'Workflow filter' })).toBeTruthy();
+
     const filtersTrigger = screen.getByRole('button', { name: 'Filters' });
     expect(filtersTrigger).toBeTruthy();
     expect(screen.queryByRole('dialog', { name: 'Advanced filters' })).toBeNull();
@@ -171,6 +175,7 @@ describe('Workflows Entrypoint', () => {
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
     expect(screen.queryByLabelText('Live updates')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   }, 10000);
@@ -420,6 +425,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByLabelText('ID filter value')).toBeTruthy();
     expect(screen.getByLabelText('Skill filter value')).toBeTruthy();
     expect(screen.getByLabelText('Title filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Updated from')).toBeTruthy();
     expect(screen.getByLabelText('Scheduled from')).toBeTruthy();
     expect(screen.getByLabelText('Created from')).toBeTruthy();
     expect(screen.getByLabelText('Finished blank values')).toBeTruthy();
@@ -446,6 +452,32 @@ describe('Workflows Entrypoint', () => {
         '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
+  });
+
+  it('filters the Updated column by the displayed updated timestamp', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const updatedFilter = screen.getByRole('button', {
+      name: 'Updated filter. No filter applied.',
+    });
+    fireEvent.click(updatedFilter);
+
+    fireEvent.change(screen.getByLabelText('Updated from'), {
+      target: { value: '2026-04-01' },
+    });
+    fireEvent.change(screen.getByLabelText('Updated to'), {
+      target: { value: '2026-04-30' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Updated filter' }));
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&updatedFrom=2026-04-01&updatedTo=2026-04-30',
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Updated filter: from 2026-04-01, to 2026-04-30' })).toBeTruthy();
+    expect(window.location.search).toBe('?updatedFrom=2026-04-01&updatedTo=2026-04-30&limit=50');
   });
 
   it('applies runtime and skill exclude modes from the drawer', async () => {
@@ -1343,7 +1375,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('21 total entries')).toBeTruthy();
   });
 
-  it('places filters in the Workflows header and uses the data slab composition', async () => {
+  it('uses the data slab composition without a duplicate Workflows header title', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
     await screen.findAllByText('Example task');
@@ -1358,7 +1390,9 @@ describe('Workflows Entrypoint', () => {
 
     expect(noticesDeck).toBeNull();
     expect(resultsHeader?.querySelector('.workflow-list-filter-trigger')).toBeTruthy();
-    expect(resultsHeader?.textContent).toContain('Workflows');
+    expect(resultsHeader?.querySelector('.page-title')).toBeNull();
+    expect(resultsHeader?.textContent).not.toContain('Workflows');
+    expect(tableHead?.textContent).toContain('Workflow');
     expect(screen.queryByRole('button', { name: /^Kind\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Workflow Type\./i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^Entry\./i })).toBeNull();
@@ -1760,5 +1794,139 @@ describe('Workflows Entrypoint', () => {
     const cardNextAction = document.querySelector('.queue-card-next-action');
     expect(cardNextAction?.textContent).toContain('Intervention requested');
     expect(cardNextAction?.textContent).toContain('Blocked by 1 prerequisite');
+  });
+});
+
+// MM-964: the workflow list density and column-visibility preferences are local
+// first, survive reload, and can be reset to defaults.
+describe('Workflows Entrypoint — dashboard preferences (MM-964)', () => {
+  const mockPayload: BootPayload = {
+    page: 'workflow-list',
+    apiBase: '/api',
+  };
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    window.history.pushState({}, 'Test', '/workflows');
+    vi.spyOn(window, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-123',
+            source: 'temporal',
+            title: 'Example task',
+            status: 'completed',
+            state: 'succeeded',
+            rawState: 'succeeded',
+            repository: 'octo/widgets',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+        ],
+      }),
+    } as Response);
+  });
+
+  const openViewOptions = () =>
+    fireEvent.click(screen.getByRole('button', { name: 'View options' }));
+
+  it('applies and persists the compact density preference across reload', async () => {
+    const view = renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'comfortable',
+    );
+
+    openViewOptions();
+    fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'compact',
+    );
+    expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toContain('compact');
+
+    // Simulate a reload by remounting a fresh instance that reads localStorage.
+    view.unmount();
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'compact',
+    );
+  });
+
+  it('hides a column when its visibility preference is turned off and remembers it', async () => {
+    const view = renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    // Repository column is visible by default.
+    expect(
+      screen.getByRole('button', { name: /Repository\. .*sort/i }),
+    ).toBeTruthy();
+
+    // The repository value is present in the desktop table before hiding.
+    expect(document.querySelector('table')?.textContent).toContain('octo/widgets');
+
+    openViewOptions();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Repository' }));
+
+    // Header and cell for the repository column are removed from the table.
+    // (The responsive mobile card layout is a separate surface and is out of
+    // scope for the column-visibility preference.)
+    expect(screen.queryByRole('button', { name: /Repository\. .*sort/i })).toBeNull();
+    expect(document.querySelector('table')?.textContent).not.toContain('octo/widgets');
+
+    view.unmount();
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+    expect(screen.queryByRole('button', { name: /Repository\. .*sort/i })).toBeNull();
+  });
+
+  it('resets density and column preferences back to defaults', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    openViewOptions();
+    fireEvent.click(screen.getByRole('radio', { name: 'Compact' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Repository' }));
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'compact',
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Reset dashboard preferences/i }));
+
+    expect(document.querySelector('.queue-table-wrapper')?.getAttribute('data-density')).toBe(
+      'comfortable',
+    );
+    expect(screen.getByRole('button', { name: /Repository\. .*sort/i })).toBeTruthy();
+    expect(window.localStorage.getItem('moonmind.dashboard.preferences')).toBeNull();
+  });
+
+  it('stops window-focus refetches of the list while live updates are paused', async () => {
+    const executionListCalls = () =>
+      vi.mocked(window.fetch).mock.calls.filter(([url]) =>
+        String(url).startsWith('/api/executions?'),
+      );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+    await screen.findAllByText('Example task');
+
+    // Live updates default on: returning focus to the tab refetches /executions.
+    const beforeFocusOn = executionListCalls().length;
+    window.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => expect(executionListCalls().length).toBeGreaterThan(beforeFocusOn));
+    const afterFocusOn = executionListCalls().length;
+
+    // Pause live updates, then dispatch another focus event.
+    openViewOptions();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Poll for live updates' }));
+    window.dispatchEvent(new Event('visibilitychange'));
+
+    // Re-enable live updates and dispatch a final focus event. Only this last
+    // focus (with the pref re-enabled) should produce a new request — proving the
+    // paused focus event in between did not refetch the list.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Poll for live updates' }));
+    window.dispatchEvent(new Event('visibilitychange'));
+    await waitFor(() => expect(executionListCalls().length).toBe(afterFocusOn + 1));
   });
 });

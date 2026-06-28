@@ -9,6 +9,10 @@ import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+} from '../utils/dashboardPreferences';
+import {
   recordTemporalTaskEditingClientEvent,
   taskCompareHref,
   taskEditForRerunHref,
@@ -103,14 +107,11 @@ function shouldUseStructuredHistory(config: DashboardConfig | undefined): boolea
   return config?.features?.liveLogsStructuredHistoryEnabled !== false;
 }
 
-type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs';
+type WorkflowDetailSubroute = 'overview' | 'steps' | 'artifacts' | 'runs' | 'debug';
 
 function workflowDetailSubrouteFromPath(pathname: string): WorkflowDetailSubroute {
-  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs))?$/);
-  if (match?.[1] === 'steps' || match?.[1] === 'artifacts' || match?.[1] === 'runs') {
-    return match[1];
-  }
-  return 'overview';
+  const match = pathname.match(/^\/workflows\/[^/]+(?:\/(steps|artifacts|runs|debug))?$/);
+  return (match?.[1] as WorkflowDetailSubroute) || 'overview';
 }
 
 function workflowDetailSubrouteHref(
@@ -4726,16 +4727,20 @@ function WorkflowDetailSubrouteNav({
   workflowId,
   current,
   search,
+  showDebug,
 }: {
   workflowId: string;
   current: WorkflowDetailSubroute;
   search: URLSearchParams;
+  showDebug: boolean;
 }) {
   const items: Array<{ route: WorkflowDetailSubroute; label: string }> = [
     { route: 'overview', label: 'Overview' },
     { route: 'steps', label: 'Steps' },
     { route: 'artifacts', label: 'Artifacts' },
     { route: 'runs', label: 'Runs' },
+    // MM-964: the Debug tab is gated by the debug-fields visibility preference.
+    ...(showDebug ? [{ route: 'debug' as WorkflowDetailSubroute, label: 'Debug' }] : []),
   ];
   return (
     <nav className="td-subroute-nav" aria-label="Workflow detail sections">
@@ -4881,11 +4886,19 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       cfg?.features?.temporalDashboard?.temporalTaskEditing,
   );
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
+  // MM-964: operators can hide the diagnostic Debug tab via a local preference.
+  // The Debug tab is available by default regardless of server config; the
+  // preference (default visible) lets an operator collapse it. The extra
+  // server-gated Debug Metadata region additionally requires `debugOn`.
+  const [debugFieldsPref, setDebugFieldsPref] = useState(
+    () => readDashboardPreferences().debugFieldsVisible,
+  );
+  const debugVisible = debugFieldsPref;
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
 
   const workflowIdMatch = window.location.pathname.match(
-    /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs))?$/,
+    /^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/,
   );
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
@@ -5624,11 +5637,27 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       </div>
 
       {taskId ? (
-        <WorkflowDetailSubrouteNav
-          workflowId={taskId}
-          current={detailSubroute}
-          search={search}
-        />
+        <div className="td-subroute-nav-row">
+          <WorkflowDetailSubrouteNav
+            workflowId={taskId}
+            current={detailSubroute}
+            search={search}
+            showDebug={debugVisible}
+          />
+          <label className="checkbox td-debug-visibility-toggle">
+            <input
+              type="checkbox"
+              checked={debugFieldsPref}
+              onChange={(event) => {
+                setDebugFieldsPref(event.target.checked);
+                updateDashboardPreferences({
+                  debugFieldsVisible: event.target.checked,
+                });
+              }}
+            />
+            Show debug details
+          </label>
+        </div>
       ) : null}
 
       {execution?.recurrence?.definitionId ? (
@@ -5675,21 +5704,11 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             <div className="td-hero-body">
               <div className="td-hero-headline">
                 <h3 className="td-title-text">{execution.title}</h3>
-                <span className="meta-inline">
-                  Temporal
-                  {execution.workflowType ? (
-                    <>
-                      <span className="dot">·</span>
-                      {execution.workflowType}
-                    </>
-                  ) : null}
-                  {execution.entry ? (
-                    <>
-                      <span className="dot">·</span>
-                      {execution.entry}
-                    </>
-                  ) : null}
-                </span>
+                {workflowId ? (
+                  <span className="meta-inline td-hero-workflow-id">
+                    <code className="text-xs break-all">{workflowId}</code>
+                  </span>
+                ) : null}
               </div>
               <button
                 type="button"
@@ -5851,27 +5870,47 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
                 {execution.scheduledFor ? <Fact label="Scheduled For">{formatWhen(execution.scheduledFor)}</Fact> : null}
                 {execution.waitingReason ? <Fact label="Waiting Reason">{execution.waitingReason}</Fact> : null}
               </FactGroup>
-
-              <FactGroup title="Temporal">
-                <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
-                <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
-                {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
-                <Fact label="Source">Temporal</Fact>
-                <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
-                <Fact label="Entry">{execution.entry || '—'}</Fact>
-                <Fact label="Current Run ID">
-                  <code className="text-xs break-all">{latestRunId || '—'}</code>
-                </Fact>
-                {resolvedAgentRunId ? (
-                  <Fact label="Workflow Run">
-                    <code className="text-xs break-all">{resolvedAgentRunId}</code>
-                  </Fact>
-                ) : null}
-                <Fact label="Workflow ID">
-                  <code className="text-xs break-all">{workflowId}</code>
-                </Fact>
-              </FactGroup>
             </div>
+          ) : null}
+
+          {detailSubroute === 'debug' && debugVisible ? (
+            <section className="stack td-debug-region" aria-label="Workflow debug details">
+              <div>
+                <h3>Debug</h3>
+                <p className="small">
+                  Raw Temporal and runtime identifiers for this workflow. These details are
+                  diagnostic only and do not affect the default overview.
+                </p>
+              </div>
+              <div className="td-facts-region">
+                <FactGroup title="Temporal">
+                  <Fact label="Temporal Status">{formatStatusLabel(execution.temporalStatus)}</Fact>
+                  <Fact label="Workflow State">{formatStatusLabel(execution.rawState || execution.state)}</Fact>
+                  {execution.closeStatus ? <Fact label="Close Status">{formatStatusLabel(execution.closeStatus)}</Fact> : null}
+                  <Fact label="Source">Temporal</Fact>
+                  <Fact label="Workflow Type">{execution.workflowType || '—'}</Fact>
+                  <Fact label="Entry">{execution.entry || '—'}</Fact>
+                  <Fact label="Current Run ID">
+                    <code className="text-xs break-all">{latestRunId || '—'}</code>
+                  </Fact>
+                  {resolvedAgentRunId ? (
+                    <Fact label="Workflow Run">
+                      <code className="text-xs break-all">{resolvedAgentRunId}</code>
+                    </Fact>
+                  ) : null}
+                  <Fact label="Workflow ID">
+                    <code className="text-xs break-all">{workflowId}</code>
+                  </Fact>
+                </FactGroup>
+                {actions ? (
+                  <FactGroup title="Action Capability Map">
+                    <Fact label="Raw Actions">
+                      <pre className="text-xs break-all">{JSON.stringify(actions, null, 2)}</pre>
+                    </Fact>
+                  </FactGroup>
+                ) : null}
+              </div>
+            </section>
           ) : null}
 
           {detailSubroute === 'overview' && runSummary ? (
@@ -6381,7 +6420,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'overview' && debugOn && execution.debugFields ? (
+          {detailSubroute === 'debug' && debugOn && debugVisible && execution.debugFields ? (
             <section className="stack">
               <h3>Debug Metadata</h3>
               <div className="grid-2">

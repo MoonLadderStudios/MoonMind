@@ -25,22 +25,19 @@ def test_combined_stack_doc_covers_required_operator_commands() -> None:
     text = _doc_text()
 
     for required in (
-        "http://localhost:8000",
         "http://localhost:7000",
+        "http://localhost:8000",
         "docker compose up -d",
         "docker compose up -d postgres",
-        "docker compose up init-db",
-        "docker compose up -d api",
-        "docker compose logs api",
-        "docker compose logs init-db",
-        "curl -fsS http://localhost:8000/healthz",
-        "curl -fsS http://localhost:7000/health",
-        "docker compose --profile <omnigent-host-profile> up -d <omnigent-host-service>",
+        "docker compose up omnigent-db-init",
+        "docker compose up -d api omnigent",
+        "docker compose logs omnigent",
+        "docker compose logs omnigent-host",
+        "curl -fsS http://localhost:7000/healthz",
+        "curl -fsS http://localhost:8000/health",
+        "docker compose --profile omnigent-host up -d omnigent-host",
     ):
         assert required in text
-
-    for absent_service in ("omnigent-db-init", "docker compose up -d api omnigent"):
-        assert absent_service not in text
 
 
 def test_combined_stack_doc_separates_normal_rollback_from_destructive_cleanup() -> None:
@@ -63,7 +60,7 @@ def test_combined_stack_doc_covers_required_troubleshooting_topics() -> None:
         "### Port Conflicts",
         "### Host Config Mount Conflicts",
         "### Built-In Accounts and OIDC",
-        "Built-in accounts mode is the expected default",
+        "Built-in accounts mode is the documented default",
         "OIDC is a future or operator-provided configuration path",
         "/data/admin-credentials",
         "omnigent-data",
@@ -74,6 +71,6 @@ def test_combined_stack_doc_covers_required_troubleshooting_topics() -> None:
 def test_readme_links_to_combined_stack_guide_and_host_urls() -> None:
     text = README.read_text(encoding="utf-8")
 
-    assert "http://localhost:8000" in text
-    assert "http://localhost:7000" not in text
+    assert "http://localhost:7000" in text
+    assert "http://localhost:8000" not in text
     assert "docs/Omnigent/CombinedStackValidationAndRollback.md" in text

@@ -237,14 +237,14 @@ samp {
   display: block;
   flex: 0 0 auto;
   width: auto;
-  height: 2.45rem;
-  max-width: 3.2rem;
+  height: 2.05rem;
+  max-width: 2.7rem;
   object-fit: contain;
 }
 
 .masthead-brand h1 {
   margin: 0;
-  font-size: clamp(1.48rem, 2.42vw, 2.08rem);
+  font-size: clamp(1.28rem, 2vw, 1.72rem);
 }
 
 .masthead-title-meta {
@@ -760,6 +760,91 @@ h1 {
   margin-top: 0.85rem;
   padding-top: 0.75rem;
   border-top: 1px solid rgb(var(--mm-border) / 0.7);
+}
+
+.workflow-list-column-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.workflow-list-column-filter {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.workflow-list-column-filter-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.65rem;
+  height: 1.65rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.workflow-list-column-filter-button:hover,
+.workflow-list-column-filter-button:focus-visible,
+.workflow-list-column-filter-button[aria-expanded="true"],
+.workflow-list-column-filter-button.is-active {
+  border-color: rgb(var(--mm-accent) / 0.55);
+  background: rgb(var(--mm-accent) / 0.1);
+  color: rgb(var(--mm-accent));
+  box-shadow: var(--mm-control-focus-ring);
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-column-filter-icon {
+  display: block;
+  width: 0.82rem;
+  height: 0.82rem;
+  fill: currentColor;
+}
+
+.workflow-list-column-filter-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.45rem);
+  left: 0;
+  display: grid;
+  gap: 0.7rem;
+  width: min(20rem, calc(100vw - 2rem));
+  padding: 0.85rem;
+  border: 1px solid rgb(var(--mm-border) / 0.82);
+  border-radius: 0.75rem;
+  background: rgb(var(--mm-panel) / 0.99);
+  color: rgb(var(--mm-ink));
+  box-shadow: var(--mm-elevation-panel);
+}
+
+.workflow-list-header-cell:nth-last-child(-n + 2) .workflow-list-column-filter-popover {
+  left: auto;
+  right: 0;
+}
+
+.workflow-list-column-filter-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.workflow-list-column-filter-popover .workflow-list-filter-control {
+  display: grid;
+  gap: 0.65rem;
+  align-items: stretch;
+}
+
+.workflow-list-column-filter-popover .workflow-list-filter-control label {
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
 }
 
 .workflow-list-pill-multiselect {
@@ -1841,6 +1926,12 @@ tbody tr:hover {
   overflow: visible;
 }
 
+.workflow-list-data-slab .queue-table-wrapper:has(
+  .workflow-list-column-filter-popover
+) {
+  overflow: visible;
+}
+
 .queue-table-wrapper table {
   border: 0;
   border-collapse: separate;
@@ -1917,6 +2008,64 @@ tbody tr:hover {
 
 .queue-table-cell-workflow {
   font-weight: 500;
+}
+
+/* MM-964: compact density preference tightens the workflow list rows. */
+.queue-table-wrapper[data-density='compact'] th,
+.queue-table-wrapper[data-density='compact'] td {
+  padding: 0.3rem 0.45rem;
+  font-size: 0.82rem;
+}
+
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-compact,
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-date,
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-next-action {
+  font-size: 0.76rem;
+}
+
+/* MM-964: dashboard preferences ("View options") popover. */
+.workflow-list-view-options {
+  position: relative;
+  margin-left: auto;
+}
+
+.workflow-list-view-options-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 12;
+  min-width: 14rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid rgb(var(--mm-border) / 0.85);
+  border-radius: 0.6rem;
+  background: rgb(var(--mm-panel) / 0.98);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.28);
+}
+
+.workflow-list-view-options-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.workflow-list-view-options-group legend {
+  padding: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(var(--mm-ink) / 0.7);
+}
+
+.workflow-list-view-options-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .workflow-list-row-title {
@@ -2332,6 +2481,7 @@ tr[data-proposal-id].proposal-consuming td {
   }
 
   .workflow-list-results-header {
+    display: flex;
     padding: 0 0 0.75rem;
     border-bottom: 0;
     background: transparent;
@@ -3203,7 +3353,29 @@ button.secondary:hover {
 }
 
 button.workflow-list-filter-chip-open,
-button.workflow-list-filter-chip-remove {
+button.workflow-list-filter-chip-remove,
+button.workflow-list-column-filter-button {
+  background-image: none;
+  transform: none;
+  filter: none;
+}
+
+button.workflow-list-column-filter-button {
+  width: 1.65rem;
+  border-color: transparent;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  box-shadow: none;
+}
+
+button.workflow-list-column-filter-button:hover,
+button.workflow-list-column-filter-button:focus-visible,
+button.workflow-list-column-filter-button[aria-expanded="true"],
+button.workflow-list-column-filter-button.is-active {
+  border-color: rgb(var(--mm-accent) / 0.55);
+  background: rgb(var(--mm-accent) / 0.1);
+  color: rgb(var(--mm-accent));
+  box-shadow: var(--mm-control-focus-ring);
   transform: none;
   filter: none;
 }
@@ -5991,6 +6163,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border) / 0.46);
   border-radius: 0.6rem;
   background: rgb(var(--mm-panel) / 0.62);
+}
+
+/* MM-964: keep the detail tab nav and the debug-visibility toggle on one row. */
+.td-subroute-nav-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.td-subroute-nav-row .td-subroute-nav {
+  flex: 1 1 auto;
+}
+
+.td-debug-visibility-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 0.82rem;
 }
 
 .td-subroute-nav a {

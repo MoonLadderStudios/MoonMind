@@ -1149,9 +1149,16 @@ async def test_agent_run_managed_session_start_runtime_error_truncates_summary(
     assert result.summary.endswith("...")
     assert result.summary.startswith("managed start failed: ")
 
-async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
+async def _run_default_profile_cooldown_retry_case(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    *,
+    sticky_patch_enabled: bool,
+) -> tuple[
+    AgentRunResult,
+    list[str | None],
+    list[dict[str, Any]],
+    list[tuple[str, dict[str, Any]]],
+]:
     run = MoonMindAgentRun()
     ensure_profile_refs: list[str | None] = []
     ensure_profile_selectors: list[dict[str, Any]] = []
@@ -1167,6 +1174,17 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
     ]
 
     _configure_workflow_runtime(monkeypatch)
+    if not sticky_patch_enabled:
+        sticky_patch_id = (
+            agent_run_module.STICKY_PINNED_PROFILE_COOLDOWN_RETRY_PATCH_ID
+        )
+
+        def patched(patch_id: str) -> bool:
+            if patch_id == sticky_patch_id:
+                return False
+            return _patch_all_enabled(patch_id)
+
+        monkeypatch.setattr(agent_run_module.workflow, "patched", patched)
 
     class _FakeManagedAgentAdapter:
         def __init__(self, **_kwargs: Any) -> None:
@@ -1262,6 +1280,59 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
 
     result = await run.run(request)
 
+    return result, ensure_profile_refs, ensure_profile_selectors, manager_signals
+
+
+async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        result,
+        ensure_profile_refs,
+        ensure_profile_selectors,
+        manager_signals,
+    ) = await _run_default_profile_cooldown_retry_case(
+        monkeypatch,
+        sticky_patch_enabled=True,
+    )
+
+    assert result.summary == "Recovered on pinned profile."
+    assert ensure_profile_refs == ["codex-default", "codex-default"]
+    assert ensure_profile_selectors == [
+        {"tagsAny": [], "tagsAll": []},
+        {"tagsAny": [], "tagsAll": []},
+    ]
+    assert manager_signals[:2] == [
+        (
+            "report_cooldown",
+            {
+                "profile_id": "codex-default",
+                "cooldown_seconds": 0,
+            },
+        ),
+        (
+            "release_slot",
+            {
+                "requester_workflow_id": "wf-agent-run-1",
+                "profile_id": "codex-default",
+            },
+        ),
+    ]
+
+
+async def test_agent_run_replays_legacy_default_fallback_retry_when_patch_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        result,
+        ensure_profile_refs,
+        ensure_profile_selectors,
+        manager_signals,
+    ) = await _run_default_profile_cooldown_retry_case(
+        monkeypatch,
+        sticky_patch_enabled=False,
+    )
+
     assert result.summary == "Recovered on pinned profile."
     assert ensure_profile_refs == ["codex-default", None]
     assert ensure_profile_selectors == [
@@ -1284,6 +1355,7 @@ async def test_agent_run_pins_default_profile_after_provider_cooldown_retry(
             },
         ),
     ]
+
 
 async def test_agent_run_preserves_operator_profile_selection_after_cooldown_retry(
     monkeypatch: pytest.MonkeyPatch,
