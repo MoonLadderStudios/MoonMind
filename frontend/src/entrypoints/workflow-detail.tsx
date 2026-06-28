@@ -5411,6 +5411,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       { updateName: 'RequestRerun' },
       {
         onSuccess: () => {
+          setActionNotice('Rerun was requested and the latest execution view is ready.');
           try {
             window.sessionStorage.setItem(
               'moonmind.temporalTaskEditing.notice',

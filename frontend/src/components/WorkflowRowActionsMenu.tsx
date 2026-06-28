@@ -101,6 +101,7 @@ export function WorkflowRowActionsMenu({
   const queryClient = useQueryClient();
   const [hasOpened, setHasOpened] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [activeDialog, setActiveDialog] = useState<RowActionDialogKind | null>(null);
 
   const detailQuery = useQuery({
@@ -315,8 +316,16 @@ export function WorkflowRowActionsMenu({
         onCompareRun: () => {},
         onRerun: () => {
           setActionError(null);
+          setActionNotice(null);
           if (busy || !workflowId) return;
-          updateMutation.mutate({ updateName: 'RequestRerun' });
+          updateMutation.mutate(
+            { updateName: 'RequestRerun' },
+            {
+              onSuccess: () => {
+                setActionNotice('Rerun was requested and the latest execution view is ready.');
+              },
+            },
+          );
         },
         onResumeFromFailedStep: () => {
           setActionError(null);
@@ -576,6 +585,11 @@ export function WorkflowRowActionsMenu({
       {actionError ? (
         <p className="workflow-row-actions-error" role="alert">
           {actionError}
+        </p>
+      ) : null}
+      {actionNotice ? (
+        <p className="notice ok" role="status">
+          {actionNotice}
         </p>
       ) : null}
     </div>

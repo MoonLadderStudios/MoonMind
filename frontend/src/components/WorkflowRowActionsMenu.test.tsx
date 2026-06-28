@@ -144,6 +144,11 @@ describe('WorkflowRowActionsMenu', () => {
       });
     });
     expect(window.location.pathname).not.toBe('/workflows/wf-rerun-created');
+    expect(
+      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('status').className).toContain('notice');
+    expect(screen.getByRole('status').className).toContain('ok');
   });
 
   it('opens a cancel dialog and posts to the cancel endpoint after confirmation', async () => {

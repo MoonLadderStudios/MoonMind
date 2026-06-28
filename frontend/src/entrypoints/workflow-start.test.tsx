@@ -3971,6 +3971,11 @@ describe.skip("Task Create Entrypoint", () => {
     ).toBe(false);
     expect(navigateTo).not.toHaveBeenCalled();
     expect(
+      await screen.findByText("Rerun was requested and the latest execution view is ready."),
+    ).toBeTruthy();
+    expect(screen.getByRole("status").className).toContain("notice");
+    expect(screen.getByRole("status").className).toContain("ok");
+    expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
     ).toBe("Rerun was requested and the latest execution view is ready.");
   });

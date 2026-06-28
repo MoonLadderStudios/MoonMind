@@ -2530,6 +2530,10 @@ describe('Workflow Detail Entrypoint', () => {
       );
     });
     expect(navigateTo).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText('Rerun was requested and the latest execution view is ready.'),
+    ).toBeTruthy();
+    expect(screen.getByRole('status')).toBeTruthy();
     expect(telemetryEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
