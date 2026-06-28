@@ -254,11 +254,11 @@ samp {
 
 .masthead-brand h1 {
   margin: 0;
-  font-size: clamp(1.28rem, 2vw, 1.72rem);
+  font-size: clamp(1.12rem, 1.7vw, 1.52rem);
 }
 
 .masthead-brand-moon {
-  color: rgb(var(--mm-accent-2));
+  color: rgb(255 255 255);
 }
 
 .masthead-brand-mind {
