@@ -225,7 +225,12 @@ class ArtifactSessionControlRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    action: Literal["send_follow_up", "clear_session"]
+    action: Literal[
+        "send_follow_up",
+        "clear_session",
+        "interrupt_turn",
+        "cancel_session",
+    ]
     message: str | None = None
     reason: str | None = None
 
@@ -242,7 +247,12 @@ class ArtifactSessionControlResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    action: Literal["send_follow_up", "clear_session"]
+    action: Literal[
+        "send_follow_up",
+        "clear_session",
+        "interrupt_turn",
+        "cancel_session",
+    ]
     projection: ArtifactSessionProjectionModel
 
 class PresignDownloadResponse(BaseModel):

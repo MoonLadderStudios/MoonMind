@@ -899,9 +899,23 @@ const ArtifactSessionProjectionSchema = z.object({
 });
 
 const ArtifactSessionControlResponseSchema = z.object({
-  action: z.enum(['send_follow_up', 'clear_session']),
+  action: z.enum(['send_follow_up', 'clear_session', 'interrupt_turn', 'cancel_session']),
   projection: ArtifactSessionProjectionSchema,
 });
+
+const InterventionCapabilitiesSchema = z
+  .object({
+    sendFollowUp: z.boolean().default(false),
+    clearSession: z.boolean().default(false),
+    interruptTurn: z.boolean().default(false),
+    cancelSession: z.boolean().default(false),
+  })
+  .default({
+    sendFollowUp: false,
+    clearSession: false,
+    interruptTurn: false,
+    cancelSession: false,
+  });
 
 const SessionSnapshotSchema = z
   .object({
@@ -923,6 +937,7 @@ const ObservabilitySummarySchema = z.object({
   liveStreamStatus: z.string().default('unavailable'),
   status: z.string().default(''),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
+  interventionCapabilities: InterventionCapabilitiesSchema,
 });
 
 const RawObservabilityEventSchema = z
@@ -1725,17 +1740,6 @@ async function fetchRunSummaryArtifact(
   return RunSummaryArtifactSchema.parse(JSON.parse(text));
 }
 
-function deriveCodexSessionId(
-  agentRunId: string | null | undefined,
-  runtimeId: string | null | undefined,
-): string | null {
-  const normalizedRuntime = String(runtimeId || '').trim().toLowerCase();
-  if (!agentRunId || (normalizedRuntime !== 'codex' && normalizedRuntime !== 'codex_cli')) {
-    return null;
-  }
-  return `sess:${agentRunId}:codex_cli`;
-}
-
 async function fetchArtifactSessionProjection(
   apiBase: string,
   agentRunId: string,
@@ -1762,7 +1766,7 @@ async function controlArtifactSession(
   apiBase: string,
   agentRunId: string,
   sessionId: string,
-  body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string },
+  body: { action: 'send_follow_up' | 'clear_session' | 'interrupt_turn' | 'cancel_session'; message?: string; reason?: string },
   routeTemplate?: string | null,
 ): Promise<z.infer<typeof ArtifactSessionControlResponseSchema>> {
   const resp = await fetch(
@@ -1780,7 +1784,16 @@ async function controlArtifactSession(
     },
   );
   if (!resp.ok) {
-    throw new Error(`Session control: ${resp.status}`);
+    let detail = `Session control: ${resp.status}`;
+    try {
+      const payload = await resp.json();
+      if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+        detail = payload.detail;
+      }
+    } catch {
+      // Keep the status fallback when the response is not JSON.
+    }
+    throw new Error(detail);
   }
   return ArtifactSessionControlResponseSchema.parse(await resp.json());
 }
@@ -3939,24 +3952,28 @@ function RecoveryEvidencePanel({
 function SessionContinuityPanel({
   apiBase,
   agentRunId,
-  targetRuntime,
   isTerminal,
-  onCancel,
   invalidateWorkflowDetail,
-  cancelBusy,
   routes,
 }: {
   apiBase: string;
   agentRunId: string;
-  targetRuntime: string | null | undefined;
   isTerminal: boolean;
-  onCancel: () => void;
   invalidateWorkflowDetail: () => void;
-  cancelBusy: boolean;
   routes: AgentRunRouteTemplates;
 }) {
   const queryClient = useQueryClient();
-  const sessionId = deriveCodexSessionId(agentRunId, targetRuntime);
+  const summaryQuery = useQuery({
+    queryKey: ['observability-summary', agentRunId, 'session-controls'],
+    queryFn: () => fetchObservabilitySummary(apiBase, agentRunId, routes.observabilitySummary),
+    enabled: !!agentRunId,
+    staleTime: 1000 * 10,
+    retry: false,
+  });
+  const summary = summaryQuery.data;
+  const sessionSnapshot = summary?.sessionSnapshot ?? null;
+  const interventionCapabilities = summary?.interventionCapabilities ?? InterventionCapabilitiesSchema.parse({});
+  const sessionId = sessionSnapshot?.sessionId ?? null;
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
 
@@ -3966,7 +3983,7 @@ function SessionContinuityPanel({
       if (!sessionId) return Promise.resolve(null);
       return fetchArtifactSessionProjection(apiBase, agentRunId, sessionId, routes.artifactSession);
     },
-    enabled: Boolean(agentRunId && sessionId),
+    enabled: Boolean(agentRunId && sessionId && summaryQuery.isSuccess),
     refetchInterval: (query) => {
       return getSessionProjectionRefetchInterval(
         isTerminal,
@@ -3978,7 +3995,7 @@ function SessionContinuityPanel({
   });
 
   const controlMutation = useMutation({
-    mutationFn: async (body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string }) => {
+    mutationFn: async (body: { action: 'send_follow_up' | 'clear_session' | 'interrupt_turn' | 'cancel_session'; message?: string; reason?: string }) => {
       if (!sessionId) throw new Error('Managed session is unavailable.');
       return controlArtifactSession(apiBase, agentRunId, sessionId, body, routes.artifactSessionControl);
     },
@@ -3996,6 +4013,17 @@ function SessionContinuityPanel({
     onError: (error: Error) => setPanelError(error.message),
   });
 
+  if (summaryQuery.isLoading) {
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <p className="small">Loading session capabilities...</p>
+      </section>
+    );
+  }
+  if (summaryQuery.isError) {
+    return null;
+  }
   if (!sessionId) {
     return null;
   }
@@ -4034,7 +4062,11 @@ function SessionContinuityPanel({
     ['Latest Control', projection.latest_control_event_ref?.artifact_id ?? null],
     ['Latest Reset', projection.latest_reset_boundary_ref?.artifact_id ?? null],
   ].filter(([, artifactId]) => artifactId !== null) as Array<[string, string]>;
-  const busy = controlMutation.isPending || cancelBusy;
+  const busy = controlMutation.isPending;
+  const canSendFollowUp = Boolean(sessionId && interventionCapabilities.sendFollowUp && !isTerminal);
+  const canClearSession = Boolean(sessionId && interventionCapabilities.clearSession && !isTerminal);
+  const canInterruptTurn = Boolean(sessionId && interventionCapabilities.interruptTurn && !isTerminal);
+  const canCancelSession = Boolean(sessionId && interventionCapabilities.cancelSession && !isTerminal);
 
   const submitFollowUp = () => {
     const message = followUpMessage.trim();
@@ -4050,6 +4082,20 @@ function SessionContinuityPanel({
     setPanelError(null);
     controlMutation.mutate({
       action: 'clear_session',
+    });
+  };
+
+  const interruptTurn = () => {
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'interrupt_turn',
+    });
+  };
+
+  const cancelSession = () => {
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'cancel_session',
     });
   };
 
@@ -4111,33 +4157,49 @@ function SessionContinuityPanel({
           onChange={(event) => setFollowUpMessage(event.target.value)}
           rows={3}
           placeholder="Send a follow-up turn to the managed Codex session."
-          disabled={busy || isTerminal}
+          disabled={busy || !canSendFollowUp}
         />
         <div className="actions">
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy || isTerminal || !followUpMessage.trim()}
-            onClick={submitFollowUp}
-          >
-            Send follow-up
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy || isTerminal}
-            onClick={clearSession}
-          >
-            Clear / Reset
-          </button>
-          <button
-            type="button"
-            className="queue-action queue-action-danger"
-            disabled={busy || isTerminal}
-            onClick={onCancel}
-          >
-            Cancel Execution
-          </button>
+          {canSendFollowUp ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || !followUpMessage.trim()}
+              onClick={submitFollowUp}
+            >
+              Send follow-up
+            </button>
+          ) : null}
+          {canClearSession ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={clearSession}
+            >
+              Clear / Reset
+            </button>
+          ) : null}
+          {canInterruptTurn ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={interruptTurn}
+            >
+              Interrupt turn
+            </button>
+          ) : null}
+          {canCancelSession ? (
+            <button
+              type="button"
+              className="queue-action queue-action-danger"
+              disabled={busy}
+              onClick={cancelSession}
+            >
+              Cancel session
+            </button>
+          ) : null}
         </div>
       </div>
     </section>
@@ -6469,11 +6531,8 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             <SessionContinuityPanel
               apiBase={payload.apiBase}
               agentRunId={resolvedAgentRunId}
-              targetRuntime={execution.targetRuntime}
               isTerminal={isTerminalExecution}
-              onCancel={onCancel}
               invalidateWorkflowDetail={invalidate}
-              cancelBusy={cancelMutation.isPending}
               routes={agentRunRoutes}
             />
           ) : null}

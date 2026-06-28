@@ -6271,6 +6271,40 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-2',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events: [], truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
         return Promise.resolve({
           ok: true,
@@ -6375,6 +6409,19 @@ describe('Workflow Detail Entrypoint', () => {
               status: 'completed',
               supportsLiveStreaming: false,
               liveStreamStatus: 'ended',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-2',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: false,
+                clearSession: false,
+                interruptTurn: false,
+                cancelSession: false,
+              },
             },
           }),
         } as Response);
@@ -6462,6 +6509,31 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
         return Promise.resolve({
           ok: true,
@@ -6553,7 +6625,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('reuses the existing execution cancel route from the Session Continuity panel', async () => {
+  it('routes active-turn interrupt and cancel controls through the agent-run session control API', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -6579,15 +6651,48 @@ describe('Workflow Detail Entrypoint', () => {
       },
     };
 
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith('/cancel')) {
+      if (url.includes('/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            ...mockExecution,
-            state: 'canceled',
-            rawState: 'canceled',
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: 'turn-1',
+              },
+              interventionCapabilities: {
+                sendFollowUp: false,
+                clearSession: true,
+                interruptTurn: true,
+                cancelSession: true,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            action: JSON.parse(String(init?.body || '{}')).action,
+            projection: {
+              agent_run_id: 'wf-task-1',
+              session_id: 'sess:wf-task-1:codex_cli',
+              session_epoch: 1,
+              grouped_artifacts: [],
+              latest_summary_ref: null,
+              latest_checkpoint_ref: null,
+              latest_control_event_ref: { artifact_id: 'art-control' },
+              latest_reset_boundary_ref: null,
+            },
           }),
         } as Response);
       }
@@ -6623,17 +6728,29 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Execution' }));
-    confirmWorkflowDialog('Cancel workflow');
+    fireEvent.click(await screen.findByRole('button', { name: 'Interrupt turn' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/executions/test-123/cancel',
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
-            action: 'cancel',
-            graceful: true,
+            action: 'interrupt_turn',
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel session' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'cancel_session',
           }),
         }),
       );
@@ -7121,14 +7238,18 @@ describe('LiveLogsPanel', () => {
     // Wait until the initial execute fetch finishes so task is loaded
     await waitFor(() => expect(screen.getByText('Active task')).toBeTruthy());
 
-    // Before click, it shouldn't have fetched the summary
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+    const summaryCallsBeforeExpand = fetchSpy.mock.calls.filter(([input]) =>
+      String(input).includes('/observability-summary'),
+    ).length;
+    expect(summaryCallsBeforeExpand).toBeGreaterThanOrEqual(1);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    // Now it should fetch
+    // Now the Live Logs panel should perform its own summary fetch.
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input).includes('/observability-summary')).length,
+      ).toBeGreaterThan(summaryCallsBeforeExpand);
     });
   });
 
