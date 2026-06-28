@@ -2,9 +2,10 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last Updated: 2026-06-15
+Last Updated: 2026-06-28
 Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/WorkflowProposalSystem.md`,
-`docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`
+`docs/Temporal/ErrorTaxonomy.md`, `docs/Temporal/StepLedgerAndProgressModel.md`,
+`docs/Workflows/NoCommitStatus.md`
 
 ---
 
@@ -14,10 +15,15 @@ MoonMind requires a clear "what happened?" summary at the end of every
 `MoonMind.UserWorkflow` execution so dashboard operators can quickly distinguish:
 
 * **Published output** (PR/branch updated successfully) vs
-* **No changes** (publish skipped because the repository was already correct) vs
+* **No commit** (publish skipped because no repository commit was needed) vs
 * **Publish disabled** (intentionally set `publish.mode=none` for a dry run) vs
 * **Failure** (and at which Temporal Activity boundary) vs
 * **Cancelled**
+
+`NO_COMMIT` replaces the older `NO_CHANGES` wording because workflows may still
+perform non-repository side effects such as Jira issue transitions, comments,
+verification records, or artifact publication. The finish summary must describe
+repository publication separately from those side effects.
 
 This document describes the finish-summary system executed during the workflow's
 finalization path. The system produces a structured, non-secret summary artifact
@@ -33,10 +39,14 @@ At the conclusion of a `MoonMind.UserWorkflow` Temporal Workflow, the system gua
 
 * `PUBLISHED_PR`
 * `PUBLISHED_BRANCH`
-* `NO_CHANGES`
+* `NO_COMMIT`
 * `PUBLISH_DISABLED`
 * `FAILED`
 * `CANCELLED`
+
+Legacy artifacts or compatibility adapters may still expose `NO_CHANGES`; new
+workflow histories and UI copy should treat that value as an alias for
+`NO_COMMIT` when the reason is that no repository commit was needed.
 
 It also logs a `finishOutcomeStage` indicating which stage of the workflow it reached (e.g., `prepare`, `llm_execution`, `publish`, `proposals`).
 
@@ -55,16 +65,26 @@ The finish summary data is small and stored as JSON. A `reports/run_summary.json
     "durationMs": 185000
   },
   "finishOutcome": {
-    "code": "NO_CHANGES",
+    "code": "NO_COMMIT",
     "stage": "publish",
-    "reason": "publish skipped: no local changes"
+    "reason": "No repository commit was needed."
   },
   "publish": {
     "mode": "pr",
     "status": "skipped",
-    "reason": "no local changes",
+    "reasonCode": "no_commit",
+    "reason": "No repository changes were available to commit or publish.",
+    "commitCreated": false,
+    "branchPushed": false,
     "prUrl": null
   },
+  "sideEffects": [
+    {
+      "kind": "jira",
+      "status": "completed",
+      "summary": "Issue transitioned to Done."
+    }
+  ],
   "proposals": {
     "generatedCount": 0,
     "submittedCount": 0,
@@ -72,6 +92,12 @@ The finish summary data is small and stored as JSON. A `reports/run_summary.json
   }
 }
 ```
+
+The `sideEffects` block is optional and bounded, but it is the preferred way to
+make side effects visible when a run has no repository commit. A Jira Implement
+preset run that moves an issue to Done but creates no commit should therefore
+summarize as `NO_COMMIT`, not as "no changes." See
+`docs/Workflows/NoCommitStatus.md` for the full lifecycle contract.
 
 ### 2.3 Failure Diagnostics Contract
 
@@ -236,15 +262,15 @@ sent to the terminal-state activity.
 
 Workflow presets do not own generic end-of-run narration. Presets may emit structured
 facts that are useful after execution, such as a Jira issue key, pull request
-URL, verification verdict, publish handoff, or outcome data, but those facts are
-inputs to operator surfaces and workflow finalization rather than a replacement
-for the canonical finish summary.
+URL, verification verdict, publish handoff, side-effect outcome, or no-commit
+data, but those facts are inputs to operator surfaces and workflow finalization
+rather than a replacement for the canonical finish summary.
 
 For orchestration presets, the final operational step should be the last action
 needed by that preset, such as MoonSpec verification or a Jira workflow
 transition. A preset should not add a final agent-authored report step whose only
 purpose is to summarize normal completion. This keeps success, failure,
-cancellation, and no-change runs on the same `reports/run_summary.json` contract
+cancellation, and no-commit runs on the same `reports/run_summary.json` contract
 even when late preset steps do not run.
 
 ---
