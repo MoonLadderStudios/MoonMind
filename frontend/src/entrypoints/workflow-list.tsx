@@ -198,6 +198,7 @@ const ExecutionRowSchema = z
     scheduledFor: z.string().nullable().optional(),
     closedAt: z.string().nullable().optional(),
     createdAt: z.string(),
+    updatedAt: z.string().nullable().optional(),
     entry: z.string().optional(),
     dependsOn: z.array(z.string()).optional(),
     blockedOnDependencies: z.boolean().optional(),
@@ -311,6 +312,21 @@ function statusSupplementItems(row: ExecutionRow): string[] {
   return items;
 }
 
+const TERMINAL_UPDATED_AT_FALLBACK_STATES = new Set(['completed', 'failed', 'canceled', 'cancelled', 'succeeded']);
+
+function rowLifecycleState(row: ExecutionRow): string {
+  return String(row.rawState || row.state || row.status || '').toLowerCase();
+}
+
+function laterTimestamp(preferred: string | null | undefined, fallback: string): string {
+  if (!preferred) return fallback;
+  const preferredMs = Date.parse(preferred);
+  const fallbackMs = Date.parse(fallback);
+  if (Number.isNaN(preferredMs)) return fallback;
+  if (Number.isNaN(fallbackMs)) return preferred;
+  return preferredMs >= fallbackMs ? preferred : fallback;
+}
+
 function formatProgress(row: ExecutionRow): { text: string; title?: string } {
   const progress = row.progress;
   const total = progress?.total ?? 0;
@@ -337,7 +353,14 @@ function formatProgress(row: ExecutionRow): { text: string; title?: string } {
 }
 
 function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
-  return row.closedAt || row.scheduledFor || row.createdAt;
+  const state = rowLifecycleState(row);
+  if (row.closedAt && TERMINAL_UPDATED_AT_FALLBACK_STATES.has(state)) {
+    return laterTimestamp(row.updatedAt, row.closedAt);
+  }
+  if (row.scheduledFor && state === 'scheduled') {
+    return laterTimestamp(row.updatedAt, row.scheduledFor);
+  }
+  return row.updatedAt || row.closedAt || row.scheduledFor || row.createdAt;
 }
 
 const RELATIVE_TIME_UNITS: Array<[string, number]> = [
