@@ -20,7 +20,11 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
-import { workflowListHrefFromContext } from '../lib/workflowListContext';
+import {
+  workflowDetailHref,
+  workflowListContextParams,
+  workflowListHrefFromContext,
+} from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -211,9 +215,8 @@ function workflowDetailSubrouteHref(
 }
 
 function workflowWorkspaceListQuery(search: URLSearchParams): string {
-  const params = new URLSearchParams(search);
-  params.delete('selectedWorkflowId');
-  const pageSize = params.get('limit') || params.get('pageSize') || '25';
+  const params = workflowListContextParams(search);
+  const pageSize = params.get('limit') || '25';
   params.delete('limit');
   params.set('pageSize', pageSize);
   return params.toString();
@@ -222,19 +225,23 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
 function WorkflowSidebarRow({
   row,
   activeWorkflowId,
+  search,
 }: {
   row: WorkflowWorkspaceRow;
   activeWorkflowId: string;
+  search: URLSearchParams;
 }) {
   const workflowId = workflowWorkspaceRowId(row);
   const active = workflowId === activeWorkflowId;
   const status = row.rawState || row.state || row.status || 'unknown';
   const title = row.title?.trim() || workflowId || 'Untitled workflow';
+  const repository = row.repository?.trim();
+  const runtime = formatRuntimeLabel(row.targetRuntime);
   return (
     <li>
       <a
         className="workflow-workspace-sidebar-row"
-        href={`/workflows/${encodeURIComponent(workflowId)}?source=temporal`}
+        href={workflowDetailHref(workflowId, search)}
         aria-current={active ? 'page' : undefined}
         data-active={active ? 'true' : 'false'}
       >
@@ -242,6 +249,11 @@ function WorkflowSidebarRow({
           <span className="workflow-workspace-sidebar-title">{title}</span>
           <span className="workflow-workspace-sidebar-meta">
             {formatWorkflowWorkspaceRelativeTime(workflowWorkspaceRowUpdatedAt(row))}
+          </span>
+          <span className="workflow-workspace-sidebar-labels" aria-label="Workflow metadata">
+            {repository ? <span>{repository}</span> : null}
+            {runtime !== '—' ? <span>{runtime}</span> : null}
+            <span>{formatStatusLabel(status)}</span>
           </span>
         </span>
         <ExecutionStatusPill status={status} />
@@ -281,10 +293,10 @@ function WorkflowWorkspaceShell({
   const rows = workflowsQuery.data?.items || [];
   const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
   const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
-  const fullListHref = `/workflows${search.toString() ? `?${search.toString()}` : ''}`;
+  const fullListHref = workflowListHrefFromContext(search, { markDetailReturn: true });
 
   return (
-    <div className="workflow-workspace-shell" data-jira-issue="MM-997" data-source-issue="MM-975">
+    <div className="workflow-workspace-shell" data-jira-issue="MM-1002" data-source-issue="MM-975">
       {sidebarOpen ? (
         <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
           <div className="workflow-workspace-sidebar-controls">
@@ -330,6 +342,7 @@ function WorkflowWorkspaceShell({
                   key={workflowWorkspaceRowId(row)}
                   row={row}
                   activeWorkflowId={workflowId}
+                  search={search}
                 />
               ))}
             </ul>

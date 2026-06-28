@@ -6494,6 +6494,7 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border-radius: 0.8rem;
   background: var(--mm-glass-fill);
   box-shadow: var(--mm-elevation-panel);
+  border-right-color: rgb(var(--mm-border) / 0.92);
   padding: 0.75rem;
 }
 
@@ -6517,20 +6518,25 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   list-style: none;
   padding: 0;
   margin: 0;
+  scrollbar-gutter: stable;
 }
 
 .workflow-workspace-sidebar-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   gap: 0.55rem;
   min-height: 3.75rem;
   padding: 0.62rem;
-  border: 1px solid rgb(var(--mm-border) / 0.58);
+  border: 1px solid rgb(var(--mm-border) / 0.68);
   border-radius: 0.55rem;
-  background: rgb(var(--mm-panel) / 0.78);
+  background: rgb(var(--mm-panel) / 0.92);
   color: rgb(var(--mm-ink));
   text-decoration: none;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
 }
 
 .workflow-workspace-sidebar-row:hover,
@@ -6565,12 +6571,34 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-size: 0.82rem;
 }
 
+.workflow-workspace-sidebar-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.workflow-workspace-sidebar-labels span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-workspace-sidebar-labels span:not(:last-child)::after {
+  content: "|";
+  margin-left: 0.25rem;
+  color: rgb(var(--mm-muted) / 0.72);
+}
+
 .workflow-workspace-current-row,
 .workflow-workspace-sidebar-state {
   border: 1px dashed rgb(var(--mm-border) / 0.75);
   border-radius: 0.55rem;
   padding: 0.65rem;
-  background: rgb(var(--mm-panel) / 0.62);
+  background: rgb(var(--mm-panel) / 0.88);
 }
 
 .workflow-workspace-current-row {
@@ -6586,6 +6614,13 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 .workflow-workspace-open-sidebar {
   justify-self: start;
   align-self: start;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workflow-workspace-sidebar-row,
+  .workflow-workspace-sidebar {
+    transition-duration: 1ms;
+  }
 }
 
 @media (max-width: 767px) {
