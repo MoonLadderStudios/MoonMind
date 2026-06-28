@@ -1814,6 +1814,52 @@ describe('Workflows Entrypoint', () => {
             createdAt: '2026-03-28T00:00:00Z',
           },
           {
+            taskId: 'task-completed-skipped',
+            source: 'temporal',
+            title: 'Completed task with skipped step',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            progress: {
+              total: 4,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 3,
+              failed: 0,
+              skipped: 1,
+              canceled: 0,
+              currentStepTitle: 'Skipped cleanup',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-failed-zero-counter',
+            source: 'temporal',
+            title: 'Failed task without failed counter',
+            status: 'failed',
+            state: 'failed',
+            rawState: 'failed',
+            progress: {
+              total: 2,
+              pending: 0,
+              ready: 0,
+              running: 0,
+              awaitingExternal: 0,
+              reviewing: 0,
+              succeeded: 1,
+              failed: 0,
+              skipped: 0,
+              canceled: 0,
+              currentStepTitle: 'Platform timeout',
+              updatedAt: '2026-03-28T00:00:00Z',
+            },
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
             taskId: 'task-missing-progress',
             source: 'temporal',
             title: 'Missing progress task',
@@ -1838,6 +1884,8 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getAllByText('Blocked by 1 prerequisite').length).toBeGreaterThan(0);
     expect(screen.getAllByText('3/6 · Run test suite').length).toBeGreaterThan(0);
     expect(screen.getAllByText('1/2 · Failed at Publish result').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('3/4 complete').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('1/2 · Failed at Platform timeout').length).toBeGreaterThan(0);
 
     // The signals are no longer buried under the workflow title cell.
     const workflowCell = document.querySelector('.queue-table-cell-workflow');

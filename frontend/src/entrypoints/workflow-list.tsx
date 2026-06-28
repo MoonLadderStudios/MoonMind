@@ -312,10 +312,10 @@ function formatProgress(row: ExecutionRow): { text: string; title?: string } {
   const isCompleted = state === 'completed' || state === 'succeeded';
   const isFailed = state === 'failed';
 
-  if (isCompleted && succeeded >= total) {
+  if (isCompleted) {
     return { text: `${succeeded}/${total} complete` };
   }
-  if (isFailed && failed > 0 && currentStepTitle) {
+  if (isFailed && currentStepTitle) {
     return {
       text: `${succeeded}/${total} · Failed at ${currentStepTitle}`,
       title: currentStepTitle,

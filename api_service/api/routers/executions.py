@@ -1753,12 +1753,12 @@ def _normalize_merge_automation_visibility_payload(
 def _bounded_execution_progress_from_sources(
     *,
     record: object,
-    memo: Mapping[str, object],
+    memo: Mapping[str, object] | None,
     finish_summary: Mapping[str, object] | None,
 ) -> ExecutionProgressModel | None:
     sources = (
         getattr(record, "progress", None),
-        memo.get("progress"),
+        memo.get("progress") if isinstance(memo, Mapping) else None,
         finish_summary.get("progress") if isinstance(finish_summary, Mapping) else None,
     )
     for source in sources:
@@ -8523,13 +8523,22 @@ async def list_executions(
                         record_obj.updated_at = (
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
-                    items.append(
-                        _serialize_execution(
-                            record_obj,
-                            include_artifact_refs=False,
-                            user=user,
-                        )
+                    execution = _serialize_execution(
+                        record_obj,
+                        include_artifact_refs=False,
+                        user=user,
                     )
+                    if _execution_uses_live_workflow_queries(execution):
+                        progress, queried_run_id = await _load_execution_progress(
+                            temporal_client=temporal_client,
+                            workflow_id=wf.id,
+                        )
+                        update: dict[str, object] = {"progress": progress}
+                        if queried_run_id:
+                            update["run_id"] = queried_run_id
+                            update["temporal_run_id"] = queried_run_id
+                        execution = execution.model_copy(update=update)
+                    items.append(execution)
 
                 items.sort(
                     key=lambda item: (

@@ -909,6 +909,15 @@ def test_serialize_execution_includes_bounded_progress_without_step_details() ->
         "updatedAt": "2026-04-04T18:11:15Z",
     }
 
+def test_serialize_execution_ignores_non_mapping_memo_for_progress() -> None:
+    record = _build_execution_record()
+    record.memo = None
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["progress"] is None
+
+
 def test_serialize_execution_nulls_progress_for_legacy_rows() -> None:
     payload = _serialize_execution(_build_execution_record()).model_dump(by_alias=True)
 
@@ -1629,6 +1638,93 @@ def test_list_executions_temporal_query_rejects_invalid_filter_bounds() -> None:
     assert invalid_sort.status_code == 422
     assert "sort must be one of" in invalid_sort.json()["detail"]["message"]
     temporal_client.count_workflows.assert_not_called()
+
+def test_list_executions_source_temporal_hydrates_live_progress() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    class _EmptyCanonicalResult:
+        def scalars(self) -> "_EmptyCanonicalResult":
+            return self
+
+        def all(self) -> list[TemporalExecutionCanonicalRecord]:
+            return []
+
+    class _Session:
+        async def execute(self, _stmt: object) -> _EmptyCanonicalResult:
+            return _EmptyCanonicalResult()
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_user_dependencies(app, is_superuser=True)
+
+    async def _memo():
+        return {
+            "title": "Live workflow",
+            "summary": "Running tests.",
+        }
+
+    workflow = SimpleNamespace(
+        id="mm:wf-live",
+        run_id="run-temporal",
+        namespace="default",
+        workflow_type="MoonMind.UserWorkflow",
+        status="RUNNING",
+        start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+        close_time=None,
+        execution_time=None,
+        search_attributes={
+            "mm_state": "executing",
+            "mm_owner_id": "system",
+            "mm_owner_type": "system",
+            "mm_entry": "run",
+        },
+        memo=_memo,
+    )
+
+    class _WorkflowIterator:
+        current_page = [workflow]
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = _override_query_client(
+        app,
+        progress={
+            "total": 3,
+            "pending": 0,
+            "ready": 0,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 2,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+            "updatedAt": "2026-04-04T18:11:15Z",
+            "runId": "run-live",
+        },
+    )
+    temporal_client.count_workflows = AsyncMock(return_value=SimpleNamespace(count=1))
+    temporal_client.list_workflows = Mock(return_value=_WorkflowIterator())
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "ownerType": "system"},
+        )
+
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert item["workflowId"] == "mm:wf-live"
+    assert item["runId"] == "run-live"
+    assert item["progress"]["succeeded"] == 2
+    assert item["progress"]["currentStepTitle"] == "Run tests"
+    temporal_client.get_workflow_handle.assert_called_once_with("mm:wf-live")
+
 
 def test_execution_facets_exclude_requested_facet_filter_and_keep_workflow_scope() -> None:
     app = FastAPI()
