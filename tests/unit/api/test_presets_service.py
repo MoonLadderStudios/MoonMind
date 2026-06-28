@@ -3130,7 +3130,6 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
                     "feature_request": "docs/Designs/RuntimeTypes.md",
                     "jira_project_key": "MM",
                     "jira_issue_type": "Story",
-                    "jira_board_id": "84",
                     "jira_dependency_mode": "linear_blocker_chain",
                     "publish_mode": "pr_with_merge_automation",
                     "source_issue_key": "MM-404",
@@ -3141,12 +3140,26 @@ async def test_seed_catalog_includes_jira_breakdown_implement_preset(tmp_path):
                 },
             )
 
+            template = await service.get_template(
+                slug="jira-breakdown-implement",
+                scope="global",
+                scope_ref=None,
+            )
+
+    assert "jira_board_id" not in {item["name"] for item in template["inputs"]}
     assert len(expanded["steps"]) == 5
     assert expanded["steps"][0]["tool"]["id"] == "jira.load_preset_brief"
     assert expanded["steps"][0]["tool"]["inputs"] == {"issueKey": "MM-404"}
     assert expanded["steps"][1]["skill"]["id"] == "moonspec-breakdown"
     assert expanded["steps"][2]["skill"]["id"] == "story-reconcile-implementation"
     assert expanded["steps"][3]["skill"]["id"] == "story.create_jira_issues"
+    assert "Selected Jira board ID" not in expanded["steps"][3]["instructions"]
+    assert expanded["steps"][3]["storyOutput"]["jira"] == {
+        "projectKey": "MM",
+        "issueTypeName": "Story",
+        "sourceIssueKey": "MM-404",
+        "dependencyMode": "linear_blocker_chain",
+    }
     downstream = expanded["steps"][4]
     assert downstream["skill"]["id"] == "story.create_jira_implement_tasks"
     assert downstream["jiraOrchestration"]["task"] == {
