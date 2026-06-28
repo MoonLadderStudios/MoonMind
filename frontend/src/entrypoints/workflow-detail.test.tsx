@@ -513,6 +513,121 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  function mockWorkflowWorkspaceFetchesWithSelectedOutsideList() {
+    const selectedExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-999 selected workflow outside filters',
+      summary: 'Workspace shell selected detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: 'detail-updated-marker',
+      scheduledFor: 'scheduled-marker',
+      actions: {},
+      relatedRuns: [],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                workflowId: 'test-456',
+                taskId: 'test-456',
+                source: 'temporal',
+                title: 'Filtered workflow',
+                status: 'completed',
+                state: 'completed',
+                rawState: 'completed',
+                createdAt: '2026-04-08T00:00:00Z',
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => selectedExecution,
+      } as Response);
+    });
+  }
+
+  function mockWorkflowWorkspaceSidebarFailure() {
+    const selectedExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '02-run',
+      runId: '02-run',
+      stepsHref: '/api/executions/test-123/steps',
+      source: 'temporal',
+      workflowType: 'MoonMind.UserWorkflow',
+      title: 'MM-999 detail survives sidebar error',
+      summary: 'Workspace shell selected detail',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      temporalStatus: 'running',
+      createdAt: '2026-04-09T00:00:00Z',
+      updatedAt: '2026-04-09T00:00:04Z',
+      actions: {},
+      relatedRuns: [],
+    };
+
+    let sidebarAttempts = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/executions?')) {
+        sidebarAttempts += 1;
+        return Promise.resolve({
+          ok: false,
+          statusText: sidebarAttempts === 1 ? 'Service Unavailable' : 'Gateway Timeout',
+          json: async () => ({}),
+        } as Response);
+      }
+      if (url.includes('/executions/test-123/steps')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => latestStepsSnapshot,
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => selectedExecution,
+      } as Response);
+    });
+  }
+
   function mockDesktopViewport(matches = true) {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
@@ -547,6 +662,60 @@ describe('Workflow Detail Entrypoint', () => {
       '/workflows/test-456?source=temporal',
     );
     expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBe('/api/executions?source=temporal&pageSize=25');
+  });
+
+  it('MM-999 pins the selected workflow above sidebar rows when it is outside the filtered result', async () => {
+    window.history.pushState({}, 'Workspace Pinned Current Test', '/workflows/test-123?source=temporal&stateIn=completed');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetchesWithSelectedOutsideList();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    const pinnedGroup = await within(sidebar).findByRole('list', { name: 'Current workflow' });
+    const pinned = within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i });
+    expect(pinned.getAttribute('aria-current')).toBe('page');
+    expect(pinned.getAttribute('data-pinned')).toBe('true');
+    expect(within(pinned).getByLabelText('executing')).toBeTruthy();
+    expect(within(pinned).getByText('scheduled-marker')).toBeTruthy();
+    expect(within(pinned).queryByText('detail-updated-marker')).toBeNull();
+    expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
+    expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+  });
+
+  it('MM-999 does not show a pinned current row when the selected workflow is in the normal sidebar list', async () => {
+    window.history.pushState({}, 'Workspace No Pinned Current Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).queryByRole('list', { name: 'Current workflow' })).toBeNull();
+    expect((await within(sidebar).findByRole('link', { name: /MM-997 selected workflow/i })).getAttribute('aria-current')).toBe(
+      'page',
+    );
+  });
+
+  it('MM-999 keeps detail visible and retries only sidebar data after a recoverable sidebar error', async () => {
+    window.history.pushState({}, 'Workspace Sidebar Error Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceSidebarFailure();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(await within(sidebar).findByText('Workflow navigation is unavailable.')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+
+    fireEvent.click(within(sidebar).getByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => {
+      const sidebarFetches = fetchSpy.mock.calls.filter(([url]) => String(url).startsWith('/api/executions?'));
+      expect(sidebarFetches.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(screen.getByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
   });
 
   it('MM-997 translates workspace sidebar limit state to the executions API page size', async () => {
@@ -794,6 +963,41 @@ describe('Workflow Detail Entrypoint', () => {
       expect(screen.queryByRole('heading', { name: 'Timeline' })).toBeNull();
       expect(screen.queryByRole('heading', { name: 'Report' })).toBeNull();
     });
+  });
+
+  it('reconstructs the full workflow list from allowlisted detail-route context (MM-998, MM-975)', async () => {
+    window.history.pushState(
+      {},
+      'Detail Context Test',
+      '/workflows/test-123?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+    );
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText('Focused route summary');
+    const expandLink = screen.getByRole('link', { name: 'Expand to full list' });
+    expect(expandLink.getAttribute('href')).toBe(
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&limit=25&returnFromWorkflowDetail=1',
+    );
+    expect(expandLink.getAttribute('href')).not.toContain('source=');
+    expect(expandLink.getAttribute('href')).not.toContain('sort=');
+    expect(expandLink.getAttribute('href')).not.toContain('nextPageToken=');
+    expect(expandLink.getAttribute('href')).not.toContain('selectedWorkflowId=');
+    expect(expandLink.getAttribute('href')).not.toContain('unsafe=');
+    expect(screen.getByRole('link', { name: 'Steps' }).getAttribute('href')).toBe(
+      '/workflows/test-123/steps?source=temporal&stateIn=completed&repoContains=moon%2Frepo&limit=25&nextPageToken=cursor-2&sort=status&selectedWorkflowId=test-123&unsafe=1',
+    );
+  });
+
+  it('expands to plain workflow list when no preserved list context exists (MM-998, MM-975)', async () => {
+    window.history.pushState({}, 'Plain Detail Test', '/workflows/test-123?source=temporal');
+    mockWorkflowDetailSubrouteFetch();
+
+    renderWithClient(<WorkflowDetailPage payload={stepsPayload} />);
+
+    await screen.findByText('Focused route summary');
+    expect(screen.getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe('/workflows');
   });
 
   it('renders recovery evidence from the failed step execution detail payload', async () => {
@@ -6628,6 +6832,40 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-2',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events: [], truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
         return Promise.resolve({
           ok: true,
@@ -6689,12 +6927,100 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
+  it('does not derive Session Continuity controls from Codex runtime names without a session snapshot', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'test-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex one-shot task',
+      summary: 'One-shot managed run',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: null,
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: true,
+                cancelSession: true,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events: [], truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/logs/merged')) {
+        return Promise.resolve({ ok: true, text: async () => '' } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        expect.stringContaining('/observability-summary'),
+        expect.anything(),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: 'Session Continuity' })).toBeNull();
+    });
+    expect(
+      fetchSpy.mock.calls.some(([input]) => String(input).includes('/artifact-sessions/')),
+    ).toBe(false);
+  });
+
   it('explains Live Logs as timeline history and Session Continuity as durable drill-down evidence', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: {
         dashboardConfig: {
           features: {
+            temporalDashboard: { actionsEnabled: true },
             logStreamingEnabled: true,
             liveLogsSessionTimelineEnabled: true,
           },
@@ -6732,6 +7058,19 @@ describe('Workflow Detail Entrypoint', () => {
               status: 'completed',
               supportsLiveStreaming: false,
               liveStreamStatus: 'ended',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 2,
+                containerId: 'ctr-1',
+                threadId: 'thread-2',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: false,
+                clearSession: false,
+                interruptTurn: false,
+                cancelSession: false,
+              },
             },
           }),
         } as Response);
@@ -6819,6 +7158,31 @@ describe('Workflow Detail Entrypoint', () => {
 
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: true,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
         return Promise.resolve({
           ok: true,
@@ -6875,6 +7239,9 @@ describe('Workflow Detail Entrypoint', () => {
     fireEvent.change(await screen.findByLabelText('Follow-up message'), {
       target: { value: 'Continue with the existing session.' },
     });
+    const summaryCallsBeforeControl = fetchSpy.mock.calls.filter(([input]) =>
+      String(input).includes('/observability-summary'),
+    ).length;
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
 
     await waitFor(() => {
@@ -6894,6 +7261,11 @@ describe('Workflow Detail Entrypoint', () => {
         fetchSpy.mock.calls.filter(([input]) => String(input) === executionDetailUrl).length,
       ).toBeGreaterThan(1);
     });
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input).includes('/observability-summary')).length,
+      ).toBeGreaterThan(summaryCallsBeforeControl);
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear / Reset' }));
 
@@ -6910,7 +7282,7 @@ describe('Workflow Detail Entrypoint', () => {
     });
   });
 
-  it('reuses the existing execution cancel route from the Session Continuity panel', async () => {
+  it('routes active-turn interrupt and cancel controls through the agent-run session control API', async () => {
     const codexPayload: BootPayload = {
       ...mockPayload,
       initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
@@ -6936,15 +7308,48 @@ describe('Workflow Detail Entrypoint', () => {
       },
     };
 
-    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith('/cancel')) {
+      if (url.includes('/observability-summary')) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            ...mockExecution,
-            state: 'canceled',
-            rawState: 'canceled',
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: 'turn-1',
+              },
+              interventionCapabilities: {
+                sendFollowUp: false,
+                clearSession: true,
+                interruptTurn: true,
+                cancelSession: true,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            action: JSON.parse(String(init?.body || '{}')).action,
+            projection: {
+              agent_run_id: 'wf-task-1',
+              session_id: 'sess:wf-task-1:codex_cli',
+              session_epoch: 1,
+              grouped_artifacts: [],
+              latest_summary_ref: null,
+              latest_checkpoint_ref: null,
+              latest_control_event_ref: { artifact_id: 'art-control' },
+              latest_reset_boundary_ref: null,
+            },
           }),
         } as Response);
       }
@@ -6980,17 +7385,29 @@ describe('Workflow Detail Entrypoint', () => {
 
     renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel Execution' }));
-    confirmWorkflowDialog('Cancel workflow');
+    fireEvent.click(await screen.findByRole('button', { name: 'Interrupt turn' }));
 
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
-        '/api/executions/test-123/cancel',
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({
-            action: 'cancel',
-            graceful: true,
+            action: 'interrupt_turn',
+          }),
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel session' }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'cancel_session',
           }),
         }),
       );
@@ -7478,14 +7895,18 @@ describe('LiveLogsPanel', () => {
     // Wait until the initial execute fetch finishes so task is loaded
     await waitFor(() => expect(screen.getByText('Active task')).toBeTruthy());
 
-    // Before click, it shouldn't have fetched the summary
-    expect(fetchSpy).not.toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+    const summaryCallsBeforeExpand = fetchSpy.mock.calls.filter(([input]) =>
+      String(input).includes('/observability-summary'),
+    ).length;
+    expect(summaryCallsBeforeExpand).toBe(0);
 
     fireEvent.click(await screen.findByText('Live Logs'));
 
-    // Now it should fetch
+    // Now the Live Logs panel should perform its own summary fetch.
     await waitFor(() => {
-      expect(fetchSpy).toHaveBeenCalledWith(expect.stringContaining('/observability-summary'), expect.anything());
+      expect(
+        fetchSpy.mock.calls.filter(([input]) => String(input).includes('/observability-summary')).length,
+      ).toBeGreaterThan(summaryCallsBeforeExpand);
     });
   });
 

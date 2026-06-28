@@ -215,10 +215,16 @@ class OmnigentHttpClient:
     async def stop_session(self, session_id: str) -> dict[str, Any]:
         return await self.post_event(session_id, {"type": "stop_session"})
 
-    async def delete_session(self, session_id: str) -> dict[str, Any]:
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        delete_branch: bool = False,
+    ) -> dict[str, Any]:
+        query = "?delete_branch=true" if delete_branch else "?delete_branch=false"
         return await self._request(
             "DELETE",
-            f"/v1/sessions/{quote(session_id, safe='')}",
+            f"/v1/sessions/{quote(session_id, safe='')}{query}",
         )
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
@@ -318,7 +324,7 @@ class OmnigentHttpClient:
             self._redact(f"Omnigent HTTP {status_code}"),
             status_code=status_code,
             response_body=response_body,
-            failure_class="integration_error",
+            failure_class=_failure_class_for_status(status_code),
         )
 
     def _redact(self, value: str) -> str:
@@ -362,6 +368,12 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
             for item in payload
         ]
     return payload
+
+
+def _failure_class_for_status(status_code: int) -> str:
+    if status_code in {400, 404, 409, 422}:
+        return "user_error"
+    return "integration_error"
 
 
 __all__ = [
