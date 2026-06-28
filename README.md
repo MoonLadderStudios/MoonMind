@@ -17,7 +17,7 @@ For now, MoonMind is focused on software engineering use cases.
 2. Install git
 3. `git clone https://github.com/MoonLadderStudios/MoonMind.git`
 4. Run `docker compose up -d` to start the service
-5. Open [http://localhost:7000](http://localhost:7000) for the MoonMind API/dashboard. In the combined MoonMind plus Omnigent stack, Omnigent is available at [http://localhost:8000](http://localhost:8000); see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
+5. Open [http://localhost:8000](http://localhost:8000). If you are validating a local MoonMind plus Omnigent Compose override, see [Combined Stack Validation and Rollback](docs/Omnigent/CombinedStackValidationAndRollback.md).
 6. In Settings:
     - Add a GitHub personal access token
     - Add an API key or click OAuth to authenticate a provider profile
