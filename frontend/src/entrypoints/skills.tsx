@@ -11,20 +11,18 @@ interface SkillItem {
 
 type PreviewTab = 'rendered' | 'raw' | 'metadata';
 
-type CollisionPolicy = 'reject' | 'new_version';
+type CollisionPolicy = 'reject';
 
 // Collision policy options surfaced for zip uploads. The values map directly to
-// the `collision_policy` field accepted by POST /api/skills/imports.
+// the `collision_policy` field accepted by POST /api/skills/imports. Only
+// `reject` is exposed today: the backend returns 409 for `new_version` until
+// versioned skill storage exists, so surfacing that option would advertise a
+// recovery path that always fails.
 const COLLISION_POLICIES: Array<{ value: CollisionPolicy; label: string; description: string }> = [
   {
     value: 'reject',
     label: 'Reject on collision',
     description: 'Fail the upload if a skill with the same name already exists.',
-  },
-  {
-    value: 'new_version',
-    label: 'Create new version',
-    description: 'Keep the existing skill and store the upload as a new version.',
   },
 ];
 

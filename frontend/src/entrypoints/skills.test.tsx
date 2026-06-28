@@ -294,7 +294,7 @@ describe('Skills Entrypoint', () => {
     expect(importCall).toBeUndefined();
   });
 
-  it('sends the selected collision policy when uploading a zip', async () => {
+  it('sends the collision policy when uploading a zip and does not expose the unsupported new-version mode', async () => {
     renderWithClient(<SkillsPage payload={mockPayload} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Skill' }));
@@ -302,9 +302,10 @@ describe('Skills Entrypoint', () => {
     fireEvent.change(screen.getByLabelText('Skill Zip'), {
       target: { files: [file] },
     });
-    fireEvent.change(screen.getByLabelText('Collision Policy'), {
-      target: { value: 'new_version' },
-    });
+
+    const collisionSelect = screen.getByLabelText('Collision Policy') as HTMLSelectElement;
+    const optionValues = Array.from(collisionSelect.options).map((option) => option.value);
+    expect(optionValues).toEqual(['reject']);
 
     fireEvent.click(screen.getByRole('button', { name: 'Upload Zip' }));
 
@@ -314,7 +315,7 @@ describe('Skills Entrypoint', () => {
       );
       expect(importCall).toBeTruthy();
       const body = importCall![1]?.body as FormData;
-      expect(body.get('collision_policy')).toBe('new_version');
+      expect(body.get('collision_policy')).toBe('reject');
     });
   });
 
