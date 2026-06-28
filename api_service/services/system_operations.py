@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -24,6 +25,7 @@ from api_service.db.models import SettingsAuditEvent, SettingsOverride
 _DEFAULT_SUBJECT_ID = UUID("00000000-0000-0000-0000-000000000000")
 _WORKER_STATE_KEY = "operations.workers.pause_state"
 _WORKER_AUDIT_KEY = "operations.workers"
+_LOG = logging.getLogger(__name__)
 
 
 class SystemOperationValidationError(ValueError):
@@ -355,8 +357,7 @@ class SystemOperationsService:
         return self._metadata_from_payload(row.value_json)
 
     async def _load_metrics(self) -> WorkerPauseMetricsModel:
-        reader = getattr(self._temporal_service, "get_drain_metrics", None)
-        if not callable(reader):
+        def unavailable() -> WorkerPauseMetricsModel:
             return WorkerPauseMetricsModel(
                 queued=0,
                 running=0,
@@ -364,10 +365,20 @@ class SystemOperationsService:
                 isDrained=False,
                 metricsSource="unavailable",
             )
-        raw = await reader()
-        queued = max(0, int(raw.get("queued") or 0))
-        running = max(0, int(raw.get("running") or 0))
-        stale_running = max(0, int(raw.get("stale_running") or 0))
+
+        reader = getattr(self._temporal_service, "get_drain_metrics", None)
+        if not callable(reader):
+            return unavailable()
+        try:
+            raw = await reader()
+            if not isinstance(raw, Mapping):
+                return unavailable()
+            queued = max(0, int(raw.get("queued") or 0))
+            running = max(0, int(raw.get("running") or 0))
+            stale_running = max(0, int(raw.get("stale_running") or 0))
+        except Exception:
+            _LOG.warning("Failed to load worker pause drain metrics", exc_info=True)
+            return unavailable()
         return WorkerPauseMetricsModel(
             queued=queued,
             running=running,

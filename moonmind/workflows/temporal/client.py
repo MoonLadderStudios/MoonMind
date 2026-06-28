@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
-from temporalio.client import Client, WorkflowExecutionDescription
+from temporalio.client import Client, WorkflowExecutionDescription, WorkflowUpdateStage
 from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
@@ -59,6 +59,7 @@ MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE = (
     "mm-operational:managed-runtime-workspace-cleanup"
 )
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
+_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
@@ -484,7 +485,7 @@ class TemporalClientAdapter:
 
     # --- Worker Pause/Resume: Batch Updates for Quiesce mode (DOC-REQ-003) ---
 
-    async def send_batch_pause_signal(
+    async def send_batch_pause_update(
         self,
         *,
         task_queues: Sequence[str] | None = None,
@@ -498,7 +499,7 @@ class TemporalClientAdapter:
             task_queues=task_queues,
         )
 
-    async def send_batch_resume_signal(
+    async def send_batch_resume_update(
         self,
         *,
         task_queues: Sequence[str] | None = None,
@@ -534,7 +535,6 @@ class TemporalClientAdapter:
             quoted = ", ".join(f'"{tq}"' for tq in task_queues)
             visibility_filter += f" AND TaskQueue IN ({quoted})"
 
-        signaled = 0
         _log = logging.getLogger(__name__)
         _sem = asyncio.Semaphore(50)
 
@@ -542,7 +542,11 @@ class TemporalClientAdapter:
             async with _sem:
                 try:
                     handle = client.get_workflow_handle(wf_id)
-                    await handle.execute_update(update_name)
+                    await handle.start_update(
+                        update_name,
+                        wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+                        rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT,
+                    )
                     return True
                 except Exception:
                     _log.warning(
@@ -558,8 +562,7 @@ class TemporalClientAdapter:
             tasks.append(asyncio.create_task(_update_one(execution.id)))
 
         results = await asyncio.gather(*tasks)
-        signaled = sum(1 for ok in results if ok)
-        return signaled
+        return sum(1 for ok in results if ok)
 
     # --- Temporal Schedule CRUD ---
 

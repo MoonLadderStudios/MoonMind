@@ -392,13 +392,12 @@ class TemporalExecutionService:
         Used by API guard to prevent new workflow submissions (DOC-REQ-001/004/005).
         """
 
+        system_id = UUID("00000000-0000-0000-0000-000000000000")
         result = await self._session.execute(
             select(SettingsOverride.value_json).where(
                 SettingsOverride.scope == "workspace",
-                SettingsOverride.workspace_id
-                == UUID("00000000-0000-0000-0000-000000000000"),
-                SettingsOverride.user_id
-                == UUID("00000000-0000-0000-0000-000000000000"),
+                SettingsOverride.workspace_id == system_id,
+                SettingsOverride.user_id == system_id,
                 SettingsOverride.key == "operations.workers.pause_state",
             )
         )
@@ -407,11 +406,11 @@ class TemporalExecutionService:
 
     async def send_quiesce_pause_signal(self) -> int:
         """Send a Quiesce pause signal to all running workflows (DOC-REQ-003, FR-007)."""
-        return await self._client_adapter.send_batch_pause_signal()
+        return await self._client_adapter.send_batch_pause_update()
 
     async def send_quiesce_resume_signal(self) -> int:
         """Send a Quiesce resume signal to all paused workflows (DOC-REQ-003, FR-010)."""
-        return await self._client_adapter.send_batch_resume_signal()
+        return await self._client_adapter.send_batch_resume_update()
 
     async def get_drain_metrics(self) -> dict[str, int]:
         """Return Temporal Visibility counts for worker-pause drain status."""

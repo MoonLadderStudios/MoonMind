@@ -52,6 +52,16 @@ class FakeTemporalService:
         return dict(self.metrics)
 
 
+class FailingMetricsTemporalService(FakeTemporalService):
+    async def get_drain_metrics(self) -> dict[str, int]:
+        raise RuntimeError("visibility unavailable")
+
+
+class MalformedMetricsTemporalService(FakeTemporalService):
+    async def get_drain_metrics(self) -> list[int]:
+        return [1, 2, 3]
+
+
 @pytest.mark.asyncio
 async def test_worker_snapshot_defaults_and_projects_sanitized_audit(
     system_operations_session_maker,
@@ -201,6 +211,31 @@ async def test_snapshot_derives_drained_status_from_temporal_metrics(
     assert snapshot.metrics.running == 2
     assert snapshot.metrics.is_drained is False
     assert snapshot.metrics.metrics_source == "temporal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "temporal_service",
+    [
+        FailingMetricsTemporalService(),
+        MalformedMetricsTemporalService(),
+        object(),
+    ],
+)
+async def test_snapshot_degrades_when_temporal_metrics_are_unavailable(
+    system_operations_session_maker,
+    temporal_service,
+) -> None:
+    async with system_operations_session_maker() as session:
+        snapshot = await SystemOperationsService(
+            session, temporal_service=temporal_service
+        ).snapshot()
+
+    assert snapshot.metrics.queued == 0
+    assert snapshot.metrics.running == 0
+    assert snapshot.metrics.stale_running == 0
+    assert snapshot.metrics.is_drained is False
+    assert snapshot.metrics.metrics_source == "unavailable"
 
 
 @pytest.mark.asyncio
