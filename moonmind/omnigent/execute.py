@@ -416,6 +416,7 @@ async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
     try:
         await task
     except asyncio.CancelledError:
+        # Expected after requesting cancellation of a helper task.
         pass
 
 
