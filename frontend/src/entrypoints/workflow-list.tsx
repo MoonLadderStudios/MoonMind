@@ -8,6 +8,10 @@ import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { PageSizeSelector, parsePageSize } from '../components/PageSizeSelector';
 import { WorkflowRowActionsMenu } from '../components/WorkflowRowActionsMenu';
 import {
+  WORKFLOW_LIST_CONTEXT_RETURN_PARAM,
+  workflowDetailHref,
+} from '../lib/workflowListContext';
+import {
   TOGGLEABLE_WORKFLOW_LIST_COLUMNS,
   readDashboardPreferences,
   resetDashboardPreferences,
@@ -784,6 +788,10 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const initial = useMemo(() => new URLSearchParams(window.location.search), []);
 
   const initialFilterValidationErrors = useMemo(() => validateInitialFilterParams(initial), [initial]);
+  const [workspaceCursorResetNotice, setWorkspaceCursorResetNotice] = useState(false);
+  const [workspaceReturnFromDetail, setWorkspaceReturnFromDetail] = useState(() =>
+    initial.get(WORKFLOW_LIST_CONTEXT_RETURN_PARAM) === '1',
+  );
   const [ignoredWorkflowScopeState] = useState(() => hasUnsupportedWorkflowScopeState(initial));
   const [filters, setFilters] = useState(() => parseInitialFilters(initial));
   const [draftFilters, setDraftFilters] = useState(() => parseInitialFilters(initial));
@@ -848,6 +856,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     appendFilterParams(params, filters);
     params.set('limit', String(pageSize));
     if (listCursor) params.set('nextPageToken', listCursor);
+    params.delete(WORKFLOW_LIST_CONTEXT_RETURN_PARAM);
     // MM-954: do not persist sort/sortDir to the URL. Sorting only reorders the
     // currently loaded page, so writing it to the URL would falsely imply a
     // global server-side sort across the full filtered result set.
@@ -932,6 +941,24 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setListCursor(null);
     setCursorStack([]);
   }, []);
+
+  useEffect(() => {
+    if (!workspaceReturnFromDetail || !listCursor || isLoading || isError || !data) return;
+    if (data.items.length > 0 || data.nextPageToken) {
+      setWorkspaceReturnFromDetail(false);
+      return;
+    }
+    setWorkspaceReturnFromDetail(false);
+    setWorkspaceCursorResetNotice(true);
+    resetToFirstPage();
+  }, [
+    data,
+    isError,
+    isLoading,
+    listCursor,
+    resetToFirstPage,
+    workspaceReturnFromDetail,
+  ]);
 
   // MM-964: column visibility. The workflow title column is the primary anchor
   // and is always shown; every other column honors the stored preference.
@@ -1126,6 +1153,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     const items = data?.items || [];
     return sortRows(items, sortField, sortDir);
   }, [data?.items, sortField, sortDir]);
+  const detailListContext = useMemo(() => {
+    const params = new URLSearchParams();
+    appendFilterParams(params, filters);
+    params.set('limit', String(pageSize));
+    if (listCursor) params.set('nextPageToken', listCursor);
+    return params;
+  }, [filters, listCursor, pageSize]);
 
   const pageIndex = cursorStack.length;
   const pageStart = sortedItems.length > 0 ? pageIndex * pageSize + 1 : 0;
@@ -1243,7 +1277,8 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
   const hasWorkflowListNotices =
     !listEnabled ||
     Boolean(ignoredWorkflowScopeState) ||
-    filterValidationErrors.length > 0;
+    filterValidationErrors.length > 0 ||
+    workspaceCursorResetNotice;
 
   const updateDraftText = (field: 'workflowId' | 'title', value: string) => {
     setDraftFilters((current) => ({
@@ -1751,6 +1786,11 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               ))}
             </div>
           ) : null}
+          {workspaceCursorResetNotice ? (
+            <div className="notice" role="status">
+              Saved pagination was no longer available. Showing the first page.
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -2086,7 +2126,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                         <tr key={rowWorkflowId(row)}>
                           <td className="queue-table-cell-workflow">
                             <a
-                              href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                              href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                               className="workflow-list-row-title"
                             >
                               {row.title}
@@ -2147,7 +2187,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                     <div className="queue-card-header">
                       <div>
                         <a
-                          href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                          href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                           className="queue-card-title"
                         >
                           {row.title}
@@ -2190,7 +2230,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                     </dl>
                     <div className="queue-card-actions">
                       <a
-                        href={`/workflows/${encodeURIComponent(rowWorkflowId(row))}?source=temporal`}
+                        href={workflowDetailHref(rowWorkflowId(row), detailListContext)}
                         className="button secondary queue-card-details-action"
                         role="button"
                       >
