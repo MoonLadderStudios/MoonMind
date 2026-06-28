@@ -55,6 +55,15 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('Loading workflows...')).toBeTruthy();
   });
 
+  it('MM-997 keeps /workflows as the full-width list route instead of the workspace shell', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+    expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
+  });
+
   it('shows structured API validation detail when the workflow list request fails', async () => {
     fetchSpy.mockResolvedValue({
       ok: false,
@@ -240,6 +249,35 @@ describe('Workflows Entrypoint', () => {
       expect(url).not.toContain('sort=');
       expect(url).not.toContain('sortDir=');
     }
+  });
+
+  it('preserves allowlisted list context on workflow detail links and keeps browser back target intact (MM-998, MM-975)', async () => {
+    window.history.pushState(
+      {},
+      'Context list',
+      '/workflows?stateIn=completed&repoContains=moon%2Frepo&targetRuntimeIn=codex_cli&limit=25&nextPageToken=cursor-2&sort=status&sortDir=asc&selectedWorkflowId=task-123&unsafe=1',
+    );
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const previousListUrl = window.location.href;
+    const detailHref = screen.getAllByRole('link', { name: 'Example task' })[0]?.getAttribute('href');
+
+    expect(detailHref).toBe(
+      '/workflows/task-123?stateIn=completed&repoContains=moon%2Frepo&targetRuntimeIn=codex_cli&limit=25&nextPageToken=cursor-2&source=temporal',
+    );
+    expect(detailHref).not.toContain('sort=');
+    expect(detailHref).not.toContain('sortDir=');
+    expect(detailHref).not.toContain('selectedWorkflowId=');
+    expect(detailHref).not.toContain('unsafe=');
+
+    window.history.pushState({}, 'Detail', detailHref || '/workflows/task-123');
+    window.history.back();
+
+    await waitFor(() => {
+      expect(window.location.href).toBe(previousListUrl);
+    });
   });
 
   it('ignores sort/sortDir present in the initial URL so deep links never imply a global sort (MM-954)', async () => {
@@ -1209,6 +1247,61 @@ describe('Workflows Entrypoint', () => {
     expect(window.location.search).toBe('?limit=100');
   });
 
+  it('recovers stale cursor context when returning from workflow detail (MM-998, MM-975)', async () => {
+    window.history.pushState(
+      {},
+      'Workspace return',
+      '/workflows?stateIn=completed&limit=50&nextPageToken=stale-token&returnFromWorkflowDetail=1',
+    );
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('nextPageToken=stale-token')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ items: [], count: 1 }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              taskId: 'task-123',
+              source: 'temporal',
+              title: 'Example task',
+              status: 'completed',
+              state: 'completed',
+              rawState: 'completed',
+              createdAt: '2026-03-28T00:00:00Z',
+            },
+          ],
+          count: 1,
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await waitFor(() => {
+      expect(executionListCalls().map(([url]) => String(url))).toContain(
+        '/api/executions?source=temporal&pageSize=50&nextPageToken=stale-token&stateIn=completed',
+      );
+    });
+    expect(await screen.findByText('Saved pagination was no longer available. Showing the first page.')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&stateIn=completed',
+      );
+    });
+    expect(window.location.search).toBe('?stateIn=completed&limit=50');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(
+      screen.queryByText('Saved pagination was no longer available. Showing the first page.'),
+    ).toBeNull();
+  });
+
   it('supports skill and date filter chips with blank semantics', async () => {
     fetchSpy.mockResolvedValue({
       ok: true,
@@ -1854,7 +1947,7 @@ describe('Workflows Entrypoint', () => {
     const titleLink = workflowCell.querySelector('a.workflow-list-row-title');
     expect(titleLink?.textContent).toBe('Scan first task');
     expect(titleLink?.getAttribute('href')).toBe(
-      '/workflows/mm%3Arun%3Ascan-first-001?source=temporal',
+      '/workflows/mm%3Arun%3Ascan-first-001?limit=50&source=temporal',
     );
     // The compact workflow id stays present but secondary.
     const compactId = workflowCell.querySelector('code.workflow-list-row-id');

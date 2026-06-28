@@ -1,22 +1,17 @@
-"""Run one Omnigent streaming execution inside a Temporal activity.
-
-MM-994: enforce Omnigent cancellation, cleanup, security, and v1 boundaries.
-"""
+"""Run one Omnigent streaming-gateway execution for MM-991."""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
-import os
-import re
-from collections.abc import Mapping
+import logging
+from collections.abc import AsyncIterator
 from contextlib import suppress
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
+import httpx
 from temporalio import activity
 
 from moonmind.omnigent.settings import (
@@ -27,47 +22,403 @@ from moonmind.omnigent.settings import (
     resolved_server_url,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-from moonmind.utils.logging import (
-    SecretRedactor,
-    redact_sensitive_payload,
-    redact_sensitive_text,
+from moonmind.workflows.adapters.omnigent_agent_adapter import (
+    OmnigentAdapterError,
+    build_omnigent_selection,
+    build_omnigent_session_create_payload,
+    resolve_omnigent_target,
 )
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
 )
 
-_ACTIVE_STATUSES = {"created", "launching", "starting", "running", "waiting", "active"}
-_FAILED_STATUSES = {"failed", "error", "errored"}
-_COMPLETED_STATUSES = {"completed", "complete", "idle", "done", "succeeded", "success"}
-_CANCELED_STATUSES = {"canceled", "cancelled", "stopped", "interrupted"}
-_SENSITIVE_KEY_RE = re.compile(
-    r"(?i)(token|secret|password|cookie|credential|authorization|auth_header|api[_-]?key)"
-)
-_SECRET_VALUE_RE = re.compile(
-    r"(?i)(bearer\s+[A-Za-z0-9._~+/=-]+|ghp_[A-Za-z0-9_]{20,}|"
-    r"github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{16,}|"
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----)"
-)
+_TERMINAL_STATUSES = {
+    "completed",
+    "failed",
+    "canceled",
+    "cancelled",
+    "timed_out",
+    "timeout",
+}
+_NON_TERMINAL_STATUSES = {
+    "created",
+    "launching",
+    "provisioning",
+    "running",
+    "waiting",
+    "idle",
+}
+
+_logger = logging.getLogger(__name__)
 
 
-class OmnigentExecutionError(RuntimeError):
-    """Non-transport Omnigent execution failure with canonical classification."""
+class OmnigentContractError(RuntimeError):
+    """Raised when Omnigent emits an unsupported adapter contract value."""
 
-    def __init__(
-        self,
-        message: str,
-        *,
-        failure_class: str = "integration_error",
-        provider_error_code: str = "omnigent_execution_error",
-    ) -> None:
-        super().__init__(message)
-        self.failure_class = failure_class
-        self.provider_error_code = provider_error_code
+
+class OmnigentSessionStillRunningError(OmnigentClientError):
+    """Raised when the stream ends while the provider session is still active."""
+
+
+def _compact_summary(value: object | None, *, fallback: str) -> str:
+    text = str(value or fallback).strip() or fallback
+    return text[:4096]
+
+
+def _session_id(payload: dict[str, Any]) -> str:
+    raw = payload.get("id") or payload.get("session_id") or payload.get("sessionId")
+    session_id = str(raw or "").strip()
+    if not session_id:
+        raise OmnigentContractError("Omnigent session creation response missing session id")
+    return session_id
+
+
+def _agent_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    items = payload.get("items") or payload.get("agents") or payload.get("data") or []
+    if isinstance(items, dict):
+        items = list(items.values())
+    elif not isinstance(items, list):
+        items = []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _resolve_agent_id(*, agents_payload: dict[str, Any], requested_name: str | None) -> str:
+    items = _agent_items(agents_payload)
+    if not items:
+        raise OmnigentContractError("Omnigent agent target could not be resolved")
+    if requested_name:
+        for item in items:
+            if str(item.get("name") or "").strip() == requested_name:
+                raw = item.get("id") or item.get("agent_id") or item.get("agentId")
+                if raw:
+                    return str(raw)
+        raise OmnigentContractError(
+            f"Requested Omnigent agent name '{requested_name}' could not be resolved"
+        )
+    raw = items[0].get("id") or items[0].get("agent_id") or items[0].get("agentId")
+    if not raw:
+        raise OmnigentContractError("Omnigent agent target is missing an id")
+    return str(raw)
+
+
+def _has_active_elicitation(payload: dict[str, Any]) -> bool:
+    pending = payload.get("pending_inputs") or payload.get("pendingInputs") or []
+    if isinstance(pending, list) and pending:
+        return True
+    return bool(payload.get("elicitation") or payload.get("elicitation_request"))
+
+
+def normalize_omnigent_observation(payload: dict[str, Any]) -> str | None:
+    """Normalize Omnigent observations; unknown values are contract errors."""
+
+    event_type = str(payload.get("type") or "").strip()
+    if event_type in {"stream.done"}:
+        return None
+    if event_type in {"response.completed", "completed"}:
+        return "completed"
+    if event_type in {"response.failed", "failed"}:
+        return "failed"
+    if event_type in {"response.elicitation_request", "elicitation_request"}:
+        return "awaiting_approval"
+    if event_type.startswith("response.") or event_type.startswith("session."):
+        known_prefixes = (
+            "response.output",
+            "response.delta",
+            "session.input",
+            "session.item",
+        )
+        if not event_type.startswith(known_prefixes):
+            raise OmnigentContractError(f"Unsupported Omnigent event type: {event_type}")
+
+    status = payload.get("status")
+    session = payload.get("session")
+    if isinstance(session, dict) and status is None:
+        status = session.get("status")
+    response = payload.get("response")
+    if isinstance(response, dict) and status is None:
+        status = response.get("status")
+    data = payload.get("data")
+    if isinstance(data, dict) and status is None:
+        data_response = data.get("response")
+        if isinstance(data_response, dict):
+            status = data_response.get("status")
+    if status is None:
+        return None
+
+    raw = str(status).strip().lower()
+    if raw in {"cancelled", "timeout"}:
+        return {"cancelled": "canceled", "timeout": "timed_out"}[raw]
+    if raw in _TERMINAL_STATUSES:
+        return raw
+    if raw == "waiting":
+        return (
+            "awaiting_approval"
+            if _has_active_elicitation(payload)
+            else "intervention_requested"
+        )
+    if raw in _NON_TERMINAL_STATUSES:
+        return raw
+    raise OmnigentContractError(f"Unsupported Omnigent status: {raw}")
+
+
+def _failure_class_for(status: str) -> str | None:
+    if status == "completed":
+        return None
+    if status == "failed":
+        return "execution_error"
+    if status in {"canceled", "timed_out"}:
+        return "system_error"
+    return "integration_error"
+
+
+def _session_options(omni: dict[str, Any]) -> dict[str, Any]:
+    session = omni.get("session")
+    return session if isinstance(session, dict) else {}
+
+
+def _build_omnigent_first_message(
+    *,
+    request: AgentExecutionRequest,
+    prompt: dict[str, Any],
+) -> dict[str, Any]:
+    text = str(prompt.get("text") or "").strip()
+    instruction_ref = str(
+        prompt.get("instructionRef") or request.instruction_ref or ""
+    ).strip()
+    if not text and instruction_ref:
+        text = instruction_ref
+    if not text:
+        text = str((request.parameters or {}).get("description") or "").strip()
+    if not text:
+        title = str((request.parameters or {}).get("title") or "MoonMind Agent Task").strip()
+        workspace_blob = json.dumps(request.workspace_spec or {}, indent=2, default=str)
+        parts = [
+            f"Task title: {title}",
+            f"Correlation ID: {request.correlation_id}",
+            f"Workspace spec (JSON):\n{workspace_blob}",
+        ]
+        if request.input_refs:
+            parts.append("Input refs: " + ", ".join(request.input_refs))
+        text = "\n\n".join(parts)
+
+    return {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        },
+    }
+
+
+async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
+    raise OmnigentContractError(
+        f"Omnigent bundleRef cannot be resolved by this activity: {bundle_ref}"
+    )
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+def _safe_heartbeat(details: dict[str, Any]) -> None:
+    try:
+        activity.heartbeat(details)
+    except RuntimeError as exc:
+        _logger.debug("Skipping Omnigent heartbeat outside activity context: %s", exc)
+
+
+def _heartbeat_details() -> tuple[Any, ...]:
+    try:
+        raw = getattr(activity.info(), "heartbeat_details", ())
+    except RuntimeError:
+        return ()
+    if raw is None:
+        return ()
+    if isinstance(raw, tuple):
+        return raw
+    if isinstance(raw, list):
+        return tuple(raw)
+    return (raw,)
+
+
+def _heartbeat_state() -> dict[str, Any]:
+    for detail in reversed(_heartbeat_details()):
+        if isinstance(detail, dict):
+            return detail
+    return {}
+
+
+def _heartbeat_session_id(state: dict[str, Any]) -> str:
+    return str(
+        state.get("omnigentSessionId")
+        or state.get("session_id")
+        or state.get("sessionId")
+        or ""
+    ).strip()
+
+
+async def _periodic_stream_heartbeat(
+    *,
+    session_id: str,
+    event_count: dict[str, int],
+    status: dict[str, str],
+    interval_seconds: float = 30.0,
+) -> None:
+    while True:
+        await asyncio.sleep(interval_seconds)
+        _safe_heartbeat(
+            {
+                "omnigentSessionId": session_id,
+                "normalizedStatus": status.get("value", "running"),
+                "eventsCaptured": event_count.get("value", 0),
+                "alive": True,
+            }
+        )
+
+
+async def _enqueue_stream_events(
+    *,
+    client: OmnigentHttpClient,
+    session_id: str,
+    queue: asyncio.Queue[dict[str, Any] | BaseException | None],
+) -> None:
+    try:
+        async for event in client.stream_events(session_id):
+            await queue.put(event)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await queue.put(exc)
+    finally:
+        await queue.put(None)
+
+
+async def _queued_stream_events(
+    *,
+    queue: asyncio.Queue[dict[str, Any] | BaseException | None],
+    stream_task: asyncio.Task[None],
+) -> AsyncIterator[dict[str, Any]]:
+    while True:
+        event = await queue.get()
+        if event is None:
+            break
+        if isinstance(event, BaseException):
+            raise event
+        yield event
+    if stream_task.done() and not stream_task.cancelled():
+        stream_task.result()
+
+
+def build_omnigent_result(
+    *,
+    request: AgentExecutionRequest,
+    terminal_status: str,
+    session_id: str,
+    agent_id: str | None,
+    final_snapshot: dict[str, Any],
+    event_count: int,
+    failure_summary: str | None = None,
+    provider_error_code: str | None = None,
+) -> AgentRunResult:
+    """Build compact terminal canonical result for Omnigent."""
+
+    refs = final_snapshot.get("outputRefs") or final_snapshot.get("output_refs") or []
+    output_refs = [str(ref) for ref in refs if str(ref).strip()]
+    if not output_refs:
+        output_refs = [f"omnigent://sessions/{session_id}/snapshot/final"]
+    diagnostics_ref = (
+        final_snapshot.get("diagnosticsRef")
+        or final_snapshot.get("diagnostics_ref")
+        or f"omnigent://sessions/{session_id}/diagnostics"
+    )
+    summary = final_snapshot.get("summary") or failure_summary
+    if not summary:
+        summary = (
+            "Omnigent session completed"
+            if terminal_status == "completed"
+            else "Omnigent session failed"
+        )
+
+    metadata = {
+        "providerName": "omnigent",
+        "normalizedStatus": terminal_status,
+        "omnigentSessionId": session_id,
+        "sseEventsCaptured": event_count,
+        "correlationId": request.correlation_id,
+    }
+    if agent_id:
+        metadata["omnigentAgentId"] = agent_id
+    snapshot_metadata_keys = {
+        "omnigentAgentName": "omnigent_agent_name",
+        "hostType": "host_type",
+        "workspace": "workspace",
+        "captureManifestRef": "capture_manifest_ref",
+        "patchRef": "patch_ref",
+        "githubPrUrl": "github_pr_url",
+    }
+    for metadata_key, snake_key in snapshot_metadata_keys.items():
+        value = final_snapshot.get(metadata_key) or final_snapshot.get(snake_key)
+        if value:
+            metadata[metadata_key] = str(value)
+
+    return AgentRunResult(
+        outputRefs=output_refs,
+        summary=_compact_summary(
+            summary,
+            fallback="Omnigent session reached a terminal status",
+        ),
+        diagnosticsRef=str(diagnostics_ref),
+        failureClass=_failure_class_for(terminal_status),
+        providerErrorCode=provider_error_code,
+        metadata=metadata,
+    )
+
+
+async def _cancel_omnigent_session(
+    client: OmnigentHttpClient,
+    session_id: str,
+) -> None:
+    with suppress(Exception):
+        await client.interrupt(session_id)
+    with suppress(Exception):
+        snapshot = await client.get_session(session_id)
+        normalized = normalize_omnigent_observation(snapshot)
+        if normalized in {
+            "created",
+            "launching",
+            "provisioning",
+            "running",
+            "waiting",
+            "idle",
+            "awaiting_approval",
+            "intervention_requested",
+        }:
+            await client.stop_session(session_id)
+
+
+async def _delete_omnigent_session(
+    client: OmnigentHttpClient | None,
+    session_id: str,
+) -> None:
+    if client is None or not session_id:
+        return
+    with suppress(Exception):
+        await client.delete_session(session_id, delete_branch=False)
+
+
+async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
+    if task is None or task.done():
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResult:
-    """Execute an Omnigent run via the streaming activity boundary."""
+    """Execute one Omnigent session and return only terminal AgentRunResult."""
 
     gate = build_omnigent_gate()
     if not gate.enabled:
@@ -75,879 +426,206 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
         )
 
-    token = resolved_api_token()
-    redactor = SecretRedactor.from_environ(
-        extra_secrets=[token],
-        placeholder="[REDACTED]",
-    )
-    try:
-        spec = _build_execution_spec(request, redactor=redactor)
-        client = OmnigentHttpClient(
-            base_url=resolved_server_url(),
-            api_token=token,
-            timeout_seconds=spec.timeout_seconds,
-            stream_timeout_seconds=spec.stream_timeout_seconds,
-        )
-        return await _execute_with_client(
-            request,
-            client=client,
-            spec=spec,
-            redactor=redactor,
-        )
-    except asyncio.CancelledError:
-        raise
-    except OmnigentClientError as exc:
-        return _failure_result(
-            request,
-            summary=str(exc),
-            failure_class=exc.failure_class,
-            provider_error_code=str(exc.status_code or "omnigent_http_error"),
-            diagnostics={"clientError": exc.diagnostics()},
-            redactor=redactor,
-        )
-    except OmnigentExecutionError as exc:
-        return _failure_result(
-            request,
-            summary=str(exc),
-            failure_class=exc.failure_class,
-            provider_error_code=exc.provider_error_code,
-            diagnostics={"error": str(exc)},
-            redactor=redactor,
-        )
-    except asyncio.TimeoutError as exc:
-        return _failure_result(
-            request,
-            summary="Omnigent execution timed out.",
-            failure_class="timed_out",
-            provider_error_code="omnigent_timed_out",
-            diagnostics={"error": redact_sensitive_text(redactor.scrub(str(exc)))},
-            redactor=redactor,
-        )
-
-
-async def _execute_with_client(
-    request: AgentExecutionRequest,
-    *,
-    client: OmnigentHttpClient,
-    spec: "_OmnigentExecutionSpec",
-    redactor: SecretRedactor,
-) -> AgentRunResult:
-    diagnostics: dict[str, Any] = {
-        "provider": "omnigent",
-        "sourceIssue": "MM-994",
-        "endpointRef": spec.endpoint_ref,
-        "errors": [],
-        "transport": {"sseConnected": False, "eventsCaptured": 0},
-        "capture": {},
-    }
+    client: OmnigentHttpClient | None = None
     session_id = ""
-    stream_task: asyncio.Task[list[dict[str, Any]]] | None = None
-    stream_events: list[dict[str, Any]] = []
-    final_snapshot: dict[str, Any] = {}
-
+    stream_task: asyncio.Task[None] | None = None
+    heartbeat_task: asyncio.Task[None] | None = None
     try:
-        session_payload = await _build_session_payload(client, request, spec)
-        session_response = await client.create_session(session_payload)
-        session_id = _extract_session_id(session_response)
-        diagnostics["omnigentSessionId"] = session_id
-        diagnostics["omnigentAgentId"] = session_payload.get("agent_id")
-
-        initial_snapshot = await _safe_get_session(client, session_id, diagnostics)
-        final_snapshot = initial_snapshot
-        stream_task = asyncio.create_task(
-            _collect_stream(client, session_id, stream_events)
-        )
-        first_message = _build_first_message_event(request, spec)
-        await client.post_event(session_id, first_message)
-
-        status = _normalize_status(initial_snapshot)
-        while status not in {"completed", "failed", "canceled"}:
-            await asyncio.sleep(spec.poll_interval_seconds)
-            snapshot = await client.get_session(session_id)
-            status = _normalize_status(snapshot)
-            final_snapshot = snapshot
-            activity.heartbeat(
-                {
-                    "providerName": "omnigent",
-                    "omnigentSessionId": session_id,
-                    "normalizedStatus": status,
-                    "eventsCaptured": len(stream_events),
-                }
+        selection = build_omnigent_selection(request)
+        async with httpx.AsyncClient() as httpx_client:
+            client = OmnigentHttpClient(
+                base_url=resolved_server_url(),
+                api_token=resolved_api_token(),
+                client=httpx_client,
             )
 
-        if stream_task is not None:
-            stream_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await stream_task
-        diagnostics["transport"]["eventsCaptured"] = len(stream_events)
+            async def list_agents() -> list[dict[str, Any]]:
+                raw = await _maybe_await(client.list_agents())
+                if isinstance(raw, list):
+                    return [item for item in raw if isinstance(item, dict)]
+                if isinstance(raw, dict):
+                    return _agent_items(raw)
+                return []
 
-        harvest = await _harvest_artifacts(
-            client,
-            session_id,
-            spec=spec,
-            diagnostics=diagnostics,
-            redactor=redactor,
-        )
-        await _maybe_delete_session(client, session_id, spec=spec, diagnostics=diagnostics)
+            target = await resolve_omnigent_target(
+                selection,
+                list_agents=list_agents,
+                upload_agent_bundle=_unsupported_bundle_upload,
+                default_agent_name=resolved_default_agent_name(),
+            )
+            session_payload = build_omnigent_session_create_payload(
+                request=request,
+                selection=selection,
+                target=target,
+            )
+            session_payload["idempotency_key"] = request.idempotency_key
+            labels = session_payload.setdefault("labels", {})
+            if isinstance(labels, dict):
+                labels.setdefault("moonmind.issue", "MM-991")
 
-        summary = _summary_from_snapshot(final_snapshot) or _summary_from_events(stream_events)
-        if status == "failed":
-            return _failure_result(
-                request,
-                summary=summary or "Omnigent execution failed.",
-                failure_class="execution_error",
-                provider_error_code="omnigent_execution_failed",
-                diagnostics=diagnostics,
-                redactor=redactor,
-                extra_metadata=_result_metadata(spec, session_id, status, harvest),
-            )
-        if status == "canceled":
-            return _failure_result(
-                request,
-                summary=summary or "Omnigent execution was canceled.",
-                failure_class="canceled",
-                provider_error_code="omnigent_canceled",
-                diagnostics=diagnostics,
-                redactor=redactor,
-                extra_metadata=_result_metadata(spec, session_id, status, harvest),
-            )
-        diagnostics_ref = _write_json_artifact(
-            spec,
-            "runtime.omnigent.diagnostics.json",
-            diagnostics,
-            redactor=redactor,
-        )
-        return AgentRunResult(
-            outputRefs=harvest.output_refs,
-            summary=_compact_summary(summary or "Omnigent execution completed.", redactor),
-            diagnosticsRef=diagnostics_ref,
-            metadata=_result_metadata(spec, session_id, status, harvest),
-        )
-    except asyncio.CancelledError:
-        if session_id:
-            await _cancel_session(client, session_id, spec=spec, diagnostics=diagnostics)
-            await _harvest_artifacts(
-                client,
-                session_id,
-                spec=spec,
-                diagnostics=diagnostics,
-                redactor=redactor,
-            )
-        raise
-    except Exception:
-        if session_id:
-            with suppress(Exception):
-                await _maybe_delete_session(
-                    client,
-                    session_id,
-                    spec=spec,
-                    diagnostics=diagnostics,
+            retry_state = _heartbeat_state()
+            session_id = _heartbeat_session_id(retry_state)
+            first_message_posted = bool(retry_state.get("firstMessagePosted"))
+            if not session_id:
+                create_response = await client.create_session(session_payload)
+                session_id = _session_id(create_response)
+                _safe_heartbeat(
+                    {
+                        "omnigentSessionId": session_id,
+                        "normalizedStatus": "running",
+                        "eventsCaptured": 0,
+                        "firstMessagePosted": False,
+                    }
                 )
+
+            first_message = _build_omnigent_first_message(
+                request=request,
+                prompt=selection.prompt,
+            )
+            digest = hashlib.sha256(
+                json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            first_message.setdefault("metadata", {})[
+                "moonmindFirstMessageDigest"
+            ] = digest
+            first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
+            stream_queue: asyncio.Queue[dict[str, Any] | BaseException | None] | None = None
+            if not first_message_posted:
+                stream_queue = asyncio.Queue()
+                stream_task = asyncio.create_task(
+                    _enqueue_stream_events(
+                        client=client,
+                        session_id=session_id,
+                        queue=stream_queue,
+                    )
+                )
+                await asyncio.sleep(0)
+                await client.post_event(session_id, first_message)
+                _safe_heartbeat(
+                    {
+                        "omnigentSessionId": session_id,
+                        "normalizedStatus": "running",
+                        "eventsCaptured": 0,
+                        "firstMessagePosted": True,
+                        "firstMessageDigest": digest,
+                    }
+                )
+
+            event_count = {"value": 0}
+            heartbeat_status = {"value": "running"}
+            heartbeat_task = asyncio.create_task(
+                _periodic_stream_heartbeat(
+                    session_id=session_id,
+                    event_count=event_count,
+                    status=heartbeat_status,
+                )
+            )
+            terminal_status: str | None = None
+            try:
+                stream_events = (
+                    _queued_stream_events(
+                        queue=stream_queue,
+                        stream_task=stream_task,
+                    )
+                    if stream_queue is not None and stream_task is not None
+                    else client.stream_events(session_id)
+                )
+                async for event in stream_events:
+                    event_count["value"] += 1
+                    normalized = normalize_omnigent_observation(event)
+                    if normalized in {"awaiting_approval", "intervention_requested"}:
+                        heartbeat_status["value"] = normalized
+                        _safe_heartbeat(
+                            {
+                                "normalizedStatus": normalized,
+                                "omnigentSessionId": session_id,
+                                "eventsCaptured": event_count["value"],
+                                "firstMessagePosted": True,
+                            }
+                        )
+                        continue
+                    if normalized in {"completed", "failed", "canceled", "timed_out"}:
+                        terminal_status = normalized
+                        heartbeat_status["value"] = normalized
+                        break
+                    if event_count["value"] % 8 == 0:
+                        _safe_heartbeat(
+                            {
+                                "omnigentSessionId": session_id,
+                                "normalizedStatus": normalized or "running",
+                                "eventsCaptured": event_count["value"],
+                                "firstMessagePosted": True,
+                            }
+                        )
+            finally:
+                await _cancel_task(heartbeat_task)
+                await _cancel_task(stream_task)
+
+            final_snapshot = await client.get_session(session_id)
+            if terminal_status is None:
+                normalized_snapshot = normalize_omnigent_observation(final_snapshot)
+                if normalized_snapshot in {
+                    "completed",
+                    "failed",
+                    "canceled",
+                    "timed_out",
+                }:
+                    terminal_status = normalized_snapshot
+                elif normalized_snapshot in _NON_TERMINAL_STATUSES:
+                    raise OmnigentSessionStillRunningError(
+                        "Omnigent stream ended while the provider session is still running"
+                    )
+            if terminal_status is None:
+                raise OmnigentContractError(
+                    "Omnigent stream ended before a terminal session outcome"
+                )
+            return build_omnigent_result(
+                request=request,
+                terminal_status=terminal_status,
+                session_id=session_id,
+                agent_id=target.agent_id,
+                final_snapshot=final_snapshot,
+                event_count=event_count["value"],
+            )
+    except asyncio.CancelledError:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        if client is not None and session_id:
+            await _cancel_omnigent_session(client, session_id)
         raise
-    finally:
-        if stream_task is not None and not stream_task.done():
-            stream_task.cancel()
-
-
-async def _cancel_session(
-    client: OmnigentHttpClient,
-    session_id: str,
-    *,
-    spec: "_OmnigentExecutionSpec",
-    diagnostics: dict[str, Any],
-) -> None:
-    diagnostics["cancellation"] = {"interruptSent": False, "stopSessionSent": False}
-    with suppress(Exception):
-        await client.interrupt(session_id)
-        diagnostics["cancellation"]["interruptSent"] = True
-    await asyncio.sleep(spec.cancel_grace_seconds)
-    with suppress(Exception):
-        snapshot = await _safe_get_session(client, session_id, diagnostics)
-        if _normalize_status(snapshot) in {"launching", "running", "awaiting_approval"}:
-            await client.stop_session(session_id)
-            diagnostics["cancellation"]["stopSessionSent"] = True
-
-
-async def _build_session_payload(
-    client: OmnigentHttpClient,
-    request: AgentExecutionRequest,
-    spec: "_OmnigentExecutionSpec",
-) -> dict[str, Any]:
-    agent_id = spec.agent_id or await _resolve_agent_id(client, spec.agent_name)
-    if not agent_id:
-        raise OmnigentExecutionError(
-            "No Omnigent agent target could be resolved.",
-            failure_class="integration_error",
-            provider_error_code="omnigent_agent_unresolved",
+    except (OmnigentContractError, OmnigentAdapterError, ValueError) as exc:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        await _delete_omnigent_session(client, session_id)
+        return AgentRunResult(
+            outputRefs=[],
+            summary=_compact_summary(exc, fallback="Omnigent contract error"),
+            diagnosticsRef="omnigent://diagnostics/contract-error",
+            failureClass="integration_error",
+            providerErrorCode="omnigent_contract_error",
+            metadata={"normalizedStatus": "failed", "providerName": "omnigent"},
+        )
+    except OmnigentSessionStillRunningError:
+        raise
+    except (OmnigentClientError, httpx.HTTPError) as exc:
+        await _cancel_task(heartbeat_task)
+        await _cancel_task(stream_task)
+        await _delete_omnigent_session(client, session_id)
+        status_code = exc.status_code if isinstance(exc, OmnigentClientError) else None
+        return AgentRunResult(
+            outputRefs=[],
+            summary=_compact_summary(exc, fallback="Omnigent integration error"),
+            diagnosticsRef="omnigent://diagnostics/transport-error",
+            failureClass="integration_error",
+            providerErrorCode=str(status_code or "omnigent_http_error"),
+            metadata={"normalizedStatus": "failed", "providerName": "omnigent"},
         )
 
-    payload: dict[str, Any] = {
-        "agent_id": agent_id,
-        "title": spec.title,
-        "labels": {
-            "moonmind.correlation_id": request.correlation_id,
-            "moonmind.idempotency_key": request.idempotency_key,
-            "moonmind.source_issue": "MM-994",
-        },
-        "host_type": spec.host_type,
-        "workspace": spec.workspace,
-        "model_override": spec.model_override,
-        "reasoning_effort": spec.reasoning_effort,
-        "terminal_launch_args": list(spec.terminal_launch_args),
-    }
-    if spec.host_type == "external":
-        payload["host_id"] = spec.host_id
-    return {key: value for key, value in payload.items() if value is not None}
 
-
-async def _resolve_agent_id(client: OmnigentHttpClient, agent_name: str) -> str:
-    if not agent_name:
-        return ""
-    agents = await client.list_agents()
-    for agent in agents:
-        if str(agent.get("name") or "").strip() == agent_name:
-            return str(agent.get("id") or "").strip()
-    raise OmnigentExecutionError(
-        f"Unknown Omnigent agent name: {agent_name}",
-        failure_class="user_error",
-        provider_error_code="omnigent_unknown_agent",
-    )
-
-
-async def _collect_stream(
-    client: OmnigentHttpClient,
-    session_id: str,
-    events: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    async for event in client.stream_events(session_id):
-        events.append(
-            {
-                "schemaVersion": "v1",
-                "capturedAt": datetime.now(tz=UTC).isoformat(),
-                "provider": "omnigent",
-                "omnigentSessionId": session_id,
-                "eventType": str(event.get("type") or event.get("event") or "unknown"),
-                "payload": redact_sensitive_payload(event),
-                "redaction": {"applied": True},
-            }
-        )
-    return events
-
-
-async def _harvest_artifacts(
-    client: OmnigentHttpClient,
-    session_id: str,
-    *,
-    spec: "_OmnigentExecutionSpec",
-    diagnostics: dict[str, Any],
-    redactor: SecretRedactor,
-) -> "_HarvestResult":
-    output_refs: list[str] = []
-    changed_files_count = 0
-    session_files_count = 0
-
-    if spec.capture_changed_files:
-        try:
-            changed = await client.list_changed_files(session_id)
-            changed_ref = _write_json_artifact(
-                spec,
-                "output.workspace.changed_files.index.json",
-                changed,
-                redactor=redactor,
-            )
-            output_refs.append(changed_ref)
-            paths = _changed_file_paths(changed)
-            changed_files_count = len(paths)
-            for path in paths[: spec.max_harvest_files]:
-                with suppress(Exception):
-                    content = await client.get_workspace_file(session_id, path)
-                    output_refs.append(
-                        _write_bytes_artifact(
-                            spec,
-                            f"output.workspace.files/{_safe_artifact_name(path)}.current",
-                            content,
-                            redactor=redactor,
-                        )
-                    )
-        except Exception as exc:
-            diagnostics.setdefault("errors", []).append(
-                {
-                    "phase": "changed_files_harvest",
-                    "failureClass": "system_error",
-                    "message": redact_sensitive_text(redactor.scrub(str(exc))),
-                }
-            )
-
-    if spec.capture_session_files:
-        try:
-            session_files = await client.list_session_files(session_id)
-            session_ref = _write_json_artifact(
-                spec,
-                "output.omnigent.session_files.index.json",
-                session_files,
-                redactor=redactor,
-            )
-            output_refs.append(session_ref)
-            files = _session_file_entries(session_files)
-            session_files_count = len(files)
-            for item in files[: spec.max_harvest_files]:
-                file_id = str(item.get("id") or item.get("file_id") or "").strip()
-                if not file_id:
-                    continue
-                with suppress(Exception):
-                    content = await client.get_session_file_content(session_id, file_id)
-                    output_refs.append(
-                        _write_bytes_artifact(
-                            spec,
-                            "output.omnigent.session_files/"
-                            f"{_safe_artifact_name(file_id)}/content",
-                            content,
-                            redactor=redactor,
-                        )
-                    )
-        except Exception as exc:
-            diagnostics.setdefault("errors", []).append(
-                {
-                    "phase": "session_files_harvest",
-                    "failureClass": "system_error",
-                    "message": redact_sensitive_text(redactor.scrub(str(exc))),
-                }
-            )
-
-    diagnostics["capture"].update(
-        {
-            "changedFiles": changed_files_count,
-            "sessionFiles": session_files_count,
-            "patchSource": spec.patch_source,
-            "patchProduced": False,
-        }
-    )
-    manifest_ref = _write_json_artifact(
-        spec,
-        "output.workspace.manifest.json",
-        {
-            "provider": "omnigent",
-            "omnigentSessionId": session_id,
-            "outputRefs": output_refs,
-            "capture": diagnostics["capture"],
-        },
-        redactor=redactor,
-    )
-    output_refs.append(manifest_ref)
-    return _HarvestResult(output_refs=output_refs, manifest_ref=manifest_ref)
-
-
-async def _maybe_delete_session(
-    client: OmnigentHttpClient,
-    session_id: str,
-    *,
-    spec: "_OmnigentExecutionSpec",
-    diagnostics: dict[str, Any],
-) -> None:
-    cleanup = {
-        "deleteRequested": spec.delete_after_harvest,
-        "deleteBranch": spec.delete_branch,
-        "sessionPreserved": not spec.delete_after_harvest,
-    }
-    diagnostics["cleanup"] = cleanup
-    if not spec.delete_after_harvest:
-        return
-    await client.delete_session(session_id, delete_branch=spec.delete_branch)
-    cleanup["sessionPreserved"] = False
-
-
-def _build_execution_spec(
-    request: AgentExecutionRequest,
-    *,
-    redactor: SecretRedactor,
-) -> "_OmnigentExecutionSpec":
-    params = dict(request.parameters or {})
-    omnigent = _mapping(params.get("omnigent"))
-    _reject_secret_payload(params, path="parameters")
-    _reject_secret_text(request.correlation_id, path="correlationId")
-    _reject_secret_text(request.idempotency_key, path="idempotencyKey")
-    _reject_v1_non_goals(omnigent)
-
-    session = _mapping(omnigent.get("session"))
-    agent = _mapping(omnigent.get("agent"))
-    prompt = _mapping(omnigent.get("prompt"))
-    capture = _mapping(omnigent.get("capture"))
-    policy = _mapping(omnigent.get("policy")) | _mapping(params.get("policy"))
-
-    host_type = str(session.get("hostType") or "managed").strip().lower()
-    host_id = _clean(session.get("hostId"))
-    workspace = _clean(session.get("workspace"))
-    if host_type == "managed" and not workspace:
-        workspace = _managed_workspace_from_request(request, params)
-    if host_type not in {"managed", "external"}:
-        raise OmnigentExecutionError(
-            "Omnigent session.hostType must be managed or external.",
-            failure_class="user_error",
-            provider_error_code="omnigent_invalid_host_type",
-        )
-    if host_type == "managed" and host_id:
-        raise OmnigentExecutionError(
-            "Omnigent managed sessions must not include session.hostId.",
-            failure_class="user_error",
-            provider_error_code="omnigent_invalid_managed_host_id",
-        )
-    if host_type == "managed" and workspace and _looks_like_local_path(workspace):
-        raise OmnigentExecutionError(
-            "Omnigent managed session.workspace must be a repository URL, not a local path.",
-            failure_class="user_error",
-            provider_error_code="omnigent_invalid_managed_workspace",
-        )
-    if host_type == "external" and not host_id:
-        raise OmnigentExecutionError(
-            "Omnigent external sessions require session.hostId.",
-            failure_class="user_error",
-            provider_error_code="omnigent_missing_external_host_id",
-        )
-
-    delete_after = _truthy(capture.get("deleteOmnigentSessionAfterHarvest"))
-    delete_branch = _truthy(capture.get("delete_branch") or capture.get("deleteBranch"))
-    allow_delete_branch = _truthy(
-        policy.get("allowDestructiveBranchCleanup")
-        or policy.get("allow_delete_branch")
-        or capture.get("allowDeleteBranch")
-    )
-    if delete_branch and not allow_delete_branch:
-        raise OmnigentExecutionError(
-            "Omnigent delete_branch=true requires explicit operator or workflow policy.",
-            failure_class="user_error",
-            provider_error_code="omnigent_delete_branch_policy_required",
-        )
-
-    timeout_seconds = _float_env("OMNIGENT_REQUEST_TIMEOUT_SECONDS", 60.0)
-    stream_timeout_seconds = _float_env("OMNIGENT_STREAM_HEARTBEAT_TIMEOUT_SECONDS", 120.0)
-    return _OmnigentExecutionSpec(
-        endpoint_ref=_clean(omnigent.get("endpointRef")) or "default",
-        agent_id=_clean(agent.get("agentId")),
-        agent_name=_clean(agent.get("agentName")) or resolved_default_agent_name(),
-        title=_clean(session.get("title")) or _clean(params.get("title")) or "MoonMind Agent Task",
-        prompt_text=_clean(prompt.get("text")) or _clean(params.get("description")),
-        include_idempotency_marker=not (prompt.get("includeIdempotencyMarker") is False),
-        host_type=host_type,
-        host_id=host_id,
-        workspace=workspace,
-        model_override=_clean(session.get("modelOverride")) or None,
-        reasoning_effort=_clean(session.get("reasoningEffort")) or None,
-        terminal_launch_args=tuple(
-            str(item).strip()
-            for item in session.get("terminalLaunchArgs", ())
-            if str(item).strip()
-        ),
-        capture_changed_files=capture.get("changedFiles") is not False,
-        capture_session_files=capture.get("sessionFiles") is not False,
-        delete_after_harvest=delete_after,
-        delete_branch=delete_branch,
-        patch_source=_clean(capture.get("patchSource")) or "github_pr_or_host_helper",
-        timeout_seconds=timeout_seconds,
-        stream_timeout_seconds=stream_timeout_seconds,
-        cancel_grace_seconds=max(0.0, _float_env("OMNIGENT_CANCEL_GRACE_SECONDS", 5.0)),
-        poll_interval_seconds=max(0.1, _float_env("OMNIGENT_POLL_INTERVAL_SECONDS", 2.0)),
-        max_harvest_files=max(0, int(_float_env("OMNIGENT_MAX_HARVEST_FILES", 50.0))),
-        artifact_dir=_artifact_dir(request, redactor=redactor),
-    )
-
-
-def _build_first_message_event(
-    request: AgentExecutionRequest,
-    spec: "_OmnigentExecutionSpec",
-) -> dict[str, Any]:
-    text = spec.prompt_text or request.instruction_ref or ""
-    if not text and request.input_refs:
-        text = "Input artifact refs: " + ", ".join(request.input_refs)
-    if not text:
-        text = f"Delegated MoonMind run {request.correlation_id}"
-    payload = {"role": "user", "content": [{"type": "input_text", "text": text}]}
-    digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-    if spec.include_idempotency_marker:
-        payload["content"].append(
-            {
-                "type": "input_text",
-                "text": (
-                    "\nMoonMind-Omnigent-Run:\n"
-                    f"  correlation_id: {request.correlation_id}\n"
-                    f"  idempotency_key: {request.idempotency_key}\n"
-                    f"  first_message_digest: sha256:{digest}\n"
-                ),
-            }
-        )
-    return {"type": "message", "data": payload}
-
-
-def _failure_result(
-    request: AgentExecutionRequest,
-    *,
-    summary: str,
-    failure_class: str,
-    provider_error_code: str,
-    diagnostics: Mapping[str, Any],
-    redactor: SecretRedactor,
-    extra_metadata: Mapping[str, Any] | None = None,
-) -> AgentRunResult:
-    spec = _minimal_artifact_spec(request)
-    diagnostics_ref = _write_json_artifact(
-        spec,
-        "runtime.omnigent.diagnostics.json",
-        diagnostics,
-        redactor=redactor,
-    )
-    metadata = {
-        "providerName": "omnigent",
-        "normalizedStatus": "failed" if failure_class != "canceled" else "canceled",
-        "sourceIssue": "MM-994",
-    }
-    if extra_metadata:
-        metadata.update(extra_metadata)
-    return AgentRunResult(
-        outputRefs=[],
-        summary=_compact_summary(summary, redactor),
-        diagnosticsRef=diagnostics_ref,
-        failureClass=failure_class,
-        providerErrorCode=provider_error_code,
-        metadata=redact_sensitive_payload(metadata),
-    )
-
-
-def _result_metadata(
-    spec: "_OmnigentExecutionSpec",
-    session_id: str,
-    status: str,
-    harvest: "_HarvestResult",
-) -> dict[str, Any]:
-    return {
-        "providerName": "omnigent",
-        "normalizedStatus": status,
-        "omnigentSessionId": session_id,
-        "hostType": spec.host_type,
-        "workspace": spec.workspace,
-        "captureManifestRef": harvest.manifest_ref,
-        "sourceIssue": "MM-994",
-    }
-
-
-async def _safe_get_session(
-    client: OmnigentHttpClient,
-    session_id: str,
-    diagnostics: dict[str, Any],
-) -> dict[str, Any]:
-    try:
-        return await client.get_session(session_id)
-    except Exception as exc:
-        diagnostics.setdefault("errors", []).append(
-            {
-                "phase": "get_session",
-                "failureClass": "integration_error",
-                "message": redact_sensitive_text(str(exc)),
-            }
-        )
-        return {}
-
-
-def _normalize_status(snapshot: Mapping[str, Any]) -> str:
-    raw = str(snapshot.get("status") or snapshot.get("state") or "").strip().lower()
-    if raw in _COMPLETED_STATUSES:
-        return "completed"
-    if raw in _FAILED_STATUSES:
-        return "failed"
-    if raw in _CANCELED_STATUSES:
-        return "canceled"
-    if raw in {"waiting", "awaiting_approval"}:
-        return "awaiting_approval"
-    if raw in _ACTIVE_STATUSES or not raw:
-        return "running"
-    raise OmnigentExecutionError(
-        f"Unknown Omnigent session status: {raw}",
-        failure_class="integration_error",
-        provider_error_code="omnigent_unknown_status",
-    )
-
-
-def _extract_session_id(response: Mapping[str, Any]) -> str:
-    for key in ("id", "session_id", "sessionId"):
-        value = _clean(response.get(key))
-        if value:
-            return value
-    nested = _mapping(response.get("session"))
-    for key in ("id", "session_id", "sessionId"):
-        value = _clean(nested.get(key))
-        if value:
-            return value
-    raise OmnigentExecutionError(
-        "Omnigent session create response did not include a session id.",
-        failure_class="integration_error",
-        provider_error_code="omnigent_missing_session_id",
-    )
-
-
-def _summary_from_snapshot(snapshot: Mapping[str, Any]) -> str:
-    for key in ("summary", "final_response", "finalResponse", "output", "message"):
-        value = _clean(snapshot.get(key))
-        if value:
-            return value
-    return ""
-
-
-def _summary_from_events(events: list[Mapping[str, Any]]) -> str:
-    parts: list[str] = []
-    for event in events:
-        payload = _mapping(event.get("payload"))
-        for key in ("text", "delta", "content"):
-            value = _clean(payload.get(key))
-            if value:
-                parts.append(value)
-    return "".join(parts).strip()
-
-
-def _changed_file_paths(payload: Mapping[str, Any]) -> list[str]:
-    raw = payload.get("files") or payload.get("changes") or []
-    paths: list[str] = []
-    if isinstance(raw, list):
-        for item in raw:
-            if isinstance(item, Mapping):
-                path = _clean(item.get("path") or item.get("filename") or item.get("name"))
-            else:
-                path = _clean(item)
-            if path:
-                paths.append(path)
-    return paths
-
-
-def _session_file_entries(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    raw = payload.get("files") or payload.get("items") or []
-    if isinstance(raw, list):
-        return [item for item in raw if isinstance(item, Mapping)]
-    return []
-
-
-def _reject_secret_payload(value: Any, *, path: str) -> None:
-    if isinstance(value, Mapping):
-        for key, nested in value.items():
-            key_text = str(key)
-            nested_path = f"{path}.{key_text}"
-            if _SENSITIVE_KEY_RE.search(key_text):
-                if not _is_secret_ref(nested):
-                    raise OmnigentExecutionError(
-                        f"Omnigent request contains raw credential field {nested_path}.",
-                        failure_class="user_error",
-                        provider_error_code="omnigent_raw_secret_rejected",
-                    )
-            _reject_secret_payload(nested, path=nested_path)
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            _reject_secret_payload(item, path=f"{path}[{index}]")
-    elif isinstance(value, str) and _SECRET_VALUE_RE.search(value):
-        _raise_secret_value_error(path)
-
-
-def _reject_secret_text(value: Any, *, path: str) -> None:
-    if isinstance(value, str) and _SECRET_VALUE_RE.search(value):
-        _raise_secret_value_error(path)
-
-
-def _raise_secret_value_error(path: str) -> None:
-    raise OmnigentExecutionError(
-        f"Omnigent request contains a secret-like value at {path}.",
-        failure_class="user_error",
-        provider_error_code="omnigent_raw_secret_rejected",
-    )
-
-
-def _reject_v1_non_goals(omnigent: Mapping[str, Any]) -> None:
-    forbidden_paths = (
-        ("session", "sessionId"),
-        ("session", "reuseSessionId"),
-        ("session", "multiStepReuse"),
-        ("capture", "hostSideHelper"),
-        ("capture", "hostSideCapture"),
-        ("streaming", "statusResults"),
-    )
-    for section_name, key in forbidden_paths:
-        section = _mapping(omnigent.get(section_name))
-        if key in section and section.get(key) not in (None, False, ""):
-            raise OmnigentExecutionError(
-                f"Omnigent v1 does not expose {section_name}.{key}.",
-                failure_class="user_error",
-                provider_error_code="omnigent_v1_non_goal",
-            )
-
-
-def _is_secret_ref(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    return value.startswith(("env://", "secret://", "vault://", "ref://"))
-
-
-def _mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
-def _clean(value: Any) -> str:
-    return str(value).strip() if value is not None else ""
-
-
-def _truthy(value: Any) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _looks_like_local_path(value: str) -> bool:
-    return value.startswith(("/", "./", "../", "~")) or (
-        re.match(r"^[A-Za-z]:[/\\]", value) is not None
-    )
-
-
-def _managed_workspace_from_request(
-    request: AgentExecutionRequest,
-    params: Mapping[str, Any],
-) -> str:
-    repository = _find_repository_url(request.workspace_spec)
-    workspace_context = params.get("workspaceContext")
-    if not repository and isinstance(workspace_context, Mapping):
-        repository = _find_repository_url(workspace_context)
-    omnigent = params.get("omnigent")
-    if not repository and isinstance(omnigent, Mapping):
-        nested_context = omnigent.get("workspaceContext")
-        if isinstance(nested_context, Mapping):
-            repository = _find_repository_url(nested_context)
-    if not repository:
-        return ""
-    branch = _clean(request.workspace_spec.get("branch")) or _clean(
-        request.workspace_spec.get("startingBranch")
-    )
-    if branch and "#" not in repository:
-        return f"{repository}#{branch}"
-    return repository
-
-
-def _find_repository_url(payload: Mapping[str, Any] | None) -> str:
-    if not isinstance(payload, Mapping):
-        return ""
-    for key in ("repository", "repositoryUrl", "repoUrl", "gitUrl"):
-        value = payload.get(key)
-        if isinstance(value, str) and _is_git_url_with_optional_branch(value):
-            return value
-        if isinstance(value, Mapping):
-            nested = _find_repository_url(value)
-            if nested:
-                return nested
-    return ""
-
-
-def _is_git_url_with_optional_branch(value: str) -> bool:
-    candidate = value.split("#", 1)[0]
-    parsed = urlparse(candidate)
-    if parsed.scheme in {"http", "https", "ssh", "git"} and parsed.netloc:
-        return True
-    if candidate.startswith("git@") and ":" in candidate:
-        return True
-    return False
-
-
-def _float_env(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, "") or default)
-    except ValueError:
-        return default
-
-
-def _artifact_dir(
-    request: AgentExecutionRequest,
-    *,
-    redactor: SecretRedactor,
-) -> Path:
-    safe_key = _safe_artifact_name(
-        request.idempotency_key or request.correlation_id or "omnigent-run"
-    )
-    root = Path(os.environ.get("MOONMIND_OMNIGENT_ARTIFACT_ROOT", "var/artifacts/omnigent"))
-    path = root / safe_key
-    return Path(redactor.scrub(str(path)))
-
-
-def _minimal_artifact_spec(request: AgentExecutionRequest) -> "_OmnigentExecutionSpec":
-    return _OmnigentExecutionSpec(
-        endpoint_ref="default",
-        agent_id="",
-        agent_name="",
-        title="MoonMind Agent Task",
-        prompt_text="",
-        include_idempotency_marker=True,
-        host_type="managed",
-        host_id="",
-        workspace="",
-        model_override=None,
-        reasoning_effort=None,
-        terminal_launch_args=(),
-        capture_changed_files=True,
-        capture_session_files=True,
-        delete_after_harvest=False,
-        delete_branch=False,
-        patch_source="github_pr_or_host_helper",
-        timeout_seconds=60.0,
-        stream_timeout_seconds=120.0,
-        cancel_grace_seconds=5.0,
-        poll_interval_seconds=2.0,
-        max_harvest_files=50,
-        artifact_dir=Path("var/artifacts/omnigent")
-        / _safe_artifact_name(request.idempotency_key or request.correlation_id or "failure"),
-    )
-
-
-def _write_json_artifact(
-    spec: "_OmnigentExecutionSpec",
-    name: str,
-    payload: Any,
-    *,
-    redactor: SecretRedactor,
-) -> str:
-    data = json.dumps(
-        redact_sensitive_payload(payload),
-        indent=2,
-        sort_keys=True,
-        default=str,
-    ).encode()
-    return _write_bytes_artifact(spec, name, data, redactor=redactor)
-
-
-def _write_bytes_artifact(
-    spec: "_OmnigentExecutionSpec",
-    name: str,
-    data: bytes,
-    *,
-    redactor: SecretRedactor,
-) -> str:
-    target = spec.artifact_dir / name
-    target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        safe_data = redactor.scrub(data.decode("utf-8", errors="strict")).encode()
-    except UnicodeDecodeError:
-        safe_data = data
-    target.write_bytes(safe_data)
-    return f"file:{target.as_posix()}"
-
-
-def _safe_artifact_name(value: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
-    return safe.strip("._")[:160] or "artifact"
-
-
-def _compact_summary(summary: str, redactor: SecretRedactor) -> str:
-    safe = redact_sensitive_text(redactor.scrub(summary)).strip()
-    return safe[:4093] + "..." if len(safe) > 4096 else safe
-
-
-class _OmnigentExecutionSpec:
-    def __init__(self, **kwargs: Any) -> None:
-        self.__dict__.update(kwargs)
-
-
-class _HarvestResult:
-    def __init__(self, *, output_refs: list[str], manifest_ref: str) -> None:
-        self.output_refs = output_refs
-        self.manifest_ref = manifest_ref
-
-
-__all__ = ["run_omnigent_execution"]
+__all__ = [
+    "OmnigentContractError",
+    "OmnigentSessionStillRunningError",
+    "build_omnigent_result",
+    "normalize_omnigent_observation",
+    "run_omnigent_execution",
+]

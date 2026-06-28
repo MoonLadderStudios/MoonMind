@@ -20,6 +20,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { workflowListHrefFromContext } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -40,6 +41,8 @@ type DashboardConfig = {
       temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
       debugFieldsEnabled?: boolean;
+      listEnabled?: boolean;
+      workspaceShellEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
     liveLogsSessionTimelineEnabled?: boolean;
@@ -56,6 +59,80 @@ type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'al
 
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
 const SESSION_PROJECTION_POLL_MS = 5000;
+const WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
+
+const WorkflowWorkspaceRowSchema = z
+  .object({
+    taskId: z.string().optional(),
+    workflowId: z.string().optional(),
+    title: z.string().optional(),
+    status: z.string().optional(),
+    state: z.string().optional(),
+    rawState: z.string().optional(),
+    createdAt: z.string().nullable().optional(),
+    scheduledFor: z.string().nullable().optional(),
+    closedAt: z.string().nullable().optional(),
+    repository: z.string().nullable().optional(),
+    targetRuntime: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const WorkflowWorkspaceListResponseSchema = z.object({
+  items: z.array(WorkflowWorkspaceRowSchema),
+});
+
+type WorkflowWorkspaceRow = z.infer<typeof WorkflowWorkspaceRowSchema>;
+
+function workflowWorkspaceRowId(row: WorkflowWorkspaceRow): string {
+  return row.workflowId || row.taskId || '';
+}
+
+function workflowWorkspaceRowUpdatedAt(row: WorkflowWorkspaceRow): string | null | undefined {
+  return row.closedAt || row.scheduledFor || row.createdAt;
+}
+
+const WORKFLOW_WORKSPACE_RELATIVE_TIME_UNITS: Array<[string, number]> = [
+  ['y', 31536000],
+  ['mo', 2592000],
+  ['w', 604800],
+  ['d', 86400],
+  ['h', 3600],
+  ['m', 60],
+];
+
+function formatWorkflowWorkspaceRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return 'Updated time unavailable';
+  const date = new Date(iso);
+  const ms = date.getTime();
+  if (Number.isNaN(ms)) return iso;
+  const diffSeconds = Math.round((Date.now() - ms) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 45) return 'just now';
+  const suffix = diffSeconds >= 0 ? 'ago' : 'from now';
+  for (const [label, unitSeconds] of WORKFLOW_WORKSPACE_RELATIVE_TIME_UNITS) {
+    if (absSeconds >= unitSeconds) {
+      return `${Math.floor(absSeconds / unitSeconds)}${label} ${suffix}`;
+    }
+  }
+  return `${absSeconds}s ${suffix}`;
+}
+
+function useWorkflowWorkspaceDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(true);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const query = window.matchMedia(WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY);
+    const update = () => setIsDesktop(query.matches);
+    update();
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  return isDesktop;
+}
 
 function normalizeLiveLogsSessionTimelineRollout(
   value: string | null | undefined,
@@ -131,6 +208,151 @@ function workflowDetailSubrouteHref(
   const suffix = subroute === 'overview' ? '' : `/${subroute}`;
   const query = search.toString();
   return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
+}
+
+function workflowWorkspaceListQuery(search: URLSearchParams): string {
+  const params = new URLSearchParams(search);
+  params.delete('selectedWorkflowId');
+  const pageSize = params.get('limit') || params.get('pageSize') || '25';
+  params.delete('limit');
+  params.set('pageSize', pageSize);
+  return params.toString();
+}
+
+function WorkflowSidebarRow({
+  row,
+  activeWorkflowId,
+}: {
+  row: WorkflowWorkspaceRow;
+  activeWorkflowId: string;
+}) {
+  const workflowId = workflowWorkspaceRowId(row);
+  const active = workflowId === activeWorkflowId;
+  const status = row.rawState || row.state || row.status || 'unknown';
+  const title = row.title?.trim() || workflowId || 'Untitled workflow';
+  return (
+    <li>
+      <a
+        className="workflow-workspace-sidebar-row"
+        href={`/workflows/${encodeURIComponent(workflowId)}?source=temporal`}
+        aria-current={active ? 'page' : undefined}
+        data-active={active ? 'true' : 'false'}
+      >
+        <span className="workflow-workspace-sidebar-row-main">
+          <span className="workflow-workspace-sidebar-title">{title}</span>
+          <span className="workflow-workspace-sidebar-meta">
+            {formatWorkflowWorkspaceRelativeTime(workflowWorkspaceRowUpdatedAt(row))}
+          </span>
+        </span>
+        <ExecutionStatusPill status={status} />
+      </a>
+    </li>
+  );
+}
+
+function WorkflowWorkspaceShell({
+  payload,
+  workflowId,
+  search,
+}: {
+  payload: BootPayload;
+  workflowId: string;
+  search: URLSearchParams;
+}) {
+  const cfg = readDashboardConfig(payload);
+  const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const openButtonRef = useRef<HTMLButtonElement | null>(null);
+  const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
+  const workflowsQuery = useQuery({
+    queryKey: ['workflow-workspace-sidebar', listQuery],
+    queryFn: async () => {
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflows: ${response.statusText}`);
+      }
+      return WorkflowWorkspaceListResponseSchema.parse(await response.json());
+    },
+    enabled: listEnabled,
+    refetchInterval: listEnabled ? listPoll : false,
+  });
+  const rows = workflowsQuery.data?.items || [];
+  const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
+  const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
+  const fullListHref = `/workflows${search.toString() ? `?${search.toString()}` : ''}`;
+
+  return (
+    <div className="workflow-workspace-shell" data-jira-issue="MM-997" data-source-issue="MM-975">
+      {sidebarOpen ? (
+        <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
+          <div className="workflow-workspace-sidebar-controls">
+            <button
+              ref={closeButtonRef}
+              type="button"
+              className="secondary"
+              onClick={() => {
+                setSidebarOpen(false);
+                window.setTimeout(() => openButtonRef.current?.focus(), 0);
+              }}
+            >
+              Close sidebar
+            </button>
+            <a className="button secondary" href={fullListHref}>
+              Expand to full list
+            </a>
+          </div>
+          {workflowsQuery.isLoading ? (
+            <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
+          ) : null}
+          {workflowsQuery.isError ? (
+            <div className="workflow-workspace-sidebar-state" role="status">
+              <p>Workflow navigation is unavailable.</p>
+              <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
+                Retry
+              </button>
+            </div>
+          ) : null}
+          {!workflowsQuery.isLoading && !workflowsQuery.isError && !activeInList && workflowId ? (
+            <div className="workflow-workspace-current-row" aria-label="Current workflow">
+              <span className="workflow-workspace-sidebar-title">Current workflow</span>
+              <code>{workflowId}</code>
+            </div>
+          ) : null}
+          {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
+            <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
+          ) : null}
+          {filteredRows.length > 0 ? (
+            <ul className="workflow-workspace-sidebar-list" aria-label="Workflow navigation list">
+              {filteredRows.map((row) => (
+                <WorkflowSidebarRow
+                  key={workflowWorkspaceRowId(row)}
+                  row={row}
+                  activeWorkflowId={workflowId}
+                />
+              ))}
+            </ul>
+          ) : null}
+        </aside>
+      ) : (
+        <button
+          ref={openButtonRef}
+          type="button"
+          className="secondary workflow-workspace-open-sidebar"
+          onClick={() => {
+            setSidebarOpen(true);
+            window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+          }}
+        >
+          Open workflow sidebar
+        </button>
+      )}
+      <main className="workflow-workspace-detail" aria-label="Workflow detail">
+        <WorkflowDetailPage payload={payload} />
+      </main>
+    </div>
+  );
 }
 
 function detailObjectValue(value: unknown): Record<string, unknown> {
@@ -1894,7 +2116,19 @@ type TimelineRow = {
   turnId: string | null;
   activeTurnId: string | null;
   metadata: Record<string, unknown>;
-  rowType: 'output' | 'system' | 'session' | 'approval' | 'publication' | 'boundary' | 'fallback';
+  rowType:
+    | 'output'
+    | 'system'
+    | 'session'
+    | 'approval'
+    | 'publication'
+    | 'boundary'
+    | 'user'
+    | 'assistant'
+    | 'tool'
+    | 'turn'
+    | 'turn-failure'
+    | 'fallback';
 };
 
 function splitLogText(content: string): string[] {
@@ -1950,18 +2184,59 @@ function parseArtifactToRows(content: string): TimelineRow[] {
   });
 }
 
-function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
-  if (event.kind === 'session_reset_boundary') {
+const USER_MESSAGE_EVENT_KINDS = new Set(['user_message_submitted']);
+const ASSISTANT_MESSAGE_EVENT_KINDS = new Set([
+  'assistant_message_delta',
+  'assistant_message_completed',
+  'assistant_message',
+]);
+const TOOL_CALL_EVENT_KINDS = new Set([
+  'tool_call_started',
+  'tool_call_output',
+  'tool_call_completed',
+  'tool_call_failed',
+]);
+const TURN_BOUNDARY_EVENT_KINDS = new Set(['turn_started', 'turn_completed']);
+const TURN_FAILURE_EVENT_KINDS = new Set(['turn_failed', 'turn_interrupted']);
+const OPERATOR_ATTENTION_EVENT_KINDS = new Set([
+  'approval_requested',
+  'approval_granted',
+  'approval_denied',
+  'intervention_requested',
+  'intervention_resolved',
+]);
+
+export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
+  const kind = event.kind ?? '';
+  if (kind === 'session_reset_boundary') {
     return 'boundary';
+  }
+  if (USER_MESSAGE_EVENT_KINDS.has(kind)) {
+    return 'user';
+  }
+  if (ASSISTANT_MESSAGE_EVENT_KINDS.has(kind)) {
+    return 'assistant';
+  }
+  if (TOOL_CALL_EVENT_KINDS.has(kind)) {
+    return 'tool';
+  }
+  if (TURN_FAILURE_EVENT_KINDS.has(kind)) {
+    return 'turn-failure';
+  }
+  if (TURN_BOUNDARY_EVENT_KINDS.has(kind)) {
+    return 'turn';
+  }
+  if (OPERATOR_ATTENTION_EVENT_KINDS.has(kind)) {
+    return 'approval';
   }
   if (event.stream === 'system') {
     return 'system';
   }
   if (event.stream === 'session') {
-    if ((event.kind ?? '').startsWith('approval_')) {
+    if (kind.startsWith('approval_') || kind.startsWith('intervention_')) {
       return 'approval';
     }
-    if ((event.kind ?? '').endsWith('_published')) {
+    if (kind.endsWith('_published')) {
       return 'publication';
     }
     return 'session';
@@ -2066,6 +2341,31 @@ function renderTimelineRowText(row: TimelineRow, timelineViewerEnabled: boolean)
     return renderAnsiFragments(row.text);
   }
   return row.text;
+}
+
+function getTimelineRowTreatmentLabel(row: TimelineRow): string | null {
+  if (row.rowType === 'user') {
+    return 'User turn';
+  }
+  if (row.rowType === 'assistant') {
+    return 'Assistant output';
+  }
+  if (row.rowType === 'tool') {
+    if (row.kind === 'tool_call_failed') return 'Tool failed';
+    if (row.kind === 'tool_call_completed') return 'Tool completed';
+    if (row.kind === 'tool_call_output') return 'Tool output';
+    return 'Tool call';
+  }
+  if (row.rowType === 'approval') {
+    return row.kind?.startsWith('intervention_') ? 'Operator intervention' : 'Operator approval';
+  }
+  if (row.rowType === 'turn-failure') {
+    return row.kind === 'turn_interrupted' ? 'Turn interrupted' : 'Turn failed';
+  }
+  if (row.rowType === 'turn') {
+    return row.kind === 'turn_completed' ? 'Turn completed' : 'Turn started';
+  }
+  return null;
 }
 
 function getCopyableRowText(row: TimelineRow): string {
@@ -2503,8 +2803,15 @@ function renderTimelineRow(
       key={row.id}
       className={rowClasses}
     >
-      {timelineViewerEnabled && row.kind ? (
-        <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+      {timelineViewerEnabled && (row.kind || getTimelineRowTreatmentLabel(row)) ? (
+        <div className="live-logs-row-heading">
+          {getTimelineRowTreatmentLabel(row) ? (
+            <span className="live-logs-treatment-label">{getTimelineRowTreatmentLabel(row)}</span>
+          ) : null}
+          {row.kind ? (
+            <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+          ) : null}
+        </div>
       ) : null}
       <div
         className="live-logs-row-text"
@@ -4842,6 +5149,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
+  const expandToFullListHref = useMemo(
+    () => workflowListHrefFromContext(search, { markDetailReturn: true }),
+    [search],
+  );
   const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
   const sourceTemporal = search.get('source') === 'temporal';
 
@@ -5595,6 +5906,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         <div className="toolbar-controls">
+          <a className="button secondary" href={expandToFullListHref}>
+            Expand to full list
+          </a>
           <span className="small">
             Live updates enabled. Polling every {Math.round(detailPoll / 1000)}s
           </span>
@@ -6524,4 +6838,23 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-export default WorkflowDetailPage;
+
+export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) {
+  const cfg = readDashboardConfig(payload);
+  const isDesktop = useWorkflowWorkspaceDesktop();
+  const workflowIdMatch = typeof window !== 'undefined'
+    ? window.location.pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/)
+    : null;
+  const workflowId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
+  const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
+  const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+
+  if (workspaceShellEnabled && listEnabled && isDesktop && workflowId) {
+    return <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />;
+  }
+
+  return <WorkflowDetailPage payload={payload} />;
+}
+
+export default WorkflowDetailEntrypoint;

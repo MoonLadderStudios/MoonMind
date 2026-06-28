@@ -92,6 +92,15 @@ class TestBuildDefaultRegistry:
         registry = build_default_registry(env=env)
         assert "codex_cloud" in registry
 
+    def test_omnigent_registered_when_enabled(self):
+        env = {
+            "OMNIGENT_ENABLED": "true",
+            "OMNIGENT_SERVER_URL": "https://omnigent.test",
+        }
+        registry = build_default_registry(env=env)
+        assert "omnigent" in registry
+        assert "omnigent_session" not in registry
+
     def test_both_registered_when_both_enabled(self):
         env = {
             "JULES_ENABLED": "true",

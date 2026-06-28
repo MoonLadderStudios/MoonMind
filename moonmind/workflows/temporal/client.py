@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Protocol
 
-from temporalio.client import Client, WorkflowExecutionDescription
+from temporalio.client import Client, WorkflowExecutionDescription, WorkflowUpdateStage
 from temporalio.common import (
     SearchAttributeKey,
     SearchAttributePair,
@@ -59,6 +59,7 @@ MANAGED_RUNTIME_WORKSPACE_CLEANUP_WORKFLOW_ID_BASE = (
     "mm-operational:managed-runtime-workspace-cleanup"
 )
 ALLOW_LIVE_TEMPORAL_IN_TESTS_ENV = "MOONMIND_ALLOW_LIVE_TEMPORAL_IN_TESTS"
+_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT = timedelta(seconds=10)
 
 def _is_rpc_status(exc: BaseException, status_name: str) -> bool:
     """Check whether *exc* is a Temporal ``RPCError`` with the given gRPC status.
@@ -482,43 +483,43 @@ class TemporalClientAdapter:
             "stale_running": 0,
         }
 
-    # --- Worker Pause/Resume: Batch Signals for Quiesce mode (DOC-REQ-003) ---
+    # --- Worker Pause/Resume: Batch Updates for Quiesce mode (DOC-REQ-003) ---
 
-    async def send_batch_pause_signal(
+    async def send_batch_pause_update(
         self,
         *,
         task_queues: Sequence[str] | None = None,
     ) -> int:
-        """Send a ``pause`` signal to all running workflows (Quiesce mode).
+        """Send the canonical ``Pause`` update to all running workflows.
 
-        Returns the number of workflows signaled.
+        Returns the number of workflows updated.
         """
-        return await self._send_signal_to_running_workflows(
-            signal_name="pause",
+        return await self._send_update_to_running_workflows(
+            update_name="Pause",
             task_queues=task_queues,
         )
 
-    async def send_batch_resume_signal(
+    async def send_batch_resume_update(
         self,
         *,
         task_queues: Sequence[str] | None = None,
     ) -> int:
-        """Send a ``resume`` signal to all running workflows.
+        """Send the canonical ``Resume`` update to all running workflows.
 
-        Returns the number of workflows signaled.
+        Returns the number of workflows updated.
         """
-        return await self._send_signal_to_running_workflows(
-            signal_name="resume",
+        return await self._send_update_to_running_workflows(
+            update_name="Resume",
             task_queues=task_queues,
         )
 
-    async def _send_signal_to_running_workflows(
+    async def _send_update_to_running_workflows(
         self,
         *,
-        signal_name: str,
+        update_name: str,
         task_queues: Sequence[str] | None = None,
     ) -> int:
-        """Iterate running workflows via Visibility and signal each one.
+        """Iterate running workflows via Visibility and update each one.
 
         This approach works with all Temporal server versions.  When the
         Temporal Batch Operations API becomes available in the Python SDK,
@@ -534,32 +535,34 @@ class TemporalClientAdapter:
             quoted = ", ".join(f'"{tq}"' for tq in task_queues)
             visibility_filter += f" AND TaskQueue IN ({quoted})"
 
-        signaled = 0
         _log = logging.getLogger(__name__)
         _sem = asyncio.Semaphore(50)
 
-        async def _signal_one(wf_id: str) -> bool:
+        async def _update_one(wf_id: str) -> bool:
             async with _sem:
                 try:
                     handle = client.get_workflow_handle(wf_id)
-                    await handle.signal(signal_name)
+                    await handle.start_update(
+                        update_name,
+                        wait_for_stage=WorkflowUpdateStage.ACCEPTED,
+                        rpc_timeout=_WORKFLOW_UPDATE_ACCEPTED_TIMEOUT,
+                    )
                     return True
                 except Exception:
                     _log.warning(
-                        "Failed to signal workflow %s with %s",
+                        "Failed to update workflow %s with %s",
                         wf_id,
-                        signal_name,
+                        update_name,
                         exc_info=True,
                     )
                     return False
 
         tasks: list[asyncio.Task[bool]] = []
         async for execution in client.list_workflows(query=visibility_filter):
-            tasks.append(asyncio.create_task(_signal_one(execution.id)))
+            tasks.append(asyncio.create_task(_update_one(execution.id)))
 
         results = await asyncio.gather(*tasks)
-        signaled = sum(1 for ok in results if ok)
-        return signaled
+        return sum(1 for ok in results if ok)
 
     # --- Temporal Schedule CRUD ---
 

@@ -123,6 +123,7 @@ def test_describe_configured_worker_uses_temporal_worker_fleet_override():
         "llm",
         "integration:jules",
         "integration:openclaw",
+        "integration:omnigent",
         "agent_runtime",
         "docker_workload",
     )

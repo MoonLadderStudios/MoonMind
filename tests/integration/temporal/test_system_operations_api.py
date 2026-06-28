@@ -25,6 +25,9 @@ class FakeTemporalService:
     async def send_resume_signal(self) -> int:
         return 0
 
+    async def get_drain_metrics(self) -> dict[str, int]:
+        return {"queued": 0, "running": 0, "stale_running": 0}
+
 
 def _override_user() -> object:
     return SimpleNamespace(
