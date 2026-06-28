@@ -1711,7 +1711,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
         viewBox="0 0 16 16"
         focusable="false"
       >
-        <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+        <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
       </svg>
       {hasActiveFilters ? (
         <span className="workflow-list-advanced-filters-count" aria-hidden="true">
@@ -1886,7 +1886,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                 viewBox="0 0 16 16"
                 focusable="false"
               >
-                <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
               </svg>
               <span>Filters</span>
               {hasActiveFilters ? (
@@ -2006,7 +2006,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                       viewBox="0 0 16 16"
                                       focusable="false"
                                     >
-                                      <path d="M2 3h12l-4.8 5.4v3.4l-2.4 1.2V8.4L2 3Z" />
+                                      <path d="M2 4h12v1.6H2V4ZM4.5 7.2h7v1.6h-7V7.2ZM6.5 10.4h3v1.6h-3v-1.6Z" />
                                     </svg>
                                   </button>
                                   {isFilterOpen ? (
