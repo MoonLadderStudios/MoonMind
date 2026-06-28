@@ -117,7 +117,12 @@ function formatWorkflowWorkspaceRelativeTime(iso: string | null | undefined): st
 }
 
 function useWorkflowWorkspaceDesktop(): boolean {
-  const [isDesktop, setIsDesktop] = useState(true);
+  const [isDesktop, setIsDesktop] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return true;
+    }
+    return window.matchMedia(WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY).matches;
+  });
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -5892,6 +5897,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     <div className="stack workflow-detail-page">
       <div className="toolbar">
         <div>
+          <a
+            className="breadcrumb-link"
+            href="/workflows"
+            data-jira-issue="MM-1001"
+            data-source-issue="MM-975"
+          >
+            Back to workflows
+          </a>
           <h2 className="page-title">Workflow Detail</h2>
           <div className="toolbar-identity-row">
             <p className="page-meta">Workflow {taskId || '—'}</p>

@@ -637,6 +637,41 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
   });
 
+  it('MM-1001 keeps mobile direct detail links standalone with no sidebar control leakage', async () => {
+    window.history.pushState({}, 'Workspace Mobile Direct Detail Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(false);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(
+      <WorkflowDetailEntrypoint
+        payload={{
+          ...stepsPayload,
+          initialData: {
+            dashboardConfig: {
+              ...stepsPayload.initialData?.dashboardConfig,
+              features: {
+                temporalDashboard: {
+                  workspaceShellEnabled: true,
+                  listEnabled: true,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Back to workflows' }).getAttribute('href')).toBe('/workflows');
+    expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+    expect(document.querySelector('.workflow-workspace-sidebar')).toBeNull();
+    expect(lastFetchUrl(fetchSpy, '/api/executions?')).toBeUndefined();
+  });
+
   it('MM-801 renders Overview as a concise summary with route preview cards', async () => {
     window.history.pushState({}, 'Overview Test', '/workflows/test-123?source=temporal');
     mockWorkflowDetailSubrouteFetch();
