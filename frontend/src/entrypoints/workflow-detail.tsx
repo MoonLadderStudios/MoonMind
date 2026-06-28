@@ -1289,6 +1289,48 @@ const ArtifactSessionControlResponseSchema = z.object({
   projection: ArtifactSessionProjectionSchema,
 });
 
+const SessionResourceSchema = z
+  .object({
+    resource_id: z.string().optional(),
+    resourceId: z.string().optional(),
+    artifact_id: z.string().optional(),
+    artifactId: z.string().optional(),
+    group_key: z.string().optional(),
+    groupKey: z.string().optional(),
+    group_title: z.string().optional(),
+    groupTitle: z.string().optional(),
+    label: z.string().nullable().optional(),
+    content_type: z.string().nullable().optional(),
+    contentType: z.string().nullable().optional(),
+    size_bytes: z.number().nullable().optional(),
+    sizeBytes: z.number().nullable().optional(),
+    content_url: z.string().optional(),
+    contentUrl: z.string().optional(),
+    download_url: z.string().optional(),
+    downloadUrl: z.string().optional(),
+    metadata: z.record(z.string(), z.unknown()).default({}),
+  })
+  .passthrough()
+  .transform((resource) => ({
+    resourceId: resource.resourceId ?? resource.resource_id ?? resource.artifactId ?? resource.artifact_id ?? '',
+    artifactId: resource.artifactId ?? resource.artifact_id ?? '',
+    groupKey: resource.groupKey ?? resource.group_key ?? '',
+    groupTitle: resource.groupTitle ?? resource.group_title ?? 'Resources',
+    label: resource.label ?? null,
+    contentType: resource.contentType ?? resource.content_type ?? null,
+    sizeBytes: resource.sizeBytes ?? resource.size_bytes ?? null,
+    contentUrl: resource.contentUrl ?? resource.content_url ?? null,
+    downloadUrl: resource.downloadUrl ?? resource.download_url ?? null,
+    metadata: resource.metadata ?? {},
+  }));
+
+const SessionResourceListSchema = z.object({
+  agent_run_id: z.string(),
+  session_id: z.string(),
+  session_epoch: z.number(),
+  resources: z.array(SessionResourceSchema).default([]),
+});
+
 type ArtifactSessionControlAction = z.infer<typeof ArtifactSessionControlResponseSchema>['action'];
 
 type ArtifactSessionControlRequest = {
@@ -2167,6 +2209,28 @@ async function fetchArtifactSessionProjection(
     throw new Error(`Session continuity: ${resp.status}`);
   }
   return ArtifactSessionProjectionSchema.parse(await resp.json());
+}
+
+async function fetchSessionResources(
+  apiBase: string,
+  agentRunId: string,
+  sessionId: string,
+  routeTemplate?: string | null,
+): Promise<z.infer<typeof SessionResourceListSchema> | null> {
+  const resp = await fetch(
+    agentRunRoute(
+      apiBase,
+      routeTemplate,
+      `/sessions/${encodeURIComponent(sessionId)}/resources`,
+      agentRunRouteParams(agentRunId, { sessionId }),
+    ),
+    { credentials: 'include' },
+  );
+  if (!resp.ok) {
+    if (resp.status === 404) return null;
+    throw new Error(`Session resources: ${resp.status}`);
+  }
+  return SessionResourceListSchema.parse(await resp.json());
 }
 
 async function controlArtifactSession(
@@ -3408,6 +3472,7 @@ type AgentRunRouteTemplates = {
   diagnostics?: string | undefined;
   artifactSession?: string | undefined;
   artifactSessionControl?: string | undefined;
+  sessionResources?: string | undefined;
 };
 
 function readAgentRunRouteTemplates(config: DashboardConfig | undefined): AgentRunRouteTemplates {
@@ -3422,6 +3487,7 @@ function readAgentRunRouteTemplates(config: DashboardConfig | undefined): AgentR
     diagnostics: sourceRoutes?.diagnostics,
     artifactSession: sourceRoutes?.artifactSession,
     artifactSessionControl: sourceRoutes?.artifactSessionControl,
+    sessionResources: sourceRoutes?.sessionResources,
   };
 }
 
@@ -4892,6 +4958,23 @@ function SessionContinuityPanel({
     retry: false,
   });
 
+  const resourcesQuery = useQuery({
+    queryKey: ['session-resources', sessionId],
+    queryFn: () => {
+      if (!sessionId) return Promise.resolve(null);
+      return fetchSessionResources(apiBase, agentRunId, sessionId, routes.sessionResources);
+    },
+    enabled: Boolean(agentRunId && sessionId && summaryQuery.isSuccess),
+    refetchInterval: (query) => {
+      return getSessionProjectionRefetchInterval(
+        isTerminal,
+        Boolean(query.state.data),
+        Boolean(query.state.error),
+      );
+    },
+    retry: false,
+  });
+
   const controlMutation = useMutation({
     mutationFn: async (body: ArtifactSessionControlRequest) => {
       if (!sessionId) throw new Error('Managed session is unavailable.');
@@ -4991,6 +5074,7 @@ function SessionContinuityPanel({
   }
 
   const projection = projectionQuery.data;
+  const sessionResources = resourcesQuery.data?.resources ?? [];
   const latestBadges = [
     ['Latest Summary', projection.latest_summary_ref?.artifact_id ?? null],
     ['Latest Checkpoint', projection.latest_checkpoint_ref?.artifact_id ?? null],
@@ -5070,6 +5154,38 @@ function SessionContinuityPanel({
               <strong>{label}:</strong> <code className="text-xs">{artifactId}</code>
             </span>
           ))}
+        </div>
+      ) : null}
+
+      {sessionResources.length > 0 ? (
+        <div className="stack">
+          <h4>Resource Evidence</h4>
+          <div className="grid-2">
+            {sessionResources.map((resource) => {
+              const label = resource.label || resource.artifactId;
+              const contentHref = resource.contentUrl
+                ? resolveApiBaseTemplate(apiBase, resource.contentUrl)
+                : buildArtifactDownloadHref(apiBase, resource.artifactId);
+              const downloadHref = resource.downloadUrl
+                ? resolveApiBaseTemplate(apiBase, resource.downloadUrl)
+                : buildArtifactDownloadHref(apiBase, resource.artifactId);
+              return (
+                <div key={resource.resourceId || resource.artifactId} className="card">
+                  <strong>{label}</strong>
+                  <div className="small">{resource.groupTitle}</div>
+                  <code className="text-xs break-all">{resource.artifactId}</code>
+                  <div className="actions" style={{ marginTop: '0.5rem' }}>
+                    <a className="button secondary small" href={contentHref} target="_blank" rel="noreferrer">
+                      Open
+                    </a>
+                    <a className="button secondary small" href={downloadHref} target="_blank" rel="noreferrer">
+                      Download
+                    </a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
 

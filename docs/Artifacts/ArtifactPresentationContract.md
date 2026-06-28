@@ -510,14 +510,38 @@ Future extension rule:
 
 - If query filters such as `session_epoch`, `link_type`, or `latest_only` are added later, the server must define their scope. Clients must not re-derive canonical “latest” locally.
 
-### 7.11 Pin / unpin
+### 7.11 List session resource aliases
+
+- `GET /api/sessions/{session_id}/resources`
+- `GET /api/sessions/{session_id}/resources/files`
+
+Response:
+
+- `SessionResourceList`
+
+Rules:
+
+- Session resources are read-only projections over authorized artifact refs from the durable managed-session projection.
+- The aliases must not create blob storage, upload flows, or a second file/resource browser source of truth.
+- The server must enforce the same artifact authorization boundary for listing, content, and download paths.
+- Secret-like metadata keys must be dropped from resource summaries before they are returned to clients.
+- Ended, degraded, or otherwise non-live sessions may still return resource references from durable artifact state.
+
+Initial content aliases:
+
+- `GET /api/sessions/{session_id}/resources/{artifact_id}/content`
+- `GET /api/sessions/{session_id}/resources/{artifact_id}/download`
+
+These aliases may only serve artifacts that belong to the requested session projection. A request for another artifact id must fail with `session_resource_not_found` even when the artifact exists elsewhere.
+
+### 7.12 Pin / unpin
 
 - `POST /api/artifacts/{artifact_id}/pin`
 - `DELETE /api/artifacts/{artifact_id}/pin`
 
 Pin request includes optional `reason`.
 
-### 7.12 Delete
+### 7.13 Delete
 
 `DELETE /api/artifacts/{artifact_id}`
 
@@ -544,6 +568,7 @@ Common codes:
 - `artifact_too_large` 413
 - `session_projection_not_found` 404
 - `session_projection_unavailable` 409
+- `session_resource_not_found` 404
 
 Client rules:
 
@@ -589,6 +614,12 @@ Common session-continuity modes:
 Default session view call:
 
 - `GET /api/agent-runs/{agent_run_id}/artifact-sessions/{session_id}`
+
+Default session resource call:
+
+- `GET /api/sessions/{session_id}/resources`
+
+The session resource response may be used to render compact evidence cards or links, but it must not replace the existing artifact detail, execution artifacts, diagnostics, or log surfaces.
 
 Artifact detail drawer/page should:
 
