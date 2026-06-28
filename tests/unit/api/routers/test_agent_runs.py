@@ -3157,6 +3157,45 @@ def test_session_resource_content_requires_artifact_in_session_projection() -> N
     assert response.json()["detail"]["code"] == "session_resource_not_found"
     artifact_service.read_path.assert_not_called()
 
+def test_session_resource_content_reads_authorized_artifact_with_principal(tmp_path) -> None:
+    user_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="owner@example.com", is_superuser=False)
+    artifact_service = AsyncMock()
+    app = _app_with_agent_and_session_routers(user, artifact_service)
+    artifact_path = tmp_path / "summary.json"
+    artifact_path.write_text('{"summary":"done"}', encoding="utf-8")
+
+    async def _get_metadata(*, artifact_id: str, principal: str):
+        assert principal == str(user_id)
+        if artifact_id != "art_summary":
+            raise TemporalArtifactAuthorizationError("not authorized")
+        return _build_artifact(artifact_id, "session.summary", label=artifact_id)
+
+    async def _read_path(*, artifact_id: str, principal: str):
+        assert artifact_id == "art_summary"
+        assert principal == str(user_id)
+        return _build_artifact(artifact_id, "session.summary", label=artifact_id)[0], artifact_path
+
+    artifact_service.get_metadata.side_effect = _get_metadata
+    artifact_service.read_path.side_effect = _read_path
+
+    with TestClient(app) as test_client:
+        with patch(
+            "api_service.api.routers.agent_runs.ManagedSessionStore.load",
+            return_value=_build_session_record(),
+        ):
+            with patch(
+                "api_service.api.routers.agent_runs._load_execution_owner_binding",
+                new=AsyncMock(return_value=("user", str(user_id))),
+            ):
+                response = test_client.get(
+                    "/api/sessions/sess:wf-task-1:codex_cli/resources/art_summary/content"
+                )
+
+    assert response.status_code == 200
+    assert response.json() == {"summary": "done"}
+    artifact_service.read_path.assert_awaited_once()
+
 def test_get_agent_run_artifact_session_projection_returns_404_when_missing(
     client: tuple[TestClient, AsyncMock],
 ) -> None:
