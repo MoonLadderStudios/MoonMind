@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -98,8 +99,23 @@ class _ArtifactRecorder:
         content_type: str,
         link_type: str,
     ) -> str:
-        artifact = self._store.put_bytes(
+        return self.put_bytes(
+            name,
             payload.encode("utf-8"),
+            content_type=content_type,
+            link_type=link_type,
+        )
+
+    def put_bytes(
+        self,
+        name: str,
+        payload: bytes,
+        *,
+        content_type: str,
+        link_type: str,
+    ) -> str:
+        artifact = self._store.put_bytes(
+            payload,
             content_type=content_type,
             metadata={
                 "name": name,
@@ -279,12 +295,16 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 recorder=recorder,
                 diagnostics=diagnostics,
             )
-    except OmnigentClientError as exc:
+    except (OmnigentClientError, httpx.HTTPError) as exc:
         diagnostics["terminalStatus"] = "failed"
+        status_code = exc.status_code if isinstance(exc, OmnigentClientError) else None
+        response_body = (
+            exc.response_body if isinstance(exc, OmnigentClientError) else None
+        )
         diagnostics["error"] = {
             "message": str(exc),
-            "statusCode": exc.status_code,
-            "responseBody": _redact(exc.response_body),
+            "statusCode": status_code,
+            "responseBody": _redact(response_body),
         }
         diagnostics_ref = _write_diagnostics(recorder, diagnostics)
         return AgentRunResult(
@@ -292,7 +312,7 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             summary=str(exc)[:4096],
             diagnosticsRef=diagnostics_ref,
             failureClass="integration_error",
-            providerErrorCode=str(exc.status_code or "omnigent_http_error"),
+            providerErrorCode=str(status_code or "omnigent_http_error"),
             metadata={
                 "providerName": "omnigent",
                 "normalizedStatus": "failed",
@@ -347,6 +367,19 @@ async def _execute_with_client(
         first_message,
         link_type="input.omnigent.first_message.request",
     )
+
+    stream_queue: asyncio.Queue[dict[str, Any] | BaseException | None] = (
+        asyncio.Queue()
+    )
+    stream_task = asyncio.create_task(
+        _enqueue_stream_events(
+            client=client,
+            session_id=session_id,
+            queue=stream_queue,
+        )
+    )
+    await asyncio.sleep(0)
+
     first_response = await client.post_event(session_id, first_message)
     first_response_ref = recorder.put_json(
         "input.omnigent.first_message.response.json",
@@ -363,7 +396,12 @@ async def _execute_with_client(
     final_response_parts: list[str] = []
     terminal_status: str | None = None
 
-    async for event in client.stream_events(session_id):
+    while True:
+        event = await stream_queue.get()
+        if event is None:
+            break
+        if isinstance(event, BaseException):
+            raise event
         raw_events.append(event)
         normalized = _normalize_sse_event(event, session_id=session_id)
         normalized_events.append(normalized)
@@ -388,7 +426,10 @@ async def _execute_with_client(
                 }
             )
         if terminal_status in _TERMINAL_STATUSES:
+            stream_task.cancel()
             break
+    if stream_task.done() and not stream_task.cancelled():
+        stream_task.result()
 
     raw_sse_ref = recorder.put_text(
         "runtime.omnigent.sse.raw.jsonl",
@@ -552,9 +593,9 @@ async def _harvest_resources(
             )
             continue
         safe_path = _safe_artifact_path(path)
-        ref = recorder.put_text(
+        ref = recorder.put_bytes(
             f"output.workspace.files/{safe_path}.current",
-            content.decode("utf-8", errors="replace"),
+            content,
             content_type="application/octet-stream",
             link_type="output.workspace.file",
         )
@@ -602,15 +643,32 @@ async def _harvest_resources(
             )
             continue
         refs.append(
-            recorder.put_text(
+            recorder.put_bytes(
                 "output.omnigent.session_files/"
                 f"{_safe_artifact_path(file_id)}/{_safe_artifact_path(filename)}",
-                content.decode("utf-8", errors="replace"),
+                content,
                 content_type="application/octet-stream",
                 link_type="output.omnigent.session_file.content",
             )
         )
     return refs
+
+
+async def _enqueue_stream_events(
+    *,
+    client: OmnigentHttpClient,
+    session_id: str,
+    queue: asyncio.Queue[dict[str, Any] | BaseException | None],
+) -> None:
+    try:
+        async for event in client.stream_events(session_id):
+            await queue.put(event)
+    except asyncio.CancelledError:
+        raise
+    except BaseException as exc:
+        await queue.put(exc)
+    finally:
+        await queue.put(None)
 
 
 def _build_session_request(request: AgentExecutionRequest) -> dict[str, Any]:
@@ -718,6 +776,8 @@ def _parse_sse_line(line: str) -> dict[str, Any] | None:
     stripped = line.strip()
     if not stripped or stripped.startswith(":"):
         return None
+    if stripped.startswith("event:"):
+        return None
     if stripped.startswith("data:"):
         stripped = stripped[5:].strip()
     if stripped == "[DONE]":
@@ -789,16 +849,23 @@ def _child_session_id(event: Mapping[str, Any]) -> str:
 def _status_from_event(event: Mapping[str, Any]) -> str:
     payload = event.get("payload") if isinstance(event.get("payload"), Mapping) else {}
     data = payload.get("data") if isinstance(payload.get("data"), Mapping) else {}
-    for source in (payload, data):
+    response = (
+        payload.get("response") if isinstance(payload.get("response"), Mapping) else {}
+    )
+    data_response = (
+        data.get("response") if isinstance(data.get("response"), Mapping) else {}
+    )
+    for source in (payload, data, response, data_response):
         status = source.get("status")
         if isinstance(status, str) and status.strip().lower() in _TERMINAL_STATUSES:
             return status.strip().lower()
-    if str(event.get("eventType") or "").lower() in {
-        "done",
-        "completed",
-        "session.completed",
-    }:
+    event_type = str(event.get("eventType") or "").lower()
+    if event_type in {"done", "completed", "session.completed", "response.completed"}:
         return "completed"
+    if event_type in {"failed", "session.failed", "response.failed"}:
+        return "failed"
+    if event_type in {"canceled", "cancelled", "session.canceled", "response.canceled"}:
+        return "canceled"
     return ""
 
 

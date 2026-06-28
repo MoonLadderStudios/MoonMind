@@ -6,12 +6,20 @@ from typing import Any
 
 import pytest
 
-from moonmind.omnigent.execute import _execute_with_client, _ArtifactRecorder
+from moonmind.omnigent.execute import (
+    _execute_with_client,
+    _normalize_sse_event,
+    _parse_sse_line,
+    _status_from_event,
+    _ArtifactRecorder,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.skills.artifact_store import FileArtifactStore
 
 
 class FakeOmnigentClient:
+    stream_started = False
+
     async def create_session(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         self.session_request = dict(payload)
         return {
@@ -34,11 +42,13 @@ class FakeOmnigentClient:
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
         assert session_id == "conv_123"
+        assert self.stream_started is True
         self.first_message = dict(payload)
         return {"ok": True, "sessionCookie": "secret-cookie"}
 
     async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
         assert session_id == "conv_123"
+        self.stream_started = True
         yield {
             "type": "response.output_text.delta",
             "data": {
@@ -58,7 +68,7 @@ class FakeOmnigentClient:
     async def get_workspace_file(self, session_id: str, path: str) -> bytes:
         assert session_id == "conv_123"
         assert path == "src/app.py"
-        return b"print('updated')\n"
+        return b"\xff\xfe\x00binary-workspace"
 
     async def list_session_files(self, session_id: str) -> dict[str, Any]:
         assert session_id == "conv_123"
@@ -67,7 +77,7 @@ class FakeOmnigentClient:
     async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
         assert session_id == "conv_123"
         assert file_id == "file_1"
-        return b"# Notes\n"
+        return b"\x89PNG\r\n\x1a\nbinary-session"
 
 
 def _request() -> AgentExecutionRequest:
@@ -181,3 +191,46 @@ async def test_omnigent_execute_captures_streams_resources_and_diagnostics(tmp_p
         artifact_by_name["output.omnigent.final_response.md"],
     ).decode("utf-8")
     assert "https://github.com/acme/widgets/pull/42" in final_response
+
+    assert (
+        _artifact_payload(
+            tmp_path,
+            artifact_by_name["output.workspace.files/src/app.py.current"],
+        )
+        == b"\xff\xfe\x00binary-workspace"
+    )
+    assert (
+        _artifact_payload(
+            tmp_path,
+            artifact_by_name["output.omnigent.session_files/file_1/notes.md"],
+        )
+        == b"\x89PNG\r\n\x1a\nbinary-session"
+    )
+
+
+def test_parse_sse_line_ignores_event_headers_and_parses_data_frames():
+    assert _parse_sse_line("event: response.created") is None
+    assert _parse_sse_line(": keepalive") is None
+    assert _parse_sse_line('data: {"type": "response.completed"}') == {
+        "type": "response.completed"
+    }
+
+
+def test_status_from_event_recognizes_omnigent_response_terminal_events():
+    completed = _normalize_sse_event(
+        {
+            "type": "response.completed",
+            "response": {"status": "completed"},
+        },
+        session_id="conv_123",
+    )
+    failed = _normalize_sse_event(
+        {
+            "type": "response.failed",
+            "data": {"response": {"status": "failed"}},
+        },
+        session_id="conv_123",
+    )
+
+    assert _status_from_event(completed) == "completed"
+    assert _status_from_event(failed) == "failed"
