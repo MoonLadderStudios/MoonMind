@@ -746,6 +746,10 @@ def build_runtime_config(
                     temporal_dashboard.temporal_workflow_editing_enabled
                 ),
                 "debugFieldsEnabled": bool(temporal_dashboard.debug_fields_enabled),
+                # MM-997: desktop workflow detail routes use the workspace shell by
+                # default. Setting this client flag to false restores standalone
+                # desktop detail presentation without changing mobile behavior.
+                "workspaceShellEnabled": True,
             },
             **build_live_logs_feature_config(),
         },

@@ -765,6 +765,7 @@ def test_build_runtime_config_uses_temporal_dashboard_settings(monkeypatch) -> N
         "submitEnabled": True,
         "temporalWorkflowEditing": False,
         "debugFieldsEnabled": True,
+        "workspaceShellEnabled": True,
     }
     assert config["sources"]["temporal"]["list"] == "/api/temporal/executions"
     assert (

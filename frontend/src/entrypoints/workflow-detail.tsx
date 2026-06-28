@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
@@ -20,6 +20,7 @@ import {
   taskEditForRerunHref,
   taskEditHref,
 } from '../lib/temporalTaskEditing';
+import { workflowListHrefFromContext } from '../lib/workflowListContext';
 import { WorkflowActionsMenu } from '../components/WorkflowActionsMenu';
 import {
   buildRemediationRuntimeRequestFields,
@@ -40,6 +41,8 @@ type DashboardConfig = {
       temporalWorkflowEditing?: boolean;
       temporalTaskEditing?: boolean;
       debugFieldsEnabled?: boolean;
+      listEnabled?: boolean;
+      workspaceShellEnabled?: boolean;
     };
     logStreamingEnabled?: boolean;
     liveLogsSessionTimelineEnabled?: boolean;
@@ -56,6 +59,98 @@ type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'al
 
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
 const SESSION_PROJECTION_POLL_MS = 5000;
+const WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY = '(min-width: 768px)';
+
+const WorkflowWorkspaceRowSchema = z
+  .object({
+    taskId: z.string().optional(),
+    workflowId: z.string().optional(),
+    title: z.string().optional(),
+    status: z.string().optional(),
+    state: z.string().optional(),
+    rawState: z.string().optional(),
+    createdAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
+    scheduledFor: z.string().nullable().optional(),
+    closedAt: z.string().nullable().optional(),
+    repository: z.string().nullable().optional(),
+    targetRuntime: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const WorkflowWorkspaceListResponseSchema = z.object({
+  items: z.array(WorkflowWorkspaceRowSchema),
+});
+
+type WorkflowWorkspaceRow = z.infer<typeof WorkflowWorkspaceRowSchema>;
+
+function workflowWorkspaceRowId(row: WorkflowWorkspaceRow): string {
+  return row.workflowId || row.taskId || '';
+}
+
+function workflowWorkspaceRowUpdatedAt(row: WorkflowWorkspaceRow): string | null | undefined {
+  return row.closedAt || row.scheduledFor || row.updatedAt || row.createdAt;
+}
+
+function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorkspaceRow {
+  return {
+    taskId: detail.taskId,
+    workflowId: detail.workflowId,
+    title: detail.title,
+    status: detail.status,
+    state: detail.state,
+    rawState: detail.rawState,
+    createdAt: detail.createdAt,
+    updatedAt: detail.updatedAt,
+    scheduledFor: detail.scheduledFor,
+    closedAt: detail.closedAt,
+    repository: detail.repository,
+    targetRuntime: detail.targetRuntime,
+  };
+}
+
+const WORKFLOW_WORKSPACE_RELATIVE_TIME_UNITS: Array<[string, number]> = [
+  ['y', 31536000],
+  ['mo', 2592000],
+  ['w', 604800],
+  ['d', 86400],
+  ['h', 3600],
+  ['m', 60],
+];
+
+function formatWorkflowWorkspaceRelativeTime(iso: string | null | undefined): string {
+  if (!iso) return 'Updated time unavailable';
+  const date = new Date(iso);
+  const ms = date.getTime();
+  if (Number.isNaN(ms)) return iso;
+  const diffSeconds = Math.round((Date.now() - ms) / 1000);
+  const absSeconds = Math.abs(diffSeconds);
+  if (absSeconds < 45) return 'just now';
+  const suffix = diffSeconds >= 0 ? 'ago' : 'from now';
+  for (const [label, unitSeconds] of WORKFLOW_WORKSPACE_RELATIVE_TIME_UNITS) {
+    if (absSeconds >= unitSeconds) {
+      return `${Math.floor(absSeconds / unitSeconds)}${label} ${suffix}`;
+    }
+  }
+  return `${absSeconds}s ${suffix}`;
+}
+
+function useWorkflowWorkspaceDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(true);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return undefined;
+    }
+    const query = window.matchMedia(WORKFLOW_WORKSPACE_DESKTOP_MEDIA_QUERY);
+    const update = () => setIsDesktop(query.matches);
+    update();
+    query.addEventListener?.('change', update);
+    return () => query.removeEventListener?.('change', update);
+  }, []);
+
+  return isDesktop;
+}
 
 function normalizeLiveLogsSessionTimelineRollout(
   value: string | null | undefined,
@@ -131,6 +226,258 @@ function workflowDetailSubrouteHref(
   const suffix = subroute === 'overview' ? '' : `/${subroute}`;
   const query = search.toString();
   return `/workflows/${encodeURIComponent(workflowId)}${suffix}${query ? `?${query}` : ''}`;
+}
+
+function workflowWorkspaceListQuery(search: URLSearchParams): string {
+  const params = new URLSearchParams(search);
+  params.delete('selectedWorkflowId');
+  const pageSize = params.get('limit') || params.get('pageSize') || '25';
+  params.delete('limit');
+  params.set('pageSize', pageSize);
+  return params.toString();
+}
+
+function WorkflowSidebarRow({
+  row,
+  activeWorkflowId,
+  pinned = false,
+}: {
+  row: WorkflowWorkspaceRow;
+  activeWorkflowId: string;
+  pinned?: boolean;
+}) {
+  const workflowId = workflowWorkspaceRowId(row);
+  const active = workflowId === activeWorkflowId;
+  const status = row.rawState || row.state || row.status || 'unknown';
+  const title = row.title?.trim() || workflowId || 'Untitled workflow';
+  return (
+    <li>
+      <a
+        className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
+        href={`/workflows/${encodeURIComponent(workflowId)}?source=temporal`}
+        aria-current={active ? 'page' : undefined}
+        data-active={active ? 'true' : 'false'}
+        data-pinned={pinned ? 'true' : 'false'}
+      >
+        <span className="workflow-workspace-sidebar-row-main">
+          {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
+          <span className="workflow-workspace-sidebar-title">{title}</span>
+          <span className="workflow-workspace-sidebar-meta">
+            {formatWorkflowWorkspaceRelativeTime(workflowWorkspaceRowUpdatedAt(row))}
+          </span>
+        </span>
+        <ExecutionStatusPill status={status} />
+      </a>
+    </li>
+  );
+}
+
+function WorkflowSidebarControls({
+  fullListHref,
+  closeButtonRef,
+  onClose,
+}: {
+  fullListHref: string;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}) {
+  return (
+    <div className="workflow-workspace-sidebar-controls">
+      <button
+        ref={closeButtonRef}
+        type="button"
+        className="secondary"
+        onClick={onClose}
+      >
+        Close sidebar
+      </button>
+      <a className="button secondary" href={fullListHref}>
+        Expand to full list
+      </a>
+    </div>
+  );
+}
+
+function WorkflowSidebarList({
+  rows,
+  activeWorkflowId,
+  ariaLabel = 'Workflow navigation list',
+  pinned = false,
+}: {
+  rows: WorkflowWorkspaceRow[];
+  activeWorkflowId: string;
+  ariaLabel?: string;
+  pinned?: boolean;
+}) {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <ul
+      className={`workflow-workspace-sidebar-list${pinned ? ' workflow-workspace-sidebar-pinned-list' : ''}`}
+      aria-label={ariaLabel}
+    >
+      {rows.map((row) => (
+        <WorkflowSidebarRow
+          key={workflowWorkspaceRowId(row)}
+          row={row}
+          activeWorkflowId={activeWorkflowId}
+          pinned={pinned}
+        />
+      ))}
+    </ul>
+  );
+}
+
+function WorkflowSidebar({
+  workflowId,
+  workflowsQuery,
+  filteredRows,
+  pinnedCurrentRow,
+  fullListHref,
+  closeButtonRef,
+  onClose,
+}: {
+  workflowId: string;
+  workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
+  filteredRows: WorkflowWorkspaceRow[];
+  pinnedCurrentRow: WorkflowWorkspaceRow | null;
+  fullListHref: string;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}) {
+  return (
+    <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
+      <WorkflowSidebarControls
+        fullListHref={fullListHref}
+        closeButtonRef={closeButtonRef}
+        onClose={onClose}
+      />
+      {workflowsQuery.isLoading ? (
+        <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
+      ) : null}
+      {workflowsQuery.isError ? (
+        <div className="workflow-workspace-sidebar-state" role="status">
+          <p>Workflow navigation is unavailable.</p>
+          <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
+        <WorkflowSidebarList
+          rows={[pinnedCurrentRow]}
+          activeWorkflowId={workflowId}
+          ariaLabel="Current workflow"
+          pinned
+        />
+      ) : null}
+      {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
+        <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
+      ) : null}
+      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} />
+    </aside>
+  );
+}
+
+function WorkflowWorkspaceShell({
+  payload,
+  workflowId,
+  search,
+}: {
+  payload: BootPayload;
+  workflowId: string;
+  search: URLSearchParams;
+}) {
+  const cfg = readDashboardConfig(payload);
+  const listPoll = cfg?.pollIntervalsMs?.list ?? 5000;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => !readDashboardPreferences().workflowWorkspaceSidebarCollapsed,
+  );
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const openButtonRef = useRef<HTMLButtonElement | null>(null);
+  const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
+  const sourceTemporal = search.get('source') === 'temporal';
+  const encodedWorkflowId = encodeURIComponent(workflowId);
+  const workflowsQuery = useQuery({
+    queryKey: ['workflow-workspace-sidebar', listQuery],
+    queryFn: async () => {
+      const response = await fetch(`${payload.apiBase}/executions?${listQuery}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflows: ${response.statusText}`);
+      }
+      return WorkflowWorkspaceListResponseSchema.parse(await response.json());
+    },
+    enabled: listEnabled,
+    refetchInterval: listEnabled ? listPoll : false,
+  });
+  const selectedWorkflowQuery = useQuery({
+    queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal],
+    queryFn: async () => {
+      const suffix = sourceTemporal ? '?source=temporal' : '';
+      const response = await fetch(`${payload.apiBase}/executions/${encodedWorkflowId}${suffix}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
+      }
+      return ExecutionDetailSchema.parse(await response.json());
+    },
+    enabled: Boolean(workflowId),
+    refetchInterval: (query) => (
+      !isExecutionTerminal(query.state.data)
+        ? (cfg?.pollIntervalsMs?.detail ?? 2000)
+        : false
+    ),
+  });
+  const rows = workflowsQuery.data?.items || [];
+  const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
+  const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
+  const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
+    ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
+    : null;
+  const fullListHref = `/workflows${search.toString() ? `?${search.toString()}` : ''}`;
+
+  return (
+    <div
+      className="workflow-workspace-shell"
+      data-sidebar-collapsed={sidebarOpen ? 'false' : 'true'}
+      data-jira-issue="MM-997 MM-999 MM-1000"
+      data-source-issue="MM-975"
+    >
+      {sidebarOpen ? (
+        <WorkflowSidebar
+          workflowId={workflowId}
+          workflowsQuery={workflowsQuery}
+          filteredRows={filteredRows}
+          pinnedCurrentRow={pinnedCurrentRow}
+          fullListHref={fullListHref}
+          closeButtonRef={closeButtonRef}
+          onClose={() => {
+            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: true });
+            setSidebarOpen(false);
+            window.setTimeout(() => openButtonRef.current?.focus(), 0);
+          }}
+        />
+      ) : (
+        <button
+          ref={openButtonRef}
+          type="button"
+          className="secondary workflow-workspace-open-sidebar"
+          onClick={() => {
+            updateDashboardPreferences({ workflowWorkspaceSidebarCollapsed: false });
+            setSidebarOpen(true);
+            window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+          }}
+        >
+          Open workflow sidebar
+        </button>
+      )}
+      <main className="workflow-workspace-detail" aria-label="Workflow detail">
+        <WorkflowDetailPage payload={payload} />
+      </main>
+    </div>
+  );
 }
 
 function detailObjectValue(value: unknown): Record<string, unknown> {
@@ -897,9 +1244,23 @@ const ArtifactSessionProjectionSchema = z.object({
 });
 
 const ArtifactSessionControlResponseSchema = z.object({
-  action: z.enum(['send_follow_up', 'clear_session']),
+  action: z.enum(['send_follow_up', 'clear_session', 'interrupt_turn', 'cancel_session']),
   projection: ArtifactSessionProjectionSchema,
 });
+
+const InterventionCapabilitiesSchema = z
+  .object({
+    sendFollowUp: z.boolean().default(false),
+    clearSession: z.boolean().default(false),
+    interruptTurn: z.boolean().default(false),
+    cancelSession: z.boolean().default(false),
+  })
+  .default({
+    sendFollowUp: false,
+    clearSession: false,
+    interruptTurn: false,
+    cancelSession: false,
+  });
 
 const SessionSnapshotSchema = z
   .object({
@@ -921,6 +1282,7 @@ const ObservabilitySummarySchema = z.object({
   liveStreamStatus: z.string().default('unavailable'),
   status: z.string().default(''),
   sessionSnapshot: SessionSnapshotSchema.nullable().optional(),
+  interventionCapabilities: InterventionCapabilitiesSchema,
 });
 
 const RawObservabilityEventSchema = z
@@ -1723,17 +2085,6 @@ async function fetchRunSummaryArtifact(
   return RunSummaryArtifactSchema.parse(JSON.parse(text));
 }
 
-function deriveCodexSessionId(
-  agentRunId: string | null | undefined,
-  runtimeId: string | null | undefined,
-): string | null {
-  const normalizedRuntime = String(runtimeId || '').trim().toLowerCase();
-  if (!agentRunId || (normalizedRuntime !== 'codex' && normalizedRuntime !== 'codex_cli')) {
-    return null;
-  }
-  return `sess:${agentRunId}:codex_cli`;
-}
-
 async function fetchArtifactSessionProjection(
   apiBase: string,
   agentRunId: string,
@@ -1760,7 +2111,7 @@ async function controlArtifactSession(
   apiBase: string,
   agentRunId: string,
   sessionId: string,
-  body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string },
+  body: { action: 'send_follow_up' | 'clear_session' | 'interrupt_turn' | 'cancel_session'; message?: string; reason?: string },
   routeTemplate?: string | null,
 ): Promise<z.infer<typeof ArtifactSessionControlResponseSchema>> {
   const resp = await fetch(
@@ -1778,7 +2129,16 @@ async function controlArtifactSession(
     },
   );
   if (!resp.ok) {
-    throw new Error(`Session control: ${resp.status}`);
+    let detail = `Session control: ${resp.status}`;
+    try {
+      const payload = await resp.json();
+      if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+        detail = payload.detail;
+      }
+    } catch {
+      // Keep the status fallback when the response is not JSON.
+    }
+    throw new Error(detail);
   }
   return ArtifactSessionControlResponseSchema.parse(await resp.json());
 }
@@ -1894,7 +2254,19 @@ type TimelineRow = {
   turnId: string | null;
   activeTurnId: string | null;
   metadata: Record<string, unknown>;
-  rowType: 'output' | 'system' | 'session' | 'approval' | 'publication' | 'boundary' | 'fallback';
+  rowType:
+    | 'output'
+    | 'system'
+    | 'session'
+    | 'approval'
+    | 'publication'
+    | 'boundary'
+    | 'user'
+    | 'assistant'
+    | 'tool'
+    | 'turn'
+    | 'turn-failure'
+    | 'fallback';
 };
 
 function splitLogText(content: string): string[] {
@@ -1950,18 +2322,59 @@ function parseArtifactToRows(content: string): TimelineRow[] {
   });
 }
 
-function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
-  if (event.kind === 'session_reset_boundary') {
+const USER_MESSAGE_EVENT_KINDS = new Set(['user_message_submitted']);
+const ASSISTANT_MESSAGE_EVENT_KINDS = new Set([
+  'assistant_message_delta',
+  'assistant_message_completed',
+  'assistant_message',
+]);
+const TOOL_CALL_EVENT_KINDS = new Set([
+  'tool_call_started',
+  'tool_call_output',
+  'tool_call_completed',
+  'tool_call_failed',
+]);
+const TURN_BOUNDARY_EVENT_KINDS = new Set(['turn_started', 'turn_completed']);
+const TURN_FAILURE_EVENT_KINDS = new Set(['turn_failed', 'turn_interrupted']);
+const OPERATOR_ATTENTION_EVENT_KINDS = new Set([
+  'approval_requested',
+  'approval_granted',
+  'approval_denied',
+  'intervention_requested',
+  'intervention_resolved',
+]);
+
+export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
+  const kind = event.kind ?? '';
+  if (kind === 'session_reset_boundary') {
     return 'boundary';
+  }
+  if (USER_MESSAGE_EVENT_KINDS.has(kind)) {
+    return 'user';
+  }
+  if (ASSISTANT_MESSAGE_EVENT_KINDS.has(kind)) {
+    return 'assistant';
+  }
+  if (TOOL_CALL_EVENT_KINDS.has(kind)) {
+    return 'tool';
+  }
+  if (TURN_FAILURE_EVENT_KINDS.has(kind)) {
+    return 'turn-failure';
+  }
+  if (TURN_BOUNDARY_EVENT_KINDS.has(kind)) {
+    return 'turn';
+  }
+  if (OPERATOR_ATTENTION_EVENT_KINDS.has(kind)) {
+    return 'approval';
   }
   if (event.stream === 'system') {
     return 'system';
   }
   if (event.stream === 'session') {
-    if ((event.kind ?? '').startsWith('approval_')) {
+    if (kind.startsWith('approval_') || kind.startsWith('intervention_')) {
       return 'approval';
     }
-    if ((event.kind ?? '').endsWith('_published')) {
+    if (kind.endsWith('_published')) {
       return 'publication';
     }
     return 'session';
@@ -2066,6 +2479,31 @@ function renderTimelineRowText(row: TimelineRow, timelineViewerEnabled: boolean)
     return renderAnsiFragments(row.text);
   }
   return row.text;
+}
+
+function getTimelineRowTreatmentLabel(row: TimelineRow): string | null {
+  if (row.rowType === 'user') {
+    return 'User turn';
+  }
+  if (row.rowType === 'assistant') {
+    return 'Assistant output';
+  }
+  if (row.rowType === 'tool') {
+    if (row.kind === 'tool_call_failed') return 'Tool failed';
+    if (row.kind === 'tool_call_completed') return 'Tool completed';
+    if (row.kind === 'tool_call_output') return 'Tool output';
+    return 'Tool call';
+  }
+  if (row.rowType === 'approval') {
+    return row.kind?.startsWith('intervention_') ? 'Operator intervention' : 'Operator approval';
+  }
+  if (row.rowType === 'turn-failure') {
+    return row.kind === 'turn_interrupted' ? 'Turn interrupted' : 'Turn failed';
+  }
+  if (row.rowType === 'turn') {
+    return row.kind === 'turn_completed' ? 'Turn completed' : 'Turn started';
+  }
+  return null;
 }
 
 function getCopyableRowText(row: TimelineRow): string {
@@ -2503,8 +2941,15 @@ function renderTimelineRow(
       key={row.id}
       className={rowClasses}
     >
-      {timelineViewerEnabled && row.kind ? (
-        <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+      {timelineViewerEnabled && (row.kind || getTimelineRowTreatmentLabel(row)) ? (
+        <div className="live-logs-row-heading">
+          {getTimelineRowTreatmentLabel(row) ? (
+            <span className="live-logs-treatment-label">{getTimelineRowTreatmentLabel(row)}</span>
+          ) : null}
+          {row.kind ? (
+            <span className="live-logs-kind-chip">{row.kind.replaceAll('_', ' ')}</span>
+          ) : null}
+        </div>
       ) : null}
       <div
         className="live-logs-row-text"
@@ -3276,6 +3721,7 @@ function LiveLogsPanel({
     enabled: !!agentRunId && expanded,
     // The summary indicates stream availability; refetch occasionally if not terminal
     staleTime: 1000 * 10,
+    refetchOnMount: 'always',
   });
 
   const historyQuery = useQuery({
@@ -3937,24 +4383,34 @@ function RecoveryEvidencePanel({
 function SessionContinuityPanel({
   apiBase,
   agentRunId,
-  targetRuntime,
   isTerminal,
-  onCancel,
   invalidateWorkflowDetail,
-  cancelBusy,
   routes,
 }: {
   apiBase: string;
   agentRunId: string;
-  targetRuntime: string | null | undefined;
   isTerminal: boolean;
-  onCancel: () => void;
   invalidateWorkflowDetail: () => void;
-  cancelBusy: boolean;
   routes: AgentRunRouteTemplates;
 }) {
   const queryClient = useQueryClient();
-  const sessionId = deriveCodexSessionId(agentRunId, targetRuntime);
+  const summaryQuery = useQuery({
+    queryKey: ['observability-summary', agentRunId],
+    queryFn: () => fetchObservabilitySummary(apiBase, agentRunId, routes.observabilitySummary),
+    enabled: !!agentRunId,
+    staleTime: 1000 * 10,
+    refetchInterval: (query) => {
+      if (isTerminal || !query.state.data?.sessionSnapshot) {
+        return false;
+      }
+      return SESSION_PROJECTION_POLL_MS;
+    },
+    retry: false,
+  });
+  const summary = summaryQuery.data;
+  const sessionSnapshot = summary?.sessionSnapshot ?? null;
+  const interventionCapabilities = summary?.interventionCapabilities ?? InterventionCapabilitiesSchema.parse({});
+  const sessionId = sessionSnapshot?.sessionId ?? null;
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
 
@@ -3964,7 +4420,7 @@ function SessionContinuityPanel({
       if (!sessionId) return Promise.resolve(null);
       return fetchArtifactSessionProjection(apiBase, agentRunId, sessionId, routes.artifactSession);
     },
-    enabled: Boolean(agentRunId && sessionId),
+    enabled: Boolean(agentRunId && sessionId && summaryQuery.isSuccess),
     refetchInterval: (query) => {
       return getSessionProjectionRefetchInterval(
         isTerminal,
@@ -3976,7 +4432,7 @@ function SessionContinuityPanel({
   });
 
   const controlMutation = useMutation({
-    mutationFn: async (body: { action: 'send_follow_up' | 'clear_session'; message?: string; reason?: string }) => {
+    mutationFn: async (body: { action: 'send_follow_up' | 'clear_session' | 'interrupt_turn' | 'cancel_session'; message?: string; reason?: string }) => {
       if (!sessionId) throw new Error('Managed session is unavailable.');
       return controlArtifactSession(apiBase, agentRunId, sessionId, body, routes.artifactSessionControl);
     },
@@ -3986,6 +4442,7 @@ function SessionContinuityPanel({
         ['agent-run-session-projection', agentRunId, sessionId],
         result.projection,
       );
+      void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
       invalidateWorkflowDetail();
       if (result.action === 'send_follow_up') {
         setFollowUpMessage('');
@@ -3994,6 +4451,17 @@ function SessionContinuityPanel({
     onError: (error: Error) => setPanelError(error.message),
   });
 
+  if (summaryQuery.isLoading) {
+    return (
+      <section className="stack">
+        <h3>Session Continuity</h3>
+        <p className="small">Loading session capabilities...</p>
+      </section>
+    );
+  }
+  if (summaryQuery.isError) {
+    return null;
+  }
   if (!sessionId) {
     return null;
   }
@@ -4032,7 +4500,11 @@ function SessionContinuityPanel({
     ['Latest Control', projection.latest_control_event_ref?.artifact_id ?? null],
     ['Latest Reset', projection.latest_reset_boundary_ref?.artifact_id ?? null],
   ].filter(([, artifactId]) => artifactId !== null) as Array<[string, string]>;
-  const busy = controlMutation.isPending || cancelBusy;
+  const busy = controlMutation.isPending;
+  const canSendFollowUp = Boolean(sessionId && interventionCapabilities.sendFollowUp && !isTerminal);
+  const canClearSession = Boolean(sessionId && interventionCapabilities.clearSession && !isTerminal);
+  const canInterruptTurn = Boolean(sessionId && interventionCapabilities.interruptTurn && !isTerminal);
+  const canCancelSession = Boolean(sessionId && interventionCapabilities.cancelSession && !isTerminal);
 
   const submitFollowUp = () => {
     const message = followUpMessage.trim();
@@ -4048,6 +4520,20 @@ function SessionContinuityPanel({
     setPanelError(null);
     controlMutation.mutate({
       action: 'clear_session',
+    });
+  };
+
+  const interruptTurn = () => {
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'interrupt_turn',
+    });
+  };
+
+  const cancelSession = () => {
+    setPanelError(null);
+    controlMutation.mutate({
+      action: 'cancel_session',
     });
   };
 
@@ -4109,33 +4595,49 @@ function SessionContinuityPanel({
           onChange={(event) => setFollowUpMessage(event.target.value)}
           rows={3}
           placeholder="Send a follow-up turn to the managed Codex session."
-          disabled={busy || isTerminal}
+          disabled={busy || !canSendFollowUp}
         />
         <div className="actions">
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy || isTerminal || !followUpMessage.trim()}
-            onClick={submitFollowUp}
-          >
-            Send follow-up
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy || isTerminal}
-            onClick={clearSession}
-          >
-            Clear / Reset
-          </button>
-          <button
-            type="button"
-            className="queue-action queue-action-danger"
-            disabled={busy || isTerminal}
-            onClick={onCancel}
-          >
-            Cancel Execution
-          </button>
+          {canSendFollowUp ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || !followUpMessage.trim()}
+              onClick={submitFollowUp}
+            >
+              Send follow-up
+            </button>
+          ) : null}
+          {canClearSession ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={clearSession}
+            >
+              Clear / Reset
+            </button>
+          ) : null}
+          {canInterruptTurn ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={interruptTurn}
+            >
+              Interrupt turn
+            </button>
+          ) : null}
+          {canCancelSession ? (
+            <button
+              type="button"
+              className="queue-action queue-action-danger"
+              disabled={busy}
+              onClick={cancelSession}
+            >
+              Cancel session
+            </button>
+          ) : null}
         </div>
       </div>
     </section>
@@ -4842,6 +5344,10 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
   const taskId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
   const encodedTaskId = taskId ? encodeURIComponent(taskId) : null;
   const search = useMemo(() => new URLSearchParams(window.location.search), []);
+  const expandToFullListHref = useMemo(
+    () => workflowListHrefFromContext(search, { markDetailReturn: true }),
+    [search],
+  );
   const detailSubroute = workflowDetailSubrouteFromPath(window.location.pathname);
   const sourceTemporal = search.get('source') === 'temporal';
 
@@ -5595,6 +6101,9 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
           </div>
         </div>
         <div className="toolbar-controls">
+          <a className="button secondary" href={expandToFullListHref}>
+            Expand to full list
+          </a>
           <span className="small">
             Live updates enabled. Polling every {Math.round(detailPoll / 1000)}s
           </span>
@@ -6432,15 +6941,12 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </>
           ) : null}
 
-          {detailSubroute === 'steps' && resolvedAgentRunId ? (
+          {detailSubroute === 'steps' && actionsOn && resolvedAgentRunId ? (
             <SessionContinuityPanel
               apiBase={payload.apiBase}
               agentRunId={resolvedAgentRunId}
-              targetRuntime={execution.targetRuntime}
               isTerminal={isTerminalExecution}
-              onCancel={onCancel}
               invalidateWorkflowDetail={invalidate}
-              cancelBusy={cancelMutation.isPending}
               routes={agentRunRoutes}
             />
           ) : null}
@@ -6524,4 +7030,23 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
     </div>
   );
 }
-export default WorkflowDetailPage;
+
+export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) {
+  const cfg = readDashboardConfig(payload);
+  const isDesktop = useWorkflowWorkspaceDesktop();
+  const workflowIdMatch = typeof window !== 'undefined'
+    ? window.location.pathname.match(/^\/workflows\/([^/]+)(?:\/(?:steps|artifacts|runs|debug))?$/)
+    : null;
+  const workflowId = decodeTaskPathSegment(workflowIdMatch ? workflowIdMatch[1] : null);
+  const search = useMemo(() => new URLSearchParams(typeof window !== 'undefined' ? window.location.search : ''), []);
+  const workspaceShellEnabled = cfg?.features?.temporalDashboard?.workspaceShellEnabled !== false;
+  const listEnabled = cfg?.features?.temporalDashboard?.listEnabled !== false;
+
+  if (workspaceShellEnabled && listEnabled && isDesktop && workflowId) {
+    return <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />;
+  }
+
+  return <WorkflowDetailPage payload={payload} />;
+}
+
+export default WorkflowDetailEntrypoint;

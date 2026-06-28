@@ -2,7 +2,7 @@
 //
 // This utility is the single source of truth for operator-tunable dashboard
 // preferences (workflow list columns/density, create-page expert mode default,
-// workflow detail debug visibility, and related defaults). Preferences are
+// workflow detail debug visibility/sidebar layout, and related defaults). Preferences are
 // stored locally in `localStorage` under one versioned key and are always read
 // back through a validation/sanitization pass so a corrupt, partial, or
 // hand-edited blob can never crash the dashboard — invalid values silently fall
@@ -68,6 +68,8 @@ export type DashboardPreferences = {
   createExpertMode: boolean;
   /** Whether diagnostic debug fields are surfaced on the workflow detail page. */
   debugFieldsVisible: boolean;
+  /** Whether the desktop workflow detail sidebar is collapsed on reload. */
+  workflowWorkspaceSidebarCollapsed: boolean;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;
   /** Preferred runtime default for the create page, where safe. */
@@ -92,6 +94,7 @@ export const DEFAULT_DASHBOARD_PREFERENCES: DashboardPreferences = {
   liveUpdatesEnabled: true,
   createExpertMode: false,
   debugFieldsVisible: true,
+  workflowWorkspaceSidebarCollapsed: false,
   preferredDetailTab: 'overview',
   defaultRuntime: '',
   defaultProviderProfile: '',
@@ -180,6 +183,10 @@ export function sanitizeDashboardPreferences(value: unknown): DashboardPreferenc
     debugFieldsVisible: sanitizeBoolean(
       value.debugFieldsVisible,
       DEFAULT_DASHBOARD_PREFERENCES.debugFieldsVisible,
+    ),
+    workflowWorkspaceSidebarCollapsed: sanitizeBoolean(
+      value.workflowWorkspaceSidebarCollapsed,
+      DEFAULT_DASHBOARD_PREFERENCES.workflowWorkspaceSidebarCollapsed,
     ),
     preferredDetailTab: sanitizeDetailTab(value.preferredDetailTab),
     defaultRuntime: sanitizeString(value.defaultRuntime),

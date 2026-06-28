@@ -70,10 +70,13 @@ def _validation_error(exc: SystemOperationValidationError) -> HTTPException:
 @router.get("/worker-pause", response_model=WorkerPauseSnapshotResponse)
 async def get_worker_pause_snapshot(
     session: AsyncSession = Depends(get_async_session),
+    temporal_service: TemporalExecutionService = Depends(_get_temporal_execution_service),
     user: User = Depends(get_current_user()),
 ) -> WorkerPauseSnapshotResponse:
     _require_operation_permission(user, "operations.read")
-    return await SystemOperationsService(session).snapshot()
+    return await SystemOperationsService(
+        session, temporal_service=temporal_service
+    ).snapshot()
 
 
 @router.post("/worker-pause", response_model=WorkerPauseSnapshotResponse)

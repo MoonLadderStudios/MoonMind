@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     MoonMindWorkflowState,
+    SettingsOverride,
     TemporalArtifact,
     TemporalArtifactStatus,
     TemporalExecutionCanonicalRecord,
@@ -230,9 +231,17 @@ NON_TERMINAL_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.FINALIZING,
 }
 
-OPERATOR_SIGNAL_ALLOWED_STATES: set[MoonMindWorkflowState] = (
-    NON_TERMINAL_STATES | {MoonMindWorkflowState.AWAITING_SLOT}
-)
+OPERATOR_SIGNAL_ALLOWED_STATES: set[MoonMindWorkflowState] = {
+    MoonMindWorkflowState.SCHEDULED,
+    MoonMindWorkflowState.INITIALIZING,
+    MoonMindWorkflowState.WAITING_ON_DEPENDENCIES,
+    MoonMindWorkflowState.PLANNING,
+    MoonMindWorkflowState.AWAITING_SLOT,
+    MoonMindWorkflowState.EXECUTING,
+    MoonMindWorkflowState.PROPOSALS,
+    MoonMindWorkflowState.AWAITING_EXTERNAL,
+    MoonMindWorkflowState.FINALIZING,
+}
 
 _RUNNING_STATES: set[MoonMindWorkflowState] = {
     MoonMindWorkflowState.PLANNING,
@@ -383,17 +392,29 @@ class TemporalExecutionService:
         Used by API guard to prevent new workflow submissions (DOC-REQ-001/004/005).
         """
 
-        # TODO(phase-4): Implement Temporal-native system pause check.
-        # AgentQueueRepository was removed in Phase 3.5 queue backend removal.
-        return False
+        system_id = UUID("00000000-0000-0000-0000-000000000000")
+        result = await self._session.execute(
+            select(SettingsOverride.value_json).where(
+                SettingsOverride.scope == "workspace",
+                SettingsOverride.workspace_id == system_id,
+                SettingsOverride.user_id == system_id,
+                SettingsOverride.key == "operations.workers.pause_state",
+            )
+        )
+        payload = result.scalar_one_or_none()
+        return bool(isinstance(payload, Mapping) and payload.get("workersPaused"))
 
     async def send_quiesce_pause_signal(self) -> int:
         """Send a Quiesce pause signal to all running workflows (DOC-REQ-003, FR-007)."""
-        return await self._client_adapter.send_batch_pause_signal()
+        return await self._client_adapter.send_batch_pause_update()
 
     async def send_quiesce_resume_signal(self) -> int:
         """Send a Quiesce resume signal to all paused workflows (DOC-REQ-003, FR-010)."""
-        return await self._client_adapter.send_batch_resume_signal()
+        return await self._client_adapter.send_batch_resume_update()
+
+    async def get_drain_metrics(self) -> dict[str, int]:
+        """Return Temporal Visibility counts for worker-pause drain status."""
+        return await self._client_adapter.get_drain_metrics()
 
     async def _validate_dependencies(
         self,

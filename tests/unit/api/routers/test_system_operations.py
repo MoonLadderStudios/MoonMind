@@ -23,6 +23,7 @@ class FakeTemporalService:
     def __init__(self) -> None:
         self.pause_calls = 0
         self.resume_calls = 0
+        self.metrics = {"queued": 0, "running": 0, "stale_running": 0}
 
     async def send_quiesce_pause_signal(self) -> int:
         self.pause_calls += 1
@@ -31,6 +32,9 @@ class FakeTemporalService:
     async def send_resume_signal(self) -> int:
         self.resume_calls += 1
         return 1
+
+    async def get_drain_metrics(self) -> dict[str, int]:
+        return dict(self.metrics)
 
 
 @pytest.fixture

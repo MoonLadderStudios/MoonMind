@@ -56,6 +56,7 @@ class OmnigentHttpClient:
         timeout_seconds: float = 60.0,
         stream_timeout_seconds: float | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base = str(base_url).rstrip("/")
         self._api_token = api_token
@@ -65,6 +66,7 @@ class OmnigentHttpClient:
             read=stream_timeout_seconds,
         )
         self._transport = transport
+        self._client = client
         self._redactor = SecretRedactor(
             secrets=[api_token],
             placeholder="[REDACTED]",
@@ -116,6 +118,22 @@ class OmnigentHttpClient:
 
     async def stream_events(self, session_id: str) -> AsyncIterator[dict[str, Any]]:
         path = f"/v1/sessions/{quote(session_id, safe='')}/stream"
+        if self._client is not None:
+            try:
+                async with self._client.stream(
+                    "GET",
+                    f"{self._base}{path}",
+                    headers=self._headers(accept="text/event-stream"),
+                ) as response:
+                    async for event in self._iter_stream_response(response):
+                        yield event
+            except httpx.HTTPError as exc:
+                raise OmnigentClientError(
+                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    failure_class="integration_error",
+                ) from exc
+            return
+
         async with httpx.AsyncClient(
             timeout=self._stream_timeout,
             transport=self._transport,
@@ -126,21 +144,28 @@ class OmnigentHttpClient:
                     f"{self._base}{path}",
                     headers=self._headers(accept="text/event-stream"),
                 ) as response:
-                    if response.status_code < 200 or response.status_code >= 300:
-                        body = (await response.aread()).decode(
-                            "utf-8",
-                            errors="replace",
-                        )
-                        raise self._error_from_response(response.status_code, body)
-                    async for line in response.aiter_lines():
-                        event = parse_sse_line(line)
-                        if event is not None:
-                            yield event
+                    async for event in self._iter_stream_response(response):
+                        yield event
             except httpx.HTTPError as exc:
                 raise OmnigentClientError(
                     self._redact(f"Omnigent transport error: {exc!s}"),
                     failure_class="integration_error",
                 ) from exc
+
+    async def _iter_stream_response(
+        self,
+        response: httpx.Response,
+    ) -> AsyncIterator[dict[str, Any]]:
+        if response.status_code < 200 or response.status_code >= 300:
+            body = (await response.aread()).decode(
+                "utf-8",
+                errors="replace",
+            )
+            raise self._error_from_response(response.status_code, body)
+        async for line in response.aiter_lines():
+            event = parse_sse_line(line)
+            if event is not None:
+                yield event
 
     async def resolve_elicitation(
         self,
@@ -190,13 +215,34 @@ class OmnigentHttpClient:
     async def stop_session(self, session_id: str) -> dict[str, Any]:
         return await self.post_event(session_id, {"type": "stop_session"})
 
-    async def delete_session(self, session_id: str) -> dict[str, Any]:
+    async def delete_session(
+        self,
+        session_id: str,
+        *,
+        delete_branch: bool = False,
+    ) -> dict[str, Any]:
+        query = "?delete_branch=true" if delete_branch else "?delete_branch=false"
         return await self._request(
             "DELETE",
-            f"/v1/sessions/{quote(session_id, safe='')}",
+            f"/v1/sessions/{quote(session_id, safe='')}{query}",
         )
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        if self._client is not None:
+            try:
+                response = await self._client.request(
+                    method,
+                    f"{self._base}{path}",
+                    headers=self._headers(),
+                    **kwargs,
+                )
+            except httpx.HTTPError as exc:
+                raise OmnigentClientError(
+                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    failure_class="integration_error",
+                ) from exc
+            return self._parse_json_response(response)
+
         async with httpx.AsyncClient(
             timeout=self._timeout,
             transport=self._transport,
@@ -213,6 +259,9 @@ class OmnigentHttpClient:
                     self._redact(f"Omnigent transport error: {exc!s}"),
                     failure_class="integration_error",
                 ) from exc
+        return self._parse_json_response(response)
+
+    def _parse_json_response(self, response: httpx.Response) -> dict[str, Any]:
         if response.status_code < 200 or response.status_code >= 300:
             raise self._error_from_response(response.status_code, response.text)
         if not response.content:
@@ -226,6 +275,22 @@ class OmnigentHttpClient:
         return {"body": redact_sensitive_payload(parsed)}
 
     async def _request_bytes(self, method: str, path: str) -> bytes:
+        if self._client is not None:
+            try:
+                response = await self._client.request(
+                    method,
+                    f"{self._base}{path}",
+                    headers=self._headers(),
+                )
+            except httpx.HTTPError as exc:
+                raise OmnigentClientError(
+                    self._redact(f"Omnigent transport error: {exc!s}"),
+                    failure_class="integration_error",
+                ) from exc
+            if response.status_code < 200 or response.status_code >= 300:
+                raise self._error_from_response(response.status_code, response.text)
+            return response.content
+
         async with httpx.AsyncClient(
             timeout=self._timeout,
             transport=self._transport,
@@ -259,7 +324,7 @@ class OmnigentHttpClient:
             self._redact(f"Omnigent HTTP {status_code}"),
             status_code=status_code,
             response_body=response_body,
-            failure_class="integration_error",
+            failure_class=_failure_class_for_status(status_code),
         )
 
     def _redact(self, value: str) -> str:
@@ -303,6 +368,12 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
             for item in payload
         ]
     return payload
+
+
+def _failure_class_for_status(status_code: int) -> str:
+    if status_code in {400, 404, 409, 422}:
+        return "user_error"
+    return "integration_error"
 
 
 __all__ = [

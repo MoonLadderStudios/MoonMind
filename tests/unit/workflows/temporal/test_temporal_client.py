@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.workflows.temporal.client import TemporalClientAdapter
+from temporalio.client import WorkflowUpdateStage
 from moonmind.workflows.temporal import client as temporal_client_module
 from moonmind.workflows.temporal.data_converter import MOONMIND_TEMPORAL_DATA_CONVERTER
 from moonmind.workflows.temporal.hard_switch_cutover import (
@@ -126,10 +127,10 @@ async def test_get_drain_metrics_empty_namespace(adapter):
 
     assert result == {"running": 0, "queued": 0, "stale_running": 0}
 
-# ---- send_batch_pause_signal / send_batch_resume_signal ----
+# ---- send_batch_pause_update / send_batch_resume_update ----
 
-async def test_send_batch_pause_signal_sends_to_all(adapter):
-    """Batch pause signal should signal each running workflow with 'pause'."""
+async def test_send_batch_pause_update_starts_all_with_canonical_pause(adapter):
+    """Batch pause should update each running workflow with 'Pause'."""
 
     executions = [_FakeWorkflowExecution(f"wf-{i}") for i in range(3)]
     mock_handles = {}
@@ -144,14 +145,19 @@ async def test_send_batch_pause_signal_sends_to_all(adapter):
     adapter._client.list_workflows = _fake_list
     adapter._client.get_workflow_handle = lambda wid: mock_handles[wid]
 
-    signaled = await adapter.send_batch_pause_signal()
+    signaled = await adapter.send_batch_pause_update()
 
     assert signaled == 3
     for handle in mock_handles.values():
-        handle.signal.assert_awaited_once_with("pause")
+        handle.start_update.assert_awaited_once()
+        assert handle.start_update.await_args.args == ("Pause",)
+        assert handle.start_update.await_args.kwargs["wait_for_stage"] is (
+            WorkflowUpdateStage.ACCEPTED
+        )
+        handle.execute_update.assert_not_awaited()
 
-async def test_send_batch_resume_signal_sends_to_all(adapter):
-    """Batch resume signal should signal each running workflow with 'resume'."""
+async def test_send_batch_resume_update_starts_all_with_canonical_resume(adapter):
+    """Batch resume should update each running workflow with 'Resume'."""
 
     executions = [_FakeWorkflowExecution("wf-1")]
     mock_handle = AsyncMock()
@@ -163,13 +169,18 @@ async def test_send_batch_resume_signal_sends_to_all(adapter):
     adapter._client.list_workflows = _fake_list
     adapter._client.get_workflow_handle = lambda wid: mock_handle
 
-    signaled = await adapter.send_batch_resume_signal()
+    signaled = await adapter.send_batch_resume_update()
 
     assert signaled == 1
-    mock_handle.signal.assert_awaited_once_with("resume")
+    mock_handle.start_update.assert_awaited_once()
+    assert mock_handle.start_update.await_args.args == ("Resume",)
+    assert mock_handle.start_update.await_args.kwargs["wait_for_stage"] is (
+        WorkflowUpdateStage.ACCEPTED
+    )
+    mock_handle.execute_update.assert_not_awaited()
 
-async def test_send_batch_signal_skips_failed_workflows(adapter):
-    """Signal dispatch should continue when individual workflows fail."""
+async def test_send_batch_update_skips_failed_workflows(adapter):
+    """Update dispatch should continue when individual workflows fail."""
 
     executions = [
         _FakeWorkflowExecution("wf-ok"),
@@ -178,7 +189,7 @@ async def test_send_batch_signal_skips_failed_workflows(adapter):
     ]
     ok_handle = AsyncMock()
     fail_handle = AsyncMock()
-    fail_handle.signal = AsyncMock(side_effect=RuntimeError("gone"))
+    fail_handle.start_update = AsyncMock(side_effect=RuntimeError("gone"))
     ok2_handle = AsyncMock()
 
     handles = {"wf-ok": ok_handle, "wf-fail": fail_handle, "wf-ok2": ok2_handle}
@@ -190,9 +201,11 @@ async def test_send_batch_signal_skips_failed_workflows(adapter):
     adapter._client.list_workflows = _fake_list
     adapter._client.get_workflow_handle = lambda wid: handles[wid]
 
-    signaled = await adapter.send_batch_pause_signal()
+    signaled = await adapter.send_batch_pause_update()
 
     # 2 succeeded, 1 failed
     assert signaled == 2
-    ok_handle.signal.assert_awaited_once_with("pause")
-    ok2_handle.signal.assert_awaited_once_with("pause")
+    ok_handle.start_update.assert_awaited_once()
+    assert ok_handle.start_update.await_args.args == ("Pause",)
+    ok2_handle.start_update.assert_awaited_once()
+    assert ok2_handle.start_update.await_args.args == ("Pause",)
