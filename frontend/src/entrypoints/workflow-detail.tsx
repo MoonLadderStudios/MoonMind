@@ -88,7 +88,7 @@ function workflowWorkspaceRowId(row: WorkflowWorkspaceRow): string {
 }
 
 function workflowWorkspaceRowUpdatedAt(row: WorkflowWorkspaceRow): string | null | undefined {
-  return row.closedAt || row.updatedAt || row.scheduledFor || row.createdAt;
+  return row.closedAt || row.scheduledFor || row.updatedAt || row.createdAt;
 }
 
 function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorkspaceRow {
@@ -423,7 +423,7 @@ function WorkflowWorkspaceShell({
     enabled: Boolean(workflowId),
     refetchInterval: (query) => (
       !isExecutionTerminal(query.state.data)
-        ? listPoll
+        ? (cfg?.pollIntervalsMs?.detail ?? 2000)
         : false
     ),
   });

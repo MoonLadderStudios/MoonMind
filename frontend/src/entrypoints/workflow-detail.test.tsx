@@ -521,6 +521,7 @@ describe('Workflow Detail Entrypoint', () => {
       temporalStatus: 'running',
       createdAt: '2026-04-09T00:00:00Z',
       updatedAt: 'detail-updated-marker',
+      scheduledFor: 'scheduled-marker',
       actions: {},
       relatedRuns: [],
     };
@@ -666,7 +667,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
     expect(within(pinned).getByLabelText('executing')).toBeTruthy();
-    expect(within(pinned).getByText('detail-updated-marker')).toBeTruthy();
+    expect(within(pinned).getByText('scheduled-marker')).toBeTruthy();
+    expect(within(pinned).queryByText('detail-updated-marker')).toBeNull();
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
