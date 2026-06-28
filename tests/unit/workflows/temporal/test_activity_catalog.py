@@ -80,6 +80,10 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         == INTEGRATIONS_TASK_QUEUE
     )
     assert (
+        catalog.resolve_activity("integration.omnigent.execute").task_queue
+        == INTEGRATIONS_TASK_QUEUE
+    )
+    assert (
         catalog.resolve_activity("workload.run").task_queue
         == AGENT_RUNTIME_TASK_QUEUE
     )

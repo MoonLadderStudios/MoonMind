@@ -2015,7 +2015,7 @@ tbody tr:hover {
   width: 30%;
 }
 
-.queue-table-column-next-action {
+.queue-table-column-progress {
   width: 18%;
 }
 
@@ -2037,7 +2037,7 @@ tbody tr:hover {
 
 .queue-table-cell-compact,
 .queue-table-cell-date,
-.queue-table-cell-next-action {
+.queue-table-cell-progress {
   font-size: 0.82rem;
 }
 
@@ -2059,7 +2059,7 @@ tbody tr:hover {
 
 .queue-table-wrapper[data-density='compact'] .queue-table-cell-compact,
 .queue-table-wrapper[data-density='compact'] .queue-table-cell-date,
-.queue-table-wrapper[data-density='compact'] .queue-table-cell-next-action {
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-progress {
   font-size: 0.76rem;
 }
 
@@ -2227,12 +2227,29 @@ tbody tr:hover {
   word-break: break-word;
 }
 
-.workflow-list-next-action-empty {
+.workflow-list-status-supplement {
+  margin-top: 0.2rem;
+  color: rgb(var(--mm-muted));
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.workflow-list-progress {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: rgb(var(--mm-ink));
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.workflow-list-progress:empty::before {
+  content: '—';
   color: rgb(var(--mm-muted));
 }
 
-.workflow-list-next-action-item + .workflow-list-next-action-item {
-  margin-top: 0.15rem;
+.queue-table-cell-progress .workflow-list-progress {
+  word-break: break-word;
 }
 
 .data-table-slab {
@@ -2468,23 +2485,6 @@ tr[data-proposal-id].proposal-consuming td {
 .queue-card-header > .queue-card-status {
   flex-shrink: 0;
   max-width: 100%;
-}
-
-.queue-card-next-action {
-  margin: 0.4rem 0 0;
-  display: grid;
-  gap: 0.15rem;
-}
-
-.queue-card-next-action-label {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: rgb(var(--mm-muted));
-}
-
-.queue-card-next-action-item {
-  margin: 0;
-  font-weight: 500;
 }
 
 .queue-card-title {
@@ -4501,6 +4501,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-weight: 750;
 }
 
+.queue-step-attachment-add-button.queue-step-context-menu-button > span {
+  display: block;
+  line-height: 1;
+  transform: translateY(-0.04em);
+}
+
 .queue-step-context-menu-popover {
   position: absolute;
   top: calc(100% + 0.35rem);
@@ -4639,17 +4645,6 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   line-height: 1.35;
 }
 
-.queue-step-capability-chip-remove {
-  width: 1.1rem;
-  height: 1.1rem;
-  border-radius: 999px;
-}
-
-.queue-step-capability-chip-remove svg {
-  width: 0.68rem;
-  height: 0.68rem;
-}
-
 .queue-step-attachment-add-button {
   display: inline-grid;
   place-items: center;
@@ -4733,15 +4728,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-attachment-chip-remove {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 0.95rem;
+  height: 0.95rem;
   border-radius: 999px;
   flex: 0 0 auto;
 }
 
 .queue-step-attachment-chip-remove svg {
-  width: 0.68rem;
-  height: 0.68rem;
+  width: 0.58rem;
+  height: 0.58rem;
 }
 
 :is(.queue-step-attachments-list, #queue-dependency-list) li {
@@ -4766,6 +4761,17 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 :is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-icon-button svg {
   width: 1rem;
   height: 1rem;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-capability-chip-remove {
+  width: 0.95rem;
+  height: 0.95rem;
+  border-radius: 999px;
+}
+
+:is(.queue-step-attachments-list, #queue-dependency-list) .queue-step-capability-chip-remove svg {
+  width: 0.58rem;
+  height: 0.58rem;
 }
 
 .queue-attachment-preview {

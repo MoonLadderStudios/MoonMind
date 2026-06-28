@@ -113,7 +113,6 @@ type WorkflowDialogKind =
   | 'rename'
   | 'resume-from-failed-step'
   | 'recover-from-selected-step'
-  | 'bypass-dependencies'
   | 'cancel'
   | 'force-cancel'
   | 'reject'
@@ -5365,7 +5364,18 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
 
   const onBypassDependencies = () => {
     setActionError(null);
-    setActiveWorkflowDialog('bypass-dependencies');
+    setActionNotice(null);
+    signalMutation.mutate(
+      {
+        signalName: 'BypassDependencies',
+        payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
+      },
+      {
+        onSuccess: () => {
+          setActionNotice('Dependency wait bypass was requested.');
+        },
+      },
+    );
   };
 
   const onCancel = () => {
@@ -5407,7 +5417,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       mode: 'detail',
       workflowId,
     });
-    updateMutation.mutate({ updateName: 'RequestRerun' });
+    updateMutation.mutate(
+      { updateName: 'RequestRerun' },
+      {
+        onSuccess: () => {
+          setActionNotice('Rerun was requested and the latest execution view is ready.');
+        },
+      },
+    );
   };
   const canCreateRemediation = Boolean(execution && isRemediationEligibleTarget(execution));
   // The remediation mode/authority/action-policy controls only render on the Artifacts
@@ -5530,15 +5547,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         break;
       case 'recover-from-selected-step':
         selectedStepRecoveryMutation.mutate(undefined, closeOnSuccess);
-        break;
-      case 'bypass-dependencies':
-        signalMutation.mutate(
-          {
-            signalName: 'BypassDependencies',
-            payload: { reason: value || 'Dependency wait bypassed by operator from the dashboard.' },
-          },
-          closeOnSuccess,
-        );
         break;
       case 'cancel':
         cancelMutation.mutate(
@@ -5682,23 +5690,6 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
               : 'selected step is not eligible'
         }
         error={activeWorkflowDialog === 'recover-from-selected-step' ? actionError : null}
-        onCancel={closeWorkflowDialog}
-        onConfirm={confirmWorkflowDialog}
-      />
-      <DashboardActionDialog
-        open={activeWorkflowDialog === 'bypass-dependencies'}
-        title="Bypass dependencies"
-        subject={workflowDialogSubject}
-        compactId={workflowDialogId}
-        consequence="Bypass dependency waiting for this workflow. Downstream work may proceed before prerequisites finish."
-        valueLabel="Reason"
-        valuePlaceholder="Dependency wait bypassed by operator from the dashboard."
-        valueMultiline
-        confirmLabel={signalMutation.isPending ? 'Bypassing' : 'Bypass dependencies'}
-        confirmPending={signalMutation.isPending}
-        danger
-        disabledReason={actionDisabledReason('canBypassDependencies')}
-        error={activeWorkflowDialog === 'bypass-dependencies' ? actionError : null}
         onCancel={closeWorkflowDialog}
         onConfirm={confirmWorkflowDialog}
       />

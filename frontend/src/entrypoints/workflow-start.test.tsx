@@ -3969,14 +3969,15 @@ describe.skip("Task Create Entrypoint", () => {
         ([url, init]) => String(url) === "/api/executions" && init?.method === "POST",
       ),
     ).toBe(false);
-    await waitFor(() => {
-      expect(navigateTo).toHaveBeenCalledWith(
-        "/workflows/mm%3Arerun-created?source=temporal",
-      );
-    });
+    expect(navigateTo).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Rerun was requested and the latest execution view is ready."),
+    ).toBeTruthy();
+    expect(screen.getByRole("status").className).toContain("notice");
+    expect(screen.getByRole("status").className).toContain("ok");
     expect(
       window.sessionStorage.getItem("moonmind.temporalTaskEditing.notice"),
-    ).toBe("Rerun was requested and the latest execution view is ready.");
+    ).toBeNull();
   });
 
   it("submits exact terminal rerun without task or input mutation fields when unchanged", async () => {
@@ -16494,6 +16495,7 @@ describe("Task Create governed Tool authoring", () => {
     const addToStep = within(step).getByRole("button", {
       name: "Add to Step 1",
     });
+    expect(addToStep.getAttribute("title")).toBe("Add files or capabilities");
 
     fireEvent.click(addToStep);
     const menu = within(step).getByRole("menu", { name: "Add to step" });
