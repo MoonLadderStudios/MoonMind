@@ -7,6 +7,8 @@ import hashlib
 import inspect
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import suppress
 from typing import Any
 
 import httpx
@@ -133,6 +135,14 @@ def normalize_omnigent_observation(payload: dict[str, Any]) -> str | None:
     session = payload.get("session")
     if isinstance(session, dict) and status is None:
         status = session.get("status")
+    response = payload.get("response")
+    if isinstance(response, dict) and status is None:
+        status = response.get("status")
+    data = payload.get("data")
+    if isinstance(data, dict) and status is None:
+        data_response = data.get("response")
+        if isinstance(data_response, dict):
+            status = data_response.get("status")
     if status is None:
         return None
 
@@ -267,6 +277,39 @@ async def _periodic_stream_heartbeat(
         )
 
 
+async def _enqueue_stream_events(
+    *,
+    client: OmnigentHttpClient,
+    session_id: str,
+    queue: asyncio.Queue[dict[str, Any] | BaseException | None],
+) -> None:
+    try:
+        async for event in client.stream_events(session_id):
+            await queue.put(event)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await queue.put(exc)
+    finally:
+        await queue.put(None)
+
+
+async def _queued_stream_events(
+    *,
+    queue: asyncio.Queue[dict[str, Any] | BaseException | None],
+    stream_task: asyncio.Task[None],
+) -> AsyncIterator[dict[str, Any]]:
+    while True:
+        event = await queue.get()
+        if event is None:
+            break
+        if isinstance(event, BaseException):
+            raise event
+        yield event
+    if stream_task.done() and not stream_task.cancelled():
+        stream_task.result()
+
+
 def build_omnigent_result(
     *,
     request: AgentExecutionRequest,
@@ -398,7 +441,18 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 "moonmindFirstMessageDigest"
             ] = digest
             first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
+            stream_queue: asyncio.Queue[dict[str, Any] | BaseException | None] | None = None
+            stream_task: asyncio.Task[None] | None = None
             if not first_message_posted:
+                stream_queue = asyncio.Queue()
+                stream_task = asyncio.create_task(
+                    _enqueue_stream_events(
+                        client=client,
+                        session_id=session_id,
+                        queue=stream_queue,
+                    )
+                )
+                await asyncio.sleep(0)
                 await client.post_event(session_id, first_message)
                 _safe_heartbeat(
                     {
@@ -417,7 +471,15 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             )
             terminal_status: str | None = None
             try:
-                async for event in client.stream_events(session_id):
+                stream_events = (
+                    _queued_stream_events(
+                        queue=stream_queue,
+                        stream_task=stream_task,
+                    )
+                    if stream_queue is not None and stream_task is not None
+                    else client.stream_events(session_id)
+                )
+                async for event in stream_events:
                     event_count["value"] += 1
                     normalized = normalize_omnigent_observation(event)
                     if normalized in {"awaiting_approval", "intervention_requested"}:
@@ -448,6 +510,10 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 except asyncio.CancelledError:
                     # Expected after cancelling the periodic heartbeat task.
                     pass
+                if stream_task is not None and not stream_task.done():
+                    stream_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await stream_task
 
             final_snapshot = await client.get_session(session_id)
             if terminal_status is None:
@@ -486,13 +552,14 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
         )
     except OmnigentSessionStillRunningError:
         raise
-    except OmnigentClientError as exc:
+    except (OmnigentClientError, httpx.HTTPError) as exc:
+        status_code = exc.status_code if isinstance(exc, OmnigentClientError) else None
         return AgentRunResult(
             outputRefs=[],
             summary=_compact_summary(exc, fallback="Omnigent integration error"),
             diagnosticsRef="omnigent://diagnostics/transport-error",
             failureClass="integration_error",
-            providerErrorCode=str(exc.status_code or "omnigent_http_error"),
+            providerErrorCode=str(status_code or "omnigent_http_error"),
             metadata={"normalizedStatus": "failed", "providerName": "omnigent"},
         )
 

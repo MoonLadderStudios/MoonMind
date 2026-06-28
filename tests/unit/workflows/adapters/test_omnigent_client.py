@@ -81,6 +81,8 @@ async def test_omnigent_client_structures_and_redacts_non_2xx_diagnostics() -> N
 
 
 def test_parse_sse_line_redacts_payload_and_rejects_malformed_frames() -> None:
+    assert parse_sse_line("event: response.created") is None
+
     parsed = parse_sse_line(
         'data: {"type":"message","token":"sensitive-value"}'
     )

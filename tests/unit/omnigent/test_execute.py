@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
 from moonmind.omnigent.execute import (
@@ -40,6 +41,21 @@ def test_normalize_waiting_with_elicitation_is_internal_awaiting_approval() -> N
 def test_normalize_unknown_status_raises_contract_error() -> None:
     with pytest.raises(OmnigentContractError, match="Unsupported Omnigent status"):
         normalize_omnigent_observation({"session": {"status": "mystery"}})
+
+
+def test_normalize_nested_response_terminal_status() -> None:
+    assert (
+        normalize_omnigent_observation(
+            {"type": "response.output_item.done", "response": {"status": "completed"}}
+        )
+        == "completed"
+    )
+    assert (
+        normalize_omnigent_observation(
+            {"data": {"response": {"status": "failed"}}}
+        )
+        == "failed"
+    )
 
 
 def test_build_omnigent_result_is_compact_terminal_success() -> None:
@@ -137,6 +153,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
     class FakeClient:
         def __init__(self, **_: object) -> None:
             self.posted_events: list[dict[str, object]] = []
+            self.stream_started = False
             created_clients.append(self)
 
         async def list_agents(self) -> dict[str, object]:
@@ -153,11 +170,13 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
             payload: dict[str, object],
         ) -> dict[str, object]:
             assert session_id == "session-1"
+            assert self.stream_started is True
             self.posted_events.append(payload)
             return {"pending_id": "pending-1"}
 
         async def stream_events(self, session_id: str):
             assert session_id == "session-1"
+            self.stream_started = True
             yield {"session": {"status": "running"}}
             yield {"type": "response.completed"}
 
@@ -195,6 +214,41 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
     assert result.diagnostics_ref == "artifact://diagnostics"
     assert result.metadata["normalizedStatus"] == "completed"
     assert created_clients
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_reports_httpx_transport_errors(
+    monkeypatch,
+) -> None:
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            raise httpx.ConnectError("connection failed")
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        )
+    )
+
+    assert result.failure_class == "integration_error"
+    assert result.provider_error_code == "omnigent_http_error"
+    assert result.metadata["normalizedStatus"] == "failed"
 
 
 @pytest.mark.asyncio
