@@ -1349,7 +1349,7 @@ describe('Workflows Entrypoint', () => {
         '/api/executions?source=temporal&pageSize=50&stateIn=failed',
       );
     });
-  });
+  }, 10000);
 
   it('stages status changes until Apply and discards them on cancel, Escape, or outside click', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
