@@ -115,7 +115,9 @@ describe('WorkflowRowActionsMenu', () => {
         ([url]) => String(url) === '/api/executions/wf-123/update',
       );
       expect(rerunCall).toBeTruthy();
-      expect(JSON.parse(String((rerunCall?.[1] as RequestInit).body))).toMatchObject({
+      const requestBody = (rerunCall?.[1] as RequestInit | undefined)?.body;
+      expect(requestBody).toBeDefined();
+      expect(JSON.parse(requestBody as string)).toMatchObject({
         updateName: 'RequestRerun',
       });
     });
