@@ -613,7 +613,7 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(within(sidebar).getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
+    expect(await within(sidebar).findByText('<img src=x onerror=alert(1)>')).toBeTruthy();
     expect(within(sidebar).getByText('<b>owner/repo</b>')).toBeTruthy();
     expect(within(sidebar).getByText('Codex CLI')).toBeTruthy();
     expect(within(sidebar).getAllByText('<script>alert(1)</script>').length).toBeGreaterThan(0);
