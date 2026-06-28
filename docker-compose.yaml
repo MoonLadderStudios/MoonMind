@@ -829,6 +829,40 @@ services:
     networks:
       - local-network
 
+  omnigent:
+    profiles: ["omnigent-host"]
+    image: ${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}
+    command: ["omnigent", "server"]
+    expose:
+      - "8000"
+    volumes:
+      - omnigent-server-state:/data
+    networks:
+      - local-network
+    restart: unless-stopped
+
+  omnigent-host:
+    profiles: ["omnigent-host"]
+    image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
+    command: ["omnigent", "host"]
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+    env_file:
+      - .env
+    volumes:
+      - ./deploy/omnigent/host-config.yaml:/root/.omnigent/config.yaml:ro
+      - omnigent-host-state:/root/.omnigent/state
+      - ./omnigent_workspaces:/workspaces
+    depends_on:
+      omnigent:
+        condition: service_started
+    networks:
+      - local-network
+    restart: unless-stopped
+
   init-db:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     environment:
@@ -930,6 +964,8 @@ services:
 
 volumes:
   qdrant-storage:
+  omnigent-server-state:
+  omnigent-host-state:
   postgres-data:
   minio-data:
   workflow_workspaces:
