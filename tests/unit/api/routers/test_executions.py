@@ -861,10 +861,58 @@ def test_serialize_execution_includes_finish_summary_projection_fields():
         },
     }
 
-    payload = _serialize_execution(record).model_dump(by_alias=True)
+    payload = _serialize_execution(record).model_dump(by_alias=True, mode="json")
 
     assert payload["finishOutcomeCode"] == "NO_CHANGES"
     assert payload["finishSummary"] == record.finish_summary_json
+
+def test_serialize_execution_includes_bounded_progress_without_step_details() -> None:
+    record = _build_execution_record()
+    record.memo = {
+        **record.memo,
+        "progress": {
+            "total": 6,
+            "pending": 2,
+            "ready": 0,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "succeeded": 3,
+            "failed": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run test suite",
+            "updatedAt": "2026-04-04T18:11:15Z",
+            "steps": [{"title": "too much detail"}],
+            "logs": "must not leak",
+            "artifacts": ["artifact-ref"],
+            "stdout": "raw stdout",
+            "stderr": "raw stderr",
+            "diagnostics": {"providerPayload": "raw"},
+        },
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True, mode="json")
+
+    assert payload["progress"] == {
+        "total": 6,
+        "pending": 2,
+        "ready": 0,
+        "running": 1,
+        "awaitingExternal": 0,
+        "reviewing": 0,
+        "succeeded": 3,
+        "failed": 0,
+        "skipped": 0,
+        "canceled": 0,
+        "currentStepTitle": "Run test suite",
+        "updatedAt": "2026-04-04T18:11:15Z",
+    }
+
+def test_serialize_execution_nulls_progress_for_legacy_rows() -> None:
+    payload = _serialize_execution(_build_execution_record()).model_dump(by_alias=True)
+
+    assert payload["progress"] is None
 
 def _override_temporal_client(app: FastAPI) -> AsyncMock:
     client = AsyncMock()

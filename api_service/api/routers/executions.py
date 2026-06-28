@@ -1750,6 +1750,50 @@ def _normalize_merge_automation_visibility_payload(
         )
         return None
 
+def _bounded_execution_progress_from_sources(
+    *,
+    record: object,
+    memo: Mapping[str, object],
+    finish_summary: Mapping[str, object] | None,
+) -> ExecutionProgressModel | None:
+    sources = (
+        getattr(record, "progress", None),
+        memo.get("progress"),
+        finish_summary.get("progress") if isinstance(finish_summary, Mapping) else None,
+    )
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        payload = {
+            "total": source.get("total"),
+            "pending": source.get("pending"),
+            "ready": source.get("ready"),
+            "running": source.get("running"),
+            "awaitingExternal": source.get("awaitingExternal")
+            if source.get("awaitingExternal") is not None
+            else source.get("awaiting_external"),
+            "reviewing": source.get("reviewing"),
+            "succeeded": source.get("succeeded"),
+            "failed": source.get("failed"),
+            "skipped": source.get("skipped"),
+            "canceled": source.get("canceled"),
+            "currentStepTitle": source.get("currentStepTitle")
+            if source.get("currentStepTitle") is not None
+            else source.get("current_step_title"),
+            "updatedAt": source.get("updatedAt")
+            or source.get("updated_at")
+            or getattr(record, "updated_at", None),
+        }
+        try:
+            return ExecutionProgressModel.model_validate(payload)
+        except ValidationError:
+            logger.warning(
+                "Invalid bounded progress payload for execution %s",
+                getattr(record, "workflow_id", "<unknown>"),
+                exc_info=True,
+            )
+    return None
+
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
 ) -> ExecutionModel:
@@ -2121,6 +2165,11 @@ def _serialize_execution(
         proposal_summary=proposal_summary,
         pr_url=pr_url,
     )
+    progress = _bounded_execution_progress_from_sources(
+        record=record,
+        memo=memo,
+        finish_summary=finish_summary if isinstance(finish_summary, Mapping) else None,
+    )
 
     started_at = getattr(record, "started_at", None)
     created_at = getattr(record, "created_at", None) or started_at or record.updated_at
@@ -2129,7 +2178,7 @@ def _serialize_execution(
     return ExecutionModel(
         task_id=None,
         agent_run_id=agent_run_id,
-        progress=None,
+        progress=progress,
         namespace=record.namespace,
         source=_TEMPORAL_SOURCE,
         workflow_id=record.workflow_id,
