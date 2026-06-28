@@ -104,6 +104,19 @@ vi.mock('@xterm/addon-fit', () => ({
   },
 }));
 
+// MM-960: simulate a transient dynamic-import (chunk-load) failure for one page
+// so we can assert the route boundary's Retry recreates the lazy import instead
+// of replaying React.lazy's cached rejection. The factory rejects the first time
+// it is evaluated and resolves to a real component afterward.
+const skillsImport = vi.hoisted(() => ({ attempts: 0 }));
+vi.mock('./skills', () => {
+  skillsImport.attempts += 1;
+  if (skillsImport.attempts === 1) {
+    throw new Error('Failed to fetch dynamically imported module: skills');
+  }
+  return { default: () => <div>Skills page recovered</div> };
+});
+
 describe('Dashboard shared entry', () => {
   let fetchSpy: MockInstance;
   let dashboardCss: string;
@@ -176,6 +189,43 @@ describe('Dashboard shared entry', () => {
     expect(await screen.findByText('Unknown dashboard page:')).toBeTruthy();
     expect(screen.getByText('proposals')).toBeTruthy();
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith('/api/proposals'))).toBe(false);
+  });
+
+  it('shows a styled configuration error for invalid page boot data (MM-960)', async () => {
+    renderWithClient(
+      <DashboardApp
+        payload={{
+          page: 'workflows-home',
+          apiBase: '/api',
+          initialData: { layout: { dataWidePanel: 'wide' } },
+        } as unknown as BootPayload}
+      />,
+    );
+
+    expect(await screen.findByText('Dashboard configuration error')).toBeTruthy();
+    expect(screen.getByRole('alert')).toBeTruthy();
+    // The invalid page is not rendered.
+    expect(screen.queryByRole('heading', { name: 'Workflows' })).toBeNull();
+  });
+
+  it('recovers from a failed lazy page import when the user retries (MM-960)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      renderWithClient(<DashboardApp payload={{ page: 'skills', apiBase: '/api' }} />);
+
+      // First dynamic import rejects -> styled route error with a Retry action.
+      expect(await screen.findByText('This page failed to load')).toBeTruthy();
+      expect(screen.queryByText('Skills page recovered')).toBeNull();
+
+      // Retry must recreate the lazy import (a cached rejection would re-throw).
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+
+      expect(await screen.findByText('Skills page recovered')).toBeTruthy();
+      expect(screen.queryByText('This page failed to load')).toBeNull();
+      expect(skillsImport.attempts).toBeGreaterThanOrEqual(2);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it('does not render operational metrics on the workflows home dashboard', async () => {
