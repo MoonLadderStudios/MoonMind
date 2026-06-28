@@ -1643,6 +1643,123 @@ def test_get_agent_run_observability_events_prefers_persisted_event_artifact(
     assert body["events"][1]["sessionEpoch"] == 2
     assert "run_id" not in body["events"][0]
 
+def test_get_agent_run_observability_events_reconstructs_mm976_chat_vocabulary(
+    client: tuple[TestClient, AsyncMock],
+    tmp_path,
+) -> None:
+    """MM-985: durable MM-976 chat-like events survive refresh reconstruction."""
+    test_client, _ = client
+    artifacts_root = tmp_path / "artifacts"
+    run_dir = artifacts_root / "run-1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "observability.events.jsonl").write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in [
+                {
+                    "runId": "run-1",
+                    "sequence": 14,
+                    "stream": "session",
+                    "text": "Assistant final answer.",
+                    "timestamp": "2026-04-08T00:00:04Z",
+                    "kind": "assistant_message",
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 2,
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                },
+                {
+                    "runId": "run-1",
+                    "sequence": 10,
+                    "stream": "session",
+                    "text": "User follow-up.",
+                    "timestamp": "2026-04-08T00:00:00Z",
+                    "kind": "user_message",
+                    "sessionId": "sess-1",
+                    "sessionEpoch": 2,
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                },
+                {
+                    "runId": "run-1",
+                    "sequence": 11,
+                    "stream": "session",
+                    "text": "Tool started.",
+                    "timestamp": "2026-04-08T00:00:01Z",
+                    "kind": "tool_call",
+                    "metadata": {"toolName": "shell"},
+                },
+                {
+                    "runId": "run-1",
+                    "sequence": 12,
+                    "stream": "session",
+                    "text": "Tool completed.",
+                    "timestamp": "2026-04-08T00:00:02Z",
+                    "kind": "tool_result",
+                    "metadata": {"exitCode": 0},
+                },
+                {
+                    "runId": "run-1",
+                    "sequence": 13,
+                    "stream": "session",
+                    "text": "Waiting for approval.",
+                    "timestamp": "2026-04-08T00:00:03Z",
+                    "kind": "approval_requested",
+                    "metadata": {"requestId": "approval-1"},
+                },
+                {
+                    "runId": "run-1",
+                    "sequence": 15,
+                    "stream": "system",
+                    "text": "Run status changed.",
+                    "timestamp": "2026-04-08T00:00:05Z",
+                    "kind": "status_update",
+                    "metadata": {"status": "running"},
+                },
+                {
+                    "runId": "run-1",
+                    "sequence": 16,
+                    "stream": "system",
+                    "text": "Run failed.",
+                    "timestamp": "2026-04-08T00:00:06Z",
+                    "kind": "failure",
+                    "metadata": {"failureClass": "runtime_error"},
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mock_record = MagicMock()
+    mock_record.workspace_path = str(tmp_path / "workspace")
+    mock_record.started_at = datetime(2026, 4, 8, 0, 0, tzinfo=UTC)
+    mock_record.observability_events_ref = "run-1/observability.events.jsonl"
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch(
+            "api_service.api.routers.agent_runs._get_agent_runtime_artifacts_root",
+            return_value=str(artifacts_root),
+        ):
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/observability/events")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [event["sequence"] for event in body["events"]] == [10, 11, 12, 13, 14, 15, 16]
+    assert [event["kind"] for event in body["events"]] == [
+        "user_message",
+        "tool_call",
+        "tool_result",
+        "approval_requested",
+        "assistant_message",
+        "status_update",
+        "failure",
+    ]
+    assert body["events"][0]["sessionId"] == "sess-1"
+    assert body["events"][0]["sessionEpoch"] == 2
+    assert body["events"][0]["threadId"] == "thread-1"
+    assert body["events"][0]["turnId"] == "turn-1"
+
 def test_get_agent_run_observability_events_applies_since_stream_and_kind_filters(
     client: tuple[TestClient, AsyncMock],
     tmp_path,
@@ -2161,6 +2278,53 @@ def test_stream_agent_run_live_logs_serializes_canonical_event_aliases(
     assert '"sessionId":"sess-1"' in response.text
     assert '"activeTurnId":"turn-3"' in response.text
     assert '"session_id"' not in response.text
+
+def test_stream_agent_run_live_logs_accepts_mm976_chat_event_kinds(
+    client: tuple[TestClient, AsyncMock],
+) -> None:
+    """MM-985: SSE preserves the MM-976 chat-like event vocabulary."""
+    test_client, _ = client
+
+    mock_record = MagicMock()
+    mock_record.status = "running"
+    mock_record.live_stream_capable = True
+    mock_record.workspace_path = "/tmp/workspace"
+
+    async def _follow(*args, **kwargs):
+        for sequence, stream, kind, text in [
+            (21, "session", "user_message", "User asked a question."),
+            (22, "session", "assistant_message", "Assistant answered."),
+            (23, "session", "tool_call", "Tool started."),
+            (24, "session", "tool_result", "Tool completed."),
+            (25, "session", "approval_requested", "Approval requested."),
+            (26, "system", "status_update", "Run status changed."),
+            (27, "system", "failure", "Run failed."),
+        ]:
+            yield RunObservabilityEvent(
+                runId="run-1",
+                sequence=sequence,
+                stream=stream,
+                text=text,
+                timestamp=f"2026-04-08T00:00:{sequence - 20:02d}Z",
+                kind=kind,
+                metadata={"sourceIssue": "MM-976"},
+            )
+
+    with patch("api_service.api.routers.agent_runs.ManagedRunStore.load", return_value=mock_record):
+        with patch("api_service.api.routers.agent_runs.SpoolLogReader.follow", new=_follow):
+            response = test_client.get(f"/api/agent-runs/{uuid4()}/logs/stream?since=20")
+
+    assert response.status_code == 200
+    for kind in [
+        "user_message",
+        "assistant_message",
+        "tool_call",
+        "tool_result",
+        "approval_requested",
+        "status_update",
+        "failure",
+    ]:
+        assert f'"kind":"{kind}"' in response.text
 
 def test_stream_agent_run_live_logs_rejects_non_live_capable_active_run(
     client: tuple[TestClient, AsyncMock],
