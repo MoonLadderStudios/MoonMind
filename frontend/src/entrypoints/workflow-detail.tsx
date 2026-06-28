@@ -2374,6 +2374,7 @@ const TURN_BOUNDARY_EVENT_KINDS = new Set(['turn_started', 'turn_completed']);
 const TURN_FAILURE_EVENT_KINDS = new Set(['turn_failed', 'turn_interrupted']);
 const OPERATOR_ATTENTION_EVENT_KINDS = new Set([
   'approval_requested',
+  'approval_resolved',
   'approval_granted',
   'approval_denied',
   'intervention_requested',
@@ -2382,7 +2383,7 @@ const OPERATOR_ATTENTION_EVENT_KINDS = new Set([
 
 export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
   const kind = event.kind ?? '';
-  if (kind === 'session_reset_boundary') {
+  if (kind === 'session_reset_boundary' || kind === 'session_cleared') {
     return 'boundary';
   }
   if (USER_MESSAGE_EVENT_KINDS.has(kind)) {
@@ -2446,6 +2447,201 @@ function mapEventsToTimelineRows(
 ): TimelineRow[] {
   if (!payload) return [];
   return payload.events.flatMap((event) => eventToTimelineRows(event));
+}
+
+type ChatBlockBase = {
+  id: string;
+  rows: TimelineRow[];
+  timestamp: string | null;
+  turnId: string | null;
+};
+
+type ChatToolOutput = {
+  id: string;
+  text: string;
+  kind: string | null;
+};
+
+type ChatBlock =
+  | (ChatBlockBase & { type: 'user' | 'assistant' | 'boundary' | 'status'; text: string })
+  | (ChatBlockBase & {
+      type: 'tool';
+      title: string;
+      status: 'running' | 'completed' | 'failed';
+      outputs: ChatToolOutput[];
+    })
+  | (ChatBlockBase & {
+      type: 'approval';
+      text: string;
+      status: 'pending' | 'granted' | 'denied' | 'resolved';
+    });
+
+type ChatSessionReducerState = {
+  blocks: ChatBlock[];
+  latestToolBlockIdByKey: Map<string, string>;
+  latestToolBlockIdByTurn: Map<string, string>;
+  latestApprovalBlockIdByKey: Map<string, string>;
+  latestApprovalBlockId: string | null;
+};
+
+function emptyChatSessionReducerState(): ChatSessionReducerState {
+  return {
+    blocks: [],
+    latestToolBlockIdByKey: new Map(),
+    latestToolBlockIdByTurn: new Map(),
+    latestApprovalBlockIdByKey: new Map(),
+    latestApprovalBlockId: null,
+  };
+}
+
+function chatMetadataString(row: TimelineRow, ...keys: string[]): string {
+  return metadataString(row.metadata, ...keys);
+}
+
+function toolCorrelationKey(row: TimelineRow): string | null {
+  const explicit = chatMetadataString(row, 'toolCallId', 'tool_call_id', 'callId', 'call_id', 'requestId', 'request_id');
+  if (explicit) return explicit;
+  const name = chatMetadataString(row, 'toolName', 'tool_name', 'name');
+  if (name && row.turnId) return `${row.turnId}:${name}`;
+  return row.turnId;
+}
+
+function approvalCorrelationKey(row: TimelineRow): string | null {
+  const explicit = chatMetadataString(row, 'approvalRequestId', 'approval_request_id', 'requestId', 'request_id', 'interventionId', 'intervention_id');
+  if (explicit) return explicit;
+  return row.turnId;
+}
+
+function replaceChatBlock(blocks: ChatBlock[], id: string, updater: (block: ChatBlock) => ChatBlock): ChatBlock[] {
+  return blocks.map((block) => (block.id === id ? updater(block) : block));
+}
+
+function appendChatBlock(state: ChatSessionReducerState, block: ChatBlock): ChatSessionReducerState {
+  return {
+    ...state,
+    blocks: [...state.blocks, block],
+  };
+}
+
+function chatSessionReducer(state: ChatSessionReducerState, row: TimelineRow): ChatSessionReducerState {
+  if (row.rowType === 'fallback' || row.rowType === 'output' || row.rowType === 'system') {
+    return state;
+  }
+
+  if (row.rowType === 'tool') {
+    const key = toolCorrelationKey(row);
+    const turnKey = row.turnId ?? row.activeTurnId;
+    const previousBlockId =
+      (key ? state.latestToolBlockIdByKey.get(key) : null)
+      ?? (turnKey && row.kind !== 'tool_call_started' ? state.latestToolBlockIdByTurn.get(turnKey) : null);
+
+    if (row.kind === 'tool_call_output' && previousBlockId) {
+      return {
+        ...state,
+        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
+          if (block.type !== 'tool') return block;
+          return {
+            ...block,
+            rows: [...block.rows, row],
+            outputs: [...block.outputs, { id: row.id, text: row.text, kind: row.kind }],
+          };
+        }),
+      };
+    }
+
+    if ((row.kind === 'tool_call_completed' || row.kind === 'tool_call_failed') && previousBlockId) {
+      return {
+        ...state,
+        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
+          if (block.type !== 'tool') return block;
+          return {
+            ...block,
+            rows: [...block.rows, row],
+            status: row.kind === 'tool_call_failed' ? 'failed' : 'completed',
+          };
+        }),
+      };
+    }
+
+    const block: ChatBlock = {
+      id: `chat-tool-${row.id}`,
+      type: 'tool',
+      rows: [row],
+      timestamp: row.timestamp,
+      turnId: row.turnId,
+      title: chatMetadataString(row, 'toolName', 'tool_name', 'name') || row.text || 'Tool call',
+      status: row.kind === 'tool_call_failed' ? 'failed' : row.kind === 'tool_call_completed' ? 'completed' : 'running',
+      outputs: row.kind === 'tool_call_output' ? [{ id: row.id, text: row.text, kind: row.kind }] : [],
+    };
+    const nextState = appendChatBlock(state, block);
+    if (key) nextState.latestToolBlockIdByKey = new Map(nextState.latestToolBlockIdByKey).set(key, block.id);
+    if (turnKey) nextState.latestToolBlockIdByTurn = new Map(nextState.latestToolBlockIdByTurn).set(turnKey, block.id);
+    return nextState;
+  }
+
+  if (row.rowType === 'approval') {
+    const key = approvalCorrelationKey(row);
+    const previousBlockId = key ? state.latestApprovalBlockIdByKey.get(key) : state.latestApprovalBlockId;
+    const resolvedStatus =
+      row.kind === 'approval_granted'
+        ? 'granted'
+        : row.kind === 'approval_denied'
+          ? 'denied'
+          : row.kind === 'approval_resolved' || row.kind === 'intervention_resolved'
+            ? 'resolved'
+            : null;
+
+    if (resolvedStatus && previousBlockId) {
+      return {
+        ...state,
+        blocks: replaceChatBlock(state.blocks, previousBlockId, (block) => {
+          if (block.type !== 'approval') return block;
+          return {
+            ...block,
+            rows: [...block.rows, row],
+            text: block.text || row.text,
+            status: resolvedStatus,
+          };
+        }),
+      };
+    }
+
+    const block: ChatBlock = {
+      id: `chat-approval-${row.id}`,
+      type: 'approval',
+      rows: [row],
+      timestamp: row.timestamp,
+      turnId: row.turnId,
+      text: row.text,
+      status: resolvedStatus ?? 'pending',
+    };
+    const nextState = appendChatBlock(state, block);
+    if (key) nextState.latestApprovalBlockIdByKey = new Map(nextState.latestApprovalBlockIdByKey).set(key, block.id);
+    nextState.latestApprovalBlockId = block.id;
+    return nextState;
+  }
+
+  const blockType =
+    row.rowType === 'user'
+      ? 'user'
+      : row.rowType === 'assistant'
+        ? 'assistant'
+        : row.rowType === 'boundary'
+          ? 'boundary'
+          : 'status';
+
+  return appendChatBlock(state, {
+    id: `chat-${blockType}-${row.id}`,
+    type: blockType,
+    rows: [row],
+    timestamp: row.timestamp,
+    turnId: row.turnId,
+    text: row.text,
+  });
+}
+
+export function reduceTimelineRowsToChatBlocks(rows: TimelineRow[]): ChatBlock[] {
+  return rows.reduce(chatSessionReducer, emptyChatSessionReducerState()).blocks;
 }
 
 function deriveSessionSnapshotFromEvent(
@@ -2996,6 +3192,173 @@ function renderTimelineRow(
         {renderTimelineRowText(row, timelineViewerEnabled)}
       </div>
       <TimelineArtifactLinks links={artifactLinks} />
+    </div>
+  );
+}
+
+function chatBlockLabel(block: ChatBlock): string {
+  const firstRow = block.rows[0];
+  const treatmentLabel = firstRow ? getTimelineRowTreatmentLabel(firstRow) : null;
+  if (treatmentLabel) return treatmentLabel;
+  if (block.type === 'user') return 'User';
+  if (block.type === 'assistant') return 'Assistant';
+  if (block.type === 'tool') return 'Tool';
+  if (block.type === 'approval') return 'Approval';
+  if (block.type === 'boundary') return 'Session boundary';
+  return 'Status';
+}
+
+function chatBlockKindLabel(block: ChatBlock): string | null {
+  const kind = block.rows.at(-1)?.kind;
+  return kind ? kind.replaceAll('_', ' ') : null;
+}
+
+function chatBlockArtifactLinks(block: ChatBlock, apiBase: string): TimelineArtifactLink[] {
+  const links = block.rows.flatMap((row) => buildTimelineArtifactLinks(row, apiBase));
+  const seen = new Set<string>();
+  return links.filter((link) => {
+    if (seen.has(link.key)) return false;
+    seen.add(link.key);
+    return true;
+  });
+}
+
+function renderChatBlock(block: ChatBlock, wrapLines: boolean, apiBase: string): ReactNode {
+  const className = [
+    'chat-session-block',
+    `chat-session-block-${block.type}`,
+    wrapLines ? 'is-wrapped' : 'is-unwrapped',
+  ].join(' ');
+  const roleLabel = chatBlockLabel(block);
+  const kindLabel = chatBlockKindLabel(block);
+  const displayKindLabel = kindLabel && kindLabel.toLowerCase() !== roleLabel.toLowerCase() ? kindLabel : null;
+  const artifactLinks = chatBlockArtifactLinks(block, apiBase);
+
+  if (block.type === 'tool') {
+    return (
+      <div key={block.id} className={className} data-chat-block-type="tool">
+        <div className="chat-session-block-heading">
+          <span className="chat-session-role-label">{roleLabel}</span>
+          <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
+          {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
+        </div>
+        <div
+          className="chat-session-block-text"
+          data-kind={block.rows[0]?.kind ?? undefined}
+          data-row-type="tool"
+        >
+          {block.title}
+        </div>
+        {block.rows.length > 1 ? (
+          <div className="chat-session-tool-events">
+            {block.rows
+              .filter((row) => row.kind !== 'tool_call_output' && row.id !== block.rows[0]?.id)
+              .map((row) => (
+                <div
+                  key={row.id}
+                  className="chat-session-tool-event"
+                  data-kind={row.kind ?? undefined}
+                  data-row-type="tool"
+                >
+                  {getTimelineRowTreatmentLabel(row) ? (
+                    <span className="chat-session-kind-chip">{getTimelineRowTreatmentLabel(row)}</span>
+                  ) : null}
+                  <span>{row.text}</span>
+                </div>
+              ))}
+          </div>
+        ) : null}
+        {block.outputs.length > 0 ? (
+          <details className="chat-session-tool-output" open={block.status !== 'running'}>
+            <summary>
+              <span>Tool output</span> <span>({block.outputs.length})</span>
+            </summary>
+            <div className="chat-session-tool-output-body">
+              {block.outputs.map((output) => (
+                <pre key={output.id} data-kind={output.kind ?? undefined} data-row-type="tool">{output.text}</pre>
+              ))}
+            </div>
+          </details>
+        ) : null}
+        <TimelineArtifactLinks links={artifactLinks} />
+      </div>
+    );
+  }
+
+  if (block.type === 'approval') {
+    return (
+      <div key={block.id} className={className} data-chat-block-type="approval">
+        <div className="chat-session-block-heading">
+          <span className="chat-session-role-label">{roleLabel}</span>
+          <span className={`chat-session-status-chip chat-session-status-${block.status}`}>{block.status}</span>
+          {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
+        </div>
+        <div
+          className="chat-session-block-text"
+          data-kind={block.rows[0]?.kind ?? undefined}
+          data-row-type="approval"
+        >
+          {block.text}
+        </div>
+        {block.rows.length > 1 ? (
+          <div className="chat-session-resolution-text">{block.rows.at(-1)?.text}</div>
+        ) : null}
+        <TimelineArtifactLinks links={artifactLinks} />
+      </div>
+    );
+  }
+
+  return (
+    <div key={block.id} className={className} data-chat-block-type={block.type}>
+      <div className="chat-session-block-heading">
+        <span className="chat-session-role-label">{roleLabel}</span>
+        {displayKindLabel ? <span className="chat-session-kind-chip">{displayKindLabel}</span> : null}
+      </div>
+      <div
+        className="chat-session-block-text"
+        data-kind={block.rows[0]?.kind ?? undefined}
+        data-row-type={block.rows[0]?.rowType}
+      >
+        {block.text}
+      </div>
+      <TimelineArtifactLinks links={artifactLinks} />
+    </div>
+  );
+}
+
+function ChatSessionView({
+  apiBase,
+  chatBlocks,
+  rows,
+  wrapLines,
+}: {
+  apiBase: string;
+  chatBlocks: ChatBlock[];
+  rows: TimelineRow[];
+  wrapLines: boolean;
+}) {
+  const hasFallbackRows = rows.some((row) => row.rowType === 'fallback' || row.rowType === 'output');
+
+  return (
+    <div className="chat-session-view" aria-label="Chat session projection">
+      <div className="chat-session-header">
+        <div>
+          <h3>Chat Session</h3>
+          <p className="small">Messages, tools, approvals, status, and session boundaries.</p>
+        </div>
+        {hasFallbackRows ? (
+          <span className="chat-session-fallback-chip">Raw history fallback active</span>
+        ) : null}
+      </div>
+      {chatBlocks.length === 0 ? (
+        <div className="chat-session-empty">
+          Structured chat projection is unavailable for these rows. Use Raw Timeline for durable history.
+        </div>
+      ) : (
+        <div className="chat-session-blocks">
+          {chatBlocks.map((block) => renderChatBlock(block, wrapLines, apiBase))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3731,6 +4094,8 @@ function LiveLogsPanel({
   const esRef = useRef<EventSource | null>(null);
   const isTerminalRef = useRef(isTerminal);
   const [sessionSnapshot, setSessionSnapshot] = useState<SessionSnapshot | null>(null);
+  const [rawTimelineExpanded, setRawTimelineExpanded] = useState(false);
+  const chatBlocks = useMemo(() => reduceTimelineRowsToChatBlocks(logContent), [logContent]);
 
   // Keep isTerminalRef current so the onerror handler always sees the latest value.
   useEffect(() => {
@@ -3742,6 +4107,7 @@ function LiveLogsPanel({
     setLogContent([]);
     lastSeqRef.current = null;
     setViewerState('starting');
+    setRawTimelineExpanded(false);
   }, [agentRunId]);
 
   useEffect(() => {
@@ -3991,6 +4357,7 @@ function LiveLogsPanel({
         ['Live', liveStatusValue],
       ].filter(([, value]) => value) as Array<[string, string]>
     : [];
+  const showRawTimeline = rawTimelineExpanded || (sessionTimelineEnabled && logContent.length > 0 && chatBlocks.length === 0);
 
   const panelBody = (
     <div className="stack live-logs-panel">
@@ -4026,13 +4393,25 @@ function LiveLogsPanel({
         {logContent.length === 0 ? (
           <div className="live-logs-empty">{emptyLabel}</div>
         ) : sessionTimelineEnabled ? (
-          <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
-            <Virtuoso
-              style={{ height: 400 }}
-              data={logContent}
-              computeItemKey={(_, row) => row.id}
-              itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
-            />
+          <div data-testid="chat-session-viewer" className="chat-session-viewer">
+            <ChatSessionView apiBase={apiBase} chatBlocks={chatBlocks} rows={logContent} wrapLines={wrapLines} />
+            <details
+              className="raw-timeline-escape-hatch"
+              open={showRawTimeline}
+              onToggle={(event) => setRawTimelineExpanded(event.currentTarget.open)}
+            >
+              <summary>Raw Timeline</summary>
+              {showRawTimeline ? (
+                <div data-testid="live-logs-timeline-viewer" className="live-logs-viewer">
+                  <Virtuoso
+                    style={{ height: 400 }}
+                    data={logContent}
+                    computeItemKey={(_, row) => row.id}
+                    itemContent={(_, row) => renderTimelineRow(row, wrapLines, true, apiBase)}
+                  />
+                </div>
+              ) : null}
+            </details>
           </div>
         ) : (
           <div data-testid="live-logs-legacy-viewer" className="live-logs-legacy-viewer">
