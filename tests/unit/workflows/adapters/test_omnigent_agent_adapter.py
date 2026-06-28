@@ -47,6 +47,15 @@ async def test_omnigent_adapter_accepts_only_canonical_agent_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_omnigent_adapter_rejects_non_external_agent_kind() -> None:
+    adapter = OmnigentExternalAdapter()
+    request = _request("omnigent").model_copy(update={"agent_kind": "managed"})
+
+    with pytest.raises(ValueError, match="only supports external agent_kind"):
+        await adapter.start(request)
+
+
+@pytest.mark.asyncio
 async def test_omnigent_unused_polling_hooks_fail_loudly() -> None:
     adapter = OmnigentExternalAdapter()
 

@@ -133,6 +133,25 @@ class TestBuildDefaultRegistry:
 
         assert enabled_registry.registered_ids == ["omnigent"]
 
+    def test_omnigent_registry_adapter_does_not_expose_api_token(self):
+        secret = "activity-boundary-only-secret"
+        registry = build_default_registry(
+            env={
+                "OMNIGENT_ENABLED": "1",
+                "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+                "OMNIGENT_API_TOKEN": secret,
+            }
+        )
+
+        adapter = registry.create("omnigent")
+        capability_payload = adapter.provider_capability.model_dump(
+            mode="json",
+            by_alias=True,
+        )
+
+        assert secret not in repr(adapter)
+        assert secret not in repr(capability_payload)
+
     def test_omnigent_alias_agent_ids_are_not_registered(self):
         registry = build_default_registry(
             env={
