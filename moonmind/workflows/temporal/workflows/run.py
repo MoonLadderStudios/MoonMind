@@ -6754,9 +6754,10 @@ class MoonMindRunWorkflow:
                             failure_message=failure_message,
                         )
 
-                        retryable = failure_message == "system_error" or (
-                            failure_message == "execution_error"
-                            and tool_type == "agent_runtime"
+                        retryable = self._activity_result_retryable(
+                            execution_result,
+                            failure_message=failure_message,
+                            tool_type=tool_type,
                         )
                         if retryable and system_retries < 3:
                             self._mark_step_terminal(
@@ -7657,6 +7658,74 @@ class MoonMindRunWorkflow:
         if isinstance(summary, str) and summary.strip():
             return summary.strip()
         return None
+
+    def _activity_result_retryable(
+        self,
+        result: Any,
+        *,
+        failure_message: str,
+        tool_type: str,
+    ) -> bool:
+        if failure_message == "system_error":
+            return True
+        if failure_message != "execution_error" or tool_type != "agent_runtime":
+            return False
+
+        outputs = self._get_from_result(result, "outputs")
+        if not isinstance(outputs, Mapping):
+            return True
+
+        provider_failure = outputs.get("providerFailure")
+        if not isinstance(provider_failure, Mapping):
+            provider_failure = {}
+        turn_metadata = outputs.get("turnMetadata")
+        if not isinstance(turn_metadata, Mapping):
+            turn_metadata = {}
+
+        def _first_text(*values: Any) -> str | None:
+            for value in values:
+                if isinstance(value, str) and value.strip():
+                    return value.strip().lower()
+            return None
+
+        provider_error_code = _first_text(
+            outputs.get("providerErrorCode"),
+            outputs.get("provider_error_code"),
+            provider_failure.get("providerErrorCode"),
+            provider_failure.get("provider_error_code"),
+        )
+        provider_error_class = _first_text(
+            provider_failure.get("providerErrorClass"),
+            provider_failure.get("provider_error_class"),
+        )
+        retry_recommendation = _first_text(
+            outputs.get("retryRecommendation"),
+            outputs.get("retry_recommendation"),
+            provider_failure.get("retryRecommendation"),
+            provider_failure.get("retry_recommendation"),
+        )
+        failure_class = _first_text(
+            outputs.get("failureClass"),
+            outputs.get("failure_class"),
+            provider_failure.get("failureClass"),
+            provider_failure.get("failure_class"),
+        )
+        turn_failure_class = _first_text(
+            turn_metadata.get("failureClass"),
+            turn_metadata.get("failure_class"),
+        )
+
+        if provider_error_code in {"401", "403"}:
+            return False
+        if provider_error_class in {"auth", "credential_scope"}:
+            return False
+        if retry_recommendation in {"reauthenticate", "expand_credential_scope"}:
+            return False
+        if failure_class in {"user_error", "permanent"}:
+            return False
+        if turn_failure_class == "permanent":
+            return False
+        return True
 
     def _activity_result_provider_failure_summary(self, result: Any) -> str | None:
         outputs = self._get_from_result(result, "outputs")

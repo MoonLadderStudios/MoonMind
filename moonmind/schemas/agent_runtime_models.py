@@ -1732,6 +1732,7 @@ ObservabilityEventKind = Literal[
     "session_resumed",
     "turn_started",
     "turn_completed",
+    "empty_assistant_turn_detected",
     "turn_interrupted",
     "session_cleared",
     "session_terminated",
