@@ -2,7 +2,7 @@
 //
 // This utility is the single source of truth for operator-tunable dashboard
 // preferences (workflow list columns/density, create-page expert mode default,
-// workflow detail debug/workspace visibility, and related defaults). Preferences are
+// workflow detail debug visibility/sidebar layout, and related defaults). Preferences are
 // stored locally in `localStorage` under one versioned key and are always read
 // back through a validation/sanitization pass so a corrupt, partial, or
 // hand-edited blob can never crash the dashboard — invalid values silently fall
@@ -68,7 +68,7 @@ export type DashboardPreferences = {
   createExpertMode: boolean;
   /** Whether diagnostic debug fields are surfaced on the workflow detail page. */
   debugFieldsVisible: boolean;
-  /** Whether the desktop workflow workspace sidebar is collapsed by default. */
+  /** Whether the desktop workflow detail sidebar is collapsed on reload. */
   workflowWorkspaceSidebarCollapsed: boolean;
   /** Preferred default workflow detail tab. */
   preferredDetailTab: WorkflowDetailTab;

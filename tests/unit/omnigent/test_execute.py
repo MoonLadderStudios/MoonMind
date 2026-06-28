@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -149,6 +150,7 @@ def test_build_omnigent_result_uses_valid_failure_class_for_timeout() -> None:
 @pytest.mark.asyncio
 async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> None:
     created_clients: list[object] = []
+    heartbeats: list[dict[str, Any]] = []
 
     class FakeClient:
         def __init__(self, **_: object) -> None:
@@ -192,6 +194,10 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
     monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._safe_heartbeat",
+        lambda details: heartbeats.append(details),
+    )
 
     result = await run_omnigent_execution(
         AgentExecutionRequest(
@@ -203,6 +209,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
                 "title": "Execute Omnigent",
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "Do the task"},
                 },
             },
@@ -214,6 +221,15 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
     assert result.diagnostics_ref == "artifact://diagnostics"
     assert result.metadata["normalizedStatus"] == "completed"
     assert created_clients
+    assert heartbeats
+    assert all("normalizedStatus" in heartbeat for heartbeat in heartbeats)
+    assert all("eventsCaptured" in heartbeat for heartbeat in heartbeats)
+    event_types = [
+        heartbeat.get("eventType")
+        for heartbeat in heartbeats
+        if "eventType" in heartbeat
+    ]
+    assert event_types == ["", "response.completed"]
 
 
 @pytest.mark.asyncio
@@ -240,6 +256,7 @@ async def test_run_omnigent_execution_reports_httpx_transport_errors(
             parameters={
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "Do the task"},
                 },
             },
@@ -334,6 +351,204 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
 
 
 @pytest.mark.asyncio
+async def test_run_omnigent_execution_derives_managed_workspace_from_workspace_spec(
+    monkeypatch,
+) -> None:
+    captured_session_payloads: list[dict[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            raise AssertionError("agentId should avoid list_agents lookup")
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            captured_session_payloads.append(payload)
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            return {}
+
+        async def stream_events(self, session_id: str):
+            yield {"type": "response.completed"}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            return {"status": "completed", "summary": "done"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            workspaceSpec={
+                "repository": "https://github.com/org/repo",
+                "branch": "feature-branch",
+            },
+            parameters={
+                "omnigent": {
+                    "agent": {"agentId": "agent-1"},
+                    "session": {"hostType": "managed"},
+                },
+            },
+        )
+    )
+
+    assert result.failure_class is None
+    assert captured_session_payloads[0]["workspace"] == (
+        "https://github.com/org/repo#feature-branch"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_deletes_session_after_transport_error(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            calls.append(("create_session", payload))
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            raise httpx.ConnectError("provider write failed")
+
+        async def stream_events(self, session_id: str):
+            if False:
+                yield {}
+
+        async def delete_session(
+            self,
+            session_id: str,
+            *,
+            delete_branch: bool = False,
+        ) -> dict[str, object]:
+            calls.append(
+                (
+                    "delete_session",
+                    {"session_id": session_id, "delete_branch": delete_branch},
+                )
+            )
+            return {}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-1",
+            idempotencyKey="idem-1",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "Do the task"},
+                },
+            },
+        )
+    )
+
+    assert result.failure_class == "integration_error"
+    assert (
+        "delete_session",
+        {"session_id": "session-1", "delete_branch": False},
+    ) in calls
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_interrupts_and_stops_on_cancellation(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            calls.append(("create_session", payload))
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            calls.append(("post_event", payload))
+            return {}
+
+        async def stream_events(self, session_id: str):
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            calls.append(("get_session", session_id))
+            return {"status": "running"}
+
+        async def interrupt(self, session_id: str) -> dict[str, object]:
+            calls.append(("interrupt", session_id))
+            return {}
+
+        async def stop_session(self, session_id: str) -> dict[str, object]:
+            calls.append(("stop_session", session_id))
+            return {}
+
+    async def cancel_immediately(_delay: float) -> None:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr("moonmind.omnigent.execute.asyncio.sleep", cancel_immediately)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_omnigent_execution(
+            AgentExecutionRequest(
+                agentKind="external",
+                agentId="omnigent",
+                correlationId="corr-1",
+                idempotencyKey="idem-1",
+                parameters={
+                    "omnigent": {
+                        "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
+                        "prompt": {"text": "Do the task"},
+                    },
+                },
+            )
+        )
+
+    assert ("interrupt", "session-1") in calls
+    assert ("stop_session", "session-1") in calls
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_posts_instruction_ref_when_prompt_text_is_absent(
     monkeypatch,
 ) -> None:
@@ -379,6 +594,7 @@ async def test_run_omnigent_execution_posts_instruction_ref_when_prompt_text_is_
             parameters={
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"instructionRef": "artifact://instruction"},
                 },
             },
@@ -435,6 +651,7 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
                 parameters={
                     "omnigent": {
                         "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
                         "prompt": {"text": "Do the task"},
                     },
                 },
@@ -494,6 +711,7 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
             parameters={
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "continue"},
                 },
             },
