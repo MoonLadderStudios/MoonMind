@@ -209,6 +209,7 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
                 "title": "Execute Omnigent",
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "Do the task"},
                 },
             },
@@ -223,6 +224,12 @@ async def test_run_omnigent_execution_waits_for_terminal_result(monkeypatch) -> 
     assert heartbeats
     assert all("normalizedStatus" in heartbeat for heartbeat in heartbeats)
     assert all("eventsCaptured" in heartbeat for heartbeat in heartbeats)
+    event_types = [
+        heartbeat.get("eventType")
+        for heartbeat in heartbeats
+        if "eventType" in heartbeat
+    ]
+    assert event_types == ["", "response.completed"]
 
 
 @pytest.mark.asyncio
@@ -249,6 +256,7 @@ async def test_run_omnigent_execution_reports_httpx_transport_errors(
             parameters={
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "Do the task"},
                 },
             },
@@ -456,6 +464,7 @@ async def test_run_omnigent_execution_deletes_session_after_transport_error(
             parameters={
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "Do the task"},
                 },
             },
@@ -528,6 +537,7 @@ async def test_run_omnigent_execution_interrupts_and_stops_on_cancellation(
                 parameters={
                     "omnigent": {
                         "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
                         "prompt": {"text": "Do the task"},
                     },
                 },
@@ -584,6 +594,7 @@ async def test_run_omnigent_execution_posts_instruction_ref_when_prompt_text_is_
             parameters={
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"instructionRef": "artifact://instruction"},
                 },
             },
@@ -640,6 +651,7 @@ async def test_run_omnigent_execution_raises_when_stream_ends_still_running(
                 parameters={
                     "omnigent": {
                         "agent": {"agentName": "codex-native-ui"},
+                        "session": {"allowEmptyWorkspace": True},
                         "prompt": {"text": "Do the task"},
                     },
                 },
@@ -699,6 +711,7 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
             parameters={
                 "omnigent": {
                     "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
                     "prompt": {"text": "continue"},
                 },
             },

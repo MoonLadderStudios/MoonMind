@@ -22,14 +22,22 @@ def _request(**overrides: object) -> AgentExecutionRequest:
         "executionProfileRef": "profile:test",
         "correlationId": "corr-1",
         "idempotencyKey": "idem-1",
-        "parameters": {"title": "MM-990 task", "omnigent": {}},
+        "parameters": {
+            "title": "MM-990 task",
+            "omnigent": {"session": {"allowEmptyWorkspace": True}},
+        },
     }
     payload.update(overrides)
     return AgentExecutionRequest(**payload)
 
 
 def test_omnigent_selection_fields_must_be_nested_under_parameters_omnigent() -> None:
-    req = _request(parameters={"agent": {"agentId": "ag_top"}, "omnigent": {}})
+    req = _request(
+        parameters={
+            "agent": {"agentId": "ag_top"},
+            "omnigent": {"session": {"allowEmptyWorkspace": True}},
+        }
+    )
 
     with pytest.raises(OmnigentAdapterError) as exc:
         build_omnigent_selection(req)
@@ -80,6 +88,26 @@ def test_managed_session_rejects_host_id_and_local_workspace() -> None:
 
     with pytest.raises(OmnigentAdapterError, match="git repository URL"):
         build_omnigent_selection(req)
+
+
+def test_managed_session_requires_workspace_unless_explicit_empty_workspace() -> None:
+    req = _request(parameters={"omnigent": {"session": {"hostType": "managed"}}})
+
+    with pytest.raises(OmnigentAdapterError, match="allowEmptyWorkspace"):
+        build_omnigent_selection(req)
+
+    allowed = _request(
+        parameters={
+            "omnigent": {
+                "session": {"hostType": "managed", "allowEmptyWorkspace": True}
+            }
+        }
+    )
+
+    selection = build_omnigent_selection(allowed)
+
+    assert selection.session.workspace is None
+    assert selection.session.allow_empty_workspace is True
 
 
 def test_managed_repository_task_normalizes_repo_url_and_branch() -> None:
@@ -177,7 +205,14 @@ async def test_target_resolution_order() -> None:
         return {"id": "ag_bundle"}
 
     direct = build_omnigent_selection(
-        _request(parameters={"omnigent": {"agent": {"agentId": "ag_direct"}}})
+        _request(
+            parameters={
+                "omnigent": {
+                    "agent": {"agentId": "ag_direct"},
+                    "session": {"allowEmptyWorkspace": True},
+                }
+            }
+        )
     )
     assert (await resolve_omnigent_target(
         direct,
@@ -188,7 +223,14 @@ async def test_target_resolution_order() -> None:
     assert calls == []
 
     named = build_omnigent_selection(
-        _request(parameters={"omnigent": {"agent": {"agentName": "codex-native-ui"}}})
+        _request(
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                }
+            }
+        )
     )
     assert (await resolve_omnigent_target(
         named,
@@ -198,7 +240,14 @@ async def test_target_resolution_order() -> None:
     )).agent_id == "ag_named"
 
     bundle = build_omnigent_selection(
-        _request(parameters={"omnigent": {"agent": {"bundleRef": "artifact://bundle"}}})
+        _request(
+            parameters={
+                "omnigent": {
+                    "agent": {"bundleRef": "artifact://bundle"},
+                    "session": {"allowEmptyWorkspace": True},
+                }
+            }
+        )
     )
     assert (await resolve_omnigent_target(
         bundle,

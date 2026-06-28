@@ -536,6 +536,15 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 async for event in stream_events:
                     event_count["value"] += 1
                     normalized = normalize_omnigent_observation(event)
+                    _safe_heartbeat(
+                        {
+                            "omnigentSessionId": session_id,
+                            "normalizedStatus": normalized or "running",
+                            "eventsCaptured": event_count["value"],
+                            "firstMessagePosted": True,
+                            "eventType": str(event.get("type") or "").strip(),
+                        }
+                    )
                     if normalized in {"awaiting_approval", "intervention_requested"}:
                         heartbeat_status["value"] = normalized
                         _safe_heartbeat(
