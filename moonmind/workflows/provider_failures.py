@@ -78,9 +78,11 @@ _AUTH_FAILURE_MARKERS = (
     "invalid api key",
     "invalid token",
     "expired token",
+    "access token could not be refreshed",
     "authentication failed",
     "not logged in",
     "please run /login",
+    "refresh token was revoked",
 )
 
 # Credential-scope markers are deliberately scoped to HTTP 403 wording or
