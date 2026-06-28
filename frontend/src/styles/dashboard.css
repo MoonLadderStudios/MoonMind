@@ -6081,6 +6081,45 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   flex-wrap: wrap;
 }
 
+.chat-session-message-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.chat-session-message {
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  padding: 0.65rem 0.72rem;
+  background: rgb(var(--mm-panel) / 0.72);
+}
+
+.chat-session-message-pending {
+  border-color: rgb(var(--mm-accent) / 0.45);
+}
+
+.chat-session-message-failed {
+  border-color: rgb(var(--mm-danger) / 0.5);
+  background: rgb(var(--mm-danger) / 0.08);
+}
+
+.chat-session-message-meta {
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.chat-session-message-text {
+  margin-top: 0.25rem;
+  white-space: pre-wrap;
+}
+
+.chat-session-message-error {
+  margin-top: 0.35rem;
+  color: rgb(var(--mm-danger));
+  font-size: 0.84rem;
+}
+
 .queue-template-actions {
   justify-content: flex-end;
 }
