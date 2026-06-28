@@ -852,10 +852,25 @@ h1 {
   font-weight: 700;
 }
 
-.workflow-list-column-filter-popover .workflow-list-filter-control {
+/*
+ * `renderFilterControl` wraps each control in `.queue-inline-filter`, whose
+ * toolbar styling includes `border-radius: 999px`. Inside the stacked popover
+ * that pill border collapses into awkward semi-circular ends overlapping the
+ * dropdown edges, so reset it to a flat container — matching the drawer's
+ * `.workflow-list-filter-section .workflow-list-filter-control` treatment.
+ */
+.workflow-list-column-filter-popover .workflow-list-filter-control,
+.workflow-list-column-filter-popover .workflow-list-filter-control:hover,
+.workflow-list-column-filter-popover .workflow-list-filter-control:focus-within {
   display: grid;
   gap: 0.65rem;
   align-items: stretch;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
 }
 
 .workflow-list-column-filter-popover .workflow-list-filter-control label {
@@ -1949,6 +1964,14 @@ tbody tr:hover {
   overflow: visible;
 }
 
+/* The Actions-header "View options" popover (desktop) escapes the table edge the
+ * same way the per-column filter popovers do. */
+.workflow-list-data-slab .queue-table-wrapper:has(
+  .workflow-list-view-options-popover
+) {
+  overflow: visible;
+}
+
 .queue-table-wrapper table {
   border: 0;
   border-collapse: separate;
@@ -2044,6 +2067,50 @@ tbody tr:hover {
 .workflow-list-view-options {
   position: relative;
   margin-left: auto;
+}
+
+/* Icon variant: lives inline in the Actions header on desktop rather than the
+ * (dropped) results header, so it neither pushes itself right nor needs the
+ * relative wrapper's auto margin. */
+.workflow-list-view-options--icon {
+  margin-left: 0;
+  flex: 0 0 auto;
+}
+
+.workflow-list-view-options-trigger--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: rgb(var(--mm-muted));
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.workflow-list-view-options-trigger--icon:hover,
+.workflow-list-view-options-trigger--icon:focus-visible,
+.workflow-list-view-options-trigger--icon[aria-expanded="true"] {
+  border-color: rgb(var(--mm-accent) / 0.55);
+  background: rgb(var(--mm-accent) / 0.1);
+  color: rgb(var(--mm-accent));
+  box-shadow: var(--mm-control-focus-ring);
+  transform: none;
+  filter: none;
+}
+
+.workflow-list-view-options-icon {
+  display: block;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.workflow-list-view-options--icon .workflow-list-view-options-popover {
+  z-index: 30;
 }
 
 .workflow-list-view-options-popover {
@@ -3490,7 +3557,8 @@ button.secondary:hover {
 
 button.workflow-list-filter-chip-open,
 button.workflow-list-filter-chip-remove,
-button.workflow-list-column-filter-button {
+button.workflow-list-column-filter-button,
+button.workflow-list-view-options-trigger--icon {
   background-image: none;
   transform: none;
   filter: none;
@@ -6499,11 +6567,21 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-table-column-actions {
-  width: 4.5rem;
+  width: 6.5rem;
 }
 
 .queue-table-actions-header {
   text-align: right;
+}
+
+/* Keeps the "Actions" label and the small desktop "View options" icon button on
+ * one right-aligned row. */
+.queue-table-actions-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  white-space: nowrap;
 }
 
 .queue-table-cell-actions {

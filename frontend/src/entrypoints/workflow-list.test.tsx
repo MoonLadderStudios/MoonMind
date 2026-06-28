@@ -1705,6 +1705,56 @@ describe('Workflows Entrypoint', () => {
     expect(detailCallsBefore).toHaveLength(0);
   });
 
+  it('promotes "View options" into the Actions header and drops the Filters row on desktop', async () => {
+    const actionsPayload: BootPayload = {
+      page: 'workflow-list',
+      apiBase: '/api',
+      initialData: {
+        dashboardConfig: {
+          features: { temporalDashboard: { listEnabled: true, actionsEnabled: true } },
+        },
+      },
+    };
+
+    // Force the desktop breakpoint (jsdom has no matchMedia, so the component
+    // otherwise defaults to the mobile layout).
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    );
+
+    try {
+      renderWithClient(<WorkflowListPage payload={actionsPayload} />);
+      await screen.findAllByText('Example task');
+
+      // The results header row is dropped on desktop, so the Filters trigger is
+      // gone in favor of the per-column filter buttons.
+      expect(screen.queryByRole('button', { name: 'Filters' })).toBeNull();
+
+      // The single "View options" control is now the icon button hosted to the
+      // right of the Actions column header.
+      const viewOptions = screen.getByRole('button', { name: 'View options' });
+      expect(viewOptions.closest('th')?.classList.contains('queue-table-actions-header')).toBe(
+        true,
+      );
+
+      // It still opens the preferences popover from its new location.
+      fireEvent.click(viewOptions);
+      expect(screen.getByRole('radio', { name: 'Compact' })).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   // MM-952: scan-first desktop table information architecture.
   it('leads the desktop table with a title-first Workflow column and secondary compact id', async () => {
     fetchSpy.mockResolvedValue({
