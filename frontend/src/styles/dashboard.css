@@ -257,6 +257,14 @@ samp {
   font-size: clamp(1.28rem, 2vw, 1.72rem);
 }
 
+.masthead-brand-moon {
+  color: rgb(var(--mm-accent-2));
+}
+
+.masthead-brand-mind {
+  color: inherit;
+}
+
 .masthead-title-meta {
   display: flex;
   align-items: center;

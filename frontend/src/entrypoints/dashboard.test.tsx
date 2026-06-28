@@ -651,6 +651,21 @@ describe('Dashboard shared entry', () => {
     }
   });
 
+  it('colors only Moon in the masthead brand with the executing status accent', async () => {
+    const { readFileSync } = await import('node:fs');
+    const dashboardTemplate = readFileSync(
+      `${process.cwd()}/api_service/templates/react_dashboard.html`,
+      'utf8',
+    );
+
+    expect(dashboardTemplate).toContain('<span class="masthead-brand-moon">Moon</span>');
+    expect(dashboardTemplate).toContain('<span class="masthead-brand-mind">Mind</span>');
+    expect(cssRuleBlock(dashboardCss, '.masthead-brand-moon')).toContain(
+      'color: rgb(var(--mm-accent-2))',
+    );
+    expect(cssRuleBlock(dashboardCss, '.masthead-brand-mind')).toContain('color: inherit');
+  });
+
 
   it('defines the shared MM-488 executing shimmer modifier contract', async () => {
     expect(dashboardCss).toMatch(/--mm-executing-sweep-cycle-duration:\s*2600ms/);
