@@ -648,7 +648,7 @@ describe('Workflow Detail Entrypoint', () => {
           ...stepsPayload,
           initialData: {
             dashboardConfig: {
-              ...stepsPayload.initialData?.dashboardConfig,
+              ...((stepsPayload.initialData as { dashboardConfig: unknown }).dashboardConfig as Record<string, unknown>),
               features: {
                 temporalDashboard: {
                   workspaceShellEnabled: true,
