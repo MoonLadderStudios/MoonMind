@@ -220,6 +220,36 @@ class ArtifactSessionProjectionModel(BaseModel):
     latest_control_event_ref: Optional[ArtifactRefModel] = None
     latest_reset_boundary_ref: Optional[ArtifactRefModel] = None
 
+class SessionResourceModel(BaseModel):
+    """Read-only session resource projection over an authorized artifact."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    resource_id: str
+    artifact_id: str
+    group_key: str
+    group_title: str
+    label: Optional[str] = None
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    status: TemporalArtifactStatus
+    artifact_ref: ArtifactRefModel
+    default_read_ref: Optional[ArtifactRefModel] = None
+    preview_artifact_ref: Optional[ArtifactRefModel] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    content_url: str
+    download_url: str
+
+class SessionResourceListResponse(BaseModel):
+    """Session-scoped read-only resource aliases backed by ArtifactRefs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_run_id: str
+    session_id: str
+    session_epoch: int
+    resources: list[SessionResourceModel] = Field(default_factory=list)
+
 class ArtifactSessionControlRequest(BaseModel):
     """Operator control request for one workflow-scoped artifact session."""
 
