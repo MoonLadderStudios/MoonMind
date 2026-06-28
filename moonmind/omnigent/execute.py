@@ -288,7 +288,7 @@ async def _enqueue_stream_events(
             await queue.put(event)
     except asyncio.CancelledError:
         raise
-    except BaseException as exc:
+    except Exception as exc:
         await queue.put(exc)
     finally:
         await queue.put(None)
