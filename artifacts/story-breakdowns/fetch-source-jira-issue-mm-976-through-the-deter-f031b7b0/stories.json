@@ -1,0 +1,659 @@
+{
+  "source": {
+    "title": "MM-976: Implement chat-like managed-agent observability and controls in MoonMind dashboard",
+    "path": null,
+    "referencePath": null,
+    "sourceDocumentClass": "declarative-text",
+    "jiraIssueKey": "MM-976",
+    "trustedSource": "moonmind.jira.get_issue with complete workflow instructions supplied to this step",
+    "originalDesignText": "Implement chat-like managed-agent observability and controls in MoonMind dashboard\n\nSummary: Add a MoonMind-native chat-like managed-agent experience for existing managed agents by extending current observability and session-control surfaces rather than porting Omnigent's full session-server architecture. Omnigent should be cloned as a concrete Apache-2.0 reference, but the target is MoonMind's Low and Medium comparison outcomes only: live agent output, more chat-like output, tool/status/session markers, and a generic follow-up box for session-capable managed agents. High-level outcomes such as making one-shot agents fully interactive or building a full Omnigent-style session product are not included.\n\nThe work reuses MoonMind's artifact-first observability model, existing Live Logs panel, SSE/EventSource transport, RunObservabilityEvent contract, RuntimeLogStreamer.emit_observability_event(...), spool-backed SpoolLogPublisher / SpoolLogReader, and existing session-control pattern. It should not require WebSocket for the first version.\n\nToday managed-agent output can be observed, but the UI feels more like logs than a conversational agent session. Session-capable agents should surface user turn submitted, assistant output/deltas, tool calls, tool output, approvals, session reset boundaries, turn completion/failure, and follow-up input controls when the runtime supports them. Artifacts and bounded metadata remain durable truth; live streaming is convenience, not source of truth; control actions remain separate from passive observation; browser payloads remain MoonMind-normalized; one-shot runtimes are not treated as interactive sessions.\n\nGoals: show live managed-agent output in the existing Live Logs panel while active; use existing SSE/EventSource; preserve artifact-backed fallback; standardize event kinds for user messages, assistant output, tool calls, system annotations, approvals, and session boundaries; render events in a clearer grouped timeline without replacing artifact-backed logs; add normalized observability events for turn, tool, approval, and session lifecycle; display them as rows/chips/banners; generalize follow-up controls using session snapshot and capability metadata instead of Codex-specific session ID derivation; route follow-ups through MoonMind control APIs and Temporal updates rather than raw terminal input.\n\nNon-goals: WebSocket for managed-agent chat; porting Omnigent's session server, runner tunnel, host liveness, resource browser, or terminal attachment model; making one-shot CLI agents fully interactive; replacing Live Logs with a chat-only UI; provider-native browser contracts; terminal scrollback, runtime home directories, or container-local databases as durable truth; full Omnigent-style session lists, forks, sub-agent trees, or resource APIs.\n\nDesign: keep GET /api/agent-runs/{agentRunId}/logs/stream as the live SSE read transport. Dashboard fetches observability summary and structured history, falls back to merged logs, connects to SSE only when the run is active and live streaming is supported, stops when terminal/collapsed/backgrounded, and uses artifacts/history as durable fallback.\n\nStandard event kinds: turn_started, user_message_submitted, turn_completed, turn_failed, turn_interrupted; assistant_message_delta, assistant_message_completed, assistant_message; tool_call_started, tool_call_output, tool_call_completed, tool_call_failed; approval_requested, approval_resolved, intervention_requested; session_started, session_resumed, session_cleared, session_reset_boundary, session_terminated; runtime_status, model_status, system_annotation. Runtime-native names may appear only as metadata and must not become the browser-facing contract.\n\nAll chat-like events normalize into RunObservabilityEvent with run_id, sequence, timestamp, stream, kind, text, optional session_id, session_epoch, container_id, thread_id, active_turn_id, and compact metadata. stream=session is for lifecycle/control/approval/status, stdout/stderr for raw output, system for MoonMind annotations. Sequence is monotonic in the run-global namespace. Metadata must be compact and not contain raw secrets, full transcripts, or large payloads; large content belongs in artifacts by reference.\n\nAdd ManagedSessionObservabilityBridge in moonmind/workflows/temporal/runtime/session_observability_bridge.py with helper methods for session, turn, user, assistant, tool, approval, reset, and termination events. Internally it calls RuntimeLogStreamer.emit_observability_event(...). Provider/runtime adapters translate native events into these stable methods; the bridge does not own provider logic.\n\nMap session-capable runtimes initially for codex_cli managed session. Emit session_started, turn_started, user_message_submitted, assistant output events where visible rollout output exists, tool events where visible tool markers exist, turn_completed, turn_failed, session_cleared, and session_reset_boundary. If only stdout/stderr is exposed, continue emitting normal stdout/stderr rows and add lifecycle markers.\n\nPreserve durable history: stdout/stderr artifacts, diagnostics artifact, observability.events.jsonl, and GET /api/agent-runs/{agentRunId}/observability/events. Live SSE remains non-authoritative; journal/artifact history reconstructs the timeline after refresh or restart.\n\nImprove Live Logs timeline projection with distinct UI treatments for user_message_submitted, assistant_message_delta/assistant_message, tool_call_started/output/completed/failed, approval_requested, turn_started/completed/failed, and session_cleared/session_reset_boundary. This remains a projection over existing TimelineRow, not a new source of truth.\n\nGeneralize session controls: observability-summary includes sessionSnapshot and interventionCapabilities such as sendFollowUp, clearSession, interruptTurn, and cancelSession derived from managed-session/runtime records. Frontend shows follow-up only when sessionSnapshot.sessionId exists, sendFollowUp is true, and the run is not terminal; shows clear/reset and interrupt under their own capabilities and state. POST /api/agent-runs/{agentRunId}/artifact-sessions/{sessionId}/control continues to carry actions such as send_follow_up, clear_session, and interrupt_turn, routed through Temporal/runtime adapters rather than sockets or raw terminal input.\n\nOne-shot runtimes may show live logs, chat-like emitted output, and session/turn markers, but must not show misleading follow-up controls. Safety rules: do not stream provider-native payloads, secrets, raw env, or full transcripts to the browser; do not depend on terminal scrollback or container-local thread databases; do not make live stream publication fatal; do not lose artifact persistence if live publishing fails; do not write arbitrary terminal input unless a safe runtime-specific session-control adapter owns it.\n\nAcceptance requires live output through SSE, durable reconstruction after refresh, normalized RunObservabilityEvent records, monotonic sequences, session identity fields when available, chat-like UI row treatments, capability-gated controls, no controls for one-shot runtimes, durable stdout/stderr/diagnostics/structured history, secret-safe normalized payloads, and tests for backend bridge emission, runtime Codex emission, API summary/history/SSE/control behavior, frontend rendering, and fallback behavior.\n"
+  },
+  "sourceDocumentClass": "declarative-text",
+  "extractedAt": "2026-06-28T06:31:21Z",
+  "designSummary": "MM-976 asks MoonMind to turn existing Live Logs and managed-session controls into a clearer chat-like operator timeline using SSE, artifact-backed observability history, RunObservabilityEvent, RuntimeLogStreamer, and HTTP/Temporal control actions. It excludes WebSocket, full Omnigent session-server parity, provider-native browser contracts, terminal scrollback durability, and interactive controls for one-shot runtimes.",
+  "canonicalClaims": [],
+  "coveragePoints": [
+    {
+      "id": "DESIGN-REQ-001",
+      "title": "Reuse existing SSE/EventSource live transport",
+      "type": "integration",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Reuse existing SSE/EventSource live transport; do not introduce WebSocket."
+    },
+    {
+      "id": "DESIGN-REQ-002",
+      "title": "Fetch structured history first and preserve artifact/merged-log fallback for refresh, ended runs, and stream failure",
+      "type": "durability",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Fetch structured history first and preserve artifact/merged-log fallback for refresh, ended runs, and stream failure."
+    },
+    {
+      "id": "DESIGN-REQ-003",
+      "title": "Define MoonMind-owned chat/session event vocabulary for turns, assistant output, tools, approvals, sessions, and status",
+      "type": "public-contract",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Define MoonMind-owned chat/session event vocabulary for turns, assistant output, tools, approvals, sessions, and status."
+    },
+    {
+      "id": "DESIGN-REQ-004",
+      "title": "Normalize chat-like events into RunObservabilityEvent with run, sequence, stream, kind, text, identity, and compact metadata",
+      "type": "public-contract",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Normalize chat-like events into RunObservabilityEvent with run, sequence, stream, kind, text, identity, and compact metadata."
+    },
+    {
+      "id": "DESIGN-REQ-005",
+      "title": "Maintain a monotonic run-global event sequence",
+      "type": "state-model",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Maintain a monotonic run-global event sequence."
+    },
+    {
+      "id": "DESIGN-REQ-006",
+      "title": "Keep browser payloads normalized, compact, and free of secrets, full transcripts, large blobs, and raw provider-native event bodies",
+      "type": "security",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Keep browser payloads normalized, compact, and free of secrets, full transcripts, large blobs, and raw provider-native event bodies."
+    },
+    {
+      "id": "DESIGN-REQ-007",
+      "title": "Add a thin ManagedSessionObservabilityBridge that delegates to RuntimeLogStreamer.emit_observability_event",
+      "type": "integration",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Add a thin ManagedSessionObservabilityBridge that delegates to RuntimeLogStreamer.emit_observability_event."
+    },
+    {
+      "id": "DESIGN-REQ-008",
+      "title": "Map runtime-native observations in managed adapters, initially codex_cli managed session",
+      "type": "integration",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Map runtime-native observations in managed adapters, initially codex_cli managed session."
+    },
+    {
+      "id": "DESIGN-REQ-009",
+      "title": "Codex managed sessions emit lifecycle, user, assistant/stdout, tool where visible, reset, completion, and failure events",
+      "type": "observability",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Codex managed sessions emit lifecycle, user, assistant/stdout, tool where visible, reset, completion, and failure events."
+    },
+    {
+      "id": "DESIGN-REQ-010",
+      "title": "Persist stdout/stderr, diagnostics, and structured observability.events.jsonl for durable reconstruction",
+      "type": "artifact",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Persist stdout/stderr, diagnostics, and structured observability.events.jsonl for durable reconstruction."
+    },
+    {
+      "id": "DESIGN-REQ-011",
+      "title": "Live stream/spool publishing failure must not fail runtime execution or artifact publication",
+      "type": "resilience",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Live stream/spool publishing failure must not fail runtime execution or artifact publication."
+    },
+    {
+      "id": "DESIGN-REQ-012",
+      "title": "Project standardized events into distinct Live Logs timeline rows, chips, cards, and reset banners",
+      "type": "ui",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Project standardized events into distinct Live Logs timeline rows, chips, cards, and reset banners."
+    },
+    {
+      "id": "DESIGN-REQ-013",
+      "title": "Existing stdout/stderr, diagnostics panels, merged-log fallback, and historical run display continue to work",
+      "type": "compatibility",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Existing stdout/stderr, diagnostics panels, merged-log fallback, and historical run display continue to work."
+    },
+    {
+      "id": "DESIGN-REQ-014",
+      "title": "observability-summary exposes sessionSnapshot and interventionCapabilities derived from runtime/session records",
+      "type": "api",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "observability-summary exposes sessionSnapshot and interventionCapabilities derived from runtime/session records."
+    },
+    {
+      "id": "DESIGN-REQ-015",
+      "title": "Follow-up, clear/reset, interrupt, and cancel controls are gated by capabilities, session identity, run terminal state, and active turn state",
+      "type": "control",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Follow-up, clear/reset, interrupt, and cancel controls are gated by capabilities, session identity, run terminal state, and active turn state."
+    },
+    {
+      "id": "DESIGN-REQ-016",
+      "title": "Control actions use HTTP POST and MoonMind/Temporal runtime adapters, not WebSocket or arbitrary terminal input",
+      "type": "integration",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Control actions use HTTP POST and MoonMind/Temporal runtime adapters, not WebSocket or arbitrary terminal input."
+    },
+    {
+      "id": "DESIGN-REQ-017",
+      "title": "One-shot managed agents may show logs/markers but must not appear follow-up capable",
+      "type": "constraint",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "One-shot managed agents may show logs/markers but must not appear follow-up capable."
+    },
+    {
+      "id": "DESIGN-REQ-018",
+      "title": "Successful control actions create visible timeline evidence and failed controls surface operator-readable errors",
+      "type": "observability",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Successful control actions create visible timeline evidence and failed controls surface operator-readable errors."
+    },
+    {
+      "id": "DESIGN-REQ-019",
+      "title": "Use Omnigent as a reference without porting its full session-server, tunnel, resource, terminal, fork, list, or sub-agent product architecture",
+      "type": "non-goal",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Use Omnigent as a reference without porting its full session-server, tunnel, resource, terminal, fork, list, or sub-agent product architecture."
+    },
+    {
+      "id": "DESIGN-REQ-020",
+      "title": "Cover backend bridge, runtime Codex emission, API history/SSE/control behavior, frontend rendering, fallback, and guardrails",
+      "type": "test",
+      "source_section": "MM-976 workflow instructions",
+      "explanation": "Cover backend bridge, runtime Codex emission, API history/SSE/control behavior, frontend rendering, fallback, and guardrails."
+    }
+  ],
+  "coverageGate": "PASS - every major design point is owned by at least one story.",
+  "stories": [
+    {
+      "id": "STORY-001",
+      "summary": "Standardize managed-session observability events",
+      "shortName": "session-event-contract",
+      "description": "As a MoonMind operator, I need managed-session activity represented by stable MoonMind observability events so dashboard and artifact consumers can interpret turns, messages, tools, approvals, status, and session boundaries without provider-native contracts.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-976: Implement chat-like managed-agent observability and controls in MoonMind dashboard",
+        "sections": [
+          "Standardize chat-like observability event kinds",
+          "Normalize all events",
+          "ManagedSessionObservabilityBridge"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-003",
+          "DESIGN-REQ-004",
+          "DESIGN-REQ-005",
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-007"
+        ]
+      },
+      "independentTest": "Unit tests instantiate the bridge with a fake RuntimeLogStreamer, emit each event family, and assert RunObservabilityEvent-compatible payloads with stable kind, stream, run ID, sequence participation, text, optional session identity, and compact sanitized metadata.",
+      "acceptanceCriteria": [
+        "Shared constants or typed literals define the standardized event vocabulary.",
+        "ManagedSessionObservabilityBridge exposes stable helpers and delegates to RuntimeLogStreamer.emit_observability_event.",
+        "Events validate with run ID, stream, kind, text, and optional session identity fields.",
+        "Provider-native names are metadata only and never required by browser consumers.",
+        "Secret-like or oversized metadata is rejected or redacted according to existing policy."
+      ],
+      "requirements": [
+        "Define event kinds for turn, assistant, tool, approval/intervention, session lifecycle, runtime/model status, and system annotation.",
+        "Place source loading/emission at runtime/activity boundaries, not workflow payloads.",
+        "Keep provider-specific translation outside the bridge.",
+        "Support missing optional session fields without validation failure."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-003",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-004",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-005",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-006",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-007",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        }
+      ],
+      "dependencies": [],
+      "assumptions": [
+        "RuntimeLogStreamer remains responsible for persistence/live publication and sequence allocation."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-002",
+      "summary": "Emit Codex managed-session timeline events",
+      "shortName": "codex-session-events",
+      "description": "As an operator watching a Codex managed session, I need turn lifecycle, user submission, assistant output, tool/status markers where reliable, completion/failure, and reset boundaries emitted as normalized observability events while existing stdout/stderr artifacts remain intact.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-976: Implement chat-like managed-agent observability and controls in MoonMind dashboard",
+        "sections": [
+          "Runtime-specific mapping",
+          "Initial target runtime: codex_cli managed session",
+          "Preserve durable history"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-008",
+          "DESIGN-REQ-009",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "independentTest": "Runtime tests drive Codex managed-session launch, follow-up, assistant output/stdout, clear/reset, success, and failure paths and assert expected normalized events persist in sequence without breaking stdout/stderr/diagnostics artifacts.",
+      "acceptanceCriteria": [
+        "Codex emits session_started or session_resumed when session identity is available.",
+        "Submitted turns emit user_message_submitted and turn_started when the boundary is observable.",
+        "Assistant output emits assistant_message_delta/assistant_message where available or remains visible through stdout/stderr rows.",
+        "Tool, approval, runtime_status, and model_status events are emitted only when reliable markers exist.",
+        "Clear/reset emits session_cleared and session_reset_boundary.",
+        "Spool/live publication failures do not fail runtime execution or suppress artifacts."
+      ],
+      "requirements": [
+        "Wire the bridge into the Codex managed-session adapter.",
+        "Translate Codex-native observations to stable event kinds at the adapter boundary.",
+        "Retain stdout/stderr and diagnostics artifact production.",
+        "Persist events into the structured history/event journal."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-008",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-009",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-010",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-011",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-020",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Codex exposes enough session/turn boundaries for the initial lifecycle markers."
+      ],
+      "needsClarification": [
+        "Which Codex-visible markers are reliable enough for first-version tool_call_* classification?"
+      ]
+    },
+    {
+      "id": "STORY-003",
+      "summary": "Serve durable chat timeline history over existing observability APIs",
+      "shortName": "durable-timeline-history",
+      "description": "As an operator refreshing or reopening a run, I need the same chat-like timeline reconstructed from durable observability history and artifacts, with SSE used only as live convenience for active runs.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-976: Implement chat-like managed-agent observability and controls in MoonMind dashboard",
+        "sections": [
+          "Keep SSE as live read transport",
+          "Preserve durable history",
+          "Live output acceptance criteria"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-010",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "independentTest": "API tests create structured events, merged logs, terminal and active states, then assert observability-summary, observability/events, and /logs/stream expose ordered normalized events while terminal runs avoid live streaming and fallback data remains available.",
+      "acceptanceCriteria": [
+        "observability/events returns structured chat/session events in run-global sequence order.",
+        "/logs/stream emits the new event kinds over existing SSE without schema errors.",
+        "Terminal runs do not advertise or open live streams.",
+        "Merged/stdout/stderr fallback still works when structured history is unavailable.",
+        "Page refresh reconstructs visible timeline rows without a live browser having been connected."
+      ],
+      "requirements": [
+        "Keep EventSource/SSE as the live read transport.",
+        "Keep live stream non-authoritative relative to artifacts/history.",
+        "Expose durable stdout, stderr, diagnostics, and observability events.",
+        "Preserve legacy API behavior for historical viewers."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-001",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-002",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-010",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-011",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-013",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-020",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        }
+      ],
+      "dependencies": [
+        "STORY-001"
+      ],
+      "assumptions": [
+        "Existing observability APIs can carry additional event kinds without a new endpoint."
+      ],
+      "needsClarification": []
+    },
+    {
+      "id": "STORY-004",
+      "summary": "Render Live Logs as a chat-like managed-agent timeline",
+      "shortName": "chat-timeline-ui",
+      "description": "As an operator viewing Live Logs, I need user messages, assistant output, tool calls, approvals, turn boundaries, failures, and session resets visually distinct while preserving the current logs, diagnostics, and fallback experience.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-976: Implement chat-like managed-agent observability and controls in MoonMind dashboard",
+        "sections": [
+          "Improve UI projection",
+          "Chat-like UI acceptance criteria"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-012",
+          "DESIGN-REQ-013",
+          "DESIGN-REQ-001",
+          "DESIGN-REQ-002",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "independentTest": "Frontend tests feed representative normalized events into classifyTimelineRow and the renderer and assert distinct treatments for user, assistant, tool, approval, reset boundary, failure, stdout/stderr, SSE error fallback, and merged-log fallback.",
+      "acceptanceCriteria": [
+        "User-message events render as user-turn headers or bubbles.",
+        "Assistant events render as grouped assistant output rows or bubbles.",
+        "Tool events render as chips or collapsible/nested tool sections.",
+        "Approval/intervention events render as highlighted operator-attention rows.",
+        "Session reset boundaries are obvious and turn completion/failure markers are visible.",
+        "Existing stdout/stderr/diagnostics and legacy merged-log fallback paths continue to render."
+      ],
+      "requirements": [
+        "Extend timeline row classification for standardized event kinds.",
+        "Implement row treatments as a projection over existing timeline data.",
+        "Keep SSE lifecycle/fallback behavior unchanged.",
+        "Avoid UI copy implying one-shot runtimes can receive follow-ups."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-012",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-013",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-001",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-002",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-020",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "TimelineRow can be extended without replacing Live Logs."
+      ],
+      "needsClarification": [
+        "Should the chat-like projection be the default when event kinds are present or a mode toggle?"
+      ]
+    },
+    {
+      "id": "STORY-005",
+      "summary": "Gate managed-session controls by runtime capabilities",
+      "shortName": "capability-gated-controls",
+      "description": "As an operator, I need follow-up, clear/reset, interrupt, and cancel controls to appear and execute only when the managed runtime session explicitly supports them, so one-shot runs are never presented as interactive sessions.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-976: Implement chat-like managed-agent observability and controls in MoonMind dashboard",
+        "sections": [
+          "Generalize session follow-up controls",
+          "Respect one-shot runtime limits",
+          "API behavior"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-014",
+          "DESIGN-REQ-015",
+          "DESIGN-REQ-016",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-018",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "independentTest": "Backend and frontend tests exercise session-capable, one-shot, active-turn, terminal, and unsupported-action runs; controls render only from capabilities, posts route through the artifact-session endpoint, unsupported actions are rejected, and outcomes produce visible evidence/errors.",
+      "acceptanceCriteria": [
+        "observability-summary includes bounded sessionSnapshot and interventionCapabilities from managed-session/runtime records.",
+        "Frontend no longer derives follow-up visibility or session IDs from Codex runtime-name guesses.",
+        "send_follow_up appears only with session ID, sendFollowUp true, and non-terminal run state.",
+        "clear_session, interrupt_turn, and cancel are independently capability-gated.",
+        "Control actions route through MoonMind/Temporal runtime adapters, not raw terminal input or WebSocket.",
+        "Unsupported actions and false capabilities produce operator-readable errors."
+      ],
+      "requirements": [
+        "Extend managed-session schema/API summary with capability metadata.",
+        "Validate capabilities in the control endpoint as well as the frontend.",
+        "Preserve Codex send_follow_up and clear_session through the generalized path.",
+        "Emit durable control/reset timeline evidence for successful actions and readable errors for failures."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-014",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-015",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-016",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-017",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-018",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-020",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-003"
+      ],
+      "assumptions": [
+        "Runtime adapter/session records can authoritatively describe intervention capabilities."
+      ],
+      "needsClarification": [
+        "Should interrupt_turn ship immediately or only once a concrete runtime adapter supports it?"
+      ]
+    },
+    {
+      "id": "STORY-006",
+      "summary": "Enforce observability and control safety guardrails",
+      "shortName": "chat-observability-guardrails",
+      "description": "As a MoonMind maintainer, I need explicit guardrails and regression tests so the chat-like experience does not leak provider-native payloads or secrets, depend on non-durable state, or accidentally port out-of-scope Omnigent product architecture.",
+      "sourceReference": {
+        "path": null,
+        "title": "MM-976: Implement chat-like managed-agent observability and controls in MoonMind dashboard",
+        "sections": [
+          "Non-goals",
+          "Safety and durability rules",
+          "Risks and mitigations"
+        ],
+        "claimIds": [],
+        "coverageIds": [
+          "DESIGN-REQ-006",
+          "DESIGN-REQ-011",
+          "DESIGN-REQ-017",
+          "DESIGN-REQ-019",
+          "DESIGN-REQ-020"
+        ]
+      },
+      "independentTest": "Guardrail tests pass secret-like metadata, oversized provider-native payloads, terminal-scrollback-only state, unsupported one-shot controls, and disabled live publication; expected results are redaction/rejection, artifact preservation, hidden controls, and no WebSocket/session-server dependency.",
+      "acceptanceCriteria": [
+        "Browser-facing payloads remain MoonMind-normalized and do not require provider-native bodies.",
+        "Secrets, raw env, OAuth tokens, API keys, and full unredacted transcripts are not emitted.",
+        "No behavior depends on terminal scrollback, runtime home directories, or container-local thread databases as durable truth.",
+        "No WebSocket, Omnigent session server, runner tunnel, terminal attachment, resource browser, forks, sub-agent trees, or session-list scope is introduced.",
+        "Control actions are capability-gated and never write arbitrary terminal input without a safe runtime-specific adapter."
+      ],
+      "requirements": [
+        "Encode security and non-goal guardrails in contract tests or nearby documentation.",
+        "Add regression coverage for metadata sanitization and provider-native payload exclusion.",
+        "Prove live stream failure is non-fatal and artifacts persist.",
+        "Prove one-shot runtimes do not advertise follow-up capabilities."
+      ],
+      "sourceDesignCoverage": [
+        {
+          "coverageId": "DESIGN-REQ-006",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-011",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-017",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-019",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        },
+        {
+          "coverageId": "DESIGN-REQ-020",
+          "ownership": "This story explicitly owns this design point through scope, acceptance criteria, and tests."
+        }
+      ],
+      "dependencies": [
+        "STORY-001",
+        "STORY-005"
+      ],
+      "assumptions": [
+        "Omnigent remains a reference only; MoonMind's artifact-first model remains authoritative."
+      ],
+      "needsClarification": []
+    }
+  ],
+  "coverageMatrix": {
+    "DESIGN-REQ-001": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-002": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-003": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-004": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-005": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-006": [
+      "STORY-001",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-007": [
+      "STORY-001"
+    ],
+    "DESIGN-REQ-008": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-009": [
+      "STORY-002"
+    ],
+    "DESIGN-REQ-010": [
+      "STORY-002",
+      "STORY-003"
+    ],
+    "DESIGN-REQ-011": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-012": [
+      "STORY-004"
+    ],
+    "DESIGN-REQ-013": [
+      "STORY-003",
+      "STORY-004"
+    ],
+    "DESIGN-REQ-014": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-015": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-016": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-017": [
+      "STORY-005",
+      "STORY-006"
+    ],
+    "DESIGN-REQ-018": [
+      "STORY-005"
+    ],
+    "DESIGN-REQ-019": [
+      "STORY-006"
+    ],
+    "DESIGN-REQ-020": [
+      "STORY-002",
+      "STORY-003",
+      "STORY-004",
+      "STORY-005",
+      "STORY-006"
+    ]
+  },
+  "outOfScope": [
+    "WebSocket transport for managed-agent chat.",
+    "Omnigent session server, runner tunnel, host liveness, resource browser, terminal attachment model, session lists, forks, sub-agent trees, or resource APIs.",
+    "Making one-shot CLI agents fully interactive.",
+    "Replacing Live Logs with a chat-only UI or treating live stream as durable truth.",
+    "Provider-native browser payload contracts or terminal scrollback/container-local databases as durable state."
+  ],
+  "referenceNotes": [
+    "Omnigent was shallow-cloned to /tmp/omnigent-mm-976 as an Apache-2.0 reference. The breakdown preserves MoonMind's stated boundary: borrow operator-experience concepts, not Omnigent's full session-server architecture."
+  ]
+}
