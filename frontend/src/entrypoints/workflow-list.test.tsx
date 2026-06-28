@@ -55,6 +55,15 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByText('Loading workflows...')).toBeTruthy();
   });
 
+  it('MM-997 keeps /workflows as the full-width list route instead of the workspace shell', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+
+    expect(document.querySelector('.workflow-workspace-shell')).toBeNull();
+    expect(document.querySelector('.queue-table-wrapper')).toBeTruthy();
+  });
+
   it('shows structured API validation detail when the workflow list request fails', async () => {
     fetchSpy.mockResolvedValue({
       ok: false,
