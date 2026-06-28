@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from moonmind.omnigent.execute import InMemoryOmnigentRunStore, run_omnigent_execution
+from moonmind.omnigent.execute import run_omnigent_execution
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 pytestmark = [
@@ -41,7 +41,7 @@ def _live_env() -> dict[str, str]:
 
 
 async def test_live_omnigent_smoke_disposable_managed_session() -> None:
-    env = _live_env()
+    _live_env()
     request = AgentExecutionRequest(
         agentKind="external",
         agentId="omnigent",
@@ -56,11 +56,7 @@ async def test_live_omnigent_smoke_disposable_managed_session() -> None:
         },
     )
 
-    result = await run_omnigent_execution(
-        request,
-        env=env,
-        run_store=InMemoryOmnigentRunStore(),
-    )
+    result = await run_omnigent_execution(request)
 
     assert result.failure_class is None
     assert result.metadata["providerName"] == "omnigent"
