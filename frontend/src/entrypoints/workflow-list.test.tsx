@@ -346,6 +346,80 @@ describe('Workflows Entrypoint', () => {
     expect(updatedCell.getAttribute('title')).not.toBe(staleExact);
   });
 
+  it('uses closedAt for terminal rows when synthetic updatedAt is older', async () => {
+    const closedAt = '2026-04-15T20:00:00Z';
+    const syntheticUpdatedAt = '2026-04-15T10:00:00Z';
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-completed',
+            source: 'temporal',
+            title: 'Completed task',
+            status: 'completed',
+            state: 'completed',
+            rawState: 'completed',
+            createdAt: '2026-04-15T09:00:00Z',
+            updatedAt: syntheticUpdatedAt,
+            closedAt,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Completed task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    const expectedExact = new Date(closedAt).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(updatedCell.getAttribute('title')).toBe(expectedExact);
+  });
+
+  it('uses scheduledFor for scheduled rows when synthetic updatedAt is older', async () => {
+    const scheduledFor = '2026-04-15T20:00:00Z';
+    const syntheticUpdatedAt = '2026-04-15T10:00:00Z';
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-scheduled',
+            source: 'temporal',
+            title: 'Scheduled task',
+            status: 'scheduled',
+            state: 'scheduled',
+            rawState: 'scheduled',
+            createdAt: '2026-04-15T09:00:00Z',
+            updatedAt: syntheticUpdatedAt,
+            scheduledFor,
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const row = await screen.findByRole('row', { name: /Scheduled task/ });
+    const updatedCell = row.querySelector('.queue-table-cell-date') as HTMLElement;
+    const expectedExact = new Date(scheduledFor).toLocaleString(undefined, {
+      year: '2-digit',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    expect(updatedCell.getAttribute('title')).toBe(expectedExact);
+  });
+
   it('floors relative Updated values so units roll over at the exact threshold', async () => {
     // 1h50m before now: Math.floor -> "1h ago"; Math.round would show "2h ago".
     // Computed against the real clock so the assertion is deterministic.

@@ -299,7 +299,29 @@ function nextActionItems(row: ExecutionRow): string[] {
   return items;
 }
 
+const TERMINAL_UPDATED_AT_FALLBACK_STATES = new Set(['completed', 'failed', 'canceled', 'cancelled', 'succeeded']);
+
+function rowLifecycleState(row: ExecutionRow): string {
+  return String(row.rawState || row.state || row.status || '').toLowerCase();
+}
+
+function laterTimestamp(preferred: string | null | undefined, fallback: string): string {
+  if (!preferred) return fallback;
+  const preferredMs = Date.parse(preferred);
+  const fallbackMs = Date.parse(fallback);
+  if (Number.isNaN(preferredMs)) return fallback;
+  if (Number.isNaN(fallbackMs)) return preferred;
+  return preferredMs >= fallbackMs ? preferred : fallback;
+}
+
 function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
+  const state = rowLifecycleState(row);
+  if (row.closedAt && TERMINAL_UPDATED_AT_FALLBACK_STATES.has(state)) {
+    return laterTimestamp(row.updatedAt, row.closedAt);
+  }
+  if (row.scheduledFor && state === 'scheduled') {
+    return laterTimestamp(row.updatedAt, row.scheduledFor);
+  }
   return row.updatedAt || row.closedAt || row.scheduledFor || row.createdAt;
 }
 
