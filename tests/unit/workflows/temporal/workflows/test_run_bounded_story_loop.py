@@ -230,6 +230,41 @@ def test_parent_loop_continues_from_structured_gate_when_remediation_remains() -
     )
 
 
+def test_parent_loop_continues_to_scheduled_remediation_without_remaining_work_ref() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}}
+    ]
+    workflow._step_terminal_dispositions["verify-1"] = "accepted"
+
+    decision = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            recommended_next_action="reattempt_current_step",
+            target_logical_step_id="remediate-1",
+        ),
+        gate_result_ref="artifact://gate/attempt-1",
+        ordered_nodes=[
+            {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+            {
+                "id": "remediate-1",
+                "inputs": {
+                    "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+                },
+            },
+            {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        ],
+        current_index=0,
+    )
+
+    assert decision["continueLoop"] is True
+    assert decision["nextAttemptKind"] == "remediation"
+    assert decision["remainingWorkRef"] is None
+    assert decision["hasRemainingRemediationStep"] is True
+    assert decision["gate"]["remainingWorkRef"] is None
+
 def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted() -> None:
     workflow = MoonMindRunWorkflow()
     workflow._step_ledger_rows = [
