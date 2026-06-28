@@ -7322,6 +7322,8 @@ describe('Workflow Detail Entrypoint', () => {
     };
     const executionDetailUrl = '/api/executions/test-123?source=temporal';
 
+    let resolveFollowUpControl: ((response: Response) => void) | null = null;
+
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/observability-summary')) {
@@ -7350,20 +7352,26 @@ describe('Workflow Detail Entrypoint', () => {
         } as Response);
       }
       if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        const action = JSON.parse(String(init?.body || '{}')).action;
+        if (action === 'send_follow_up') {
+          return new Promise((resolve) => {
+            resolveFollowUpControl = resolve;
+          });
+        }
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            action: JSON.parse(String(init?.body || '{}')).action,
+            action,
             projection: {
               agent_run_id: 'wf-task-1',
               session_id: 'sess:wf-task-1:codex_cli',
-              session_epoch: JSON.parse(String(init?.body || '{}')).action === 'clear_session' ? 2 : 1,
+              session_epoch: action === 'clear_session' ? 2 : 1,
               grouped_artifacts: [],
               latest_summary_ref: { artifact_id: 'art-summary' },
               latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
               latest_control_event_ref: { artifact_id: 'art-control' },
               latest_reset_boundary_ref:
-                JSON.parse(String(init?.body || '{}')).action === 'clear_session'
+                action === 'clear_session'
                   ? { artifact_id: 'art-reset' }
                   : null,
             },
@@ -7410,6 +7418,14 @@ describe('Workflow Detail Entrypoint', () => {
     ).length;
     fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
 
+    const pendingMessages = await screen.findByLabelText('Pending session messages');
+    const optimisticBubble = within(pendingMessages).getByText('Continue with the existing session.');
+    const optimisticContainer = optimisticBubble.closest('.chat-session-message');
+    expect(optimisticContainer?.getAttribute('data-client-event-key')).toMatch(
+      /^MM-1015:MM-977:sess:wf-task-1:codex_cli:1:\d+$/,
+    );
+    expect(screen.getByText('Operator message · Sending')).toBeTruthy();
+
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         '/api/agent-runs/wf-task-1/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control',
@@ -7421,6 +7437,29 @@ describe('Workflow Detail Entrypoint', () => {
           }),
         }),
       );
+    });
+    expect(resolveFollowUpControl).toBeTruthy();
+
+    act(() => {
+      resolveFollowUpControl?.({
+        ok: true,
+        json: async () => ({
+          action: 'send_follow_up',
+          projection: {
+            agent_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: { artifact_id: 'art-summary' },
+            latest_checkpoint_ref: { artifact_id: 'art-checkpoint' },
+            latest_control_event_ref: { artifact_id: 'art-control' },
+            latest_reset_boundary_ref: null,
+          },
+        }),
+      } as Response);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('Operator message · Sending')).toBeNull();
     });
     await waitFor(() => {
       expect(
@@ -7446,6 +7485,105 @@ describe('Workflow Detail Entrypoint', () => {
         }),
       );
     });
+  });
+
+  it('marks optimistic follow-up bubbles failed when durable control confirmation fails', async () => {
+    const codexPayload: BootPayload = {
+      ...mockPayload,
+      initialData: { dashboardConfig: { features: { temporalDashboard: { actionsEnabled: true } } } },
+    };
+    const mockExecution = {
+      taskId: 'test-123',
+      workflowId: 'wf-session-123',
+      namespace: 'default',
+      temporalRunId: '01-run',
+      runId: '01-run',
+      source: 'temporal',
+      title: 'Codex session task',
+      summary: 'Session-backed work',
+      status: 'running',
+      state: 'executing',
+      rawState: 'executing',
+      targetRuntime: 'codex_cli',
+      agentRunId: 'wf-task-1',
+      createdAt: '2026-03-28T00:00:00Z',
+      updatedAt: '2026-03-28T00:00:02Z',
+      actions: {
+        canCancel: true,
+      },
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: false,
+              liveStreamStatus: 'unavailable',
+              sessionSnapshot: {
+                sessionId: 'sess:wf-task-1:codex_cli',
+                sessionEpoch: 1,
+                containerId: 'ctr-1',
+                threadId: 'thread-1',
+                activeTurnId: null,
+              },
+              interventionCapabilities: {
+                sendFollowUp: true,
+                clearSession: false,
+                interruptTurn: false,
+                cancelSession: false,
+              },
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli/control')) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: async () => ({ detail: 'Follow-up is not supported for this session.' }),
+        } as Response);
+      }
+      if (url.includes('/artifact-sessions/sess%3Awf-task-1%3Acodex_cli')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            agent_run_id: 'wf-task-1',
+            session_id: 'sess:wf-task-1:codex_cli',
+            session_epoch: 1,
+            grouped_artifacts: [],
+            latest_summary_ref: null,
+            latest_checkpoint_ref: null,
+            latest_control_event_ref: null,
+            latest_reset_boundary_ref: null,
+          }),
+        } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => mockExecution,
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={codexPayload} />);
+
+    fireEvent.change(await screen.findByLabelText('Follow-up message'), {
+      target: { value: 'Try the next turn.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send follow-up' }));
+
+    const pendingMessages = await screen.findByLabelText('Pending session messages');
+    expect(within(pendingMessages).getByText('Try the next turn.')).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByText('Operator message · Failed')).toBeTruthy();
+    });
+    expect(screen.getAllByText('Follow-up is not supported for this session.').length).toBeGreaterThan(0);
   });
 
   it('routes active-turn interrupt and cancel controls through the agent-run session control API', async () => {

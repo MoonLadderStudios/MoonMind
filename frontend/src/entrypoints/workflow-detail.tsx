@@ -1289,6 +1289,27 @@ const ArtifactSessionControlResponseSchema = z.object({
   projection: ArtifactSessionProjectionSchema,
 });
 
+type ArtifactSessionControlAction = z.infer<typeof ArtifactSessionControlResponseSchema>['action'];
+
+type ArtifactSessionControlRequest = {
+  action: ArtifactSessionControlAction;
+  message?: string;
+  reason?: string;
+};
+
+type ChatSessionMessageEvent = {
+  type: 'chat_session.message_submitted';
+  clientEventKey: string;
+  sessionId: string;
+  sessionEpoch: number;
+  message: string;
+};
+
+type OptimisticChatSessionMessage = ChatSessionMessageEvent & {
+  status: 'pending' | 'failed';
+  error?: string;
+};
+
 const InterventionCapabilitiesSchema = z
   .object({
     sendFollowUp: z.boolean().default(false),
@@ -2152,7 +2173,7 @@ async function controlArtifactSession(
   apiBase: string,
   agentRunId: string,
   sessionId: string,
-  body: { action: 'send_follow_up' | 'clear_session' | 'interrupt_turn' | 'cancel_session'; message?: string; reason?: string },
+  body: ArtifactSessionControlRequest,
   routeTemplate?: string | null,
 ): Promise<z.infer<typeof ArtifactSessionControlResponseSchema>> {
   const resp = await fetch(
@@ -2182,6 +2203,15 @@ async function controlArtifactSession(
     throw new Error(detail);
   }
   return ArtifactSessionControlResponseSchema.parse(await resp.json());
+}
+
+function chatSessionMessageEventToControlRequest(
+  event: ChatSessionMessageEvent,
+): ArtifactSessionControlRequest {
+  return {
+    action: 'send_follow_up',
+    message: event.message,
+  };
 }
 
 /** Fetch the observability summary for a agent run. */
@@ -4842,6 +4872,8 @@ function SessionContinuityPanel({
   const sessionId = sessionSnapshot?.sessionId ?? null;
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
+  const [optimisticMessages, setOptimisticMessages] = useState<OptimisticChatSessionMessage[]>([]);
+  const optimisticMessageSequenceRef = useRef(0);
 
   const projectionQuery = useQuery({
     queryKey: ['agent-run-session-projection', agentRunId, sessionId],
@@ -4861,7 +4893,7 @@ function SessionContinuityPanel({
   });
 
   const controlMutation = useMutation({
-    mutationFn: async (body: { action: 'send_follow_up' | 'clear_session' | 'interrupt_turn' | 'cancel_session'; message?: string; reason?: string }) => {
+    mutationFn: async (body: ArtifactSessionControlRequest) => {
       if (!sessionId) throw new Error('Managed session is unavailable.');
       return controlArtifactSession(apiBase, agentRunId, sessionId, body, routes.artifactSessionControl);
     },
@@ -4878,6 +4910,42 @@ function SessionContinuityPanel({
       }
     },
     onError: (error: Error) => setPanelError(error.message),
+  });
+
+  const followUpMutation = useMutation({
+    mutationFn: async (event: ChatSessionMessageEvent) => {
+      if (!sessionId) throw new Error('Managed session is unavailable.');
+      return controlArtifactSession(
+        apiBase,
+        agentRunId,
+        sessionId,
+        chatSessionMessageEventToControlRequest(event),
+        routes.artifactSessionControl,
+      );
+    },
+    onSuccess: (result, event) => {
+      setPanelError(null);
+      setOptimisticMessages((messages) =>
+        messages.filter((message) => message.clientEventKey !== event.clientEventKey),
+      );
+      void queryClient.setQueryData(
+        ['agent-run-session-projection', agentRunId, sessionId],
+        result.projection,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['observability-summary', agentRunId] });
+      invalidateWorkflowDetail();
+      setFollowUpMessage('');
+    },
+    onError: (error: Error, event) => {
+      setPanelError(error.message);
+      setOptimisticMessages((messages) =>
+        messages.map((message) =>
+          message.clientEventKey === event.clientEventKey
+            ? { ...message, status: 'failed', error: error.message }
+            : message,
+        ),
+      );
+    },
   });
 
   if (summaryQuery.isLoading) {
@@ -4929,7 +4997,7 @@ function SessionContinuityPanel({
     ['Latest Control', projection.latest_control_event_ref?.artifact_id ?? null],
     ['Latest Reset', projection.latest_reset_boundary_ref?.artifact_id ?? null],
   ].filter(([, artifactId]) => artifactId !== null) as Array<[string, string]>;
-  const busy = controlMutation.isPending;
+  const busy = controlMutation.isPending || followUpMutation.isPending;
   const canSendFollowUp = Boolean(sessionId && interventionCapabilities.sendFollowUp && !isTerminal);
   const canClearSession = Boolean(sessionId && interventionCapabilities.clearSession && !isTerminal);
   const canInterruptTurn = Boolean(sessionId && interventionCapabilities.interruptTurn && !isTerminal);
@@ -4937,12 +5005,20 @@ function SessionContinuityPanel({
 
   const submitFollowUp = () => {
     const message = followUpMessage.trim();
-    if (!message) return;
-    setPanelError(null);
-    controlMutation.mutate({
-      action: 'send_follow_up',
+    if (!message || !sessionId) return;
+    const event: ChatSessionMessageEvent = {
+      type: 'chat_session.message_submitted',
+      clientEventKey: `MM-1015:MM-977:${sessionId}:${sessionSnapshot?.sessionEpoch ?? projection.session_epoch}:${optimisticMessageSequenceRef.current++}`,
+      sessionId,
+      sessionEpoch: sessionSnapshot?.sessionEpoch ?? projection.session_epoch,
       message,
-    });
+    };
+    setPanelError(null);
+    setOptimisticMessages((messages) => [
+      ...messages.filter((pending) => pending.clientEventKey !== event.clientEventKey),
+      { ...event, status: 'pending' },
+    ]);
+    followUpMutation.mutate(event);
   };
 
   const clearSession = () => {
@@ -5017,6 +5093,25 @@ function SessionContinuityPanel({
       </div>
 
       <div className="stack">
+        {optimisticMessages.length > 0 ? (
+          <div className="chat-session-message-list" aria-label="Pending session messages">
+            {optimisticMessages.map((message) => (
+              <div
+                key={message.clientEventKey}
+                className={`chat-session-message chat-session-message-${message.status}`}
+                data-client-event-key={message.clientEventKey}
+              >
+                <div className="chat-session-message-meta">
+                  Operator message · {message.status === 'pending' ? 'Sending' : 'Failed'}
+                </div>
+                <div className="chat-session-message-text">{message.message}</div>
+                {message.error ? (
+                  <div className="chat-session-message-error">{message.error}</div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
         <label htmlFor="session-follow-up">Follow-up message</label>
         <textarea
           id="session-follow-up"
