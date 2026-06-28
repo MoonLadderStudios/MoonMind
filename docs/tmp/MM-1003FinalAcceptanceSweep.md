@@ -1,7 +1,7 @@
 # MM-1003 Final Acceptance Sweep
 
-Source issue: MM-1003  
-Source traceability: MM-975  
+Source issue: MM-1003
+Source traceability: MM-975
 Date: 2026-06-28
 
 ## Scope
