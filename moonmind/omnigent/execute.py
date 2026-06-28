@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
+import inspect
 from typing import Any
 
 import httpx
@@ -14,13 +14,16 @@ from temporalio import activity
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
-    resolved_request_timeout_seconds,
+    resolved_api_token,
+    resolved_default_agent_name,
     resolved_server_url,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
-    build_omnigent_first_message,
-    omnigent_parameters,
+    OmnigentAdapterError,
+    build_omnigent_selection,
+    build_omnigent_session_create_payload,
+    resolve_omnigent_target,
 )
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
@@ -157,6 +160,53 @@ def _session_options(omni: dict[str, Any]) -> dict[str, Any]:
     return session if isinstance(session, dict) else {}
 
 
+def _build_omnigent_first_message(
+    *,
+    request: AgentExecutionRequest,
+    prompt: dict[str, Any],
+) -> dict[str, Any]:
+    text = str(prompt.get("text") or "").strip()
+    instruction_ref = str(prompt.get("instructionRef") or "").strip()
+    if not text and (instruction_ref or request.instruction_ref):
+        raise OmnigentContractError(
+            "Omnigent prompt requires inline text; instructionRef cannot be sent "
+            "without artifact resolution"
+        )
+    if not text:
+        text = str((request.parameters or {}).get("description") or "").strip()
+    if not text:
+        title = str((request.parameters or {}).get("title") or "MoonMind Agent Task").strip()
+        workspace_blob = json.dumps(request.workspace_spec or {}, indent=2, default=str)
+        parts = [
+            f"Task title: {title}",
+            f"Correlation ID: {request.correlation_id}",
+            f"Workspace spec (JSON):\n{workspace_blob}",
+        ]
+        if request.input_refs:
+            parts.append("Input refs: " + ", ".join(request.input_refs))
+        text = "\n\n".join(parts)
+
+    return {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        },
+    }
+
+
+async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
+    raise OmnigentContractError(
+        f"Omnigent bundleRef cannot be resolved by this activity: {bundle_ref}"
+    )
+
+
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
 def _safe_heartbeat(details: dict[str, Any]) -> None:
     try:
         activity.heartbeat(details)
@@ -285,67 +335,38 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             f"{OMNIGENT_DISABLED_MESSAGE} (missing: {', '.join(gate.missing)})"
         )
 
-    params = request.parameters or {}
-    omni = omnigent_parameters(request)
-    token = os.environ.get("OMNIGENT_API_TOKEN", "").strip() or None
     try:
+        selection = build_omnigent_selection(request)
         async with httpx.AsyncClient() as httpx_client:
             client = OmnigentHttpClient(
                 base_url=resolved_server_url(),
-                token=token,
-                request_timeout_seconds=float(resolved_request_timeout_seconds()),
+                api_token=resolved_api_token(),
                 client=httpx_client,
             )
 
-            agent_cfg = omni.get("agent") if isinstance(omni.get("agent"), dict) else {}
-            agent_id = str(agent_cfg.get("agentId") or agent_cfg.get("id") or "").strip()
-            agent_name = str(
-                agent_cfg.get("agentName")
-                or agent_cfg.get("name")
-                or os.environ.get("OMNIGENT_DEFAULT_AGENT_NAME", "")
-            ).strip()
-            if not agent_id:
-                agent_id = _resolve_agent_id(
-                    agents_payload=await client.list_agents(),
-                    requested_name=agent_name or None,
-                )
+            async def list_agents() -> list[dict[str, Any]]:
+                raw = await _maybe_await(client.list_agents())
+                if isinstance(raw, list):
+                    return [item for item in raw if isinstance(item, dict)]
+                if isinstance(raw, dict):
+                    return _agent_items(raw)
+                return []
 
-            session_cfg = _session_options(omni)
-            host_type = str(
-                session_cfg.get("hostType")
-                or omni.get("hostType")
-                or os.environ.get("OMNIGENT_DEFAULT_HOST_TYPE")
-                or "managed"
-            ).strip()
-            session_payload: dict[str, Any] = {
-                "agent_id": agent_id,
-                "title": str(params.get("title") or "MoonMind Agent Task"),
-                "idempotency_key": request.idempotency_key,
-                "labels": {
-                    "moonmind.correlation_id": request.correlation_id,
-                    "moonmind.idempotency_key": request.idempotency_key,
-                    "moonmind.issue": "MM-991",
-                },
-                "host_type": host_type,
-            }
-            workspace = (
-                session_cfg.get("workspace")
-                or omni.get("workspace")
-                or request.workspace_spec.get("repository")
+            target = await resolve_omnigent_target(
+                selection,
+                list_agents=list_agents,
+                upload_agent_bundle=_unsupported_bundle_upload,
+                default_agent_name=resolved_default_agent_name(),
             )
-            if workspace:
-                session_payload["workspace"] = workspace
-            host_id = session_cfg.get("hostId") or omni.get("hostId")
-            if host_type == "external" and host_id:
-                session_payload["host_id"] = str(host_id)
-            model = session_cfg.get("modelOverride") or omni.get("model")
-            if model:
-                session_payload["model_override"] = str(model)
-            reasoning_effort = session_cfg.get("reasoningEffort") or omni.get(
-                "reasoningEffort"
+            session_payload = build_omnigent_session_create_payload(
+                request=request,
+                selection=selection,
+                target=target,
             )
-            if reasoning_effort:
-                session_payload["reasoning_effort"] = str(reasoning_effort)
+            session_payload["idempotency_key"] = request.idempotency_key
+            labels = session_payload.setdefault("labels", {})
+            if isinstance(labels, dict):
+                labels.setdefault("moonmind.issue", "MM-991")
 
             retry_state = _heartbeat_state()
             session_id = _heartbeat_session_id(retry_state)
@@ -360,7 +381,10 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                     }
                 )
 
-            first_message = build_omnigent_first_message(request)
+            first_message = _build_omnigent_first_message(
+                request=request,
+                prompt=selection.prompt,
+            )
             digest = hashlib.sha256(
                 json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
@@ -436,11 +460,11 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 request=request,
                 terminal_status=terminal_status,
                 session_id=session_id,
-                agent_id=agent_id,
+                agent_id=target.agent_id,
                 final_snapshot=final_snapshot,
                 event_count=event_count["value"],
             )
-    except (OmnigentContractError, ValueError) as exc:
+    except (OmnigentContractError, OmnigentAdapterError, ValueError) as exc:
         return AgentRunResult(
             outputRefs=[],
             summary=_compact_summary(exc, fallback="Omnigent contract error"),

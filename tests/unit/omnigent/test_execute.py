@@ -269,6 +269,7 @@ async def test_run_omnigent_execution_uses_nested_session_parameters(
             "host_id": "host-1",
             "model_override": "codex-special",
             "reasoning_effort": "high",
+            "terminal_launch_args": [],
         }
     ]
     assert result.metadata["hostType"] == "external"

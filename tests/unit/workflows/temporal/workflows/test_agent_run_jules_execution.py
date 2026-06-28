@@ -439,6 +439,63 @@ async def test_resolve_adapter_metadata_normalizes_case_for_activity_routing(
         "callback_base_url": None,
     }
 
+async def test_resolve_adapter_metadata_exposes_gated_omnigent_streaming_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.adapters.external_adapter_registry import (
+        build_default_registry,
+    )
+
+    registry = build_default_registry(
+        env={
+            "OMNIGENT_ENABLED": "1",
+            "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+            "OMNIGENT_API_TOKEN": "activity-boundary-only",
+        }
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "build_default_registry",
+        lambda: registry,
+    )
+
+    metadata = await agent_run_module.resolve_adapter_metadata("omnigent")
+
+    assert metadata == {
+        "agent_id": "omnigent",
+        "execution_style": "streaming_gateway",
+        "supports_callbacks": False,
+        "callback_base_url": None,
+    }
+
+async def test_resolve_adapter_metadata_rejects_omnigent_top_level_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.workflows.adapters.external_adapter_registry import (
+        build_default_registry,
+    )
+
+    registry = build_default_registry(
+        env={
+            "OMNIGENT_ENABLED": "1",
+            "OMNIGENT_SERVER_URL": "https://omnigent.example.test",
+        }
+    )
+    monkeypatch.setattr(
+        agent_run_module,
+        "build_default_registry",
+        lambda: registry,
+    )
+
+    for alias in (
+        "omnigent_session",
+        "omnigent_claude",
+        "omnigent_codex",
+        "omnigent_polly",
+    ):
+        with pytest.raises(ValueError, match="No external adapter registered"):
+            await agent_run_module.resolve_adapter_metadata(alias)
+
 async def test_agent_run_streaming_gateway_uses_validated_provider_execute_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

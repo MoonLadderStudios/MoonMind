@@ -1,23 +1,21 @@
-"""Omnigent external-agent runtime gate for MM-991."""
-
-from __future__ import annotations
+"""Omnigent runtime integration settings."""
 
 from moonmind.omnigent.settings import (
-    DEFAULT_OMNIGENT_SERVER_URL,
     OMNIGENT_DISABLED_MESSAGE,
     OmnigentRuntimeGate,
     build_omnigent_gate,
     is_omnigent_enabled,
-    resolved_request_timeout_seconds,
+    resolved_api_token,
+    resolved_default_agent_name,
     resolved_server_url,
 )
 
 __all__ = [
-    "DEFAULT_OMNIGENT_SERVER_URL",
     "OMNIGENT_DISABLED_MESSAGE",
     "OmnigentRuntimeGate",
     "build_omnigent_gate",
     "is_omnigent_enabled",
-    "resolved_request_timeout_seconds",
+    "resolved_api_token",
+    "resolved_default_agent_name",
     "resolved_server_url",
 ]

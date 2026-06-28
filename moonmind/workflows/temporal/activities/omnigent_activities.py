@@ -11,7 +11,7 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRu
 async def omnigent_execute_activity(
     request: AgentExecutionRequest,
 ) -> AgentRunResult:
-    """Run one Omnigent session through the terminal streaming gateway."""
+    """Run one Omnigent streaming execution."""
 
     from moonmind.omnigent.execute import run_omnigent_execution
 

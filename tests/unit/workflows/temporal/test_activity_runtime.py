@@ -4269,6 +4269,35 @@ async def test_build_activity_bindings_resolves_memory_integration_handlers(
                 == "applied_repo_memory_result_requires_accepted_gates"
             )
 
+
+async def test_build_activity_bindings_resolves_omnigent_execute_handler(
+    tmp_path: Path,
+):
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=LocalTemporalArtifactStore(tmp_path / "artifacts"),
+            )
+            catalog = build_default_activity_catalog()
+            bindings = {
+                binding.activity_type: binding
+                for binding in build_activity_bindings(
+                    catalog,
+                    integration_activities=TemporalIntegrationActivities(
+                        artifact_service=service,
+                        client_factory=_FakeJulesClient,
+                    ),
+                    fleets=(INTEGRATIONS_FLEET,),
+                )
+            }
+
+            assert "integration.omnigent.execute" in bindings
+            assert (
+                bindings["integration.omnigent.execute"].handler.__name__
+                == "integration_omnigent_execute"
+            )
+
 async def test_build_activity_bindings_artifact_read_accepts_request_mapping(
     tmp_path: Path,
 ):

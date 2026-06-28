@@ -1,4 +1,4 @@
-"""Runtime gate for Omnigent external agent integration."""
+"""Runtime gate for the Omnigent external agent integration."""
 
 from __future__ import annotations
 
@@ -6,10 +6,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-DEFAULT_OMNIGENT_SERVER_URL = "http://127.0.0.1:8000"
-
 OMNIGENT_DISABLED_MESSAGE = (
-    "targetRuntime=omnigent requires OMNIGENT_ENABLED=true with "
+    "agentId=omnigent requires OMNIGENT_ENABLED=true with "
     "OMNIGENT_SERVER_URL configured"
 )
 
@@ -27,7 +25,9 @@ class OmnigentRuntimeGate:
 
 
 def _clean(value: object | None) -> str:
-    return str(value or "").strip()
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _enabled_from_env(*, env: Mapping[str, Any]) -> bool:
@@ -50,14 +50,20 @@ def build_omnigent_gate(
     """Return gate state for Omnigent (env-driven)."""
 
     source = env if env is not None else os.environ
+    enabled_flag = _enabled_from_env(env=source)
+    raw_enabled = source.get("OMNIGENT_ENABLED")
+    server_url = _clean(source.get("OMNIGENT_SERVER_URL"))
+
     missing: list[str] = []
-    if not _enabled_from_env(env=source):
+    if raw_enabled is None or _clean(raw_enabled) == "":
         missing.append("OMNIGENT_ENABLED")
-    if not _clean(source.get("OMNIGENT_SERVER_URL")):
+        if not server_url:
+            missing.append("OMNIGENT_SERVER_URL")
+    elif enabled_flag and not server_url:
         missing.append("OMNIGENT_SERVER_URL")
 
     return OmnigentRuntimeGate(
-        enabled=len(missing) == 0,
+        enabled=enabled_flag and len(missing) == 0,
         missing=tuple(missing),
         error_message=error_message,
     )
@@ -68,27 +74,32 @@ def is_omnigent_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
 
 
 def resolved_server_url(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return configured Omnigent server URL."""
+
     source = env if env is not None else os.environ
-    return _clean(source.get("OMNIGENT_SERVER_URL")) or DEFAULT_OMNIGENT_SERVER_URL
+    return _clean(source.get("OMNIGENT_SERVER_URL"))
 
 
-def resolved_request_timeout_seconds(*, env: Mapping[str, Any] | None = None) -> int:
+def resolved_api_token(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return configured Omnigent API token."""
+
     source = env if env is not None else os.environ
-    raw = _clean(source.get("OMNIGENT_REQUEST_TIMEOUT_SECONDS"))
-    if not raw:
-        return 30
-    try:
-        return max(5, int(raw))
-    except ValueError:
-        return 30
+    return _clean(source.get("OMNIGENT_API_TOKEN"))
+
+
+def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return configured default Omnigent agent name."""
+
+    source = env if env is not None else os.environ
+    return _clean(source.get("OMNIGENT_DEFAULT_AGENT_NAME"))
 
 
 __all__ = [
-    "DEFAULT_OMNIGENT_SERVER_URL",
     "OMNIGENT_DISABLED_MESSAGE",
     "OmnigentRuntimeGate",
     "build_omnigent_gate",
     "is_omnigent_enabled",
-    "resolved_request_timeout_seconds",
+    "resolved_api_token",
+    "resolved_default_agent_name",
     "resolved_server_url",
 ]

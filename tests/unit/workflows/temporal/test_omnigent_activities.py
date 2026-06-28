@@ -1,6 +1,6 @@
+import pytest
 from unittest.mock import patch
 
-import pytest
 from temporalio.testing import ActivityEnvironment
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
@@ -12,12 +12,7 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
 @pytest.mark.asyncio
 @patch("moonmind.omnigent.execute.run_omnigent_execution")
 async def test_omnigent_execute_activity_delegates(mock_run):
-    expected_result = AgentRunResult(
-        summary="done",
-        outputRefs=["artifact://output"],
-        diagnosticsRef="artifact://diagnostics",
-        metadata={"providerName": "omnigent"},
-    )
+    expected_result = AgentRunResult(summary="done", output_refs=[])
     mock_run.return_value = expected_result
 
     req = AgentExecutionRequest(

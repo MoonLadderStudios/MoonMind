@@ -35,7 +35,7 @@ describe('dashboardPreferences', () => {
         workflowListDensity: 'compact',
         workflowListColumnVisibility: {
           status: true,
-          nextAction: false,
+          progress: false,
           repository: true,
           targetRuntime: false,
           updatedAt: true,
@@ -52,7 +52,7 @@ describe('dashboardPreferences', () => {
       const reloaded = readDashboardPreferences();
       expect(reloaded).toEqual(next);
       expect(reloaded.workflowListDensity).toBe('compact');
-      expect(reloaded.workflowListColumnVisibility.nextAction).toBe(false);
+      expect(reloaded.workflowListColumnVisibility.progress).toBe(false);
       expect(reloaded.createExpertMode).toBe(true);
       expect(reloaded.debugFieldsVisible).toBe(false);
       expect(reloaded.preferredDetailTab).toBe('steps');
@@ -142,6 +142,41 @@ describe('dashboardPreferences', () => {
       expect(written.workflowListDensity).toBe('comfortable');
       expect(written.workflowListPageSize).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListPageSize);
       expect(readDashboardPreferences().workflowListDensity).toBe('comfortable');
+    });
+
+    it('defaults include progress and do not include removed nextAction column', () => {
+      expect(DEFAULT_DASHBOARD_PREFERENCES.workflowListColumnVisibility.progress).toBe(true);
+      expect(DEFAULT_DASHBOARD_PREFERENCES.workflowListColumnVisibility).not.toHaveProperty(
+        'nextAction',
+      );
+    });
+
+    it('ignores legacy nextAction visibility during sanitization', () => {
+      const prefs = sanitizeDashboardPreferences({
+        workflowListColumnVisibility: {
+          status: false,
+          nextAction: true,
+          progress: false,
+        },
+      });
+
+      expect(prefs.workflowListColumnVisibility.status).toBe(false);
+      expect(prefs.workflowListColumnVisibility.progress).toBe(false);
+      expect(prefs.workflowListColumnVisibility).not.toHaveProperty('nextAction');
+    });
+
+    it('round-trip preferences no longer include nextAction', () => {
+      writeDashboardPreferences({
+        ...DEFAULT_DASHBOARD_PREFERENCES,
+        workflowListColumnVisibility: {
+          ...DEFAULT_DASHBOARD_PREFERENCES.workflowListColumnVisibility,
+          progress: false,
+        },
+      });
+
+      const parsed = JSON.parse(storedRaw() ?? '{}');
+      expect(parsed.preferences.workflowListColumnVisibility.progress).toBe(false);
+      expect(parsed.preferences.workflowListColumnVisibility).not.toHaveProperty('nextAction');
     });
   });
 
