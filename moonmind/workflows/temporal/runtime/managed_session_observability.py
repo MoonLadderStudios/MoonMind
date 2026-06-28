@@ -55,7 +55,7 @@ class ManagedSessionObservabilityBridge:
     ) -> None:
         action = "resume_session" if resumed else "start_session"
         kind = "session_resumed" if resumed else "session_started"
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind=kind,
             text=(
@@ -94,7 +94,7 @@ class ManagedSessionObservabilityBridge:
         }
         if reason:
             metadata["reason"] = reason
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="user_message_submitted",
             text=f"User message submitted for turn {turn_id}.",
@@ -116,7 +116,7 @@ class ManagedSessionObservabilityBridge:
             metadata["reason"] = reason
         if source:
             metadata["source"] = source
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="turn_started",
             text=f"Turn started: {turn_id}.",
@@ -142,7 +142,7 @@ class ManagedSessionObservabilityBridge:
         }
         if reason:
             metadata["reason"] = reason
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="assistant_message",
             text="Assistant message completed.",
@@ -150,7 +150,7 @@ class ManagedSessionObservabilityBridge:
             active_turn_id=record.active_turn_id,
             metadata=metadata,
         )
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="assistant_message_completed",
             text="Assistant message completed.",
@@ -173,7 +173,7 @@ class ManagedSessionObservabilityBridge:
         text = self._non_blank_string(assistant_text)
         if text is not None:
             metadata["assistantMessageLength"] = len(text)
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="turn_completed",
             text=f"Turn completed: {turn_id}.",
@@ -205,7 +205,7 @@ class ManagedSessionObservabilityBridge:
         error = self._non_blank_string(response_metadata.get("reason"))
         if error is not None:
             metadata["error"] = error[:500]
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="turn_failed",
             text=f"Turn failed: {turn_id}.",
@@ -224,7 +224,7 @@ class ManagedSessionObservabilityBridge:
     ) -> None:
         payload: dict[str, object] = {"status": status}
         payload.update(self._compact_metadata(metadata or {}))
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="runtime_status",
             text=f"Runtime status: {status}.",
@@ -242,7 +242,7 @@ class ManagedSessionObservabilityBridge:
     ) -> None:
         payload: dict[str, object] = {"model": model}
         payload.update(self._compact_metadata(metadata or {}))
-        self._publisher.emit_session_event(
+        self._emit_session_event(
             record=record,
             kind="model_status",
             text="Model status available.",
@@ -273,7 +273,7 @@ class ManagedSessionObservabilityBridge:
             turn_id = (
                 self._non_blank_string(observation.get("turnId")) or default_turn_id
             )
-            self._publisher.emit_session_event(
+            self._emit_session_event(
                 record=record,
                 kind=stable_kind,
                 text=(
@@ -298,6 +298,28 @@ class ManagedSessionObservabilityBridge:
             return None
         text = value.strip()
         return text or None
+
+    def _emit_session_event(
+        self,
+        *,
+        record: CodexManagedSessionRecord,
+        text: str,
+        kind: str,
+        turn_id: str | None = None,
+        active_turn_id: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        try:
+            self._publisher.emit_session_event(
+                record=record,
+                text=text,
+                kind=kind,
+                turn_id=turn_id,
+                active_turn_id=active_turn_id,
+                metadata=metadata,
+            )
+        except Exception:
+            return
 
     @staticmethod
     def _compact_metadata(metadata: Mapping[str, Any]) -> dict[str, object]:
