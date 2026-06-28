@@ -9,9 +9,38 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
+
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """PyYAML loader that rejects duplicate mapping keys."""
+
+
+def _construct_mapping_with_unique_keys(loader, node, deep=False):
+    seen_keys = set()
+    for key_node, _value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in seen_keys:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key ({key!r})",
+                key_node.start_mark,
+            )
+        seen_keys.add(key)
+    return yaml.SafeLoader.construct_mapping(loader, node, deep=deep)
+
+
+UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_mapping_with_unique_keys,
+)
+
+
 def _load_compose() -> dict:
     compose_path = REPO_ROOT / "docker-compose.yaml"
-    return yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    return yaml.load(
+        compose_path.read_text(encoding="utf-8"),
+        Loader=UniqueKeySafeLoader,
+    )
 
 def _env_map(environment: object) -> dict[str, str]:
     if isinstance(environment, dict):
@@ -260,20 +289,20 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert "omnigent-host" in services
 
     server_service = services["omnigent"]
-    assert server_service["profiles"] == ["omnigent-host"]
-    assert server_service["command"] == [
-        "omnigent",
-        "server",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8000",
-        "--no-open",
-    ]
+    assert "profiles" not in server_service
+    assert server_service["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert (
+        server_service["depends_on"]["omnigent-db-init"]["condition"]
+        == "service_completed_successfully"
+    )
     assert _network_names(server_service) == {"local-network"}
 
     host_service = services["omnigent-host"]
     assert host_service["profiles"] == ["omnigent-host"]
+    assert host_service["image"] == (
+        "${OMNIGENT_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host}:"
+        "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
+    )
     assert host_service["command"] == [
         "omnigent",
         "host",
@@ -294,6 +323,7 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert "omnigent-host-state:/root/.omnigent" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert "omnigent-host-state" in volumes
+    assert "omnigent-server-state" not in volumes
 
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
