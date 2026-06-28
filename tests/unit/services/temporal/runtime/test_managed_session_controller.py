@@ -3239,7 +3239,12 @@ async def test_controller_send_turn_emits_follow_up_reason_in_session_events(
         {"action": "send_turn", "reason": "Operator follow-up"},
         {
             "action": "send_turn",
-            "assistantText": "OK",
+            "assistantTextOmitted": True,
+            "assistantTextSha256": (
+                "565339bc4d33d72817b583024112eb7f5cdf3e5"
+                "eef0252d6ec1b9c9a94e12bb3"
+            ),
+            "assistantTextLengthChars": 2,
             "reason": "Operator follow-up",
         },
     ]
@@ -5574,6 +5579,7 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
     tmp_path: Path,
 ) -> None:
     store = ManagedSessionStore(tmp_path / "session-store")
+    session_supervisor = AsyncMock(spec=ManagedSessionSupervisor)
     store.save(
         CodexManagedSessionRecord(
             sessionId="sess-1",
@@ -5619,6 +5625,7 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
         codex_volume_name="codex_auth_volume",
         workspace_root="/tmp/agent_jobs",
         session_store=store,
+        session_supervisor=session_supervisor,
         command_runner=_fake_runner,
     )
 
@@ -5638,6 +5645,18 @@ async def test_controller_send_turn_bounds_persisted_last_assistant_text(
     assert updated.metadata["lastAssistantTextTruncated"] is True
     assert updated.metadata["lastAssistantTextOriginalChars"] == 8190
     assert len(str(updated.metadata["lastAssistantText"]).encode("utf-8")) <= 4096
+    emitted_kinds = [
+        call.kwargs.get("kind")
+        for call in session_supervisor.emit_session_event.call_args_list
+    ]
+    emitted_metadata = [
+        call.kwargs.get("metadata")
+        for call in session_supervisor.emit_session_event.call_args_list
+    ]
+    assert emitted_kinds == ["turn_started", "turn_completed"]
+    assert emitted_metadata[1]["assistantTextOmitted"] is True
+    assert emitted_metadata[1]["assistantTextLengthChars"] == 8190
+    assert "assistantText" not in emitted_metadata[1]
 
 @pytest.mark.asyncio
 async def test_controller_interrupt_turn_preserves_failed_runtime_result(
