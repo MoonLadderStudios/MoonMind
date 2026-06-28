@@ -90,6 +90,22 @@ function workflowWorkspaceRowUpdatedAt(row: WorkflowWorkspaceRow): string | null
   return row.closedAt || row.scheduledFor || row.createdAt;
 }
 
+function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorkspaceRow {
+  return {
+    taskId: detail.taskId,
+    workflowId: detail.workflowId,
+    title: detail.title,
+    status: detail.status,
+    state: detail.state,
+    rawState: detail.rawState,
+    createdAt: detail.createdAt,
+    scheduledFor: detail.scheduledFor,
+    closedAt: detail.closedAt,
+    repository: detail.repository,
+    targetRuntime: detail.targetRuntime,
+  };
+}
+
 const WORKFLOW_WORKSPACE_RELATIVE_TIME_UNITS: Array<[string, number]> = [
   ['y', 31536000],
   ['mo', 2592000],
@@ -221,9 +237,11 @@ function workflowWorkspaceListQuery(search: URLSearchParams): string {
 function WorkflowSidebarRow({
   row,
   activeWorkflowId,
+  pinned = false,
 }: {
   row: WorkflowWorkspaceRow;
   activeWorkflowId: string;
+  pinned?: boolean;
 }) {
   const workflowId = workflowWorkspaceRowId(row);
   const active = workflowId === activeWorkflowId;
@@ -232,12 +250,14 @@ function WorkflowSidebarRow({
   return (
     <li>
       <a
-        className="workflow-workspace-sidebar-row"
+        className={`workflow-workspace-sidebar-row${pinned ? ' workflow-workspace-sidebar-row-pinned' : ''}`}
         href={`/workflows/${encodeURIComponent(workflowId)}?source=temporal`}
         aria-current={active ? 'page' : undefined}
         data-active={active ? 'true' : 'false'}
+        data-pinned={pinned ? 'true' : 'false'}
       >
         <span className="workflow-workspace-sidebar-row-main">
+          {pinned ? <span className="workflow-workspace-sidebar-kicker">Current workflow</span> : null}
           <span className="workflow-workspace-sidebar-title">{title}</span>
           <span className="workflow-workspace-sidebar-meta">
             {formatWorkflowWorkspaceRelativeTime(workflowWorkspaceRowUpdatedAt(row))}
@@ -265,6 +285,8 @@ function WorkflowWorkspaceShell({
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const listQuery = useMemo(() => workflowWorkspaceListQuery(search), [search]);
+  const sourceTemporal = search.get('source') === 'temporal';
+  const encodedWorkflowId = encodeURIComponent(workflowId);
   const workflowsQuery = useQuery({
     queryKey: ['workflow-workspace-sidebar', listQuery],
     queryFn: async () => {
@@ -277,13 +299,33 @@ function WorkflowWorkspaceShell({
     enabled: listEnabled,
     refetchInterval: listEnabled ? listPoll : false,
   });
+  const selectedWorkflowQuery = useQuery({
+    queryKey: ['workflow-detail', encodedWorkflowId, sourceTemporal],
+    queryFn: async () => {
+      const suffix = sourceTemporal ? '?source=temporal' : '';
+      const response = await fetch(`${payload.apiBase}/executions/${encodedWorkflowId}${suffix}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch workflow: ${response.statusText}`);
+      }
+      return ExecutionDetailSchema.parse(await response.json());
+    },
+    enabled: Boolean(workflowId),
+    refetchInterval: (query) => (
+      !isExecutionTerminal(query.state.data)
+        ? listPoll
+        : false
+    ),
+  });
   const rows = workflowsQuery.data?.items || [];
   const activeInList = rows.some((row) => workflowWorkspaceRowId(row) === workflowId);
   const filteredRows = rows.filter((row) => workflowWorkspaceRowId(row));
+  const pinnedCurrentRow = selectedWorkflowQuery.data && !activeInList
+    ? workflowWorkspaceRowFromDetail(selectedWorkflowQuery.data)
+    : null;
   const fullListHref = `/workflows${search.toString() ? `?${search.toString()}` : ''}`;
 
   return (
-    <div className="workflow-workspace-shell" data-jira-issue="MM-997" data-source-issue="MM-975">
+    <div className="workflow-workspace-shell" data-jira-issue="MM-999" data-source-issue="MM-975">
       {sidebarOpen ? (
         <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
           <div className="workflow-workspace-sidebar-controls">
@@ -313,11 +355,10 @@ function WorkflowWorkspaceShell({
               </button>
             </div>
           ) : null}
-          {!workflowsQuery.isLoading && !workflowsQuery.isError && !activeInList && workflowId ? (
-            <div className="workflow-workspace-current-row" aria-label="Current workflow">
-              <span className="workflow-workspace-sidebar-title">Current workflow</span>
-              <code>{workflowId}</code>
-            </div>
+          {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
+            <ul className="workflow-workspace-sidebar-list workflow-workspace-sidebar-pinned-list" aria-label="Current workflow">
+              <WorkflowSidebarRow row={pinnedCurrentRow} activeWorkflowId={workflowId} pinned />
+            </ul>
           ) : null}
           {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
             <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
