@@ -68,6 +68,7 @@ type FilterField =
   | 'targetSkill'
   | 'title'
   | 'scheduledFor'
+  | 'updatedAt'
   | 'createdAt'
   | 'closedAt';
 
@@ -94,7 +95,7 @@ const TABLE_COLUMN_FILTER_FIELDS: Partial<Record<string, FilterField>> = {
   status: 'status',
   repository: 'repository',
   targetRuntime: 'targetRuntime',
-  updatedAt: 'createdAt',
+  updatedAt: 'updatedAt',
 };
 
 // All filterable columns. This is the durable filter data model and feeds the
@@ -106,6 +107,7 @@ const FILTER_FIELDS = [
   ['repository', 'Repository'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
+  ['updatedAt', 'Updated'],
   ['scheduledFor', 'Scheduled'],
   ['createdAt', 'Created'],
   ['closedAt', 'Finished'],
@@ -118,6 +120,7 @@ const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'targetRuntime',
   'targetSkill',
   'title',
+  'updatedAt',
   'scheduledFor',
   'createdAt',
   'closedAt',
@@ -133,6 +136,7 @@ const DRAWER_FILTER_FIELDS: Array<[FilterField, string]> = [
   ['repository', 'Repository'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
+  ['updatedAt', 'Updated'],
   ['scheduledFor', 'Scheduled'],
   ['createdAt', 'Created'],
   ['closedAt', 'Finished'],
@@ -151,6 +155,7 @@ type ColumnFilters = {
   targetRuntime: ValueFilter;
   targetSkill: ValueFilter;
   title: TextFilter;
+  updatedAt: DateFilter;
   scheduledFor: DateFilter;
   createdAt: DateFilter;
   closedAt: DateFilter;
@@ -408,6 +413,7 @@ function emptyFilters(): ColumnFilters {
     targetRuntime: emptyValueFilter(),
     targetSkill: emptyValueFilter(),
     title: {},
+    updatedAt: {},
     scheduledFor: {},
     createdAt: {},
     closedAt: {},
@@ -509,6 +515,10 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
     to: params.get('scheduledTo') || '',
     blank: (params.get('scheduledBlank') as DateFilter['blank']) || '',
   };
+  filters.updatedAt = {
+    from: params.get('updatedFrom') || '',
+    to: params.get('updatedTo') || '',
+  };
   filters.createdAt = {
     from: params.get('createdFrom') || '',
     to: params.get('createdTo') || '',
@@ -559,6 +569,7 @@ function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
   appendValueParams(params, filters.targetSkill, 'targetSkillIn', 'targetSkillNotIn', 'targetSkillBlank');
   if (filters.title.contains?.trim()) params.set('titleContains', filters.title.contains.trim());
   appendDateParams(params, filters.scheduledFor, 'scheduledFrom', 'scheduledTo', 'scheduledBlank');
+  appendDateParams(params, filters.updatedAt, 'updatedFrom', 'updatedTo');
   appendDateParams(params, filters.createdAt, 'createdFrom', 'createdTo');
   appendDateParams(params, filters.closedAt, 'finishedFrom', 'finishedTo', 'finishedBlank');
 }
@@ -682,7 +693,14 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
     return summarizeValues(filters.repository);
   }
   if (field === 'title') return filters.title.contains?.trim() || '';
-  const dateFilter = field === 'scheduledFor' ? filters.scheduledFor : field === 'createdAt' ? filters.createdAt : filters.closedAt;
+  const dateFilter =
+    field === 'scheduledFor'
+      ? filters.scheduledFor
+      : field === 'updatedAt'
+        ? filters.updatedAt
+        : field === 'createdAt'
+          ? filters.createdAt
+          : filters.closedAt;
   if (dateFilter.blank === 'include' && !dateFilter.from && !dateFilter.to) return 'blank';
   if (dateFilter.blank === 'exclude' && !dateFilter.from && !dateFilter.to) return 'not blank';
   const parts = [];
@@ -697,7 +715,7 @@ function clearFilterField(filters: ColumnFilters, field: FilterField): ColumnFil
   const next = { ...filters };
   if (field === 'workflowId' || field === 'title') next[field] = {};
   else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
-  else if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') next[field] = {};
+  else if (field === 'scheduledFor' || field === 'updatedAt' || field === 'createdAt' || field === 'closedAt') next[field] = {};
   else next[field] = emptyValueFilter();
   return next;
 }
@@ -1111,7 +1129,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     }));
   };
 
-  const updateDraftDate = (field: 'scheduledFor' | 'createdAt' | 'closedAt', patch: DateFilter) => {
+  const updateDraftDate = (field: 'scheduledFor' | 'updatedAt' | 'createdAt' | 'closedAt', patch: DateFilter) => {
     setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
   };
 
@@ -1337,8 +1355,15 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       );
     }
 
-    if (field === 'scheduledFor' || field === 'createdAt' || field === 'closedAt') {
-      const label = field === 'scheduledFor' ? 'Scheduled' : field === 'createdAt' ? 'Created' : 'Finished';
+    if (field === 'scheduledFor' || field === 'updatedAt' || field === 'createdAt' || field === 'closedAt') {
+      const label =
+        field === 'scheduledFor'
+          ? 'Scheduled'
+          : field === 'updatedAt'
+            ? 'Updated'
+            : field === 'createdAt'
+              ? 'Created'
+              : 'Finished';
       const draft = draftFilters[field];
       return (
         <div className="queue-inline-filter workflow-list-filter-control">
@@ -1360,7 +1385,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
               onChange={(event) => updateDraftDate(field, { to: event.target.value })}
             />
           </label>
-          {field !== 'createdAt' ? (
+          {field !== 'createdAt' && field !== 'updatedAt' ? (
             <label>
               {label} blank values
               <select
@@ -1638,7 +1663,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
                                     className={`workflow-list-column-filter-button${filterValue ? ' is-active' : ''}`}
                                     aria-label={
                                       filterValue
-                                        ? `${label} filter: ${filterValue}`
+                                        ? `${label} column filter: ${filterValue}`
                                         : `${label} filter. No filter applied.`
                                     }
                                     aria-haspopup="dialog"

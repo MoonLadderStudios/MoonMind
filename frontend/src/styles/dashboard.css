@@ -1824,7 +1824,7 @@ tbody tr:hover {
 }
 
 .workflow-list-results-header {
-  display: none;
+  display: flex;
   align-items: center;
   gap: 0.6rem;
   flex-wrap: wrap;
@@ -1921,7 +1921,12 @@ tbody tr:hover {
  * table never needs horizontal scrolling.
  */
 .workflow-list-data-slab .queue-table-wrapper:has(
-  .td-workflow-actions-popover,
+  .td-workflow-actions-popover
+) {
+  overflow: visible;
+}
+
+.workflow-list-data-slab .queue-table-wrapper:has(
   .workflow-list-column-filter-popover
 ) {
   overflow: visible;

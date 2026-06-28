@@ -174,6 +174,7 @@ describe('Workflows Entrypoint', () => {
 
     expect(await screen.findByText('No workflows found for the current filters.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
     expect(screen.queryByLabelText('Live updates')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull();
   }, 10000);
@@ -423,6 +424,7 @@ describe('Workflows Entrypoint', () => {
     expect(screen.getByLabelText('ID filter value')).toBeTruthy();
     expect(screen.getByLabelText('Skill filter value')).toBeTruthy();
     expect(screen.getByLabelText('Title filter value')).toBeTruthy();
+    expect(screen.getByLabelText('Updated from')).toBeTruthy();
     expect(screen.getByLabelText('Scheduled from')).toBeTruthy();
     expect(screen.getByLabelText('Created from')).toBeTruthy();
     expect(screen.getByLabelText('Finished blank values')).toBeTruthy();
@@ -449,6 +451,32 @@ describe('Workflows Entrypoint', () => {
         '/api/executions?source=temporal&pageSize=50&workflowIdContains=task-123&stateIn=completed&repoContains=owner%2Frepo&targetRuntimeIn=codex_cloud&titleContains=Example',
       );
     });
+  });
+
+  it('filters the Updated column by the displayed updated timestamp', async () => {
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Example task');
+    const updatedFilter = screen.getByRole('button', {
+      name: 'Updated filter. No filter applied.',
+    });
+    fireEvent.click(updatedFilter);
+
+    fireEvent.change(screen.getByLabelText('Updated from'), {
+      target: { value: '2026-04-01' },
+    });
+    fireEvent.change(screen.getByLabelText('Updated to'), {
+      target: { value: '2026-04-30' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply Updated filter' }));
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&updatedFrom=2026-04-01&updatedTo=2026-04-30',
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Updated filter: from 2026-04-01, to 2026-04-30' })).toBeTruthy();
+    expect(window.location.search).toBe('?updatedFrom=2026-04-01&updatedTo=2026-04-30&limit=50');
   });
 
   it('applies runtime and skill exclude modes from the drawer', async () => {
