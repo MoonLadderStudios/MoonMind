@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { BootPayload } from "../boot/parseBootPayload";
 import { renderWithClient } from "../utils/test-utils";
@@ -427,7 +427,6 @@ describe("SchedulesPage", () => {
   });
 
   it("allows personal schedule owners to delete when the delete contract is available", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     mockScheduleDetailFetch(fetchSpy, {
       permissions: {
         canEdit: true,
@@ -451,6 +450,15 @@ describe("SchedulesPage", () => {
     const deleteButton = screen.getByRole("button", { name: "Delete schedule" }) as HTMLButtonElement;
     expect(deleteButton.disabled).toBe(false);
     fireEvent.click(deleteButton);
+    const dialog = screen.getByRole("dialog", { name: "Delete schedule" });
+    expect(dialog).not.toBeNull();
+    const confirmButton = within(dialog).getByRole("button", { name: "Delete schedule" }) as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText("Type DELETE to confirm"), {
+      target: { value: "DELETE" },
+    });
+    expect(confirmButton.disabled).toBe(false);
+    fireEvent.click(confirmButton);
 
     await waitFor(() => {
       expect(
@@ -460,8 +468,6 @@ describe("SchedulesPage", () => {
         )),
       ).toBe(true);
     });
-
-    confirmSpy.mockRestore();
   });
 
   it("explains missing delete permission when the delete contract is available", async () => {

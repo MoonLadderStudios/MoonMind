@@ -3120,6 +3120,125 @@ tr[data-proposal-id].proposal-consuming td {
   color: rgb(var(--mm-warn));
 }
 
+.dashboard-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgb(15 23 42 / 0.52);
+}
+
+.dashboard-dialog {
+  width: min(34rem, 100%);
+  max-height: min(42rem, calc(100vh - 2rem));
+  overflow: auto;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.5rem;
+  background: rgb(var(--mm-panel));
+  color: rgb(var(--mm-ink));
+  box-shadow: 0 24px 70px -34px rgb(0 0 0 / 0.72);
+}
+
+.dashboard-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1rem;
+}
+
+.dashboard-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.dashboard-dialog-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.dashboard-dialog-subject {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.3rem 0 0;
+  color: rgb(var(--mm-muted));
+  font-size: 0.82rem;
+}
+
+.dashboard-dialog-subject code {
+  max-width: 16rem;
+  overflow-wrap: anywhere;
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.28rem;
+  background: rgb(var(--mm-ink) / 0.06);
+  color: rgb(var(--mm-ink));
+  font-size: 0.76rem;
+}
+
+.dashboard-dialog-close {
+  width: 2rem;
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 0.45rem;
+}
+
+.dashboard-dialog-consequence {
+  color: rgb(var(--mm-ink));
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.dashboard-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: rgb(var(--mm-muted));
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.dashboard-dialog-field input,
+.dashboard-dialog-field textarea {
+  width: 100%;
+  border: 1px solid rgb(var(--mm-border));
+  border-radius: 0.45rem;
+  padding: 0.56rem 0.62rem;
+  background: rgb(var(--mm-bg));
+  color: rgb(var(--mm-ink));
+  font: inherit;
+  font-weight: 500;
+}
+
+.dashboard-dialog-field textarea {
+  resize: vertical;
+  min-height: 5.5rem;
+}
+
+.dashboard-dialog-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.dashboard-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.dashboard-dialog-danger {
+  background: rgb(var(--mm-danger));
+}
+
 .proposal-action-feedback {
   min-height: 3.2rem;
 }

@@ -96,11 +96,12 @@ describe('WorkflowRowActionsMenu', () => {
     });
   });
 
-  it('confirms before cancelling and posts to the cancel endpoint', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('opens a cancel dialog and posts to the cancel endpoint after confirmation', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Cancel' }));
+    expect(screen.getByRole('dialog', { name: 'Cancel workflow' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel workflow' }));
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(
@@ -112,14 +113,19 @@ describe('WorkflowRowActionsMenu', () => {
         graceful: true,
       });
     });
-    confirmSpy.mockRestore();
   });
 
-  it('posts a forced cancel request when force cancel is selected', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('requires typed confirmation before posting a forced cancel request', async () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
+    const confirmButton = screen.getByRole('button', { name: 'Force cancel workflow' }) as HTMLButtonElement;
+    expect(confirmButton.disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Type FORCE CANCEL to confirm'), {
+      target: { value: 'FORCE CANCEL' },
+    });
+    expect(confirmButton.disabled).toBe(false);
+    fireEvent.click(confirmButton);
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(([url, init]) => {
@@ -134,6 +140,5 @@ describe('WorkflowRowActionsMenu', () => {
         reason: 'Force canceled by operator from the dashboard.',
       });
     });
-    confirmSpy.mockRestore();
   });
 });
