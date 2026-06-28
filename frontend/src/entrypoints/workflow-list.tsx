@@ -73,9 +73,19 @@ const TASK_WORKFLOW_TYPE = 'MoonMind.UserWorkflow';
 const TASK_ENTRY = 'user_workflow';
 
 const TIMESTAMP_SORT_FIELDS = new Set(['updatedAt', 'scheduledFor', 'createdAt', 'closedAt']);
+const PROGRESS_BUCKET_OPTIONS = ['not_started', 'in_progress', 'complete'] as const;
+const PROGRESS_SIGNAL_OPTIONS = [
+  'running',
+  'awaiting_external',
+  'reviewing',
+  'has_failed_steps',
+  'has_skipped_steps',
+  'has_canceled_steps',
+] as const;
 type FilterField =
   | 'workflowId'
   | 'status'
+  | 'progress'
   | 'repository'
   | 'targetRuntime'
   | 'targetSkill'
@@ -104,7 +114,7 @@ type TableColumnDef = {
 const TABLE_COLUMNS: TableColumnDef[] = [
   { field: 'title', label: 'Workflow', sortable: true, colClassName: 'queue-table-column-workflow' },
   { field: 'status', label: 'Status', sortable: true, colClassName: 'queue-table-column-status' },
-  { field: 'progress', label: 'Progress', sortable: false, colClassName: 'queue-table-column-progress' },
+  { field: 'progress', label: 'Progress', sortable: true, colClassName: 'queue-table-column-progress' },
   { field: 'repository', label: 'Repository', sortable: true, colClassName: 'queue-table-column-repository' },
   { field: 'targetRuntime', label: 'Runtime', sortable: true, colClassName: 'queue-table-column-runtime' },
   { field: 'updatedAt', label: 'Updated', sortable: true, colClassName: 'queue-table-column-date' },
@@ -112,6 +122,7 @@ const TABLE_COLUMNS: TableColumnDef[] = [
 const TABLE_COLUMN_FILTER_FIELDS: Partial<Record<string, FilterField>> = {
   title: 'title',
   status: 'status',
+  progress: 'progress',
   repository: 'repository',
   targetRuntime: 'targetRuntime',
   updatedAt: 'updatedAt',
@@ -123,6 +134,7 @@ const FILTER_FIELDS = [
   ['workflowId', 'ID'],
   ['title', 'Title'],
   ['status', 'Status'],
+  ['progress', 'Progress'],
   ['repository', 'Repository'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
@@ -135,6 +147,7 @@ type FilterColumn = (typeof FILTER_FIELDS)[number];
 const ACTIVE_FILTER_FIELDS = new Set<FilterField>([
   'workflowId',
   'status',
+  'progress',
   'repository',
   'targetRuntime',
   'targetSkill',
@@ -152,6 +165,7 @@ const DRAWER_FILTER_FIELDS: Array<[FilterField, string]> = [
   ['workflowId', 'ID'],
   ['title', 'Title'],
   ['status', 'Status'],
+  ['progress', 'Progress'],
   ['repository', 'Repository'],
   ['targetRuntime', 'Runtime'],
   ['targetSkill', 'Skill'],
@@ -167,9 +181,20 @@ type ValueFilter = { mode: 'include' | 'exclude'; values: string[]; blank?: 'inc
 type RepositoryFilter = ValueFilter & { exactText?: string };
 type TextFilter = { contains?: string };
 type DateFilter = { from?: string; to?: string; blank?: 'include' | 'exclude' | '' };
+type ProgressBucket = (typeof PROGRESS_BUCKET_OPTIONS)[number];
+type ProgressSignal = (typeof PROGRESS_SIGNAL_OPTIONS)[number];
+type ProgressFilter = {
+  pctFrom?: string;
+  pctTo?: string;
+  bucketIn: ProgressBucket[];
+  signalIn: ProgressSignal[];
+  stepTitleContains?: string;
+  blank?: 'include' | 'exclude' | '';
+};
 type ColumnFilters = {
   workflowId: TextFilter;
   status: ValueFilter;
+  progress: ProgressFilter;
   repository: RepositoryFilter;
   targetRuntime: ValueFilter;
   targetSkill: ValueFilter;
@@ -235,6 +260,10 @@ type ExecutionRow = z.infer<typeof ExecutionRowSchema>;
 
 function rowWorkflowId(row: ExecutionRow): string {
   return row.workflowId || row.taskId || '';
+}
+
+function emptyProgressFilter(): ProgressFilter {
+  return { pctFrom: '', pctTo: '', bucketIn: [], signalIn: [], stepTitleContains: '', blank: '' };
 }
 
 const ExecutionFacetResponseSchema = z.object({
@@ -353,6 +382,103 @@ function formatProgress(row: ExecutionRow): { text: string; title?: string } {
   return { text: `${succeeded}/${total}` };
 }
 
+function progressTotal(row: ExecutionRow): number {
+  return row.progress?.total ?? 0;
+}
+
+function progressSucceeded(row: ExecutionRow): number {
+  return row.progress?.succeeded ?? 0;
+}
+
+function progressPct(row: ExecutionRow): number | null {
+  const total = progressTotal(row);
+  if (!row.progress || total <= 0) return null;
+  const succeeded = progressSucceeded(row);
+  return Math.min(100, Math.max(0, (succeeded / total) * 100));
+}
+
+function progressBucket(row: ExecutionRow): ProgressBucket | null {
+  const progress = row.progress;
+  const total = progressTotal(row);
+  if (!progress || total <= 0) return null;
+  const succeeded = progressSucceeded(row);
+  if (succeeded >= total) return 'complete';
+  const active =
+    (progress.running ?? 0) > 0 ||
+    (progress.awaitingExternal ?? 0) > 0 ||
+    (progress.reviewing ?? 0) > 0;
+  const terminal =
+    (progress.failed ?? 0) > 0 ||
+    (progress.skipped ?? 0) > 0 ||
+    (progress.canceled ?? 0) > 0;
+  return succeeded > 0 || active || terminal ? 'in_progress' : 'not_started';
+}
+
+function progressSignals(row: ExecutionRow): ProgressSignal[] {
+  const progress = row.progress;
+  if (!progress) return [];
+  const signals: ProgressSignal[] = [];
+  if ((progress.running ?? 0) > 0) signals.push('running');
+  if ((progress.awaitingExternal ?? 0) > 0) signals.push('awaiting_external');
+  if ((progress.reviewing ?? 0) > 0) signals.push('reviewing');
+  if ((progress.failed ?? 0) > 0) signals.push('has_failed_steps');
+  if ((progress.skipped ?? 0) > 0) signals.push('has_skipped_steps');
+  if ((progress.canceled ?? 0) > 0) signals.push('has_canceled_steps');
+  return signals;
+}
+
+function formatProgressBucket(value: string): string {
+  if (value === 'not_started') return 'Not started';
+  if (value === 'in_progress') return 'In progress';
+  if (value === 'complete') return 'Complete';
+  return value;
+}
+
+function formatProgressSignal(value: string): string {
+  if (value === 'running') return 'Has running step';
+  if (value === 'awaiting_external') return 'Waiting on external progress';
+  if (value === 'reviewing') return 'Reviewing';
+  if (value === 'has_failed_steps') return 'Has failed steps';
+  if (value === 'has_skipped_steps') return 'Has skipped steps';
+  if (value === 'has_canceled_steps') return 'Has canceled steps';
+  return value;
+}
+
+function parsePercent(value: string | undefined): number | null {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.min(100, Math.max(0, parsed));
+}
+
+function rowMatchesProgressFilter(row: ExecutionRow, filter: ProgressFilter): boolean {
+  const pct = progressPct(row);
+  const isBlank = pct === null;
+  if (filter.blank === 'include' && !isBlank) return false;
+  if (filter.blank === 'exclude' && isBlank) return false;
+
+  const pctFrom = parsePercent(filter.pctFrom);
+  const pctTo = parsePercent(filter.pctTo);
+  if (pctFrom !== null && (pct === null || pct < pctFrom)) return false;
+  if (pctTo !== null && (pct === null || pct > pctTo)) return false;
+
+  if (filter.bucketIn.length > 0) {
+    const bucket = progressBucket(row);
+    if (!bucket || !filter.bucketIn.includes(bucket)) return false;
+  }
+  if (filter.signalIn.length > 0) {
+    const rowSignals = progressSignals(row);
+    if (!filter.signalIn.some((signal) => rowSignals.includes(signal))) return false;
+  }
+  const stepNeedle = (filter.stepTitleContains || '').trim().toLowerCase();
+  if (stepNeedle) {
+    const title = (row.progress?.currentStepTitle || '').toLowerCase();
+    if (!title.includes(stepNeedle)) return false;
+  }
+  return true;
+}
+
 function rowUpdatedAt(row: ExecutionRow): string | null | undefined {
   const state = rowLifecycleState(row);
   if (row.closedAt && TERMINAL_UPDATED_AT_FALLBACK_STATES.has(state)) {
@@ -417,6 +543,23 @@ function sortRows(rows: ExecutionRow[], field: string, direction: 'asc' | 'desc'
       const rightStatus = (right.rawState || right.state || '').toLowerCase();
       const compare = leftStatus.localeCompare(rightStatus);
       if (compare !== 0) return dir * compare;
+    } else if (field === 'progress') {
+      const leftPct = progressPct(left);
+      const rightPct = progressPct(right);
+      if (leftPct === null && rightPct !== null) return 1;
+      if (leftPct !== null && rightPct === null) return -1;
+      if (leftPct !== null && rightPct !== null && leftPct !== rightPct) {
+        return dir * (leftPct - rightPct);
+      }
+      const leftSucceeded = progressSucceeded(left);
+      const rightSucceeded = progressSucceeded(right);
+      if (leftSucceeded !== rightSucceeded) return dir * (leftSucceeded - rightSucceeded);
+      const leftTotal = progressTotal(left);
+      const rightTotal = progressTotal(right);
+      if (leftTotal !== rightTotal) return dir * (leftTotal - rightTotal);
+      const leftUpdated = Date.parse(left.progress?.updatedAt || rowUpdatedAt(left) || '') || 0;
+      const rightUpdated = Date.parse(right.progress?.updatedAt || rowUpdatedAt(right) || '') || 0;
+      if (leftUpdated !== rightUpdated) return dir * (leftUpdated - rightUpdated);
     } else {
       leftVal = String((left as Record<string, unknown>)[field] ?? '').toLowerCase();
       rightVal = String((right as Record<string, unknown>)[field] ?? '').toLowerCase();
@@ -485,6 +628,7 @@ function emptyFilters(): ColumnFilters {
   return {
     workflowId: {},
     status: emptyValueFilter(),
+    progress: emptyProgressFilter(),
     repository: { ...emptyValueFilter(), exactText: '' },
     targetRuntime: emptyValueFilter(),
     targetSkill: emptyValueFilter(),
@@ -538,6 +682,8 @@ function validateInitialFilterParams(params: URLSearchParams): string[] {
     validateCanonicalFilterPair(params, 'repoIn', 'repoNotIn'),
     validateCanonicalFilterPair(params, 'targetRuntimeIn', 'targetRuntimeNotIn'),
     validateCanonicalFilterPair(params, 'targetSkillIn', 'targetSkillNotIn'),
+    validateCanonicalFilterPair(params, 'progressBucketIn', 'progressBucketNotIn'),
+    validateCanonicalFilterPair(params, 'progressSignalIn', 'progressSignalNotIn'),
   ].filter((message): message is string => Boolean(message));
 }
 
@@ -585,6 +731,19 @@ function parseInitialFilters(params: URLSearchParams): ColumnFilters {
   } else if (skillIn.length > 0) {
     filters.targetSkill = { mode: 'include', values: skillIn, blank: '' };
   }
+
+  filters.progress = {
+    pctFrom: params.get('progressPctFrom') || '',
+    pctTo: params.get('progressPctTo') || '',
+    bucketIn: splitParam(params, 'progressBucketIn').filter((value): value is ProgressBucket =>
+      (PROGRESS_BUCKET_OPTIONS as readonly string[]).includes(value),
+    ),
+    signalIn: splitParam(params, 'progressSignalIn').filter((value): value is ProgressSignal =>
+      (PROGRESS_SIGNAL_OPTIONS as readonly string[]).includes(value),
+    ),
+    stepTitleContains: params.get('progressStepTitleContains') || '',
+    blank: (params.get('progressBlank') as ProgressFilter['blank']) || '',
+  };
 
   filters.scheduledFor = {
     from: params.get('scheduledFrom') || '',
@@ -634,9 +793,21 @@ function appendDateParams(
   if (blankParam && filter.blank) params.set(blankParam, filter.blank);
 }
 
+function appendProgressParams(params: URLSearchParams, filter: ProgressFilter) {
+  if (filter.pctFrom?.trim()) params.set('progressPctFrom', filter.pctFrom.trim());
+  if (filter.pctTo?.trim()) params.set('progressPctTo', filter.pctTo.trim());
+  if (filter.bucketIn.length > 0) params.set('progressBucketIn', filter.bucketIn.join(','));
+  if (filter.signalIn.length > 0) params.set('progressSignalIn', filter.signalIn.join(','));
+  if (filter.stepTitleContains?.trim()) {
+    params.set('progressStepTitleContains', filter.stepTitleContains.trim());
+  }
+  if (filter.blank) params.set('progressBlank', filter.blank);
+}
+
 function appendFilterParams(params: URLSearchParams, filters: ColumnFilters) {
   if (filters.workflowId.contains?.trim()) params.set('workflowIdContains', filters.workflowId.contains.trim());
   appendValueParams(params, filters.status, 'stateIn', 'stateNotIn');
+  appendProgressParams(params, filters.progress);
   if (filters.repository.exactText?.trim()) {
     params.set('repoContains', filters.repository.exactText.trim());
   }
@@ -762,6 +933,25 @@ function summarizeValues(
 function filterSummary(field: FilterField, filters: ColumnFilters): string {
   if (field === 'workflowId') return filters.workflowId.contains?.trim() || '';
   if (field === 'status') return summarizeValues(filters.status, formatStatusLabel, { maxVisibleValues: 3 });
+  if (field === 'progress') {
+    const progressFilter = filters.progress;
+    const parts: string[] = [];
+    const from = progressFilter.pctFrom?.trim();
+    const to = progressFilter.pctTo?.trim();
+    if (from || to) parts.push(`${from || '0'}-${to || '100'}%`);
+    if (progressFilter.bucketIn.length > 0) {
+      parts.push(progressFilter.bucketIn.map(formatProgressBucket).join(', '));
+    }
+    if (progressFilter.signalIn.length > 0) {
+      parts.push(progressFilter.signalIn.map(formatProgressSignal).join(', '));
+    }
+    if (progressFilter.stepTitleContains?.trim()) {
+      parts.push(`step ${progressFilter.stepTitleContains.trim()}`);
+    }
+    if (progressFilter.blank === 'include') parts.push('No progress data');
+    if (progressFilter.blank === 'exclude') parts.push('has progress data');
+    return parts.join(', ');
+  }
   if (field === 'targetRuntime') return summarizeValues(filters.targetRuntime, formatRuntimeLabel);
   if (field === 'targetSkill') return summarizeValues(filters.targetSkill);
   if (field === 'repository') {
@@ -790,6 +980,7 @@ function filterSummary(field: FilterField, filters: ColumnFilters): string {
 function clearFilterField(filters: ColumnFilters, field: FilterField): ColumnFilters {
   const next = { ...filters };
   if (field === 'workflowId' || field === 'title') next[field] = {};
+  else if (field === 'progress') next.progress = emptyProgressFilter();
   else if (field === 'repository') next.repository = { ...emptyValueFilter(), exactText: '' };
   else if (field === 'scheduledFor' || field === 'updatedAt' || field === 'createdAt' || field === 'closedAt') next[field] = {};
   else next[field] = emptyValueFilter();
@@ -1188,10 +1379,14 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     return () => window.cancelAnimationFrame(frame);
   }, [drawerOpen]);
 
-  const sortedItems = useMemo(() => {
+  const pageItems = useMemo(() => {
     const items = data?.items || [];
-    return sortRows(items, sortField, sortDir);
-  }, [data?.items, sortField, sortDir]);
+    return items.filter((row) => rowMatchesProgressFilter(row, filters.progress));
+  }, [data?.items, filters.progress]);
+
+  const sortedItems = useMemo(() => {
+    return sortRows(pageItems, sortField, sortDir);
+  }, [pageItems, sortField, sortDir]);
   const detailListContext = useMemo(() => {
     const params = new URLSearchParams();
     appendFilterParams(params, filters);
@@ -1212,7 +1407,7 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       return;
     }
     setSortField(field);
-    setSortDir(TIMESTAMP_SORT_FIELDS.has(field) ? 'desc' : 'asc');
+    setSortDir(TIMESTAMP_SORT_FIELDS.has(field) || field === 'progress' ? 'desc' : 'asc');
   };
 
   const sortIndicator = (field: string) =>
@@ -1225,8 +1420,9 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
       : sortDir === 'asc'
         ? 'ascending'
         : 'descending';
+    const defaultDirection = TIMESTAMP_SORT_FIELDS.has(field) || field === 'progress' ? 'descending' : 'ascending';
     const sortHint = !isSorted
-      ? 'Not sorted. Activate to sort the current page ascending.'
+      ? `Not sorted. Activate to sort the current page ${defaultDirection}.`
       : sortDir === 'asc'
         ? 'Sorted ascending, current page only. Activate to sort descending.'
         : 'Sorted descending, current page only. Activate to sort ascending.';
@@ -1363,6 +1559,13 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
     setDraftFilters((current) => ({ ...current, [field]: { ...current[field], ...patch } }));
   };
 
+  const updateDraftProgress = (patch: Partial<ProgressFilter>) => {
+    setDraftFilters((current) => ({
+      ...current,
+      progress: { ...current.progress, ...patch },
+    }));
+  };
+
   const valueOptionsForField = (field: FilterField): string[] => {
     const facetKey = facetForFilterField(field);
     const facetData = facetKey ? facetByField[facetKey].data : undefined;
@@ -1470,6 +1673,110 @@ export function WorkflowListPage({ payload }: { payload: BootPayload }) {
             onChange={(next) => updateDraftValues('status', next.map((value) => value.toLowerCase()))}
           />
           {renderFacetNotice('status')}
+        </div>
+      );
+    }
+
+    if (field === 'progress') {
+      const draft = draftFilters.progress;
+      return (
+        <div className="queue-inline-filter workflow-list-filter-control">
+          <div className="workflow-list-filter-sort-actions">
+            <button type="button" className="secondary" onClick={() => { setSortField('progress'); setSortDir('asc'); }}>
+              Sort least complete first
+            </button>
+            <button type="button" className="secondary" onClick={() => { setSortField('progress'); setSortDir('desc'); }}>
+              Sort most complete first
+            </button>
+          </div>
+          <div className="workflow-list-progress-range">
+            <label>
+              Completion from percent
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={draft.pctFrom || ''}
+                disabled={!listEnabled}
+                onChange={(event) => updateDraftProgress({ pctFrom: event.target.value })}
+              />
+            </label>
+            <label>
+              Completion to percent
+              <input
+                type="number"
+                min="0"
+                max="100"
+                value={draft.pctTo || ''}
+                disabled={!listEnabled}
+                onChange={(event) => updateDraftProgress({ pctTo: event.target.value })}
+              />
+            </label>
+          </div>
+          <fieldset className="workflow-list-progress-filter-group">
+            <legend>Buckets</legend>
+            {PROGRESS_BUCKET_OPTIONS.map((bucket) => (
+              <label className="checkbox" key={bucket}>
+                <input
+                  type="checkbox"
+                  checked={draft.bucketIn.includes(bucket)}
+                  disabled={!listEnabled}
+                  onChange={(event) => {
+                    const bucketIn = event.target.checked
+                      ? ([...draft.bucketIn, bucket].filter((value, index, values) => values.indexOf(value) === index) as ProgressBucket[])
+                      : draft.bucketIn.filter((value) => value !== bucket);
+                    updateDraftProgress({ bucketIn });
+                  }}
+                />
+                {formatProgressBucket(bucket)}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="workflow-list-progress-filter-group">
+            <legend>Signals</legend>
+            {PROGRESS_SIGNAL_OPTIONS.map((signal) => (
+              <label className="checkbox" key={signal}>
+                <input
+                  type="checkbox"
+                  checked={draft.signalIn.includes(signal)}
+                  disabled={!listEnabled}
+                  onChange={(event) => {
+                    const signalIn = event.target.checked
+                      ? ([...draft.signalIn, signal].filter((value, index, values) => values.indexOf(value) === index) as ProgressSignal[])
+                      : draft.signalIn.filter((value) => value !== signal);
+                    updateDraftProgress({ signalIn });
+                  }}
+                />
+                {formatProgressSignal(signal)}
+              </label>
+            ))}
+          </fieldset>
+          <label>
+            Current step title
+            <input
+              type="text"
+              value={draft.stepTitleContains || ''}
+              disabled={!listEnabled}
+              placeholder="contains text..."
+              onChange={(event) => updateDraftProgress({ stepTitleContains: event.target.value })}
+            />
+          </label>
+          <label>
+            Progress blank values
+            <select
+              value={draft.blank || ''}
+              disabled={!listEnabled}
+              onChange={(event) =>
+                updateDraftProgress({
+                  blank: event.target.value as NonNullable<ProgressFilter['blank']>,
+                })
+              }
+            >
+              <option value="">Ignore blanks</option>
+              <option value="include">Include no progress data</option>
+              <option value="exclude">Exclude no progress data</option>
+            </select>
+          </label>
         </div>
       );
     }

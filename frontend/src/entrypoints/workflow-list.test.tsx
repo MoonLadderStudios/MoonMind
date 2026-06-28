@@ -88,12 +88,13 @@ describe('Workflows Entrypoint', () => {
 
     await screen.findAllByText('Example task');
 
-    expect(document.querySelectorAll('.workflow-list-column-filter-button')).toHaveLength(5);
+    expect(document.querySelectorAll('.workflow-list-column-filter-button')).toHaveLength(6);
     const workflowFilter = screen.getByRole('button', {
       name: 'Workflow filter. No filter applied.',
     });
     fireEvent.click(workflowFilter);
     expect(screen.getByRole('dialog', { name: 'Workflow filter' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Progress filter. No filter applied.' })).toBeTruthy();
 
     const filtersTrigger = screen.getByRole('button', { name: 'Filters' });
     expect(filtersTrigger).toBeTruthy();
@@ -250,6 +251,137 @@ describe('Workflows Entrypoint', () => {
       expect(url).not.toContain('sort=');
       expect(url).not.toContain('sortDir=');
     }
+  });
+
+  it('MM-1018 sorts Progress by bounded completion percent with blanks last', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-blank',
+            source: 'temporal',
+            title: 'Blank progress',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+          },
+          {
+            taskId: 'task-half',
+            source: 'temporal',
+            title: 'Half progress',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+            progress: { total: 4, succeeded: 2, currentStepTitle: 'Build', updatedAt: '2026-03-28T00:01:00Z' },
+          },
+          {
+            taskId: 'task-most',
+            source: 'temporal',
+            title: 'Most progress',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+            progress: { total: 4, succeeded: 3, currentStepTitle: 'Test', updatedAt: '2026-03-28T00:02:00Z' },
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    const progressHeaderButton = await screen.findByRole('button', {
+      name: /Progress\. Not sorted\. Activate to sort the current page descending\./i,
+    });
+    fireEvent.click(progressHeaderButton);
+
+    const table = screen.getByRole('table');
+    const mostLink = within(table).getByRole('link', { name: 'Most progress' });
+    const halfLink = within(table).getByRole('link', { name: 'Half progress' });
+    const blankLink = within(table).getByRole('link', { name: 'Blank progress' });
+    expect(mostLink.compareDocumentPosition(halfLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(halfLink.compareDocumentPosition(blankLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(progressHeaderButton);
+    await waitFor(() => {
+      expect(progressHeaderButton.closest('th')?.getAttribute('aria-sort')).toBe('ascending');
+    });
+    expect(halfLink.compareDocumentPosition(mostLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(mostLink.compareDocumentPosition(blankLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(window.location.search).not.toContain('sort=');
+    expect(executionListCalls().some(([url]) => String(url).includes('/steps'))).toBe(false);
+  });
+
+  it('MM-1018 serializes Progress filters and filters bounded current-page progress', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        items: [
+          {
+            taskId: 'task-match',
+            source: 'temporal',
+            title: 'Matching progress',
+            status: 'failed',
+            state: 'failed',
+            rawState: 'failed',
+            createdAt: '2026-03-28T00:00:00Z',
+            progress: {
+              total: 4,
+              succeeded: 2,
+              failed: 1,
+              currentStepTitle: 'Run tests',
+              updatedAt: '2026-03-28T00:02:00Z',
+            },
+          },
+          {
+            taskId: 'task-miss',
+            source: 'temporal',
+            title: 'Other progress',
+            status: 'executing',
+            state: 'executing',
+            rawState: 'executing',
+            createdAt: '2026-03-28T00:00:00Z',
+            progress: {
+              total: 4,
+              succeeded: 1,
+              running: 1,
+              currentStepTitle: 'Implement',
+              updatedAt: '2026-03-28T00:01:00Z',
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    renderWithClient(<WorkflowListPage payload={mockPayload} />);
+
+    await screen.findAllByText('Matching progress');
+    openFilterDrawer();
+    expect(screen.getByLabelText('Completion from percent')).toBeTruthy();
+    expect(screen.getByLabelText('Current step title')).toBeTruthy();
+    expect(screen.getByLabelText('Progress blank values')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Completion from percent'), { target: { value: '25' } });
+    fireEvent.change(screen.getByLabelText('Completion to percent'), { target: { value: '75' } });
+    fireEvent.click(screen.getByLabelText('Has failed steps'));
+    fireEvent.change(screen.getByLabelText('Current step title'), { target: { value: 'tests' } });
+    applyFilterDrawer();
+
+    await waitFor(() => {
+      expect(lastExecutionListUrl()).toBe(
+        '/api/executions?source=temporal&pageSize=50&progressPctFrom=25&progressPctTo=75&progressSignalIn=has_failed_steps&progressStepTitleContains=tests',
+      );
+    });
+    expect(window.location.search).toBe(
+      '?progressPctFrom=25&progressPctTo=75&progressSignalIn=has_failed_steps&progressStepTitleContains=tests&limit=50',
+    );
+    expect(screen.getByRole('button', { name: /Progress filter: 25-75%, Has failed steps, step tests/i })).toBeTruthy();
+    expect((await screen.findAllByText('Matching progress')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Other progress')).toBeNull();
+    expect(executionListCalls().some(([url]) => String(url).includes('/steps'))).toBe(false);
   });
 
   it('preserves allowlisted list context on workflow detail links and keeps browser back target intact (MM-998, MM-975)', async () => {

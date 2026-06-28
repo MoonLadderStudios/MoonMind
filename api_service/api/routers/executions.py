@@ -263,6 +263,29 @@ _TEMPORAL_STATUS_VALUES = (
     "failed",
     "canceled",
 )
+_PROGRESS_BUCKET_VALUES = frozenset({"not_started", "in_progress", "complete"})
+_PROGRESS_SIGNAL_VALUES = frozenset(
+    {
+        "running",
+        "awaiting_external",
+        "reviewing",
+        "has_failed_steps",
+        "has_skipped_steps",
+        "has_canceled_steps",
+    }
+)
+_PROGRESS_FILTER_ALIASES = frozenset(
+    {
+        "progressPctFrom",
+        "progressPctTo",
+        "progressBucketIn",
+        "progressBucketNotIn",
+        "progressSignalIn",
+        "progressSignalNotIn",
+        "progressStepTitleContains",
+        "progressBlank",
+    }
+)
 _NON_TERMINAL_MM_STATES = frozenset(
     {
         "scheduled",
@@ -539,6 +562,251 @@ def _validate_blank_mode(raw: str | None, *, alias: str) -> str | None:
             f"{alias} must be one of: include, exclude."
         )
     return value
+
+
+def _normalize_progress_percent(raw: str | None, *, alias: str) -> float | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise TemporalExecutionValidationError(
+            f"{alias} must be a number from 0 to 100."
+        ) from exc
+    if parsed < 0 or parsed > 100:
+        raise TemporalExecutionValidationError(
+            f"{alias} must be a number from 0 to 100."
+        )
+    return parsed
+
+
+def _validate_progress_values(
+    values: list[str],
+    *,
+    alias: str,
+    allowed: frozenset[str],
+) -> None:
+    unsupported = sorted(value for value in values if value not in allowed)
+    if unsupported:
+        raise TemporalExecutionValidationError(
+            f"{alias} must use supported values: {', '.join(sorted(allowed))}."
+        )
+
+
+def _validate_progress_request_params(
+    request: Request,
+    *,
+    sort: str | None,
+    sort_dir: str | None,
+) -> None:
+    progress_pct_from = _normalize_progress_percent(
+        request.query_params.get("progressPctFrom"),
+        alias="progressPctFrom",
+    )
+    progress_pct_to = _normalize_progress_percent(
+        request.query_params.get("progressPctTo"),
+        alias="progressPctTo",
+    )
+    if (
+        progress_pct_from is not None
+        and progress_pct_to is not None
+        and progress_pct_from > progress_pct_to
+    ):
+        raise TemporalExecutionValidationError(
+            "progressPctFrom must be before or equal to progressPctTo."
+        )
+    progress_bucket_in = _raw_query_values(
+        request, "progressBucketIn", request.query_params.get("progressBucketIn")
+    )
+    progress_bucket_not_in = _raw_query_values(
+        request, "progressBucketNotIn", request.query_params.get("progressBucketNotIn")
+    )
+    progress_signal_in = _raw_query_values(
+        request, "progressSignalIn", request.query_params.get("progressSignalIn")
+    )
+    progress_signal_not_in = _raw_query_values(
+        request, "progressSignalNotIn", request.query_params.get("progressSignalNotIn")
+    )
+    _validate_non_contradictory_values(
+        "progressBucketIn",
+        progress_bucket_in,
+        "progressBucketNotIn",
+        progress_bucket_not_in,
+    )
+    _validate_non_contradictory_values(
+        "progressSignalIn",
+        progress_signal_in,
+        "progressSignalNotIn",
+        progress_signal_not_in,
+    )
+    _validate_progress_values(
+        progress_bucket_in + progress_bucket_not_in,
+        alias="progressBucketIn",
+        allowed=_PROGRESS_BUCKET_VALUES,
+    )
+    _validate_progress_values(
+        progress_signal_in + progress_signal_not_in,
+        alias="progressSignalIn",
+        allowed=_PROGRESS_SIGNAL_VALUES,
+    )
+    _normalize_text_filter(
+        request.query_params.get("progressStepTitleContains"),
+        alias="progressStepTitleContains",
+    )
+    _validate_blank_mode(request.query_params.get("progressBlank"), alias="progressBlank")
+    if sort in {"progress", "progressPct"}:
+        direction = str(sort_dir or "desc").strip().lower()
+        if direction not in {"asc", "desc"}:
+            raise TemporalExecutionValidationError("sortDir must be one of: asc, desc.")
+
+
+def _execution_progress_pct(execution: ExecutionModel) -> float | None:
+    progress = execution.progress
+    if progress is None or progress.total <= 0:
+        return None
+    return max(0.0, min(100.0, (progress.succeeded / progress.total) * 100.0))
+
+
+def _execution_progress_bucket(execution: ExecutionModel) -> str | None:
+    progress = execution.progress
+    if progress is None or progress.total <= 0:
+        return None
+    if progress.succeeded >= progress.total:
+        return "complete"
+    active = (
+        progress.running > 0
+        or progress.awaiting_external > 0
+        or progress.reviewing > 0
+    )
+    terminal = progress.failed > 0 or progress.skipped > 0 or progress.canceled > 0
+    if progress.succeeded > 0 or active or terminal:
+        return "in_progress"
+    return "not_started"
+
+
+def _execution_progress_signals(execution: ExecutionModel) -> set[str]:
+    progress = execution.progress
+    if progress is None:
+        return set()
+    signals: set[str] = set()
+    if progress.running > 0:
+        signals.add("running")
+    if progress.awaiting_external > 0:
+        signals.add("awaiting_external")
+    if progress.reviewing > 0:
+        signals.add("reviewing")
+    if progress.failed > 0:
+        signals.add("has_failed_steps")
+    if progress.skipped > 0:
+        signals.add("has_skipped_steps")
+    if progress.canceled > 0:
+        signals.add("has_canceled_steps")
+    return signals
+
+
+def _execution_matches_progress_request(
+    execution: ExecutionModel,
+    request: Request,
+) -> bool:
+    pct = _execution_progress_pct(execution)
+    is_blank = pct is None
+    blank_mode = _validate_blank_mode(
+        request.query_params.get("progressBlank"),
+        alias="progressBlank",
+    )
+    if blank_mode == "include" and not is_blank:
+        return False
+    if blank_mode == "exclude" and is_blank:
+        return False
+    pct_from = _normalize_progress_percent(
+        request.query_params.get("progressPctFrom"),
+        alias="progressPctFrom",
+    )
+    pct_to = _normalize_progress_percent(
+        request.query_params.get("progressPctTo"),
+        alias="progressPctTo",
+    )
+    if pct_from is not None and (pct is None or pct < pct_from):
+        return False
+    if pct_to is not None and (pct is None or pct > pct_to):
+        return False
+    bucket_in = set(
+        _raw_query_values(
+            request, "progressBucketIn", request.query_params.get("progressBucketIn")
+        )
+    )
+    bucket_not_in = set(
+        _raw_query_values(
+            request,
+            "progressBucketNotIn",
+            request.query_params.get("progressBucketNotIn"),
+        )
+    )
+    bucket = _execution_progress_bucket(execution)
+    if bucket_in and bucket not in bucket_in:
+        return False
+    if bucket_not_in and bucket in bucket_not_in:
+        return False
+    signal_in = set(
+        _raw_query_values(
+            request, "progressSignalIn", request.query_params.get("progressSignalIn")
+        )
+    )
+    signal_not_in = set(
+        _raw_query_values(
+            request,
+            "progressSignalNotIn",
+            request.query_params.get("progressSignalNotIn"),
+        )
+    )
+    signals = _execution_progress_signals(execution)
+    if signal_in and not signals.intersection(signal_in):
+        return False
+    if signal_not_in and signals.intersection(signal_not_in):
+        return False
+    step_title_contains = _normalize_text_filter(
+        request.query_params.get("progressStepTitleContains"),
+        alias="progressStepTitleContains",
+    )
+    if step_title_contains:
+        title = (execution.progress.current_step_title if execution.progress else None) or ""
+        if step_title_contains.lower() not in title.lower():
+            return False
+    return True
+
+
+def _request_has_progress_filters(request: Request) -> bool:
+    return any(request.query_params.get(alias) for alias in _PROGRESS_FILTER_ALIASES)
+
+
+def _sort_executions_by_progress(
+    items: list[ExecutionModel],
+    *,
+    direction: str,
+) -> list[ExecutionModel]:
+    reverse = direction == "desc"
+
+    def key(item: ExecutionModel) -> tuple[int, float, int, int, float, str]:
+        pct = _execution_progress_pct(item)
+        progress = item.progress
+        updated_at = progress.updated_at if progress else item.updated_at
+        return (
+            1 if pct is None else 0,
+            pct or 0.0,
+            progress.succeeded if progress else 0,
+            progress.total if progress else 0,
+            updated_at.timestamp() if updated_at else 0.0,
+            item.workflow_id,
+        )
+
+    non_blank = [item for item in items if _execution_progress_pct(item) is not None]
+    blank = [item for item in items if _execution_progress_pct(item) is None]
+    return sorted(non_blank, key=key, reverse=reverse) + sorted(
+        blank,
+        key=lambda item: item.workflow_id,
+        reverse=True,
+    )
 
 
 def _normalize_date_bound(raw: str | None, *, alias: str, end_of_day: bool = False) -> str | None:
@@ -880,6 +1148,7 @@ def _build_temporal_execution_query(
         "targetSkillNotIn",
         target_skill_not_in_values,
     )
+    _validate_progress_request_params(request, sort=sort, sort_dir=sort_dir)
 
     temporal_scope = _normalize_temporal_list_scope(
         scope,
@@ -991,6 +1260,8 @@ def _build_temporal_execution_query(
     count_query = " AND ".join(query_parts) if query_parts else ""
     list_query = count_query
     if include_order and sort:
+        if sort in {"progress", "progressPct"}:
+            return count_query, list_query
         sort_attr = _EXECUTION_SORT_FIELDS.get(sort)
         if sort_attr is None:
             raise TemporalExecutionValidationError(
@@ -8540,23 +8811,36 @@ async def list_executions(
                         execution = execution.model_copy(update=update)
                     items.append(execution)
 
-                items.sort(
-                    key=lambda item: (
-                        (
-                            0
-                            if item.state == MoonMindWorkflowState.SCHEDULED.value
-                            else 1
-                        ),
-                        (
-                            -item.scheduled_for.timestamp()
-                            if item.state == MoonMindWorkflowState.SCHEDULED.value
-                            and item.scheduled_for is not None
-                            else float("inf")
-                        ),
-                        -(item.updated_at.timestamp() if item.updated_at else 0),
-                        item.workflow_id,
+                if _request_has_progress_filters(request):
+                    items = [
+                        item
+                        for item in items
+                        if _execution_matches_progress_request(item, request)
+                    ]
+
+                if sort in {"progress", "progressPct"}:
+                    items = _sort_executions_by_progress(
+                        items,
+                        direction=str(sort_dir or "desc").strip().lower(),
                     )
-                )
+                else:
+                    items.sort(
+                        key=lambda item: (
+                            (
+                                0
+                                if item.state == MoonMindWorkflowState.SCHEDULED.value
+                                else 1
+                            ),
+                            (
+                                -item.scheduled_for.timestamp()
+                                if item.state == MoonMindWorkflowState.SCHEDULED.value
+                                and item.scheduled_for is not None
+                                else float("inf")
+                            ),
+                            -(item.updated_at.timestamp() if item.updated_at else 0),
+                            item.workflow_id,
+                        )
+                    )
 
             new_token_str = None
             if iterator.next_page_token:

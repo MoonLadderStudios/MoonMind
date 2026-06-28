@@ -1639,6 +1639,216 @@ def test_list_executions_temporal_query_rejects_invalid_filter_bounds() -> None:
     assert "sort must be one of" in invalid_sort.json()["detail"]["message"]
     temporal_client.count_workflows.assert_not_called()
 
+
+def test_list_executions_temporal_query_validates_progress_filters() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+    temporal_client = SimpleNamespace(count_workflows=AsyncMock(), list_workflows=Mock())
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        contradictory_bucket = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "progressBucketIn": "in_progress",
+                "progressBucketNotIn": "complete",
+            },
+        )
+        invalid_percent = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "progressPctFrom": "75",
+                "progressPctTo": "25",
+            },
+        )
+        invalid_signal = test_client.get(
+            "/api/executions",
+            params={"source": "temporal", "progressSignalIn": "awaitingExternal"},
+        )
+
+    assert contradictory_bucket.status_code == 422
+    assert contradictory_bucket.json()["detail"]["message"] == (
+        "Cannot combine progressBucketIn and progressBucketNotIn."
+    )
+    assert invalid_percent.status_code == 422
+    assert (
+        "progressPctFrom must be before or equal to progressPctTo"
+        in invalid_percent.json()["detail"]["message"]
+    )
+    assert invalid_signal.status_code == 422
+    assert (
+        "progressSignalIn must use supported values"
+        in invalid_signal.json()["detail"]["message"]
+    )
+    temporal_client.count_workflows.assert_not_called()
+
+
+def test_list_executions_source_temporal_filters_and_sorts_progress_from_bounded_summary() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+
+    class _EmptyCanonicalResult:
+        def scalars(self) -> "_EmptyCanonicalResult":
+            return self
+
+        def all(self) -> list[TemporalExecutionCanonicalRecord]:
+            return []
+
+    class _Session:
+        async def execute(self, _stmt: object) -> _EmptyCanonicalResult:
+            return _EmptyCanonicalResult()
+
+    app.dependency_overrides[get_async_session] = lambda: _Session()
+    _override_user_dependencies(app, is_superuser=True)
+
+    def _workflow(
+        workflow_id: str,
+        title: str,
+        progress: dict[str, object] | None,
+    ) -> SimpleNamespace:
+        async def _memo() -> dict[str, object]:
+            return {
+                "title": title,
+                "summary": title,
+                **({"progress": progress} if progress is not None else {}),
+            }
+
+        return SimpleNamespace(
+            id=workflow_id,
+            run_id=f"run-{workflow_id}",
+            namespace="default",
+            workflow_type="MoonMind.UserWorkflow",
+            status="COMPLETED",
+            start_time=datetime(2026, 4, 4, 18, 0, tzinfo=UTC),
+            close_time=datetime(2026, 4, 4, 18, 5, tzinfo=UTC),
+            execution_time=None,
+            search_attributes={
+                "mm_state": "completed",
+                "mm_owner_id": "system",
+                "mm_owner_type": "system",
+                "mm_entry": "run",
+            },
+            memo=_memo,
+        )
+
+    high = _workflow(
+        "wf-high",
+        "High progress",
+        {
+            "total": 4,
+            "pending": 0,
+            "ready": 0,
+            "succeeded": 3,
+            "failed": 1,
+            "running": 0,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+            "updatedAt": "2026-04-04T18:11:15Z",
+        },
+    )
+    low = _workflow(
+        "wf-low",
+        "Low progress",
+        {
+            "total": 4,
+            "pending": 0,
+            "ready": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Implement",
+            "updatedAt": "2026-04-04T18:09:15Z",
+        },
+    )
+    blank = _workflow("wf-blank", "Blank progress", None)
+
+    class _WorkflowIterator:
+        current_page = [low, blank, high]
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    progress_by_workflow_id = {
+        "wf-high": {
+            "total": 4,
+            "pending": 0,
+            "ready": 0,
+            "succeeded": 3,
+            "failed": 1,
+            "running": 0,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Run tests",
+            "updatedAt": "2026-04-04T18:11:15Z",
+        },
+        "wf-low": {
+            "total": 4,
+            "pending": 0,
+            "ready": 0,
+            "succeeded": 1,
+            "failed": 0,
+            "running": 1,
+            "awaitingExternal": 0,
+            "reviewing": 0,
+            "skipped": 0,
+            "canceled": 0,
+            "currentStepTitle": "Implement",
+            "updatedAt": "2026-04-04T18:09:15Z",
+        },
+        "wf-blank": None,
+    }
+
+    def _workflow_handle(workflow_id: str) -> _QueryHandle:
+        return _QueryHandle(progress=progress_by_workflow_id[workflow_id])
+
+    temporal_client = SimpleNamespace(
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=3)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+        get_workflow_handle=Mock(side_effect=_workflow_handle),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "ownerType": "system",
+                "progressPctFrom": "25",
+                "progressPctTo": "100",
+                "progressSignalIn": "has_failed_steps",
+                "progressStepTitleContains": "tests",
+                "sort": "progressPct",
+                "sortDir": "desc",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["workflowId"] for item in body["items"]] == ["wf-high"]
+    count_query = temporal_client.count_workflows.await_args.kwargs["query"]
+    list_query = temporal_client.list_workflows.call_args.kwargs["query"]
+    assert "progress" not in count_query
+    assert "ORDER BY" not in list_query
+
+
 def test_list_executions_source_temporal_hydrates_live_progress() -> None:
     app = FastAPI()
     app.include_router(router)
