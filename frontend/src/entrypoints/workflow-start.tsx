@@ -4835,6 +4835,7 @@ function StepAddMenu({
   }, [closeMenu, focusMenuItem, open]);
 
   const menuLabel = `Add to Step ${stepNumber}`;
+  const menuTitle = "Add files or capabilities";
   const menuTitleId = `queue-step-add-menu-title-${stepNumber}`;
   const imageItemLabel = isImageOnlyPolicy(attachmentPolicy)
     ? "Image…"
@@ -4854,7 +4855,7 @@ function StepAddMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={menuLabel}
-        title={menuLabel}
+        title={menuTitle}
         ref={triggerRef}
         onClick={() => setOpen((value) => !value)}
       >

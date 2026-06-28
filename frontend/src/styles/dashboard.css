@@ -4501,6 +4501,12 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   font-weight: 750;
 }
 
+.queue-step-attachment-add-button.queue-step-context-menu-button > span {
+  display: block;
+  line-height: 1;
+  transform: translateY(-0.04em);
+}
+
 .queue-step-context-menu-popover {
   position: absolute;
   top: calc(100% + 0.35rem);
@@ -4640,14 +4646,14 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-capability-chip-remove {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 0.95rem;
+  height: 0.95rem;
   border-radius: 999px;
 }
 
 .queue-step-capability-chip-remove svg {
-  width: 0.68rem;
-  height: 0.68rem;
+  width: 0.58rem;
+  height: 0.58rem;
 }
 
 .queue-step-attachment-add-button {
@@ -4733,15 +4739,15 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 }
 
 .queue-step-attachment-chip-remove {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 0.95rem;
+  height: 0.95rem;
   border-radius: 999px;
   flex: 0 0 auto;
 }
 
 .queue-step-attachment-chip-remove svg {
-  width: 0.68rem;
-  height: 0.68rem;
+  width: 0.58rem;
+  height: 0.58rem;
 }
 
 :is(.queue-step-attachments-list, #queue-dependency-list) li {

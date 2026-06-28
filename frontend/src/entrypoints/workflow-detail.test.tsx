@@ -5217,7 +5217,6 @@ describe('Workflow Detail Entrypoint', () => {
 
     const menu = await openWorkflowActionsMenu();
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Bypass Dependencies' }));
-    confirmWorkflowDialog('Bypass dependencies');
 
     await waitFor(() => {
       expect(signalBodies).toEqual([
