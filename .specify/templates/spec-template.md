@@ -1,3 +1,5 @@
+<!-- Generated from vendor/moonspec/bundle/templates/spec-template.md; edit MoonSpec repo instead. -->
+
 # Feature Specification: [FEATURE NAME]
 
 **Feature Branch**: `[###-feature-name]`
@@ -15,7 +17,7 @@
 **Stable Claim IDs**: [CLAIM-001, DESIGN-REQ-001, DOC-REQ-001, or none with reason]
 **Source Issue Traceability**: [e.g., MM-933 from MM-927, or none]
 
-<!-- Moon Spec specs contain exactly one independently testable user story. Use /speckit.breakdown for technical designs that contain multiple stories. -->
+<!-- MoonSpec specs contain exactly one independently testable user story. Use /moonspec.breakdown for technical designs that contain multiple stories. -->
 
 ## User Story - [Brief Title]
 

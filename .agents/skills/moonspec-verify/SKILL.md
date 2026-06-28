@@ -1,14 +1,16 @@
 ---
 name: moonspec-verify
-description: Verify a completed Moon Spec implementation against the original request, one-story `spec.md`, plan, tasks, constitution, source-design mappings, and required tests. Use when the user asks to run or reproduce `/speckit.verify`, perform the final read-only implementation check, audit unit and integration test evidence, classify requirement coverage, or decide whether more code or test work is needed before closing a spec.
+description: Verify a completed MoonSpec implementation against the original request, one-story `spec.md`, plan, tasks, constitution, source-design mappings, and required tests. Use when the user asks to run or reproduce `/moonspec.verify`, perform the final read-only implementation check, audit unit and integration test evidence, classify requirement coverage, or decide whether more code or test work is needed before closing a spec.
 metadata:
   required-capabilities:
     - git
 ---
+<!-- Generated from vendor/moonspec/bundle/skills/moonspec-verify/SKILL.md; edit MoonSpec repo instead. -->
+
 
 # MoonSpec Verify
 
-Use this skill to perform the final Moon Spec verification workflow.
+Use this skill to perform the final MoonSpec verification workflow.
 
 ## Scope
 
@@ -31,7 +33,7 @@ This skill answers:
 - Use absolute paths in reports.
 - Keep the verdict conservative when evidence is incomplete.
 
-Stop if the required artifacts cannot be located. If `spec.md` contains multiple stories, report `NO_DETERMINATION` for Moon Spec completion and recommend splitting the design with `/speckit.breakdown` or regenerating a one-story spec.
+Stop if the required artifacts cannot be located. If `spec.md` contains multiple stories, report `NO_DETERMINATION` for MoonSpec completion and recommend splitting the design with `/moonspec.breakdown` or regenerating a one-story spec.
 
 ## Pre-Verify Hooks
 
@@ -76,13 +78,7 @@ If the user provides a specific `spec.md` or feature directory, use it and deriv
 Otherwise run the prerequisite script from the repository root:
 
 ```bash
-scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
-```
-
-On PowerShell projects, use:
-
-```powershell
-scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks
+.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks
 ```
 
 Parse `FEATURE_DIR` and `AVAILABLE_DOCS`, then derive:
@@ -365,7 +361,7 @@ If no hooks are registered or `.specify/extensions.yml` does not exist, skip sil
 
 - Verification is read-only except ignored disposable test artifacts.
 - The original request as preserved in `spec.md`, interpreted against the canonical source document per `docs/Workflows/MoonSpecDocumentModel.md`, is the alignment baseline. The canonical document — not the spec — remains the source of truth for desired state.
-- Moon Spec uses one story per spec.
+- MoonSpec uses one story per spec.
 - `spec.md` plus `.specify/memory/constitution.md` define governing requirements.
 - `plan.md` and `tasks.md` are useful context but never proof of implementation.
 - Unit tests and integration tests are both expected evidence.

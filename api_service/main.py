@@ -92,6 +92,9 @@ logger.info("Starting FastAPI...")
 _PRESET_SEED_DIR = (
     Path(__file__).resolve().parent / "data" / "presets"
 )
+# One-time pre-release seed cleanup for databases that were created before
+# MoonSpec became the canonical bundle identity. Remove after the submodule
+# cutover has run through existing development installations.
 _LEGACY_PRESET_SLUGS_TO_DEACTIVATE = ("speckit-orchestrate",)
 
 def _initialize_embedding_model(app_state, app_settings):

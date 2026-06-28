@@ -63,7 +63,7 @@ class FakeTaskState:
         used_skills = metadata.get("usedTools")
         used_fallback = metadata.get("usedFallback")
         shadow_mode = metadata.get("shadowModeRequested")
-        if selected is None and self.phase.value.startswith("speckit_"):
+        if selected is None and self.phase.value.startswith("moonspec_"):
             selected = "auto"
         if adapter is None and selected == "auto":
             adapter = "auto"
@@ -113,7 +113,7 @@ class FakeArtifact:
         self.content_type = "text/plain"
         self.size_bytes = 42
         self.expires_at = datetime.now(UTC)
-        self.source_phase = models.AutomationPhase.SPECKIT_PLAN
+        self.source_phase = models.AutomationPhase.PLAN
         self.run = run
 
 @pytest.fixture
@@ -153,7 +153,7 @@ def _build_run(run_id: UUID | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         id=run_id,
         status=models.AutomationRunStatus.SUCCEEDED,
-        branch_name="speckit/branch",
+        branch_name="moonspec/branch",
         pull_request_url="https://example.com/pr/1",
         result_summary="Spec automation completed",
         started_at=datetime.now(UTC),
@@ -168,12 +168,12 @@ def test_get_run_detail_success(
     run_id = uuid4()
     run = _build_run(run_id)
     task_state = FakeTaskState(
-        phase=models.AutomationPhase.SPECKIT_SPECIFY,
+        phase=models.AutomationPhase.SPECIFY,
         status=models.AutomationTaskStatus.SUCCEEDED,
-        metadata={"branch": "speckit/branch"},
+        metadata={"branch": "moonspec/branch"},
     )
     artifact = FakeArtifact(
-        name="phase-speckit_specify.stdout",
+        name="phase-moonspec_specify.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/stdout.log",
     )
@@ -188,7 +188,7 @@ def test_get_run_detail_success(
     assert data["run_id"] == str(run_id)
     assert data["status"] == models.AutomationRunStatus.SUCCEEDED.value
     assert data["phases"][0]["phase"] == task_state.phase.value
-    assert data["phases"][0]["metadata"] == {"branch": "speckit/branch"}
+    assert data["phases"][0]["metadata"] == {"branch": "moonspec/branch"}
     assert data["phases"][0]["selected_skill"] == "auto"
     assert data["phases"][0]["adapter_id"] == "auto"
     assert data["phases"][0]["execution_path"] == "skill"
@@ -202,7 +202,7 @@ def test_get_run_detail_uses_explicit_skill_metadata(
     run_id = uuid4()
     run = _build_run(run_id)
     task_state = FakeTaskState(
-        phase=models.AutomationPhase.SPECKIT_PLAN,
+        phase=models.AutomationPhase.PLAN,
         status=models.AutomationTaskStatus.SUCCEEDED,
         metadata={
             "selectedTool": "custom-skill",
@@ -227,14 +227,14 @@ def test_get_run_detail_uses_explicit_skill_metadata(
     assert phase_payload["used_fallback"] is True
     assert phase_payload["shadow_mode_requested"] is False
 
-def test_get_run_detail_backfills_blank_speckit_adapter_fields(
+def test_get_run_detail_backfills_blank_moonspec_adapter_fields(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
     run_id = uuid4()
     run = _build_run(run_id)
     task_state = FakeTaskState(
-        phase=models.AutomationPhase.SPECKIT_ANALYZE,
+        phase=models.AutomationPhase.ALIGN,
         status=models.AutomationTaskStatus.SUCCEEDED,
         metadata={
             "selectedTool": "auto",
@@ -254,7 +254,7 @@ def test_get_run_detail_backfills_blank_speckit_adapter_fields(
     assert phase_payload["used_skills"] is True
     assert phase_payload["used_fallback"] is False
 
-def test_get_run_detail_keeps_non_speckit_partial_metadata(
+def test_get_run_detail_keeps_non_moonspec_partial_metadata(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     http_client, repo, _user = client
@@ -296,7 +296,7 @@ def test_get_artifact_detail_success(
     run_id = uuid4()
     run = _build_run(run_id)
     artifact = FakeArtifact(
-        name="phase-speckit_plan.stdout",
+        name="phase-moonspec_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/plan.log",
         run_id=run_id,
@@ -356,7 +356,7 @@ def test_get_artifact_detail_forbidden(
     run = _build_run(run_id)
     run.repository = "forbidden/repo"
     artifact = FakeArtifact(
-        name="phase-speckit_plan.stdout",
+        name="phase-moonspec_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/plan.log",
         run_id=run_id,
@@ -381,7 +381,7 @@ def test_download_artifact_success(
     run = _build_run(run_id)
     artifact_path = Path("runs/123/artifacts/stdout.log")
     artifact = FakeArtifact(
-        name="phase-speckit_plan.stdout",
+        name="phase-moonspec_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path=str(artifact_path),
         run_id=run_id,
@@ -406,7 +406,7 @@ def test_download_artifact_success(
     assert response.status_code == 200
     assert response.content == b"artifact body"
     assert (
-        'filename="phase-speckit_plan.stdout"'
+        'filename="phase-moonspec_plan.stdout"'
         in response.headers["content-disposition"]
     )
     assert response.headers["content-type"].startswith("text/plain")
@@ -420,7 +420,7 @@ def test_download_artifact_missing_file(
     run_id = uuid4()
     run = _build_run(run_id)
     artifact = FakeArtifact(
-        name="phase-speckit_plan.stdout",
+        name="phase-moonspec_plan.stdout",
         artifact_type=models.AutomationArtifactType.STDOUT_LOG,
         storage_path="runs/123/artifacts/missing.log",
         run_id=run_id,

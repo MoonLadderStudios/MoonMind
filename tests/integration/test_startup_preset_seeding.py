@@ -60,7 +60,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
         seeded_step_titles = [step["title"] for step in template.steps]
         assert "Classify request and resume point" not in seeded_step_titles
         assert "Split broad designs when needed" not in seeded_step_titles
-        assert seeded_step_titles[0] == "Create or select Moon Spec"
+        assert seeded_step_titles[0] == "Create or select MoonSpec"
         assert "moonspec-breakdown" not in seeded_skill_ids
         assert "speckit-analyze" not in seeded_skill_ids
         specify_step = template.steps[0]
@@ -74,7 +74,7 @@ async def test_startup_seeds_default_task_templates(disabled_env_keys, tmp_path)
             for step in template.steps
             if step["title"] == "Generate TDD task breakdown"
         )
-        assert "/moonspec-verify" in tasks_step["instructions"]
+        assert "/moonspec.verify" in tasks_step["instructions"]
         assert "/speckit.verify" not in tasks_step["instructions"]
 
         result = await session.execute(

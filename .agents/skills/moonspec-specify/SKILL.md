@@ -1,24 +1,26 @@
 ---
 name: moonspec-specify
-description: Create or update a Moon Spec feature specification from a natural language feature request or referenced declarative design. Use when the user asks to run or reproduce `/speckit.specify`, create a `spec.md`, initialize a feature directory under `specs/`, preserve the original feature request for later verification, map source design requirements, or generate a single-story Moon Spec specification with a requirements quality checklist.
+description: Create or update a MoonSpec feature specification from a natural language feature request or referenced declarative design. Use when the user asks to run or reproduce `/moonspec.specify`, create a `spec.md`, initialize a feature directory under `specs/`, preserve the original feature request for later verification, map source design requirements, or generate a single-story MoonSpec specification with a requirements quality checklist.
 metadata:
   required-capabilities:
     - git
 ---
+<!-- Generated from vendor/moonspec/bundle/skills/moonspec-specify/SKILL.md; edit MoonSpec repo instead. -->
+
 
 # MoonSpec Specify
 
-Use this skill to perform the Moon Spec specify workflow.
+Use this skill to perform the MoonSpec specify workflow.
 
 ## When To Use
 
-Use this skill when the user wants to create or update a Moon Spec `spec.md` from:
+Use this skill when the user wants to create or update a MoonSpec `spec.md` from:
 
 - A natural language feature request.
 - A referenced declarative design, contract, or source requirements document.
-- A request to run or reproduce `/speckit.specify`.
+- A request to run or reproduce `/moonspec.specify`.
 
-Do not use this skill to split a broad design into multiple specs; use `/speckit.breakdown` for that.
+Do not use this skill to split a broad design into multiple specs; use `/moonspec.breakdown` for that.
 
 ## Inputs
 
@@ -26,7 +28,7 @@ Do not use this skill to split a broad design into multiple specs; use `/speckit
 - `spec.md` is a temporary execution artifact and downstream adapter derived from the request or its canonical source document. It is never the source of truth for desired state (see `docs/Workflows/MoonSpecDocumentModel.md`).
 - Do not ask the user to repeat the request unless it is empty or no independently testable story can be derived.
 - If the feature description is empty, stop with: `ERROR "No feature description provided"`.
-- Preserve the original feature description verbatim in the generated spec's `**Input**` field. Do not summarize or normalize it; `/speckit.verify` relies on this source request.
+- Preserve the original feature description verbatim in the generated spec's `**Input**` field. Do not summarize or normalize it; `/moonspec.verify` relies on this source request.
 - If the request references a source design file, contract, or declarative design artifact, resolve and read it before generating the spec.
 - Default the intent to implemented system behavior. Use documentation-only intent only when the user explicitly asks for docs-only or documentation alignment work.
 
@@ -49,7 +51,7 @@ For source-backed requests:
    - Explicit non-goals or exclusions that constrain scope.
 4. Build a source packet from the source artifact. Record the source document path, document class, viewpoint, owning surface, stable claim IDs, and source issue traceability when present. For canonical docs, derive viewpoint and owning surface from the document metadata header, `docs/DocumentationArchitecture.md`, file path, title, and authority text. If the source already has stable IDs, preserve them. If a concrete source claim has no stable ID, assign `CLAIM-001`, `CLAIM-002`, and so on within the generated packet; do not treat line numbers as stable IDs.
 5. Assign source requirement IDs: `DESIGN-REQ-001`, `DESIGN-REQ-002`, and so on. Link each `DESIGN-REQ-*` to its stable claim ID, or state why no stable source claim applies.
-6. If the source artifact contains multiple independent stories, do not collapse them into one spec. Ask the user to choose one story, or direct them to `/speckit.breakdown` when the goal is to extract stories from a broader technical or declarative design.
+6. If the source artifact contains multiple independent stories, do not collapse them into one spec. Ask the user to choose one story, or direct them to `/moonspec.breakdown` when the goal is to extract stories from a broader technical or declarative design.
 7. If a source requirement is intentionally out of scope for the selected story, keep it in the source mapping as out of scope with a short rationale. Do not silently drop it.
 8. Record the packet in `spec.md` immediately below `**Input**` as `## Source Packet`. Include:
    - `**Artifact Role**`: state that `spec.md` is a temporary adapter derived from the canonical request or source document, not authoritative desired state.
@@ -135,7 +137,7 @@ Important constraints:
 - Create only one feature per invocation.
 - Generate exactly one user story in the spec.
 - Do not generate P1/P2/P3 stories or multiple story sections.
-- If the input describes multiple independent stories, choose the primary story only when obvious and record the rest as out of scope; otherwise ask for clarification or direct the user to `/speckit.breakdown` when starting from a technical or declarative design.
+- If the input describes multiple independent stories, choose the primary story only when obvious and record the rest as out of scope; otherwise ask for clarification or direct the user to `/moonspec.breakdown` when starting from a technical or declarative design.
 - If the request is too ambiguous to identify one independently testable story, ask one targeted question before creating files.
 - The spec directory name and git branch name are independent.
 - The spec directory and file are created by this workflow, not by hooks.
@@ -230,7 +232,7 @@ After writing the initial spec, create `SPECIFY_FEATURE_DIRECTORY/checklists/req
 
 ## Notes
 
-- Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`
+- Items marked incomplete require spec updates before `/moonspec.plan`
 ```
 
 Validate the spec against every checklist item. Mark passing items complete. For failures, quote the relevant spec section in the notes.
@@ -323,7 +325,7 @@ Report completion with:
 - `SPEC_FILE`
 - Checklist results summary
 - Intent classification and source design mapping summary, when applicable
-- Readiness for `/speckit.clarify` or `/speckit.plan`
+- Readiness for `/moonspec.plan`
 
 After reporting, check `.specify/extensions.yml` for `hooks.after_specify` using the same parsing, filtering, and condition rules as pre-spec hooks. For each executable hook:
 

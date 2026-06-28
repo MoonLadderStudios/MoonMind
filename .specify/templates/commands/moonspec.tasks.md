@@ -1,21 +1,22 @@
 ---
-description: Generate a one-story, TDD-first Moon Spec tasks.md with unit tests, integration tests, and source-design traceability.
+description: Generate a one-story, TDD-first MoonSpec tasks.md with unit tests, integration tests, and source-design traceability.
 handoffs:
-  - label: Analyze For Consistency
-    agent: speckit.analyze
-    prompt: Run a project analysis for consistency
+  - label: Align Artifacts
+    agent: moonspec.align
+    prompt: Align MoonSpec artifacts before implementation
     send: true
   - label: Implement Project
-    agent: speckit.implement
+    agent: moonspec.implement
     prompt: Start the implementation in phases
     send: true
   - label: Verify Final Implementation
-    agent: speckit.verify
+    agent: moonspec.verify
     prompt: Verify the completed implementation against the original feature request
 scripts:
-  sh: scripts/bash/check-prerequisites.sh --json
-  ps: scripts/powershell/check-prerequisites.ps1 -Json
+  sh: .specify/scripts/bash/check-prerequisites.sh --json
 ---
+<!-- Generated from vendor/moonspec/bundle/commands/markdown/moonspec.tasks.md; edit MoonSpec repo instead. -->
+
 
 ## User Input
 
@@ -61,7 +62,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Outline
 
-Moon Spec tasks turn one declarative design-backed spec into an executable implementation checklist. The output MUST preserve single-story focus, make TDD the default path, include both unit and integration test work, and keep every task traceable to the original request or source design preserved in `spec.md`.
+MoonSpec tasks turn one declarative design-backed spec into an executable implementation checklist. The output MUST preserve single-story focus, make TDD the default path, include both unit and integration test work, and keep every task traceable to the original request or source design preserved in `spec.md`.
 
 1. **Setup**: Run `{SCRIPT}` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
@@ -74,7 +75,7 @@ Moon Spec tasks turn one declarative design-backed spec into an executable imple
 3. **Execute task generation workflow**:
    - Load plan.md and extract tech stack, libraries, project structure, unit testing tools, and integration testing tools
    - Load spec.md and extract the preserved `**Input**`, single user story, goal, independent test, acceptance scenarios, edge cases, functional requirements, success criteria, assumptions, and source design mappings such as `DESIGN-REQ-*` or `DOC-REQ-*`
-   - Confirm spec.md contains exactly one independently testable user story; if it contains multiple stories, STOP and tell the user to use `/speckit.breakdown` for broad designs or regenerate a one-story spec with `/speckit.specify`
+   - Confirm spec.md contains exactly one independently testable user story; if it contains multiple stories, STOP and tell the user to use `/moonspec.breakdown` for broad designs or regenerate a one-story spec with `/moonspec.specify`
    - Build a traceability inventory covering each `FR-*`, acceptance scenario, edge case, measurable success criterion, and in-scope source design mapping
    - If data-model.md exists: Extract entities needed by the story
    - If contracts/ exists: Map interface contracts to the story and to integration/contract test tasks
@@ -94,7 +95,7 @@ Moon Spec tasks turn one declarative design-backed spec into an executable imple
    - Phase 3: The single story from spec.md
    - The story phase includes: story goal, independent test criteria, source traceability, required unit tests, required integration tests, red-first confirmation tasks, and implementation tasks
    - Final Phase: Polish & cross-cutting concerns
-   - Final verification task that runs `/speckit.verify` after implementation and tests pass
+   - Final verification task that runs `/moonspec.verify` after implementation and tests pass
    - All tasks must follow the strict checklist format (see Task Generation Rules below)
    - Clear file paths for each task, plus requirement/scenario/source IDs where applicable
    - Dependencies section showing phase and test-before-implementation order
@@ -231,4 +232,4 @@ Every task MUST strictly follow this format:
   - The phase should be a complete, independently testable vertical slice
 - **Final Phase**: Polish & Cross-Cutting Concerns
   - Refactoring, documentation, performance, security, and additional coverage that strengthen the completed story without adding hidden scope
-  - Include a final task to run `/speckit.verify` after all implementation and tests pass
+  - Include a final task to run `/moonspec.verify` after all implementation and tests pass

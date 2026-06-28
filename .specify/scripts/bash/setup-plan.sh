@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Generated from vendor/moonspec/bundle/scripts/bash/setup-plan.sh; edit MoonSpec repo instead.
 
 set -e
 

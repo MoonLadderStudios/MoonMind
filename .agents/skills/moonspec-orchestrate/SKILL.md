@@ -1,18 +1,20 @@
 ---
 name: moonspec-orchestrate
-description: Orchestrate the full Moon Spec lifecycle from a preselected single-story feature request or active feature directory through specification, planning, TDD task generation, artifact alignment, implementation, and final verification. Use when the user asks for an end-to-end Moon Spec run and the input has already been routed to one independently testable story, or when Codex needs to coordinate `moonspec-specify`, `moonspec-plan`, `moonspec-tasks`, `moonspec-align`, `moonspec-implement`, and `moonspec-verify` without manual analyze/remediation prompts.
+description: Orchestrate the full MoonSpec lifecycle from a preselected single-story feature request or active feature directory through specification, planning, TDD task generation, artifact alignment, implementation, and final verification. Use when the user asks for an end-to-end MoonSpec run and the input has already been routed to one independently testable story, or when Codex needs to coordinate `moonspec-specify`, `moonspec-plan`, `moonspec-tasks`, `moonspec-align`, `moonspec-implement`, and `moonspec-verify` without manual analyze/remediation prompts.
 metadata:
   required-capabilities:
     - git
 ---
+<!-- Generated from vendor/moonspec/bundle/skills/moonspec-orchestrate/SKILL.md; edit MoonSpec repo instead. -->
+
 
 # MoonSpec Orchestrate
 
-Use this skill to coordinate the Moon Spec workflow end to end.
+Use this skill to coordinate the MoonSpec workflow end to end.
 
 ## Scope
 
-Orchestrate downstream Moon Spec skills instead of reimplementing their detailed workflows:
+Orchestrate downstream MoonSpec skills instead of reimplementing their detailed workflows:
 
 - `moonspec-specify`: create one-story specs from a single feature request.
 - `moonspec-plan`: create implementation planning artifacts.
@@ -22,7 +24,7 @@ Orchestrate downstream Moon Spec skills instead of reimplementing their detailed
 - `moonspec-verify`: perform final read-only verification.
 - `moonspec-doc-reconcile`: update the canonical source document when verified discoveries definitely require it.
 
-Do not use older `speckit-*` skill names in orchestration instructions. Slash commands such as `/speckit.plan` may still appear only when referring to the user-facing command names.
+MoonSpec skill IDs and command IDs use `moonspec-*` and `/moonspec.*`.
 
 ## Inputs
 
@@ -35,7 +37,7 @@ Default intent is `runtime`: production code plus tests must be delivered. Use `
 
 ## Core Rules
 
-- Moon Spec uses one independently testable story per `spec.md`.
+- MoonSpec uses one independently testable story per `spec.md`.
 - Before starting downstream stages, validate that the input is already exactly one independently testable story or an active feature directory with an existing one-story `spec.md`.
 - If the input is a broad design, names multiple stories/features, asks to split or implement all stories, or otherwise cannot be bounded to one independently testable story without selection, stop immediately and report that a higher-level workflow must route it through `moonspec-breakdown` or another upstream selector first.
 - Single-story requests go through `moonspec-specify`.
@@ -87,7 +89,7 @@ Use these gates before advancing:
 - Tasks gate:
   - `tasks.md` exists.
   - It covers exactly one story.
-  - It includes unit test tasks, integration test tasks, red-first confirmation tasks, implementation tasks, story validation, and final `/speckit.verify`.
+  - It includes unit test tasks, integration test tasks, red-first confirmation tasks, implementation tasks, story validation, and final `/moonspec.verify`.
   - Source design or original request mappings have task coverage.
 - Align gate:
   - `moonspec-align` has run after `tasks.md` generation unless the user explicitly skipped alignment.
@@ -129,7 +131,7 @@ For the selected spec:
 ### 3. Generate Tasks
 
 1. Run `moonspec-tasks` if the tasks gate is incomplete or upstream artifacts changed.
-2. Verify `tasks.md` format, single-story focus, TDD order, unit/integration coverage, source traceability, and final `/speckit.verify`.
+2. Verify `tasks.md` format, single-story focus, TDD order, unit/integration coverage, source traceability, and final `/moonspec.verify`.
 
 ### 4. Align Artifacts
 
@@ -218,6 +220,6 @@ Mention source design coverage and `DOC-REQ-*`/`DESIGN-REQ-*` status when presen
 - Do not invent user approvals or fake intermediate outputs.
 - Do not run `moonspec-breakdown` or perform story routing from inside this workflow.
 - Enforce one story per spec.
-- Keep TDD, unit tests, integration tests, and `/speckit.verify` in the pipeline.
+- Keep TDD, unit tests, integration tests, and `/moonspec.verify` in the pipeline.
 - Treat verification as the final authority for completion.
 - Run doc reconciliation after a `FULLY_IMPLEMENTED` verdict when a canonical source candidate exists; never let derived artifacts silently override canonical docs.
