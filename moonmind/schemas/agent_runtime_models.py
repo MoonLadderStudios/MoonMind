@@ -339,6 +339,16 @@ _OBSERVABILITY_PROVIDER_NATIVE_KEYS: frozenset[str] = frozenset(
         "transcript",
     }
 )
+_OBSERVABILITY_REDACTED_SENTINELS: frozenset[str] = frozenset(
+    {
+        "[REDACTED]",
+        "[REDACTED_AUTHORIZATION]",
+        "[REDACTED_AUTH_PATH]",
+        "[REDACTED_PRIVATE_KEY]",
+        "[REDACTED_PATH]",
+        "[REDACTED_URL]",
+    }
+)
 
 
 def extract_durable_retrieval_metadata(
@@ -434,6 +444,32 @@ def _contains_sensitive_key(
             _contains_sensitive_key(
                 item, allowed_sensitive_keys=allowed_sensitive_keys
             )
+            for item in value
+        )
+    return False
+
+
+def _contains_unredacted_observability_credential_metadata(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            normalized = str(key).strip().lower()
+            if any(fragment in normalized for fragment in _SENSITIVE_KEY_FRAGMENTS):
+                if normalized.endswith("_ref") or normalized.endswith("ref"):
+                    continue
+                if isinstance(nested, str) and (
+                    nested in _OBSERVABILITY_REDACTED_SENTINELS
+                    or nested.startswith("artifact://")
+                    or nested.startswith("art:")
+                    or nested.startswith("ref:")
+                ):
+                    continue
+                return True
+            if _contains_unredacted_observability_credential_metadata(nested):
+                return True
+        return False
+    if isinstance(value, (list, tuple)):
+        return any(
+            _contains_unredacted_observability_credential_metadata(item)
             for item in value
         )
     return False
@@ -1855,7 +1891,7 @@ class RunObservabilityEvent(BaseModel):
     @classmethod
     def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
         compact = validate_compact_temporal_mapping(value, field_name="metadata")
-        if _contains_sensitive_key(compact):
+        if _contains_unredacted_observability_credential_metadata(compact):
             raise ValueError("metadata must not contain raw credential keys")
         if _contains_provider_native_observability_key(compact):
             raise ValueError(

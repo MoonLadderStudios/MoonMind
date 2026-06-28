@@ -57,6 +57,7 @@ type LiveLogsSessionTimelineRollout = 'off' | 'internal' | 'codex_managed' | 'al
 
 const GITHUB_PULL_REQUEST_PATH_PATTERN = /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/i;
 const SESSION_PROJECTION_POLL_MS = 5000;
+const SESSION_CAPABILITY_POLL_MS = 5000;
 
 function normalizeLiveLogsSessionTimelineRollout(
   value: string | null | undefined,
@@ -244,6 +245,17 @@ export function getSessionProjectionRefetchInterval(
     return false;
   }
   return SESSION_PROJECTION_POLL_MS;
+}
+
+export function getSessionCapabilityRefetchInterval(
+  isTerminal: boolean,
+  hasCapabilities: boolean,
+  hasError: boolean,
+): number | false {
+  if (isTerminal || hasCapabilities || hasError) {
+    return false;
+  }
+  return SESSION_CAPABILITY_POLL_MS;
 }
 
 function normalizeGitHubPullRequestUrl(value: string | null | undefined): string | null {
@@ -3974,10 +3986,22 @@ function SessionContinuityPanel({
   const queryClient = useQueryClient();
   const [followUpMessage, setFollowUpMessage] = useState('');
   const [panelError, setPanelError] = useState<string | null>(null);
+  const canPollSessionCapabilities = isCodexManagedRuntime(targetRuntime);
   const summaryQuery = useQuery({
     queryKey: ['session-intervention-capabilities', agentRunId],
     queryFn: () => fetchObservabilitySummary(apiBase, agentRunId, routes.observabilitySummary),
     enabled: Boolean(agentRunId),
+    refetchInterval: (query) => {
+      if (!canPollSessionCapabilities) {
+        return false;
+      }
+      const capabilities = query.state.data?.interventionCapabilities;
+      return getSessionCapabilityRefetchInterval(
+        isTerminal,
+        capabilities?.sendFollowUp === true || capabilities?.clearSession === true,
+        Boolean(query.state.error),
+      );
+    },
     retry: false,
   });
   const capabilities = summaryQuery.data?.interventionCapabilities;

@@ -551,6 +551,25 @@ def test_run_observability_event_rejects_secret_like_metadata() -> None:
             metadata={"oauthToken": "raw-token", "apiKey": "raw-key"},
         )
 
+def test_run_observability_event_accepts_redacted_secret_like_metadata() -> None:
+    # MM-988: bridge-redacted metadata is safe to publish even when the source
+    # provider used secret-like metadata keys.
+    event = LiveLogChunk(
+        sequence=1,
+        stream="system",
+        timestamp="2026-04-08T00:00:00Z",
+        text="metadata sanitized",
+        kind="system_annotation",
+        metadata={
+            "apiToken": "[REDACTED]",
+            "authorization": "[REDACTED_AUTHORIZATION]",
+            "nested": [{"privateKey": "[REDACTED_PRIVATE_KEY]"}],
+        },
+    )
+
+    assert event.metadata["apiToken"] == "[REDACTED]"
+    assert event.metadata["authorization"] == "[REDACTED_AUTHORIZATION]"
+
 def test_run_observability_event_accepts_artifact_refs_for_provider_evidence() -> None:
     event = LiveLogChunk(
         runId="run-1",

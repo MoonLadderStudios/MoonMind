@@ -5,6 +5,7 @@ import { renderWithClient } from '../utils/test-utils';
 import { EXECUTING_STATUS_PILL_TRACEABILITY } from '../utils/executionStatusPillClasses';
 import {
   expandRouteTemplate,
+  getSessionCapabilityRefetchInterval,
   getSessionProjectionRefetchInterval,
   normalizeObservabilityEvent,
   WorkflowDetailPage,
@@ -6810,6 +6811,13 @@ describe('Workflow Detail Entrypoint', () => {
     expect(getSessionProjectionRefetchInterval(false, true, false)).toBe(false);
     expect(getSessionProjectionRefetchInterval(false, false, true)).toBe(false);
     expect(getSessionProjectionRefetchInterval(true, false, false)).toBe(false);
+  });
+
+  it('keeps polling session capabilities until a managed session is visible or terminal', () => {
+    expect(getSessionCapabilityRefetchInterval(false, false, false)).toBe(5000);
+    expect(getSessionCapabilityRefetchInterval(false, true, false)).toBe(false);
+    expect(getSessionCapabilityRefetchInterval(false, false, true)).toBe(false);
+    expect(getSessionCapabilityRefetchInterval(true, false, false)).toBe(false);
   });
 });
 
