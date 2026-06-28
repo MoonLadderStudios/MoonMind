@@ -15,10 +15,12 @@ describe('WorkflowRowActionsMenu', () => {
     actions: {
       canPause: true,
       canCancel: true,
+      canRerun: true,
     },
   };
 
   beforeEach(() => {
+    window.history.pushState({}, 'Workflows', '/workflows?source=temporal');
     fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url === '/api/executions/wf-123?source=temporal') {
@@ -94,6 +96,33 @@ describe('WorkflowRowActionsMenu', () => {
         signalName: 'Pause',
       });
     });
+  });
+
+  it('requests a rerun from the row menu without navigating away from the workflow list', async () => {
+    renderWithClient(
+      <WorkflowRowActionsMenu
+        workflowId="wf-123"
+        apiBase="/api"
+        actionsEnabled
+        taskEditingEnabled
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rerun' }));
+
+    await waitFor(() => {
+      const rerunCall = fetchSpy.mock.calls.find(
+        ([url]) => String(url) === '/api/executions/wf-123/update',
+      );
+      expect(rerunCall).toBeTruthy();
+      const requestBody = (rerunCall?.[1] as RequestInit | undefined)?.body;
+      expect(requestBody).toBeDefined();
+      expect(JSON.parse(requestBody as string)).toMatchObject({
+        updateName: 'RequestRerun',
+      });
+    });
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?source=temporal');
   });
 
   it('opens a cancel dialog and posts to the cancel endpoint after confirmation', async () => {
