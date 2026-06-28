@@ -1611,6 +1611,47 @@ describe('Workflows Entrypoint', () => {
     expect(detailsLink.closest('.queue-card-actions')).toBeTruthy();
   });
 
+  it('MM-1001 keeps mobile workflow cards, filters, and detail navigation available', async () => {
+    renderWithClient(
+      <WorkflowListPage
+        payload={{
+          ...mockPayload,
+          initialData: {
+            dashboardConfig: {
+              features: {
+                temporalDashboard: {
+                  workspaceShellEnabled: true,
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+
+    await screen.findAllByText('Example task');
+
+    const cardList = document.querySelector('.queue-card-list') as HTMLElement;
+    expect(cardList).toBeTruthy();
+
+    const cardTitle = await within(cardList).findByRole('link', { name: 'Example task' });
+    const detailsLink = within(cardList).getByRole('button', { name: 'View details' });
+
+    expect(cardTitle.getAttribute('href')).toBe('/workflows/task-123?source=temporal');
+    expect(detailsLink.getAttribute('href')).toBe('/workflows/task-123?source=temporal');
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+
+    openFilterDrawer();
+    fireEvent.change(await screen.findByLabelText('Status filter value'), {
+      target: { value: 'completed' },
+    });
+    applyFilterDrawer();
+
+    expect(await screen.findByRole('button', { name: 'Status filter: completed' })).toBeTruthy();
+    expect(await within(cardList).findByRole('link', { name: 'Example task' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeTruthy();
+  }, 10000);
+
   it('keeps mobile task cards constrained to the viewport width', async () => {
     renderWithClient(<WorkflowListPage payload={mockPayload} />);
 
