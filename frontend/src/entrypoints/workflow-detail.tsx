@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import Anser from 'anser';
 import { Virtuoso } from 'react-virtuoso';
 import { z } from 'zod';
@@ -69,6 +69,7 @@ const WorkflowWorkspaceRowSchema = z
     state: z.string().optional(),
     rawState: z.string().optional(),
     createdAt: z.string().nullable().optional(),
+    updatedAt: z.string().nullable().optional(),
     scheduledFor: z.string().nullable().optional(),
     closedAt: z.string().nullable().optional(),
     repository: z.string().nullable().optional(),
@@ -87,7 +88,7 @@ function workflowWorkspaceRowId(row: WorkflowWorkspaceRow): string {
 }
 
 function workflowWorkspaceRowUpdatedAt(row: WorkflowWorkspaceRow): string | null | undefined {
-  return row.closedAt || row.scheduledFor || row.createdAt;
+  return row.closedAt || row.updatedAt || row.scheduledFor || row.createdAt;
 }
 
 function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorkspaceRow {
@@ -99,6 +100,7 @@ function workflowWorkspaceRowFromDetail(detail: ExecutionDetail): WorkflowWorksp
     state: detail.state,
     rawState: detail.rawState,
     createdAt: detail.createdAt,
+    updatedAt: detail.updatedAt,
     scheduledFor: detail.scheduledFor,
     closedAt: detail.closedAt,
     repository: detail.repository,
@@ -269,6 +271,115 @@ function WorkflowSidebarRow({
   );
 }
 
+function WorkflowSidebarControls({
+  fullListHref,
+  closeButtonRef,
+  onClose,
+}: {
+  fullListHref: string;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}) {
+  return (
+    <div className="workflow-workspace-sidebar-controls">
+      <button
+        ref={closeButtonRef}
+        type="button"
+        className="secondary"
+        onClick={onClose}
+      >
+        Close sidebar
+      </button>
+      <a className="button secondary" href={fullListHref}>
+        Expand to full list
+      </a>
+    </div>
+  );
+}
+
+function WorkflowSidebarList({
+  rows,
+  activeWorkflowId,
+  ariaLabel = 'Workflow navigation list',
+  pinned = false,
+}: {
+  rows: WorkflowWorkspaceRow[];
+  activeWorkflowId: string;
+  ariaLabel?: string;
+  pinned?: boolean;
+}) {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <ul
+      className={`workflow-workspace-sidebar-list${pinned ? ' workflow-workspace-sidebar-pinned-list' : ''}`}
+      aria-label={ariaLabel}
+    >
+      {rows.map((row) => (
+        <WorkflowSidebarRow
+          key={workflowWorkspaceRowId(row)}
+          row={row}
+          activeWorkflowId={activeWorkflowId}
+          pinned={pinned}
+        />
+      ))}
+    </ul>
+  );
+}
+
+function WorkflowSidebar({
+  workflowId,
+  workflowsQuery,
+  filteredRows,
+  pinnedCurrentRow,
+  fullListHref,
+  closeButtonRef,
+  onClose,
+}: {
+  workflowId: string;
+  workflowsQuery: UseQueryResult<z.infer<typeof WorkflowWorkspaceListResponseSchema>, Error>;
+  filteredRows: WorkflowWorkspaceRow[];
+  pinnedCurrentRow: WorkflowWorkspaceRow | null;
+  fullListHref: string;
+  closeButtonRef: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}) {
+  return (
+    <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
+      <WorkflowSidebarControls
+        fullListHref={fullListHref}
+        closeButtonRef={closeButtonRef}
+        onClose={onClose}
+      />
+      {workflowsQuery.isLoading ? (
+        <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
+      ) : null}
+      {workflowsQuery.isError ? (
+        <div className="workflow-workspace-sidebar-state" role="status">
+          <p>Workflow navigation is unavailable.</p>
+          <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
+        <WorkflowSidebarList
+          rows={[pinnedCurrentRow]}
+          activeWorkflowId={workflowId}
+          ariaLabel="Current workflow"
+          pinned
+        />
+      ) : null}
+      {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
+        <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
+      ) : null}
+      <WorkflowSidebarList rows={filteredRows} activeWorkflowId={workflowId} />
+    </aside>
+  );
+}
+
 function WorkflowWorkspaceShell({
   payload,
   workflowId,
@@ -327,54 +438,18 @@ function WorkflowWorkspaceShell({
   return (
     <div className="workflow-workspace-shell" data-jira-issue="MM-999" data-source-issue="MM-975">
       {sidebarOpen ? (
-        <aside className="workflow-workspace-sidebar" aria-label="Workflow navigation">
-          <div className="workflow-workspace-sidebar-controls">
-            <button
-              ref={closeButtonRef}
-              type="button"
-              className="secondary"
-              onClick={() => {
-                setSidebarOpen(false);
-                window.setTimeout(() => openButtonRef.current?.focus(), 0);
-              }}
-            >
-              Close sidebar
-            </button>
-            <a className="button secondary" href={fullListHref}>
-              Expand to full list
-            </a>
-          </div>
-          {workflowsQuery.isLoading ? (
-            <p className="workflow-workspace-sidebar-state">Loading workflows...</p>
-          ) : null}
-          {workflowsQuery.isError ? (
-            <div className="workflow-workspace-sidebar-state" role="status">
-              <p>Workflow navigation is unavailable.</p>
-              <button type="button" className="secondary" onClick={() => void workflowsQuery.refetch()}>
-                Retry
-              </button>
-            </div>
-          ) : null}
-          {!workflowsQuery.isLoading && !workflowsQuery.isError && pinnedCurrentRow ? (
-            <ul className="workflow-workspace-sidebar-list workflow-workspace-sidebar-pinned-list" aria-label="Current workflow">
-              <WorkflowSidebarRow row={pinnedCurrentRow} activeWorkflowId={workflowId} pinned />
-            </ul>
-          ) : null}
-          {!workflowsQuery.isLoading && !workflowsQuery.isError && filteredRows.length === 0 ? (
-            <p className="workflow-workspace-sidebar-state">No workflows match the current list filters.</p>
-          ) : null}
-          {filteredRows.length > 0 ? (
-            <ul className="workflow-workspace-sidebar-list" aria-label="Workflow navigation list">
-              {filteredRows.map((row) => (
-                <WorkflowSidebarRow
-                  key={workflowWorkspaceRowId(row)}
-                  row={row}
-                  activeWorkflowId={workflowId}
-                />
-              ))}
-            </ul>
-          ) : null}
-        </aside>
+        <WorkflowSidebar
+          workflowId={workflowId}
+          workflowsQuery={workflowsQuery}
+          filteredRows={filteredRows}
+          pinnedCurrentRow={pinnedCurrentRow}
+          fullListHref={fullListHref}
+          closeButtonRef={closeButtonRef}
+          onClose={() => {
+            setSidebarOpen(false);
+            window.setTimeout(() => openButtonRef.current?.focus(), 0);
+          }}
+        />
       ) : (
         <button
           ref={openButtonRef}

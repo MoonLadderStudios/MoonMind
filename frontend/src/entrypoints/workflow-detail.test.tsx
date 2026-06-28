@@ -520,7 +520,7 @@ describe('Workflow Detail Entrypoint', () => {
       rawState: 'executing',
       temporalStatus: 'running',
       createdAt: '2026-04-09T00:00:00Z',
-      updatedAt: '2026-04-09T00:00:04Z',
+      updatedAt: 'detail-updated-marker',
       actions: {},
       relatedRuns: [],
     };
@@ -665,6 +665,8 @@ describe('Workflow Detail Entrypoint', () => {
     const pinned = within(pinnedGroup).getByRole('link', { name: /MM-999 selected workflow outside filters/i });
     expect(pinned.getAttribute('aria-current')).toBe('page');
     expect(pinned.getAttribute('data-pinned')).toBe('true');
+    expect(within(pinned).getByLabelText('executing')).toBeTruthy();
+    expect(within(pinned).getByText('detail-updated-marker')).toBeTruthy();
     expect(within(sidebar).getByRole('link', { name: /Filtered workflow/i }).getAttribute('aria-current')).toBeNull();
     expect(screen.getByRole('main', { name: 'Workflow detail' })).toBeTruthy();
     expect(await screen.findByRole('heading', { name: 'Workflow Detail' })).toBeTruthy();
