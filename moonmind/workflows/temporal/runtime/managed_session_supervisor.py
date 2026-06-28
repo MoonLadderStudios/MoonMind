@@ -14,6 +14,7 @@ from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 
 from .log_streamer import RuntimeLogStreamer
 from .managed_session_store import ManagedSessionStore
+from .session_observability_bridge import ManagedSessionObservabilityBridge
 
 logger = logging.getLogger(__name__)
 
@@ -78,18 +79,21 @@ class ManagedSessionSupervisor:
         offset: int,
     ) -> None:
         try:
-            self._log_streamer.emit_observability_event(
+            bridge = ManagedSessionObservabilityBridge(
+                log_streamer=self._log_streamer,
                 run_id=record.agent_run_id,
                 workspace_path=record.workspace_path,
-                stream=stream_name,
-                text=text,
-                kind=f"{stream_name}_chunk",
-                offset=offset,
                 session_id=record.session_id,
                 session_epoch=record.session_epoch,
                 container_id=record.container_id,
                 thread_id=record.thread_id,
                 active_turn_id=record.active_turn_id,
+            )
+            bridge.emit(
+                stream=stream_name,
+                text=text,
+                kind=f"{stream_name}_chunk",
+                offset=offset,
                 metadata={"source": "managed_session_artifact_spool"},
                 preserve_text=True,
             )
@@ -229,18 +233,21 @@ class ManagedSessionSupervisor:
     ) -> None:
         """Publish one session-aware observability row into the run-level stream."""
         try:
-            self._log_streamer.emit_observability_event(
+            bridge = ManagedSessionObservabilityBridge(
+                log_streamer=self._log_streamer,
                 run_id=record.agent_run_id,
                 workspace_path=record.workspace_path,
-                stream="session",
-                text=text,
-                kind=kind,
                 session_id=record.session_id,
                 session_epoch=record.session_epoch,
                 container_id=record.container_id,
                 thread_id=record.thread_id,
+                active_turn_id=record.active_turn_id,
+            )
+            bridge.session_event(
+                text=text,
+                kind=kind,
                 turn_id=turn_id,
-                active_turn_id=active_turn_id if active_turn_id is not None else record.active_turn_id,
+                active_turn_id=active_turn_id,
                 metadata=dict(metadata or {}),
             )
         except Exception:
