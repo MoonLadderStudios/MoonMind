@@ -5125,7 +5125,13 @@ function RunComparisonPanel({
   );
 }
 
-export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
+export function WorkflowDetailPage({
+  payload,
+  fullListLinkLabel = 'Expand to full list',
+}: {
+  payload: BootPayload;
+  fullListLinkLabel?: string;
+}) {
   const queryClient = useQueryClient();
   const cfg = readDashboardConfig(payload);
   const agentRunRoutes = readAgentRunRouteTemplates(cfg);
@@ -5911,7 +5917,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
         </div>
         <div className="toolbar-controls">
           <a className="button secondary" href={expandToFullListHref}>
-            Expand to full list
+            {fullListLinkLabel}
           </a>
           <span className="small">
             Live updates enabled. Polling every {Math.round(detailPoll / 1000)}s
@@ -6858,7 +6864,12 @@ export function WorkflowDetailEntrypoint({ payload }: { payload: BootPayload }) 
     return <WorkflowWorkspaceShell payload={payload} workflowId={workflowId} search={search} />;
   }
 
-  return <WorkflowDetailPage payload={payload} />;
+  return (
+    <WorkflowDetailPage
+      payload={payload}
+      fullListLinkLabel={isDesktop ? 'Expand to full list' : 'Back to workflows'}
+    />
+  );
 }
 
 export default WorkflowDetailEntrypoint;

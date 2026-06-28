@@ -954,7 +954,8 @@ describe('Workflow Detail Entrypoint', () => {
     expect(screen.queryByRole('complementary', { name: 'Workflow navigation' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close sidebar' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Open workflow sidebar' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Expand to full list' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Back to workflows' }).getAttribute('href')).toBe('/workflows');
   });
 
   it('MM-801 renders Overview as a concise summary with route preview cards', async () => {
