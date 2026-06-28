@@ -1106,11 +1106,12 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
         <div className="section-heading-row">
           <h3>Runs</h3>
         </div>
-        {runsQuery.isError ? (
-          <div className="schedules-error" role="alert">{errorMessage(runsQuery.error, 'Failed to fetch schedule runs')}</div>
-        ) : (
-          <DataTable
+        <DataTable
             data={runs}
+            isLoading={runsQuery.isLoading}
+            loadingMessage="Loading schedule runs..."
+            isError={runsQuery.isError}
+            errorMessage={errorMessage(runsQuery.error, 'Failed to fetch schedule runs')}
             columns={[
               {
                 key: 'scheduledFor',
@@ -1146,11 +1147,10 @@ function ScheduleDetailPage({ payload, definitionId }: { payload: BootPayload; d
                 render: (item) => displayValue(item.message),
               },
             ]}
-            emptyMessage={runsQuery.isLoading ? 'Loading schedule runs...' : 'No runs recorded for this schedule.'}
+            emptyMessage="No runs recorded for this schedule."
             getRowKey={(item) => item.id}
             ariaLabel="Schedule runs"
           />
-        )}
       </section>
 
       <section className="panel--data schedules-detail-panel" aria-label="Schedule target payload">
@@ -1227,13 +1227,12 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
       </section>
 
       <section className="panel--data schedules-table-panel" aria-label="Recurring schedule list">
-        {isLoading ? (
-          <p className="loading">Loading recurring schedules...</p>
-        ) : isError ? (
-          <div className="schedules-error" role="alert">{errorMessage(error, 'Failed to fetch schedules')}</div>
-        ) : (
-          <DataTable
+        <DataTable
             data={schedules}
+            isLoading={isLoading}
+            loadingMessage="Loading recurring schedules..."
+            isError={isError}
+            errorMessage={errorMessage(error, 'Failed to fetch schedules')}
             columns={[
               {
                 key: 'name',
@@ -1304,7 +1303,6 @@ export function SchedulesPage({ payload }: { payload: BootPayload }) {
             getRowKey={(item) => item.id}
             ariaLabel="Recurring schedules"
           />
-        )}
       </section>
     </div>
   );

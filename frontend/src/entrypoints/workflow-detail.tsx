@@ -7,6 +7,7 @@ import { BootPayload } from '../boot/parseBootPayload';
 import { ExecutionStatusPill } from '../components/ExecutionStatusPill';
 import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
+import { LogPanel } from '../components/dashboard/LogPanel';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
   readDashboardPreferences,
@@ -3630,7 +3631,6 @@ function StaticLogPanel({
   routes: AgentRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [wrapLines, setWrapLines] = useState(true);
 
   const streamQuery = useQuery({
     queryKey: ['agent-run-stream', agentRunId, stream],
@@ -3647,11 +3647,6 @@ function StaticLogPanel({
 
   const title = stream === 'stdout' ? 'Stdout' : 'Stderr';
 
-  const handleCopy = () => {
-    if (!streamQuery.data) return;
-    copyTextToClipboard(streamQuery.data);
-  };
-
   const downloadUrl = agentRunRoute(
     apiBase,
     stream === 'stdout' ? routes.logsStdout : routes.logsStderr,
@@ -3660,46 +3655,17 @@ function StaticLogPanel({
   );
 
   return (
-    <details className="stack" open={expanded}>
-      <summary
-        onClick={(e) => {
-          e.preventDefault();
-          setExpanded((prev) => !prev);
-        }}
-        style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
-      >
-        <span>{title}</span>
-      </summary>
-      <div className="stack">
-        {expanded ? (
-          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-              <span className="small">Wrap lines</span>
-            </label>
-            <button className="secondary small" onClick={handleCopy}>Copy</button>
-            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-          </div>
-        ) : null}
-        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-          <pre
-            style={{
-              background: '#111',
-              color: '#e8e8e8',
-              padding: '0.75rem',
-              fontSize: '0.7rem',
-              lineHeight: 1.4,
-              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
-              wordBreak: wrapLines ? 'break-all' : 'normal',
-              borderRadius: '4px',
-              margin: 0,
-            }}
-          >
-            {streamQuery.isLoading ? 'Loading...' : streamQuery.isError ? `Error loading ${stream}` : streamQuery.data || `(no ${stream} output)`}
-          </pre>
-        </div>
-      </div>
-    </details>
+    <LogPanel
+      title={title}
+      text={streamQuery.data}
+      isLoading={streamQuery.isLoading}
+      isError={streamQuery.isError}
+      errorMessage={`Error loading ${stream}`}
+      emptyMessage={`(no ${stream} output)`}
+      downloadUrl={downloadUrl}
+      onExpandedChange={setExpanded}
+      ariaLabel={`${title} output`}
+    />
   );
 }
 
@@ -3713,7 +3679,6 @@ function DiagnosticsPanel({
   routes: AgentRunRouteTemplates;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [wrapLines, setWrapLines] = useState(true);
 
   const diagQuery = useQuery({
     queryKey: ['agent-run-diagnostics', agentRunId],
@@ -3721,11 +3686,6 @@ function DiagnosticsPanel({
     enabled: !!agentRunId && expanded,
     retry: false,
   });
-
-  const handleCopy = () => {
-    if (!diagQuery.data) return;
-    copyTextToClipboard(diagQuery.data);
-  };
 
   const downloadUrl = agentRunRoute(
     apiBase,
@@ -3735,46 +3695,17 @@ function DiagnosticsPanel({
   );
 
   return (
-    <details className="stack" open={expanded}>
-      <summary
-        onClick={(e) => {
-          e.preventDefault();
-          setExpanded((prev) => !prev);
-        }}
-        style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '1.2rem', marginBottom: '0.5rem' }}
-      >
-        <span>Diagnostics</span>
-      </summary>
-      <div className="stack">
-        {expanded ? (
-          <div className="button-group" style={{ fontSize: '0.9rem', fontWeight: 'normal' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-              <input type="checkbox" checked={wrapLines} onChange={(e) => setWrapLines(e.target.checked)} />
-              <span className="small">Wrap lines</span>
-            </label>
-            <button className="secondary small" onClick={handleCopy}>Copy</button>
-            <a className="button secondary small" href={downloadUrl} target="_blank" rel="noreferrer">Download</a>
-          </div>
-        ) : null}
-        <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
-          <pre
-            style={{
-              background: '#111',
-              color: '#e8e8e8',
-              padding: '0.75rem',
-              fontSize: '0.7rem',
-              lineHeight: 1.4,
-              whiteSpace: wrapLines ? 'pre-wrap' : 'pre',
-              wordBreak: wrapLines ? 'break-all' : 'normal',
-              borderRadius: '4px',
-              margin: 0,
-            }}
-          >
-            {diagQuery.isLoading ? 'Loading...' : diagQuery.isError ? 'Error loading diagnostics' : diagQuery.data || '(no diagnostics output)'}
-          </pre>
-        </div>
-      </div>
-    </details>
+    <LogPanel
+      title="Diagnostics"
+      text={diagQuery.data}
+      isLoading={diagQuery.isLoading}
+      isError={diagQuery.isError}
+      errorMessage="Error loading diagnostics"
+      emptyMessage="(no diagnostics output)"
+      downloadUrl={downloadUrl}
+      onExpandedChange={setExpanded}
+      ariaLabel="Diagnostics output"
+    />
   );
 }
 

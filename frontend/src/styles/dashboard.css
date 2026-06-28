@@ -498,10 +498,9 @@ h1 {
   box-shadow: none;
 }
 
-.panel:has(.workflow-start-page) {
-  max-width: min(72rem, calc(100vw - 2rem));
-  margin-inline: auto;
-}
+/* The workflow start page declares its own page surface via
+ * `.dashboard-surface--page` (MM-959), so no `.panel:has()` exception is
+ * needed to constrain and center it. */
 
 .panel:has(.workflow-list-notices-deck),
 .panel:has(.workflow-list-data-slab) {
@@ -6675,5 +6674,351 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
 
   .td-instructions-panel pre {
     font-size: 0.85rem;
+  }
+}
+
+/* ===========================================================================
+ * MM-959: Shared dashboard primitives
+ * DashboardSurface / DashboardNotice / DashboardErrorDetails / LogPanel and
+ * upgraded DataTable. Explicit surface classes let pages declare chrome
+ * directly instead of relying on global `.panel:has(...)` exceptions.
+ * ======================================================================== */
+
+.dashboard-surface {
+  display: block;
+  width: 100%;
+}
+
+.dashboard-surface--page {
+  max-width: min(72rem, calc(100vw - 2rem));
+  margin-inline: auto;
+}
+
+.dashboard-surface--controlDeck,
+.dashboard-surface--formSlab {
+  border-radius: 1rem;
+  background: var(--mm-glass-fill);
+  border: 1px solid var(--mm-glass-border);
+  box-shadow: var(--mm-elevation-panel);
+  padding: 1rem;
+}
+
+.dashboard-surface--dataSlab,
+.dashboard-surface--evidenceSlab {
+  border-radius: 1rem;
+  background: rgb(var(--mm-panel) / 0.92);
+  border: 1px solid rgb(var(--mm-border) / 0.72);
+  box-shadow: 0 16px 36px -30px rgb(var(--mm-ink) / 0.55);
+  padding: 1rem;
+}
+
+.dashboard-surface--floatingRail {
+  border-radius: 1rem;
+  background: var(--mm-glass-fill);
+  border: 1px solid var(--mm-glass-border);
+  box-shadow: var(--mm-elevation-panel);
+  padding: 0.75rem;
+}
+
+.dashboard-surface--debugDrawer {
+  border-radius: 0.75rem;
+  background: rgb(var(--mm-panel) / 0.72);
+  border: 1px dashed rgb(var(--mm-border) / 0.72);
+  padding: 0.75rem;
+}
+
+/* DashboardNotice ---------------------------------------------------------- */
+
+.dashboard-notice {
+  border-radius: 0.65rem;
+  padding: 0.65rem 0.72rem;
+  border: 1px solid rgb(var(--mm-border));
+  background: rgb(var(--mm-panel) / 0.72);
+  color: rgb(var(--mm-ink));
+  font-size: 0.9rem;
+  box-shadow: 0 10px 24px -22px rgb(var(--mm-ink) / 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.dashboard-notice__title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.dashboard-notice__body {
+  margin: 0;
+}
+
+.dashboard-notice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.dashboard-notice__details-summary {
+  cursor: pointer;
+}
+
+.dashboard-notice--info {
+  border-color: rgb(var(--mm-accent) / 0.5);
+  background: rgb(var(--mm-accent) / 0.08);
+}
+
+.dashboard-notice--success {
+  border-color: rgb(var(--mm-ok) / 0.5);
+  background: rgb(var(--mm-ok) / 0.08);
+  color: rgb(var(--mm-ok));
+}
+
+.dashboard-notice--warning,
+.dashboard-notice--pending {
+  border-color: rgb(var(--mm-warn) / 0.5);
+  background: rgb(var(--mm-warn) / 0.1);
+  color: rgb(var(--mm-warn));
+}
+
+.dashboard-notice--error {
+  border-color: rgb(var(--mm-danger) / 0.5);
+  background: rgb(var(--mm-danger) / 0.08);
+  color: rgb(var(--mm-danger));
+}
+
+/* DashboardErrorDetails ---------------------------------------------------- */
+
+.dashboard-error-details {
+  border-radius: 0.65rem;
+  padding: 0.65rem 0.72rem;
+  border: 1px solid rgb(var(--mm-danger) / 0.5);
+  background: rgb(var(--mm-danger) / 0.08);
+  color: rgb(var(--mm-danger));
+  font-size: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dashboard-error-details__message {
+  margin: 0;
+}
+
+.dashboard-error-details__summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.dashboard-error-details__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.dashboard-error-details__meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+}
+
+.dashboard-error-details__meta dt {
+  font-weight: 600;
+}
+
+.dashboard-error-details__meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-error-details__raw {
+  margin: 0;
+  padding: 0.5rem;
+  border-radius: 0.4rem;
+  background: rgb(var(--mm-ink) / 0.08);
+  color: rgb(var(--mm-ink));
+  font-family: var(--mm-font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 14rem;
+  overflow: auto;
+}
+
+.dashboard-error-details__actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+/* LogPanel ----------------------------------------------------------------- */
+
+.log-panel {
+  display: block;
+}
+
+.log-panel__summary,
+.log-panel__title {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+.log-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.log-panel__content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.log-panel__controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  font-weight: normal;
+}
+
+.log-panel__wrap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.log-panel__fallback {
+  margin: 0;
+  color: rgb(var(--mm-muted));
+}
+
+.log-panel__viewport {
+  max-height: 400px;
+  overflow: auto;
+  border-radius: 0.4rem;
+}
+
+.log-panel__output {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 0.4rem;
+  background: rgb(var(--mm-ink) / 0.92);
+  color: rgb(var(--mm-bg, 245 245 245));
+  font-family: var(--mm-font-mono, ui-monospace, monospace);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre;
+}
+
+.log-panel__output[data-wrap="on"] {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.log-panel__output--loading,
+.log-panel__output--empty {
+  color: rgb(var(--mm-muted));
+}
+
+.log-panel__output--error {
+  color: rgb(var(--mm-danger));
+}
+
+/* Upgraded DataTable ------------------------------------------------------- */
+
+.data-table-slab[data-density="compact"] .data-table th,
+.data-table-slab[data-density="compact"] .data-table td {
+  padding: 0.4rem 0.55rem;
+}
+
+.data-table-slab[data-sticky="off"] .data-table th {
+  position: static;
+}
+
+.data-table th[data-align="right"],
+.data-table td[data-align="right"] {
+  text-align: right;
+}
+
+.data-table th[data-align="center"],
+.data-table td[data-align="center"] {
+  text-align: center;
+}
+
+.data-table__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.data-table__sort-indicator {
+  font-size: 0.75em;
+  opacity: 0.7;
+}
+
+.data-table-error {
+  color: rgb(var(--mm-danger));
+}
+
+/* Responsive stacked-card fallback. Hidden until the viewport is too narrow
+ * for the table, at which point the table is hidden and cards take over. */
+.data-table-cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 0.6rem;
+}
+
+.data-table-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid rgb(var(--mm-border) / 0.72);
+  border-radius: 0.6rem;
+  background: rgb(var(--mm-panel) / 0.86);
+}
+
+.data-table-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.data-table-card__label {
+  color: rgb(var(--mm-muted));
+  font-size: 0.78rem;
+}
+
+@media (max-width: 720px) {
+  .data-table-slab[data-responsive="on"] {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .data-table-slab[data-responsive="on"] .data-table {
+    display: none;
+  }
+
+  .data-table-slab[data-responsive="on"] .data-table-cards {
+    display: flex;
+    flex-direction: column;
   }
 }
