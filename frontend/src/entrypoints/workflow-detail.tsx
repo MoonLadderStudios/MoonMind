@@ -1988,7 +1988,7 @@ const OPERATOR_ATTENTION_EVENT_KINDS = new Set([
 
 export function classifyTimelineRow(event: ObservabilityEvent): TimelineRow['rowType'] {
   const kind = event.kind ?? '';
-  if (event.kind === 'session_reset_boundary') {
+  if (kind === 'session_reset_boundary') {
     return 'boundary';
   }
   if (USER_MESSAGE_EVENT_KINDS.has(kind)) {
