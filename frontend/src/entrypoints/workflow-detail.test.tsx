@@ -23,6 +23,7 @@ import {
   readDashboardPreferences,
   updateDashboardPreferences,
 } from '../utils/dashboardPreferences';
+import { WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY } from '../lib/workflowListContext';
 
 declare const __dirname: string;
 
@@ -898,6 +899,30 @@ describe('Workflow Detail Entrypoint', () => {
     expect(expand.getAttribute('href')).not.toContain('selectedWorkflowId=');
     expect(expand.getAttribute('href')).not.toContain('unsafe=');
     expect(expand.getAttribute('class') || '').toContain('button');
+    expect(expand.getAttribute('class') || '').toContain('workflow-workspace-expand-list');
+    expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
+      'workflow-workspace-close-sidebar',
+    );
+  });
+
+  it('MM-1008 keeps close-sidebar and expand-list controls visually distinct', async () => {
+    window.history.pushState({}, 'Workspace Controls Test', '/workflows/test-123?source=temporal');
+    mockDesktopViewport(true);
+    mockWorkflowWorkspaceFetches();
+
+    renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
+
+    const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
+    expect(within(sidebar).getByRole('button', { name: 'Close sidebar' }).getAttribute('class') || '').toContain(
+      'workflow-workspace-close-sidebar',
+    );
+    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('class') || '').toContain(
+      'workflow-workspace-expand-list',
+    );
+
+    const dashboardCss = await readDashboardCss();
+    expect(dashboardCss).toMatch(/\.workflow-workspace-close-sidebar\s*\{[\s\S]*border-style:\s*dashed;/);
+    expect(dashboardCss).toMatch(/\.workflow-workspace-expand-list\s*\{[\s\S]*background:\s*rgb\(var\(--mm-accent\)/);
   });
 
   it('MM-1002 renders sidebar titles, repositories, runtimes, and statuses as React text', async () => {
@@ -938,9 +963,11 @@ describe('Workflow Detail Entrypoint', () => {
     renderWithClient(<WorkflowDetailEntrypoint payload={stepsPayload} />);
 
     const sidebar = await screen.findByRole('complementary', { name: 'Workflow navigation' });
-    expect(within(sidebar).getByRole('link', { name: 'Expand to full list' }).getAttribute('href')).toBe(
-      '/workflows',
-    );
+    const expandLink = within(sidebar).getByRole('link', { name: 'Expand to full list' });
+    expect(expandLink.getAttribute('href')).toBe('/workflows');
+
+    fireEvent.click(expandLink);
+    expect(window.sessionStorage.getItem(WORKFLOW_LIST_RETURN_FOCUS_INTENT_KEY)).toBe('1');
   });
 
   it('MM-1000 uses a single-column collapsed workspace layout and reduced-motion guard', async () => {
