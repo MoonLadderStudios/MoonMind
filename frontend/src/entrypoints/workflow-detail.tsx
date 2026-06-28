@@ -9,6 +9,10 @@ import { executionStatusPillProps } from '../utils/executionStatusPillClasses';
 import { SkillProvenanceBadge } from '../components/skills/SkillProvenanceBadge';
 import { formatRuntimeLabel, formatStatusLabel } from '../utils/formatters';
 import {
+  readDashboardPreferences,
+  updateDashboardPreferences,
+} from '../utils/dashboardPreferences';
+import {
   recordTemporalTaskEditingClientEvent,
   taskCompareHref,
   taskEditForRerunHref,
@@ -4723,17 +4727,20 @@ function WorkflowDetailSubrouteNav({
   workflowId,
   current,
   search,
+  showDebug,
 }: {
   workflowId: string;
   current: WorkflowDetailSubroute;
   search: URLSearchParams;
+  showDebug: boolean;
 }) {
   const items: Array<{ route: WorkflowDetailSubroute; label: string }> = [
     { route: 'overview', label: 'Overview' },
     { route: 'steps', label: 'Steps' },
     { route: 'artifacts', label: 'Artifacts' },
     { route: 'runs', label: 'Runs' },
-    { route: 'debug', label: 'Debug' },
+    // MM-964: the Debug tab is gated by the debug-fields visibility preference.
+    ...(showDebug ? [{ route: 'debug' as WorkflowDetailSubroute, label: 'Debug' }] : []),
   ];
   return (
     <nav className="td-subroute-nav" aria-label="Workflow detail sections">
@@ -4879,6 +4886,14 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       cfg?.features?.temporalDashboard?.temporalTaskEditing,
   );
   const debugOn = Boolean(cfg?.features?.temporalDashboard?.debugFieldsEnabled);
+  // MM-964: operators can hide the diagnostic Debug tab via a local preference.
+  // The Debug tab is available by default regardless of server config; the
+  // preference (default visible) lets an operator collapse it. The extra
+  // server-gated Debug Metadata region additionally requires `debugOn`.
+  const [debugFieldsPref, setDebugFieldsPref] = useState(
+    () => readDashboardPreferences().debugFieldsVisible,
+  );
+  const debugVisible = debugFieldsPref;
   const logStreamingEnabled = cfg?.features?.logStreamingEnabled !== false;
   const structuredHistoryEnabled = shouldUseStructuredHistory(cfg);
 
@@ -5622,11 +5637,27 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
       </div>
 
       {taskId ? (
-        <WorkflowDetailSubrouteNav
-          workflowId={taskId}
-          current={detailSubroute}
-          search={search}
-        />
+        <div className="td-subroute-nav-row">
+          <WorkflowDetailSubrouteNav
+            workflowId={taskId}
+            current={detailSubroute}
+            search={search}
+            showDebug={debugVisible}
+          />
+          <label className="checkbox td-debug-visibility-toggle">
+            <input
+              type="checkbox"
+              checked={debugFieldsPref}
+              onChange={(event) => {
+                setDebugFieldsPref(event.target.checked);
+                updateDashboardPreferences({
+                  debugFieldsVisible: event.target.checked,
+                });
+              }}
+            />
+            Show debug details
+          </label>
+        </div>
       ) : null}
 
       {execution?.recurrence?.definitionId ? (
@@ -5842,7 +5873,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </div>
           ) : null}
 
-          {detailSubroute === 'debug' ? (
+          {detailSubroute === 'debug' && debugVisible ? (
             <section className="stack td-debug-region" aria-label="Workflow debug details">
               <div>
                 <h3>Debug</h3>
@@ -6389,7 +6420,7 @@ export function WorkflowDetailPage({ payload }: { payload: BootPayload }) {
             </section>
           ) : null}
 
-          {detailSubroute === 'debug' && debugOn && execution.debugFields ? (
+          {detailSubroute === 'debug' && debugOn && debugVisible && execution.debugFields ? (
             <section className="stack">
               <h3>Debug Metadata</h3>
               <div className="grid-2">

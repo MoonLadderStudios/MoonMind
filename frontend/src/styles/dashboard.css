@@ -2010,6 +2010,64 @@ tbody tr:hover {
   font-weight: 500;
 }
 
+/* MM-964: compact density preference tightens the workflow list rows. */
+.queue-table-wrapper[data-density='compact'] th,
+.queue-table-wrapper[data-density='compact'] td {
+  padding: 0.3rem 0.45rem;
+  font-size: 0.82rem;
+}
+
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-compact,
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-date,
+.queue-table-wrapper[data-density='compact'] .queue-table-cell-next-action {
+  font-size: 0.76rem;
+}
+
+/* MM-964: dashboard preferences ("View options") popover. */
+.workflow-list-view-options {
+  position: relative;
+  margin-left: auto;
+}
+
+.workflow-list-view-options-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  z-index: 12;
+  min-width: 14rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid rgb(var(--mm-border) / 0.85);
+  border-radius: 0.6rem;
+  background: rgb(var(--mm-panel) / 0.98);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.28);
+}
+
+.workflow-list-view-options-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.workflow-list-view-options-group legend {
+  padding: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(var(--mm-ink) / 0.7);
+}
+
+.workflow-list-view-options-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .workflow-list-row-title {
   display: block;
   font-weight: 600;
@@ -6105,6 +6163,24 @@ button:where(:not(.secondary, .queue-action, .queue-submit-primary, .queue-step-
   border: 1px solid rgb(var(--mm-border) / 0.46);
   border-radius: 0.6rem;
   background: rgb(var(--mm-panel) / 0.62);
+}
+
+/* MM-964: keep the detail tab nav and the debug-visibility toggle on one row. */
+.td-subroute-nav-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.td-subroute-nav-row .td-subroute-nav {
+  flex: 1 1 auto;
+}
+
+.td-debug-visibility-toggle {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 0.82rem;
 }
 
 .td-subroute-nav a {

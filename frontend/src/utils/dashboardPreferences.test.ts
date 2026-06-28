@@ -1,0 +1,164 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  DASHBOARD_PREFERENCES_STORAGE_KEY,
+  DASHBOARD_PREFERENCES_VERSION,
+  DEFAULT_DASHBOARD_PREFERENCES,
+  readDashboardPreferences,
+  resetDashboardPreferences,
+  sanitizeDashboardPreferences,
+  updateDashboardPreferences,
+  writeDashboardPreferences,
+} from './dashboardPreferences';
+
+function storedRaw(): string | null {
+  return window.localStorage.getItem(DASHBOARD_PREFERENCES_STORAGE_KEY);
+}
+
+describe('dashboardPreferences', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  describe('read/write (MM-964 preference read/write)', () => {
+    it('returns defaults when nothing is stored', () => {
+      expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+    });
+
+    it('round-trips a full preference object across a simulated reload', () => {
+      const next = writeDashboardPreferences({
+        ...DEFAULT_DASHBOARD_PREFERENCES,
+        workflowListDensity: 'compact',
+        workflowListColumnVisibility: {
+          status: true,
+          nextAction: false,
+          repository: true,
+          targetRuntime: false,
+          updatedAt: true,
+        },
+        workflowListPageSize: 100,
+        liveUpdatesEnabled: false,
+        createExpertMode: true,
+        debugFieldsVisible: false,
+        preferredDetailTab: 'steps',
+        defaultRuntime: 'codex_cli',
+      });
+
+      // A fresh read simulates a page reload reading from localStorage.
+      const reloaded = readDashboardPreferences();
+      expect(reloaded).toEqual(next);
+      expect(reloaded.workflowListDensity).toBe('compact');
+      expect(reloaded.workflowListColumnVisibility.nextAction).toBe(false);
+      expect(reloaded.createExpertMode).toBe(true);
+      expect(reloaded.debugFieldsVisible).toBe(false);
+      expect(reloaded.preferredDetailTab).toBe('steps');
+    });
+
+    it('persists with a version envelope', () => {
+      writeDashboardPreferences({ ...DEFAULT_DASHBOARD_PREFERENCES, createExpertMode: true });
+      const parsed = JSON.parse(storedRaw() ?? '{}');
+      expect(parsed.version).toBe(DASHBOARD_PREFERENCES_VERSION);
+      expect(parsed.preferences.createExpertMode).toBe(true);
+    });
+
+    it('applies a partial patch on top of stored preferences', () => {
+      writeDashboardPreferences({ ...DEFAULT_DASHBOARD_PREFERENCES, workflowListDensity: 'compact' });
+      const updated = updateDashboardPreferences({ createExpertMode: true });
+      expect(updated.workflowListDensity).toBe('compact');
+      expect(updated.createExpertMode).toBe(true);
+      // The patch is durable.
+      expect(readDashboardPreferences()).toEqual(updated);
+    });
+  });
+
+  describe('invalid preference fallback (MM-964 invalid preference fallback)', () => {
+    it('falls back to defaults when the stored blob is not valid JSON', () => {
+      window.localStorage.setItem(DASHBOARD_PREFERENCES_STORAGE_KEY, '{not json');
+      expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+    });
+
+    it('falls back to defaults when the stored version does not match', () => {
+      window.localStorage.setItem(
+        DASHBOARD_PREFERENCES_STORAGE_KEY,
+        JSON.stringify({
+          version: DASHBOARD_PREFERENCES_VERSION + 1,
+          preferences: { workflowListDensity: 'compact' },
+        }),
+      );
+      expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+    });
+
+    it('falls back to defaults when the stored value is not an object', () => {
+      window.localStorage.setItem(DASHBOARD_PREFERENCES_STORAGE_KEY, JSON.stringify([1, 2, 3]));
+      expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+    });
+
+    it('ignores individual invalid fields while keeping valid ones', () => {
+      window.localStorage.setItem(
+        DASHBOARD_PREFERENCES_STORAGE_KEY,
+        JSON.stringify({
+          version: DASHBOARD_PREFERENCES_VERSION,
+          preferences: {
+            workflowListDensity: 'ultra-compact', // invalid enum
+            workflowListPageSize: 7, // unsupported page size
+            preferredDetailTab: 'nope', // invalid enum
+            liveUpdatesEnabled: 'yes', // wrong type
+            createExpertMode: true, // valid
+            workflowListColumnVisibility: { repository: false, bogus: true },
+            workflowListDefaultStatuses: ['executing', 42, '  failed  ', ''],
+            defaultRuntime: '  codex_cli  ',
+          },
+        }),
+      );
+      const prefs = readDashboardPreferences();
+      expect(prefs.workflowListDensity).toBe('comfortable'); // reset
+      expect(prefs.workflowListPageSize).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListPageSize);
+      expect(prefs.preferredDetailTab).toBe('overview'); // reset
+      expect(prefs.liveUpdatesEnabled).toBe(true); // reset to default
+      expect(prefs.createExpertMode).toBe(true); // kept
+      expect(prefs.workflowListColumnVisibility.repository).toBe(false); // kept
+      expect(prefs.workflowListColumnVisibility).not.toHaveProperty('bogus'); // dropped
+      expect(prefs.workflowListDefaultStatuses).toEqual(['executing', 'failed']); // sanitized
+      expect(prefs.defaultRuntime).toBe('codex_cli'); // trimmed
+    });
+
+    it('sanitizeDashboardPreferences returns defaults for non-object input', () => {
+      expect(sanitizeDashboardPreferences(null)).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+      expect(sanitizeDashboardPreferences('nope')).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+      expect(sanitizeDashboardPreferences(123)).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+    });
+
+    it('never persists an invalid value through write', () => {
+      const written = writeDashboardPreferences({
+        ...DEFAULT_DASHBOARD_PREFERENCES,
+        // Force-cast to exercise the sanitizer on the write path.
+        workflowListDensity: 'bogus' as never,
+        workflowListPageSize: 9999 as never,
+      });
+      expect(written.workflowListDensity).toBe('comfortable');
+      expect(written.workflowListPageSize).toBe(DEFAULT_DASHBOARD_PREFERENCES.workflowListPageSize);
+      expect(readDashboardPreferences().workflowListDensity).toBe('comfortable');
+    });
+  });
+
+  describe('reset behavior (MM-964 reset behavior)', () => {
+    it('clears stored preferences and returns defaults', () => {
+      writeDashboardPreferences({
+        ...DEFAULT_DASHBOARD_PREFERENCES,
+        workflowListDensity: 'compact',
+        createExpertMode: true,
+      });
+      expect(storedRaw()).not.toBeNull();
+
+      const reset = resetDashboardPreferences();
+      expect(reset).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+      expect(storedRaw()).toBeNull();
+      // A subsequent read also yields defaults.
+      expect(readDashboardPreferences()).toEqual(DEFAULT_DASHBOARD_PREFERENCES);
+    });
+  });
+});

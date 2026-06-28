@@ -1,2 +1,3 @@
 - [Pre-existing test_executions failures](pre-existing-test-executions-failures.md) — describe_execution IllegalStateChangeError reproduces on main; not a regression
 - [MM-954 workflow-list current-page sort](mm954-workflow-list-current-page-sort.md) — why list sorting is intentionally page-only, not global server-side
+- [Frontend vitest colon-path workaround](frontend-vitest-colon-path-workaround.md) — vitest fails on colon in workspace dir; run from a colon-free copy under /tmp
