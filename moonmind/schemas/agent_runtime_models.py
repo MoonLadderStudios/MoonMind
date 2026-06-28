@@ -1724,38 +1724,6 @@ class ManagedRunRecord(BaseModel):
                 
         return self
 
-OBSERVABILITY_EVENT_KINDS: tuple[str, ...] = (
-    "stdout_chunk",
-    "stderr_chunk",
-    "system_annotation",
-    "session_started",
-    "session_resumed",
-    "session_cleared",
-    "session_terminated",
-    "session_reset_boundary",
-    "turn_started",
-    "turn_completed",
-    "turn_failed",
-    "turn_interrupted",
-    "empty_assistant_turn_detected",
-    "user_message_submitted",
-    "assistant_message_delta",
-    "assistant_message_completed",
-    "assistant_message",
-    "tool_call_started",
-    "tool_call_output",
-    "tool_call_completed",
-    "tool_call_failed",
-    "runtime_status",
-    "model_status",
-    "intervention_requested",
-    "approval_requested",
-    "approval_resolved",
-    "summary_published",
-    "checkpoint_published",
-    "reset_boundary_published",
-)
-
 ObservabilityEventKind = Literal[
     "stdout_chunk",
     "stderr_chunk",

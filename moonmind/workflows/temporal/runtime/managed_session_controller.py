@@ -235,6 +235,21 @@ def _last_assistant_text_metadata(value: str) -> dict[str, Any]:
     }
 
 
+def _assistant_text_event_metadata(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str):
+        return {}
+    normalized = value.strip()
+    if not normalized:
+        return {}
+    return {
+        "assistantTextOmitted": True,
+        "assistantTextSha256": hashlib.sha256(
+            normalized.encode("utf-8")
+        ).hexdigest(),
+        "assistantTextLengthChars": len(normalized),
+    }
+
+
 def _is_empty_assistant_turn_response(
     response: CodexManagedSessionTurnResponse,
 ) -> bool:
@@ -3098,7 +3113,9 @@ class DockerCodexManagedSessionController:
                             active_turn_id=updated_record.active_turn_id,
                             metadata={
                                 "action": "send_turn",
-                                "assistantText": terminal_response.metadata.get("assistantText"),
+                                **_assistant_text_event_metadata(
+                                    terminal_response.metadata.get("assistantText")
+                                ),
                                 "reason": request.reason,
                             },
                         )

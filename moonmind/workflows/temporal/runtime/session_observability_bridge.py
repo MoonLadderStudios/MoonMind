@@ -12,7 +12,7 @@ from moonmind.utils.logging import redact_sensitive_payload
 from .log_streamer import RuntimeLogStreamer
 
 _SENSITIVE_METADATA_KEY = re.compile(
-    r"(token|secret|password|credential|api[_-]?key|auth)",
+    r"(token|secret|password|credential|api[_-]?key|auth(?!or(?!iz|is)|entic))",
     re.IGNORECASE,
 )
 _REFERENCE_PREFIXES = ("env://", "secret://", "vault://", "ref://")
@@ -30,7 +30,7 @@ def _redact_observability_metadata(value: Any, *, key: str | None = None) -> Any
     if isinstance(value, list):
         return [_redact_observability_metadata(item, key=key) for item in value]
     if isinstance(value, tuple):
-        return [_redact_observability_metadata(item, key=key) for item in value]
+        return tuple(_redact_observability_metadata(item, key=key) for item in value)
     redacted = redact_sensitive_payload(value, key=key)
     if key is None or not isinstance(redacted, str):
         return redacted

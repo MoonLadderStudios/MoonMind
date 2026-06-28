@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import get_args
+
 import pytest
 
-from moonmind.schemas.agent_runtime_models import OBSERVABILITY_EVENT_KINDS
+from moonmind.schemas.agent_runtime_models import ObservabilityEventKind
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.session_observability_bridge import (
     ManagedSessionObservabilityBridge,
@@ -51,7 +53,7 @@ def test_mm_983_observability_vocabulary_includes_required_mm_976_kinds() -> Non
         "reset_boundary_published",
     }
 
-    assert required.issubset(set(OBSERVABILITY_EVENT_KINDS))
+    assert required.issubset(set(get_args(ObservabilityEventKind)))
 
 
 def test_bridge_helpers_delegate_to_runtime_log_streamer_and_keep_sequence() -> None:
@@ -156,6 +158,9 @@ def test_bridge_redacts_secret_like_metadata() -> None:
             "apiToken": "raw-token-value",
             "detail": "Bearer samplevalue",
             "artifactRef": "artifact://safe-ref",
+            "author": "John Doe",
+            "authority": "admin",
+            "authorization": "Bearer raw-auth-value",
         },
     )
 
@@ -163,6 +168,26 @@ def test_bridge_redacts_secret_like_metadata() -> None:
     assert event["metadata"]["apiToken"] == "[REDACTED]"
     assert event["metadata"]["detail"] == "[REDACTED_AUTHORIZATION]"
     assert event["metadata"]["artifactRef"] == "artifact://safe-ref"
+    assert event["metadata"]["author"] == "John Doe"
+    assert event["metadata"]["authority"] == "admin"
+    assert event["metadata"]["authorization"] == "[REDACTED]"
+
+
+def test_bridge_preserves_tuple_metadata_shape_when_redacting() -> None:
+    metadata = ManagedSessionObservabilityBridge.safe_metadata(
+        {
+            "items": (
+                {"apiToken": "raw-token-value"},
+                {"artifactRef": "artifact://safe-ref"},
+            )
+        }
+    )
+
+    assert isinstance(metadata["items"], tuple)
+    assert metadata["items"] == (
+        {"apiToken": "[REDACTED]"},
+        {"artifactRef": "artifact://safe-ref"},
+    )
 
 
 def test_bridge_rejects_oversized_metadata() -> None:
