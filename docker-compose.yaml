@@ -23,7 +23,7 @@ services:
     image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
     init: true
     ports:
-      - "8000:8000"
+      - "${MOONMIND_API_HOST_PORT:-7000}:8000"
     environment:
       - PYTHONPATH=/app
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
@@ -59,7 +59,8 @@ services:
       - OIDC_CLIENT_SECRET=${API_CLIENT_SECRET:-changeme} # For 'local', matches realm-export.json
       - JWT_SECRET=${JWT_SECRET:-devsecret} # For 'disabled' auth provider (legacy JWT)
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./model_data:/app/model_data
       - ./api_service:/app/api_service
@@ -290,7 +291,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -346,7 +348,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -400,7 +403,8 @@ services:
         moonmind.workflows.temporal.worker_runtime}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -459,7 +463,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -537,7 +542,8 @@ services:
       - NO_PROXY=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
       - no_proxy=${MOONMIND_SANDBOX_NO_PROXY:-localhost,127.0.0.1,temporal-internal,moonmind-temporal-artifacts-s3,moonmind-api-db,postgres,minio,temporal}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -645,7 +651,8 @@ services:
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
@@ -726,7 +733,8 @@ services:
       - MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES=${MOONMIND_DEPLOYMENT_EXCLUDED_SERVICES:-temporal-worker-deployment-control}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - .:/workspace/host_project:ro
       - ./deploy/state:/workspace/deployment_state:rw
@@ -788,7 +796,8 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./api_service:/app/api_service:ro
@@ -839,7 +848,8 @@ services:
       - QDRANT_URL=${QDRANT_URL:-http://qdrant:6333}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ./moonmind:/app/moonmind:ro
       - ./tools:/app/tools:ro

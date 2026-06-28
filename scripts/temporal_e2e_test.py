@@ -5,7 +5,7 @@ import time
 
 import requests
 
-API_BASE = os.getenv("API_BASE_URL", "http://localhost:8000/api")
+API_BASE = os.getenv("API_BASE_URL", "http://localhost:7000/api")
 
 def main():
     print("Starting Temporal E2E test...")

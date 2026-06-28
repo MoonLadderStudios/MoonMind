@@ -86,7 +86,7 @@ If auto-seeding has already run, create the profile through the dashboard or the
 ### REST API
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/provider-profiles \
+curl -X POST http://localhost:7000/api/v1/provider-profiles \
   -H 'Content-Type: application/json' \
   -d '{
     "profile_id": "claude_minimax",

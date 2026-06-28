@@ -1,4 +1,6 @@
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 import yaml
@@ -66,6 +68,53 @@ def test_temporal_compose_topology_and_private_exposure():
         assert "local-network" in temporal_networks
     elif isinstance(temporal_networks, list):
         assert "local-network" in temporal_networks
+
+def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
+    compose = _load_compose()
+    services = compose["services"]
+
+    api_service = services["api"]
+    assert api_service["ports"] == ["${MOONMIND_API_HOST_PORT:-7000}:8000"]
+
+    healthcheck = " ".join(str(part) for part in api_service["healthcheck"]["test"])
+    assert "http://localhost:8000/healthz" in healthcheck
+
+    api_env = _env_map(api_service["environment"])
+    assert api_env["MODEL_CONTEXT_PROTOCOL_PORT"] == "8000"
+
+    runtime_service_names = [
+        "temporal-worker-workflow",
+        "temporal-worker-workflow-merge-automation",
+        "temporal-worker-agent-runtime",
+    ]
+    for service_name in runtime_service_names:
+        service_env = _env_map(services[service_name]["environment"])
+        assert service_env["MOONMIND_URL"] == "${MOONMIND_URL:-http://api:8000}"
+
+    for service in services.values():
+        for env_file in service.get("env_file", []):
+            if isinstance(env_file, dict) and env_file.get("path") == ".env":
+                assert env_file.get("required") is False
+
+    env_template = (REPO_ROOT / ".env-template").read_text(encoding="utf-8")
+    assert any(
+        line.strip() == "MOONMIND_API_HOST_PORT=7000"
+        for line in env_template.splitlines()
+    )
+
+def test_documented_compose_startup_config_succeeds_without_env_file():
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI is not available")
+
+    result = subprocess.run(
+        ["docker", "compose", "-f", "docker-compose.yaml", "config"],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 def test_merge_automation_workflow_worker_polls_dedicated_user_workflow_queue():
     compose = _load_compose()
