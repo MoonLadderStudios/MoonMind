@@ -250,3 +250,21 @@ async def test_omnigent_rejects_v1_session_reuse_boundary(
     assert result.failure_class == "user_error"
     assert result.provider_error_code == "omnigent_v1_non_goal"
     assert _FakeOmnigentClient.instances == []
+
+
+@pytest.mark.asyncio
+async def test_omnigent_timeout_maps_to_canonical_timed_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TimeoutClient(_FakeOmnigentClient):
+        async def create_session(self, payload: dict[str, Any]) -> dict[str, Any]:
+            self.calls.append(("create_session", payload))
+            raise asyncio.TimeoutError("request timeout token=hidden")
+
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", TimeoutClient)
+
+    result = await run_omnigent_execution(_request())
+
+    assert result.failure_class == "timed_out"
+    assert result.provider_error_code == "omnigent_timed_out"
+    assert "token=hidden" not in result.model_dump_json(by_alias=True)

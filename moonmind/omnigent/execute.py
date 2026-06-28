@@ -113,6 +113,15 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             diagnostics={"error": str(exc)},
             redactor=redactor,
         )
+    except asyncio.TimeoutError as exc:
+        return _failure_result(
+            request,
+            summary="Omnigent execution timed out.",
+            failure_class="timed_out",
+            provider_error_code="omnigent_timed_out",
+            diagnostics={"error": redact_sensitive_text(redactor.scrub(str(exc)))},
+            redactor=redactor,
+        )
 
 
 async def _execute_with_client(
