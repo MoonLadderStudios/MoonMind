@@ -144,9 +144,11 @@ from moonmind.workflows.temporal.incident_reconstruction import (
 from moonmind.workflows.temporal.bounded_story_loop import (
     BoundedStoryLoopInput,
     LoopAttempt,
+    LoopBudget,
     PublicationAction,
     TypedGateResult,
     compile_bounded_story_loop,
+    evaluate_attempt_continuation,
     evaluate_publication_decision,
 )
 from moonmind.workflows.temporal.completion_summary import (
@@ -3527,6 +3529,7 @@ class MoonMindRunWorkflow:
             "gateVerdict": gate.verdict,
             "confidence": gate.confidence,
             "validatedRefs": dict(gate.validated_refs or {}),
+            "invalidatedRefs": list(gate.invalidated_refs),
             "remainingWorkRef": gate.remaining_work_ref,
             "targetLogicalStepId": gate.target_logical_step_id,
             "workspacePolicyRecommendation": gate.workspace_policy_recommendation,
@@ -4268,6 +4271,7 @@ class MoonMindRunWorkflow:
             "verdict": verdict,
             "confidence": gate_result.confidence,
             "validatedRefs": dict(gate_result.validated_refs or {}),
+            "invalidatedRefs": list(gate_result.invalidated_refs),
             "remainingWorkRef": gate_result.remaining_work_ref,
             "recommendedNextAction": gate_result.recommended_next_action,
             "targetLogicalStepId": gate_result.target_logical_step_id,
@@ -4288,6 +4292,145 @@ class MoonMindRunWorkflow:
         if diagnostics_ref:
             gate_context["diagnosticsRef"] = diagnostics_ref
         self._publish_context["moonSpecGate"] = gate_context
+
+    @staticmethod
+    def _bounded_story_loop_artifact_ref(value: Any) -> str | None:
+        ref = str(value or "").strip()
+        if ref.startswith("artifact://"):
+            return ref
+        return None
+
+    def _bounded_story_loop_gate_from_step_gate(
+        self,
+        *,
+        gate_result: StepGateResult,
+        gate_result_ref: str | None,
+        logical_step_id: str,
+    ) -> TypedGateResult:
+        terminal = self._step_terminal_dispositions.get(logical_step_id)
+        terminal_disposition = (
+            "accepted" if terminal == "accepted" else "failed_with_remaining_work"
+        )
+        return TypedGateResult.model_validate(
+            {
+                "verdict": gate_result.verdict,
+                "terminalDisposition": terminal_disposition,
+                "gateResultRef": self._bounded_story_loop_artifact_ref(
+                    gate_result_ref
+                ),
+                "remainingWorkRef": self._bounded_story_loop_artifact_ref(
+                    gate_result.remaining_work_ref
+                ),
+                "diagnosticsRef": self._bounded_story_loop_artifact_ref(
+                    next(iter(gate_result.blocking_evidence_refs), None)
+                ),
+                "degraded": gate_result.degraded,
+            }
+        )
+
+    @staticmethod
+    def _bounded_story_loop_workflow_identity() -> tuple[str, str]:
+        try:
+            info = workflow.info()
+            return info.workflow_id, info.run_id
+        except Exception:
+            return "unit-test-workflow", "unit-test-run"
+
+    def _bounded_story_loop_attempt_for_gate(
+        self,
+        *,
+        logical_step_id: str,
+        remediation_gate: bool,
+    ) -> LoopAttempt:
+        execution_ordinal = self._step_execution_for(logical_step_id) or 1
+        workflow_id, run_id = self._bounded_story_loop_workflow_identity()
+        identity = StepExecutionIdentityModel(
+            workflowId=workflow_id,
+            runId=run_id,
+            logicalStepId=logical_step_id,
+            executionOrdinal=execution_ordinal,
+        )
+        output_refs = self._step_execution_compact_output_refs(logical_step_id)
+        accepted_output_ref = self._bounded_story_loop_artifact_ref(
+            output_refs.get("primaryRef") or output_refs.get("summaryRef")
+        )
+        return LoopAttempt.model_validate(
+            {
+                "attemptOrdinal": execution_ordinal,
+                "kind": "remediation" if remediation_gate else "implementation",
+                "stepExecutionId": build_step_execution_id(identity),
+                "checkpointBeforeRef": self._bounded_story_loop_artifact_ref(
+                    self._step_checkpoint_refs.get(logical_step_id)
+                ),
+                "checkpointAfterRef": self._bounded_story_loop_artifact_ref(
+                    self._step_checkpoint_refs.get(logical_step_id)
+                ),
+                "acceptedOutputRef": accepted_output_ref,
+                "terminalDisposition": (
+                    self._step_terminal_dispositions.get(logical_step_id)
+                    or "failed_with_remaining_work"
+                ),
+            }
+        )
+
+    def _bounded_story_loop_continuation_decision(
+        self,
+        *,
+        logical_step_id: str,
+        gate_result: StepGateResult,
+        gate_result_ref: str | None,
+        ordered_nodes: Sequence[Mapping[str, Any]],
+        current_index: int,
+    ) -> dict[str, Any]:
+        remediation_gate = current_index > 1 and self._is_moonspec_remediation_step(
+            ordered_nodes[current_index - 2]
+        )
+        has_remaining_remediation_step = self._has_remaining_moonspec_remediation_step(
+            ordered_nodes=ordered_nodes,
+            current_index=current_index,
+        )
+        gate = self._bounded_story_loop_gate_from_step_gate(
+            gate_result=gate_result,
+            gate_result_ref=gate_result_ref,
+            logical_step_id=logical_step_id,
+        )
+        attempt = self._bounded_story_loop_attempt_for_gate(
+            logical_step_id=logical_step_id,
+            remediation_gate=remediation_gate,
+        )
+        budget = LoopBudget.model_validate(
+            {
+                "maxAttempts": 1,
+                "maxConsecutiveNoProgressAttempts": 1,
+                "maxRepeatedFailedCommands": 1,
+                "maxUnsafeOrPolicyDeniedAttempts": 1,
+                "consumed": {
+                    "attempts": 0 if has_remaining_remediation_step else 1,
+                    "consecutive_no_progress_attempts": 0,
+                    "repeated_failed_commands": 0,
+                    "unsafe_or_policy_denied_attempts": 0,
+                },
+            }
+        )
+        decision = evaluate_attempt_continuation(
+            attempt=attempt,
+            gate=gate,
+            budget=budget,
+            checkpoint_available=True,
+            policy_allowed=True,
+        )
+        payload = decision.model_dump(by_alias=True, mode="json")
+        payload["hasRemainingRemediationStep"] = has_remaining_remediation_step
+        payload["gate"] = {
+            "verdict": gate.verdict,
+            "gateResultRef": gate.gate_result_ref,
+            "remainingWorkRef": gate.remaining_work_ref,
+            "diagnosticsRef": gate.diagnostics_ref,
+        }
+        self._publish_context.setdefault("boundedStoryLoop", {})[
+            "continuationDecision"
+        ] = payload
+        return payload
 
     def _blocking_moonspec_gate_reason(self) -> str | None:
         verdict = self._normalize_moonspec_verify_verdict(self._moonspec_gate_verdict)
@@ -7373,6 +7516,12 @@ class MoonMindRunWorkflow:
                         node_inputs=node_inputs,
                     )
                 ):
+                    step_gate_result = self._moonspec_verify_gate_result(
+                        outputs_for_gate
+                    )
+                    step_gate_result_ref = self._moonspec_verify_gate_result_ref(
+                        outputs_for_gate
+                    )
                     self._record_moonspec_verify_gate(
                         node_id=node_id,
                         outputs=outputs_for_gate,
@@ -7388,12 +7537,17 @@ class MoonMindRunWorkflow:
                         )
                         else index
                     )
-                    if blocking_gate_reason and not (
-                        gate_verdict == "ADDITIONAL_WORK_NEEDED"
-                        and self._has_remaining_moonspec_remediation_step(
+                    continuation_decision = (
+                        self._bounded_story_loop_continuation_decision(
+                            logical_step_id=node_id,
+                            gate_result=step_gate_result,
+                            gate_result_ref=step_gate_result_ref,
                             ordered_nodes=ordered_nodes,
                             current_index=remaining_remediation_index,
                         )
+                    )
+                    if blocking_gate_reason and not bool(
+                        continuation_decision.get("continueLoop")
                     ):
                         self._plan_blocked_message = blocking_gate_reason
                         self._publish_status = "not_required"

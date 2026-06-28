@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from moonmind.workflows.skills.approval_policy import StepGateResult
 from moonmind.workflows.temporal.bounded_story_loop import LoopAttempt, TypedGateResult
 from moonmind.workflows.temporal.workflows.run import (
     MoonMindRunWorkflow,
@@ -182,3 +183,111 @@ def test_workflow_payload_rejects_full_supervisor_for_bounded_story_loop() -> No
                 }
             },
         )
+
+
+def test_parent_loop_continues_from_structured_gate_when_remediation_remains() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-1", "attempt": 1, "artifacts": {}}
+    ]
+    workflow._step_terminal_dispositions["verify-1"] = "accepted"
+
+    decision = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-1",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            validated_refs={"diffRef": "artifact://diff/attempt-1"},
+            invalidated_refs=("artifact://superseded/output-1",),
+            remaining_work_ref="artifact://remaining-work/attempt-1",
+            recommended_next_action="reattempt_current_step",
+            target_logical_step_id="remediate-1",
+            workspace_policy_recommendation=(
+                "apply_previous_execution_diff_to_clean_baseline"
+            ),
+        ),
+        gate_result_ref="artifact://gate/attempt-1",
+        ordered_nodes=[
+            {"id": "verify-1", "inputs": {"selectedSkill": "moonspec-verify"}},
+            {
+                "id": "remediate-1",
+                "inputs": {
+                    "annotations": {"jiraOrchestrateRole": "moonspec-remediation"}
+                },
+            },
+            {"id": "verify-2", "inputs": {"selectedSkill": "moonspec-verify"}},
+        ],
+        current_index=0,
+    )
+
+    assert decision["continueLoop"] is True
+    assert decision["nextAttemptKind"] == "remediation"
+    assert decision["remainingWorkRef"] == "artifact://remaining-work/attempt-1"
+    assert decision["hasRemainingRemediationStep"] is True
+    assert (
+        workflow._publish_context["boundedStoryLoop"]["continuationDecision"]
+        == decision
+    )
+
+
+def test_parent_loop_stops_on_structured_gate_when_remediation_budget_exhausted() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._step_ledger_rows = [
+        {"logicalStepId": "verify-final", "attempt": 1, "artifacts": {}}
+    ]
+    workflow._step_terminal_dispositions["verify-final"] = "accepted"
+
+    decision = workflow._bounded_story_loop_continuation_decision(
+        logical_step_id="verify-final",
+        gate_result=StepGateResult(
+            verdict="ADDITIONAL_WORK_NEEDED",
+            confidence="medium",
+            remaining_work_ref="artifact://remaining-work/final",
+            recommended_next_action="reattempt_current_step",
+        ),
+        gate_result_ref="artifact://gate/final",
+        ordered_nodes=[
+            {"id": "verify-final", "inputs": {"selectedSkill": "moonspec-verify"}},
+            {
+                "id": "code-review",
+                "inputs": {
+                    "annotations": {"jiraOrchestrateRole": "code-review-handoff"}
+                },
+            },
+        ],
+        current_index=0,
+    )
+
+    assert decision["continueLoop"] is False
+    assert decision["state"] == "failed_with_remaining_work"
+    assert decision["reason"] == "max_attempts_exhausted"
+    assert decision["remainingWorkRef"] == "artifact://remaining-work/final"
+    assert decision["hasRemainingRemediationStep"] is False
+
+
+def test_moonspec_gate_context_records_invalidated_refs_as_typed_data() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    workflow._record_moonspec_verify_gate(
+        node_id="verify-1",
+        outputs={
+            "moonSpecVerify": {
+                "verdict": "ADDITIONAL_WORK_NEEDED",
+                "confidence": "medium",
+                "validatedRefs": {"testReportRef": "artifact://tests/report"},
+                "invalidatedRefs": ["artifact://step/output-v1"],
+                "remainingWorkRef": "artifact://remaining-work/attempt-1",
+                "recommendedNextAction": "reattempt_current_step",
+                "targetLogicalStepId": "remediate-1",
+                "workspacePolicyRecommendation": (
+                    "apply_previous_execution_diff_to_clean_baseline"
+                ),
+            }
+        },
+    )
+
+    context = workflow._publish_context["moonSpecGate"]
+    assert context["invalidatedRefs"] == ["artifact://step/output-v1"]
+    assert context["remainingWorkRef"] == "artifact://remaining-work/attempt-1"
+    assert context["recommendedNextAction"] == "reattempt_current_step"
+    assert context["targetLogicalStepId"] == "remediate-1"
