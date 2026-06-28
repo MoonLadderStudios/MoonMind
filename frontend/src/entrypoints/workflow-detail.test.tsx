@@ -8458,6 +8458,136 @@ describe('LiveLogsPanel', () => {
     expect(screen.getByText('Turn interrupted')).toBeTruthy();
   });
 
+  it('MM-1014 renders chat session blocks, updates paired rows, streams live rows through the same projection, and exposes raw timeline', async () => {
+    const events = [
+      {
+        sequence: 1,
+        timestamp: '2026-04-08T00:00:01Z',
+        stream: 'session',
+        kind: 'user_message_submitted',
+        text: 'Please inspect the run.',
+        turn_id: 'turn-mm-1014',
+      },
+      {
+        sequence: 2,
+        timestamp: '2026-04-08T00:00:02Z',
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'I will inspect the run.',
+        turn_id: 'turn-mm-1014',
+      },
+      {
+        sequence: 3,
+        timestamp: '2026-04-08T00:00:03Z',
+        stream: 'session',
+        kind: 'tool_call_started',
+        text: 'exec_command: rg -n MM-1014',
+        turn_id: 'turn-mm-1014',
+        metadata: { toolCallId: 'tool-1', toolName: 'exec_command' },
+      },
+      {
+        sequence: 4,
+        timestamp: '2026-04-08T00:00:04Z',
+        stream: 'session',
+        kind: 'tool_call_output',
+        text: 'MM-1014 evidence line',
+        turn_id: 'turn-mm-1014',
+        metadata: { toolCallId: 'tool-1' },
+      },
+      {
+        sequence: 5,
+        timestamp: '2026-04-08T00:00:05Z',
+        stream: 'session',
+        kind: 'approval_requested',
+        text: 'Approval requested for command execution.',
+        turn_id: 'turn-mm-1014',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 6,
+        timestamp: '2026-04-08T00:00:06Z',
+        stream: 'session',
+        kind: 'approval_granted',
+        text: 'Approval granted by operator.',
+        turn_id: 'turn-mm-1014',
+        metadata: { requestId: 'approval-1' },
+      },
+      {
+        sequence: 7,
+        timestamp: '2026-04-08T00:00:07Z',
+        stream: 'session',
+        kind: 'session_cleared',
+        text: 'Session cleared before the next turn.',
+        metadata: { controlEventRef: 'art-control' },
+      },
+    ];
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/observability-summary')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            summary: {
+              status: 'running',
+              supportsLiveStreaming: true,
+              liveStreamStatus: 'available',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/observability/events')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ events, truncated: false }),
+        } as Response);
+      }
+      if (url.includes('/artifacts?link_type=report.primary&latest_only=true')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({ ok: true, json: async () => ({ artifacts: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => activeExecution } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={sessionTimelinePayload} />);
+    fireEvent.click(await screen.findByText('Live Logs'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-session-viewer')).toBeTruthy();
+      expect(screen.getByText('Please inspect the run.')).toBeTruthy();
+      expect(screen.getByText('I will inspect the run.')).toBeTruthy();
+      expect(screen.getByText('exec_command')).toBeTruthy();
+      expect(screen.getByText('MM-1014 evidence line')).toBeTruthy();
+      expect(screen.getByText('Approval requested for command execution.')).toBeTruthy();
+      expect(screen.getByText('Approval granted by operator.')).toBeTruthy();
+      expect(screen.getByText('Session cleared before the next turn.')).toBeTruthy();
+    });
+
+    expect(screen.getByText('Raw Timeline')).toBeTruthy();
+    expect(screen.queryByTestId('live-logs-timeline-viewer')).toBeNull();
+    fireEvent.click(screen.getByText('Raw Timeline'));
+    await waitFor(() => expect(screen.getByTestId('live-logs-timeline-viewer')).toBeTruthy());
+
+    await waitForEventSourceInstance();
+    const es = MockEventSource.instances.at(-1)!;
+    act(() => es.triggerOpen());
+    act(() =>
+      es.triggerLogChunk({
+        sequence: 8,
+        stream: 'session',
+        kind: 'assistant_message',
+        text: 'Live assistant update.',
+        turn_id: 'turn-mm-1014-live',
+      }),
+    );
+
+    await waitFor(() => expect(screen.getAllByText('Live assistant update.').length).toBeGreaterThan(0));
+    expect(document.querySelectorAll('[data-chat-block-type="approval"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-chat-block-type="tool"]')).toHaveLength(1);
+  });
+
   it('renders inline artifact links for publication and clear-reset timeline rows', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
