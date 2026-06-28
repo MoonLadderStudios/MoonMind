@@ -19,6 +19,14 @@ def test_omnigent_gate_requires_server_url_when_enabled() -> None:
     assert gate.missing == ("OMNIGENT_SERVER_URL",)
 
 
+def test_omnigent_gate_preserves_explicit_false_values() -> None:
+    for raw_enabled in ("false", "0", False, 0):
+        gate = build_omnigent_gate(env={"OMNIGENT_ENABLED": raw_enabled})
+
+        assert gate.enabled is False
+        assert gate.missing == ()
+
+
 def test_omnigent_gate_enabled_with_flag_and_server_url() -> None:
     env = {
         "OMNIGENT_ENABLED": "true",

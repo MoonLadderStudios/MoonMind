@@ -25,7 +25,9 @@ class OmnigentRuntimeGate:
 
 
 def _clean(value: object | None) -> str:
-    return str(value or "").strip()
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _enabled_from_env(*, env: Mapping[str, Any]) -> bool:
@@ -49,16 +51,19 @@ def build_omnigent_gate(
 
     source = env if env is not None else os.environ
     enabled_flag = _enabled_from_env(env=source)
+    raw_enabled = source.get("OMNIGENT_ENABLED")
     server_url = _clean(source.get("OMNIGENT_SERVER_URL"))
 
     missing: list[str] = []
-    if not enabled_flag:
+    if raw_enabled is None or _clean(raw_enabled) == "":
         missing.append("OMNIGENT_ENABLED")
-    if not server_url:
+        if not server_url:
+            missing.append("OMNIGENT_SERVER_URL")
+    elif enabled_flag and not server_url:
         missing.append("OMNIGENT_SERVER_URL")
 
     return OmnigentRuntimeGate(
-        enabled=len(missing) == 0,
+        enabled=enabled_flag and len(missing) == 0,
         missing=tuple(missing),
         error_message=error_message,
     )

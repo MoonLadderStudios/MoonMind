@@ -872,6 +872,16 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
         ),
+        TemporalActivityDefinition(
+            activity_type="integration.omnigent.execute",
+            family="integration",
+            capability_class="integration:omnigent",
+            task_queue=cfg.activity_integrations_task_queue,
+            fleet=INTEGRATIONS_FLEET,
+            timeouts=TemporalActivityTimeouts(300, 700, heartbeat_timeout_seconds=120),
+            retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
+            heartbeat_required=True,
+        ),
         # ---- General-purpose repo operations (provider-agnostic) ----
         TemporalActivityDefinition(
             activity_type="repo.create_pr",
