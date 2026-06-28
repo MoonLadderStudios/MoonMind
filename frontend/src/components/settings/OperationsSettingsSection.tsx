@@ -1273,10 +1273,17 @@ export function OperationsSettingsSection({
             </section>
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-              <section className="rounded-3xl border border-slate-200 dark:border-slate-800 p-5">
-                <h4 className="text-base font-semibold text-slate-900 dark:text-white">Worker controls</h4>
+              <section
+                className="rounded-3xl border border-rose-200 bg-rose-50/40 p-5 dark:border-rose-900/50 dark:bg-rose-900/10"
+                aria-label="Worker controls danger zone"
+              >
+                <span className="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">
+                  Danger zone
+                </span>
+                <h4 className="mt-2 text-base font-semibold text-slate-900 dark:text-white">Worker controls</h4>
                 <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">
                   Drain lets running jobs finish. Quiesce stops new claims immediately.
+                  These actions affect every running and queued workflow.
                 </p>
 
                 <form className="mt-5 space-y-4" onSubmit={handlePause}>

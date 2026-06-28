@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { BootPayload } from '../boot/parseBootPayload';
 import { SecretManager } from '../components/secrets/SecretManager';
+import { ConfigurationHealthSummary } from '../components/settings/ConfigurationHealthSummary';
 import { GeneratedSettingsSection } from '../components/settings/GeneratedSettingsSection';
 import { GithubTokenProbePanel } from '../components/settings/GithubTokenProbePanel';
 import {
@@ -200,7 +201,6 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       }
       return response.json();
     },
-    enabled: section === 'providers-secrets',
   });
 
   const {
@@ -218,7 +218,6 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
       }
       return response.json();
     },
-    enabled: section === 'providers-secrets',
   });
 
   const fallbackSection = SETTINGS_SECTIONS[0]!;
@@ -245,6 +244,16 @@ export function SettingsPage({ payload }: { payload: BootPayload }) {
           <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">{currentSection.description}</p>
         </div>
       </header>
+
+      <ConfigurationHealthSummary
+        providerProfiles={providerProfiles ?? []}
+        secrets={secretsData?.items ?? []}
+        isLoading={areProfilesLoading || areSecretsLoading}
+        isError={areProfilesErrored || areSecretsErrored}
+        workerPauseConfig={workerPauseConfig}
+        canWriteProviderProfiles={canWriteProviderProfiles}
+        canRunGithubTokenProbe={canRunGithubTokenProbe}
+      />
 
       <section className="rounded-[2rem] border border-mm-border/80 bg-transparent p-3 shadow-sm">
         <fieldset className="settings-nav-field">
