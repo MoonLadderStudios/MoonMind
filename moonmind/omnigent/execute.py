@@ -413,8 +413,10 @@ async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
     if task is None or task.done():
         return
     task.cancel()
-    with suppress(asyncio.CancelledError):
+    try:
         await task
+    except asyncio.CancelledError:
+        pass
 
 
 async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResult:
