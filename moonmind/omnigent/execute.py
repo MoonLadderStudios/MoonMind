@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import inspect
+import json
+import logging
 from typing import Any
 
 import httpx
@@ -46,6 +47,8 @@ _NON_TERMINAL_STATUSES = {
     "waiting",
     "idle",
 }
+
+_logger = logging.getLogger(__name__)
 
 
 class OmnigentContractError(RuntimeError):
@@ -210,8 +213,8 @@ async def _maybe_await(value: Any) -> Any:
 def _safe_heartbeat(details: dict[str, Any]) -> None:
     try:
         activity.heartbeat(details)
-    except RuntimeError:
-        pass
+    except RuntimeError as exc:
+        _logger.debug("Skipping Omnigent heartbeat outside activity context: %s", exc)
 
 
 def _heartbeat_details() -> tuple[Any, ...]:
@@ -440,6 +443,7 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 try:
                     await heartbeat_task
                 except asyncio.CancelledError:
+                    # Expected after cancelling the periodic heartbeat task.
                     pass
 
             final_snapshot = await client.get_session(session_id)
