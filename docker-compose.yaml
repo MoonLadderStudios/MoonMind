@@ -832,7 +832,7 @@ services:
   omnigent:
     profiles: ["omnigent-host"]
     image: ${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}
-    command: ["omnigent", "server"]
+    command: ["omnigent", "server", "--host", "0.0.0.0", "--port", "8000", "--no-open"]
     expose:
       - "8000"
     volumes:
@@ -844,7 +844,7 @@ services:
   omnigent-host:
     profiles: ["omnigent-host"]
     image: ${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}
-    command: ["omnigent", "host"]
+    command: ["omnigent", "host", "--server", "http://omnigent:8000", "--non-interactive"]
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -853,8 +853,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./deploy/omnigent/host-config.yaml:/root/.omnigent/config.yaml:ro
-      - omnigent-host-state:/root/.omnigent/state
+      - omnigent-host-state:/root/.omnigent
       - ./omnigent_workspaces:/workspaces
     depends_on:
       omnigent:

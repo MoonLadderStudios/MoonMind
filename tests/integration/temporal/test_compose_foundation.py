@@ -185,9 +185,28 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert "omnigent" in services
     assert "omnigent-host" in services
 
+    server_service = services["omnigent"]
+    assert server_service["profiles"] == ["omnigent-host"]
+    assert server_service["command"] == [
+        "omnigent",
+        "server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+        "--no-open",
+    ]
+    assert _network_names(server_service) == {"local-network"}
+
     host_service = services["omnigent-host"]
     assert host_service["profiles"] == ["omnigent-host"]
-    assert host_service["command"] == ["omnigent", "host"]
+    assert host_service["command"] == [
+        "omnigent",
+        "host",
+        "--server",
+        "http://omnigent:8000",
+        "--non-interactive",
+    ]
     assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
     assert _network_names(host_service) == {"local-network"}
 
@@ -198,20 +217,9 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert host_env["GOOGLE_API_KEY"] == "${GOOGLE_API_KEY:-}"
 
     host_volumes = set(host_service["volumes"])
-    assert (
-        "./deploy/omnigent/host-config.yaml:/root/.omnigent/config.yaml:ro"
-        in host_volumes
-    )
-    assert "omnigent-host-state:/root/.omnigent/state" in host_volumes
+    assert "omnigent-host-state:/root/.omnigent" in host_volumes
     assert "./omnigent_workspaces:/workspaces" in host_volumes
     assert "omnigent-host-state" in volumes
-
-    host_config = yaml.safe_load(
-        (REPO_ROOT / "deploy" / "omnigent" / "host-config.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert host_config == {"server": "http://omnigent:8000"}
 
 def test_visibility_schema_rehearsal_service_is_wired():
     compose = _load_compose()
