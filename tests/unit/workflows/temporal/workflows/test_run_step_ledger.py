@@ -1184,6 +1184,40 @@ def test_run_memo_surfaces_runtime_and_skill_visibility(
     assert memo_updates[-1]["targetRuntime"] == "codex_cli"
     assert memo_updates[-1]["targetSkill"] == "pr-resolver"
 
+
+def test_run_search_attributes_encode_runtime_and_skill_as_keyword_lists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    upserts: list[object] = []
+    monkeypatch.setattr(
+        run_module.workflow,
+        "upsert_search_attributes",
+        upserts.append,
+    )
+    workflow = MoonMindRunWorkflow()
+
+    workflow._title = "Resolve PR #1633"
+    workflow._target_runtime = "codex_cli"
+    workflow._target_skill = "pr-resolver"
+    workflow._update_search_attributes()
+
+    pairs_by_name = {
+        pair.key.name: pair
+        for pair in upserts[-1]
+    }
+    runtime_pair = pairs_by_name["mm_target_runtime"]
+    skill_pair = pairs_by_name["mm_target_skill"]
+    assert runtime_pair.key == run_module.SearchAttributeKey.for_keyword_list(
+        "mm_target_runtime"
+    )
+    assert runtime_pair.value == ["codex_cli"]
+    assert skill_pair.key == run_module.SearchAttributeKey.for_keyword_list(
+        "mm_target_skill"
+    )
+    assert skill_pair.value == ["pr-resolver"]
+
+
 def test_run_groups_child_lineage_and_evidence_into_step_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

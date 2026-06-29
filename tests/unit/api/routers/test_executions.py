@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Response
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+from temporalio.api.enums.v1 import IndexedValueType
 from temporalio.service import RPCError, RPCStatusCode
 
 from api_service.api.routers.executions import (
@@ -87,6 +88,8 @@ from moonmind.schemas.temporal_models import (
     UpdateExecutionRequest,
 )
 from moonmind.workflows.temporal.service import TemporalExecutionService
+
+_TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
 
 class _ScalarRows:
@@ -1151,7 +1154,7 @@ def test_list_executions_temporal_query_includes_target_runtime_filter() -> None
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1200,8 +1203,8 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
-                        "mm_target_skill": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                        "mm_target_skill": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1260,7 +1263,7 @@ def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_st
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1306,7 +1309,7 @@ def test_list_executions_temporal_query_mixes_terminal_and_non_terminal_state_fi
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1351,8 +1354,8 @@ def test_list_executions_temporal_query_supports_repeated_canonical_filters() ->
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
-                        "mm_target_skill": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                        "mm_target_skill": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1399,8 +1402,8 @@ def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
-                        "mm_target_skill": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                        "mm_target_skill": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1474,8 +1477,8 @@ def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_rep
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
-                        "mm_target_skill": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                        "mm_target_skill": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1547,7 +1550,7 @@ async def test_optional_temporal_search_attribute_detection_rejects_wrong_type()
                 return_value=SimpleNamespace(
                     custom_attributes={
                         "mm_target_runtime": SimpleNamespace(type=1),
-                        "mm_target_skill": SimpleNamespace(type=2),
+                        "mm_target_skill": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1567,8 +1570,8 @@ async def test_optional_temporal_search_attribute_detection_uses_fresh_cache() -
         list_search_attributes=AsyncMock(
             return_value=SimpleNamespace(
                 custom_attributes={
-                    "mm_target_runtime": SimpleNamespace(type=2),
-                    "mm_target_skill": SimpleNamespace(type=2),
+                    "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                    "mm_target_skill": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                 }
             )
         )
@@ -1628,8 +1631,8 @@ def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_ex
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
-                        "mm_target_skill": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
+                        "mm_target_skill": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )
@@ -1805,6 +1808,54 @@ def test_list_executions_temporal_query_supports_sort_and_text_filters() -> None
     assert 'mm_title = "release"' in count_query
     assert "ORDER BY" not in count_query
     assert list_query.endswith("ORDER BY StartTime ASC")
+
+
+def test_list_executions_temporal_query_omits_order_by_for_keyword_list_target_sort() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    class _WorkflowIterator:
+        current_page: list[object] = []
+        next_page_token: bytes | None = None
+
+        async def fetch_next_page(self) -> None:
+            return None
+
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(
+                            type=_TARGET_SEARCH_ATTRIBUTE_TYPE
+                        ),
+                    }
+                )
+            )
+        ),
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(return_value=_WorkflowIterator()),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "targetRuntime": "codex_cli",
+                "sort": "targetRuntime",
+                "sortDir": "asc",
+            },
+        )
+
+    assert response.status_code == 200
+    list_query = temporal_client.list_workflows.call_args.kwargs["query"]
+    assert 'mm_target_runtime="codex_cli"' in list_query
+    assert "ORDER BY" not in list_query
 
 
 def test_list_executions_temporal_query_title_filter_ands_word_tokens() -> None:
@@ -2283,7 +2334,7 @@ def test_execution_facets_exclude_requested_facet_filter_and_keep_workflow_scope
             list_search_attributes=AsyncMock(
                 return_value=SimpleNamespace(
                     custom_attributes={
-                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_runtime": SimpleNamespace(type=_TARGET_SEARCH_ATTRIBUTE_TYPE),
                     }
                 )
             )

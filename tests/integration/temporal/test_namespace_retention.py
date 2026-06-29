@@ -20,8 +20,8 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_started_at": "Datetime",
     "mm_repo": "Keyword",
     "mm_integration": "Keyword",
-    "mm_target_runtime": "Keyword",
-    "mm_target_skill": "Keyword",
+    "mm_target_runtime": "KeywordList",
+    "mm_target_skill": "KeywordList",
     "mm_title": "KeywordList",
     "mm_scheduled_for": "Datetime",
     "mm_has_dependencies": "Bool",
@@ -351,6 +351,47 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():
         assert f"{name} {attr_type}" in registered
 
+def test_namespace_bootstrap_retypes_target_facets_to_keyword_lists(tmp_path: Path):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "namespace.exists").touch()
+    _write_search_attributes(
+        state_dir,
+        {
+            **REQUIRED_SEARCH_ATTRIBUTES,
+            "mm_target_runtime": "Keyword",
+            "mm_target_skill": "Keyword",
+        },
+    )
+    _write_executable(fake_bin / "temporal", TEMPORAL_STUB)
+
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+    env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
+    env["TEMPORAL_ADDRESS"] = "temporal:7233"
+    env["TEMPORAL_NAMESPACE"] = "default"
+    env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
+
+    result = subprocess.run(
+        ["sh", str(BOOTSTRAP_SCRIPT)],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "replacing with KeywordList" in result.stdout
+
+    registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
+    assert "mm_target_runtime KeywordList" in registered
+    assert "mm_target_skill KeywordList" in registered
+    assert "mm_target_runtime Keyword\n" not in registered
+    assert "mm_target_skill Keyword\n" not in registered
+
 def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgrade(
     tmp_path: Path,
 ):
@@ -386,7 +427,7 @@ def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgr
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
-    env["FAKE_TEMPORAL_KEYWORD_LIMIT"] = "12"
+    env["FAKE_TEMPORAL_KEYWORD_LIMIT"] = "10"
     env["TEMPORAL_ADDRESS"] = "temporal:7233"
     env["TEMPORAL_NAMESPACE"] = "default"
     env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
@@ -419,4 +460,4 @@ def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgr
     keyword_count = sum(
         1 for line in registered.splitlines() if line.endswith(" Keyword")
     )
-    assert keyword_count == 12
+    assert keyword_count == 10

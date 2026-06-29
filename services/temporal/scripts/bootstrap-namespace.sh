@@ -193,8 +193,8 @@ mm_updated_at:Datetime
 mm_started_at:Datetime
 mm_repo:Keyword
 mm_integration:Keyword
-mm_target_runtime:Keyword
-mm_target_skill:Keyword
+mm_target_runtime:KeywordList
+mm_target_skill:KeywordList
 mm_title:KeywordList
 mm_scheduled_for:Datetime
 mm_has_dependencies:Bool
@@ -320,10 +320,23 @@ while :; do
       attr_type=${spec#*:}
       if search_attribute_registered "$name" "$list_output"; then
         if ! search_attribute_type_matches "$name" "$attr_type" "$list_output"; then
-          log "Search attribute ${name} exists with the wrong type; expected ${attr_type}."
-          exit 1
+          case "$name" in
+            mm_target_runtime|mm_target_skill)
+              log "Search attribute ${name} exists with the wrong type; replacing with ${attr_type}."
+              if ! remove_search_attribute "$name"; then
+                log "Failed to remove search attribute ${name} for type replacement."
+                exit 1
+              fi
+              ;;
+            *)
+              log "Search attribute ${name} exists with the wrong type; expected ${attr_type}."
+              exit 1
+              ;;
+          esac
         fi
-        continue
+        if search_attribute_type_matches "$name" "$attr_type" "$list_output"; then
+          continue
+        fi
       fi
       all_registered=0
       if create_search_attribute "$name" "$attr_type"; then

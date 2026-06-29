@@ -23,6 +23,7 @@ from moonmind.workflows.temporal.client import (
     MANAGED_SESSION_RECONCILE_WORKFLOW_ID_BASE,
     ScheduleTriggerResult,
     TemporalClientAdapter,
+    _build_typed_search_attributes,
 )
 from moonmind.workflows.temporal.schedule_errors import (
     ScheduleAlreadyExistsError,
@@ -59,6 +60,24 @@ async def _run_schedule_update_callback(handle: MagicMock, update_input: Any) ->
     update = await update_callback(update_input)
     assert isinstance(update, ScheduleUpdate)
     return update.schedule
+
+
+def test_build_typed_search_attributes_encodes_target_facets_as_keyword_lists() -> None:
+    typed_search_attributes = _build_typed_search_attributes(
+        {
+            "mm_target_runtime": ["codex_cli"],
+            "mm_target_skill": ["pr-resolver"],
+        }
+    )
+
+    assert typed_search_attributes is not None
+    assert typed_search_attributes.get(
+        SearchAttributeKey.for_keyword_list("mm_target_runtime")
+    ) == ["codex_cli"]
+    assert typed_search_attributes.get(
+        SearchAttributeKey.for_keyword_list("mm_target_skill")
+    ) == ["pr-resolver"]
+
 
 # ---------------------------------------------------------------------------
 # T010: create_schedule
