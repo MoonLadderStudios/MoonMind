@@ -1944,7 +1944,13 @@ def _serialize_execution_list_item(record) -> ExecutionListItemModel:
             dependencies_block.get("declaredIds") or memo.get("depends_on")
         )
 
-    finish_summary = _finish_summary_from_memo(memo)
+    memo_finish_summary = _finish_summary_from_memo(memo)
+    finish_summary_json = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(finish_summary_json)
+        if isinstance(finish_summary_json, Mapping)
+        else memo_finish_summary
+    )
     progress = _bounded_execution_progress_from_sources(
         record=record,
         memo=memo,
