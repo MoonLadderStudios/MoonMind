@@ -3268,6 +3268,74 @@ class ExecutionModel(BaseModel):
     stale_state: bool = Field(False, alias="staleState")
     refreshed_at: datetime | None = Field(None, alias="refreshedAt")
 
+
+class ExecutionListItemModel(BaseModel):
+    """Compact execution row returned by list APIs.
+
+    The detail endpoint returns ``ExecutionModel``. List views use this bounded
+    row model so high-cardinality dashboard polling does not ship memo,
+    parameters, summaries, debug fields, or other detail-only payloads.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    source: Literal["temporal"] = Field("temporal", alias="source")
+    workflow_id: str = Field(..., alias="workflowId")
+    run_id: str = Field(..., alias="runId")
+    workflow_type: str = Field(..., alias="workflowType")
+    entry: Literal["user_workflow", "manifest"] = Field(..., alias="entry")
+    owner_type: Literal["user", "system", "service"] = Field(..., alias="ownerType")
+    owner_id: str = Field(..., alias="ownerId")
+    title: str = Field(..., alias="title")
+    status: Literal[
+        "queued",
+        "running",
+        "awaiting_action",
+        "waiting",
+        "completed",
+        "failed",
+        "canceled",
+    ] = Field(..., alias="status")
+    dashboard_status: Literal[
+        "queued",
+        "running",
+        "awaiting_action",
+        "waiting",
+        "completed",
+        "failed",
+        "canceled",
+    ] = Field(..., alias="dashboardStatus")
+    state: str = Field(..., alias="state")
+    raw_state: str = Field(..., alias="rawState")
+    temporal_status: Literal["running", "completed", "failed", "canceled"] = Field(
+        ..., alias="temporalStatus"
+    )
+    close_status: Optional[str] = Field(None, alias="closeStatus")
+    waiting_reason: Optional[str] = Field(None, alias="waitingReason")
+    attention_required: bool = Field(False, alias="attentionRequired")
+    target_runtime: Optional[str] = Field(None, alias="targetRuntime")
+    target_skill: Optional[str] = Field(None, alias="targetSkill")
+    task_skills: Optional[list[str]] = Field(None, alias="taskSkills")
+    repository: Optional[str] = Field(None, alias="repository")
+    progress: ExecutionProgressModel | None = Field(None, alias="progress")
+    scheduled_for: Optional[datetime] = Field(None, alias="scheduledFor")
+    created_at: datetime = Field(..., alias="createdAt")
+    started_at: datetime | None = Field(None, alias="startedAt")
+    updated_at: datetime = Field(..., alias="updatedAt")
+    closed_at: datetime | None = Field(None, alias="closedAt")
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+    blocked_on_dependencies: bool = Field(False, alias="blockedOnDependencies")
+    detail_href: str = Field(..., alias="detailHref")
+    redirect_path: Optional[str] = Field(None, alias="redirectPath")
+    latest_run_view: bool = Field(True, alias="latestRunView")
+    continue_as_new_cause: Optional[str] = Field(None, alias="continueAsNewCause")
+    ui_query_model: Literal["compatibility_adapter"] = Field(
+        "compatibility_adapter", alias="uiQueryModel"
+    )
+    stale_state: bool = Field(False, alias="staleState")
+    refreshed_at: datetime | None = Field(None, alias="refreshedAt")
+
+
 class ExecutionRefreshEnvelope(BaseModel):
     """Compatibility metadata for patching one acted-on row and refetching lists."""
 
@@ -3313,7 +3381,7 @@ class ExecutionListResponse(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    items: list[ExecutionModel] = Field(default_factory=list, alias="items")
+    items: list[ExecutionListItemModel] = Field(default_factory=list, alias="items")
     next_page_token: Optional[str] = Field(None, alias="nextPageToken")
     count: Optional[int] = Field(None, alias="count")
     count_mode: Literal["exact", "estimated_or_unknown"] = Field(

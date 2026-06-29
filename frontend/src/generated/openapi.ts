@@ -4585,12 +4585,132 @@ export interface components {
             createdAt: string;
         };
         /**
+         * ExecutionListItemModel
+         * @description Compact execution row returned by list APIs.
+         *
+         *     The detail endpoint returns ``ExecutionModel``. List views use this bounded
+         *     row model so high-cardinality dashboard polling does not ship memo,
+         *     parameters, summaries, debug fields, or other detail-only payloads.
+         */
+        ExecutionListItemModel: {
+            /**
+             * Source
+             * @default temporal
+             * @constant
+             */
+            source: "temporal";
+            /** Workflowid */
+            workflowId: string;
+            /** Runid */
+            runId: string;
+            /** Workflowtype */
+            workflowType: string;
+            /**
+             * Entry
+             * @enum {string}
+             */
+            entry: "user_workflow" | "manifest";
+            /**
+             * Ownertype
+             * @enum {string}
+             */
+            ownerType: "user" | "system" | "service";
+            /** Ownerid */
+            ownerId: string;
+            /** Title */
+            title: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
+            /**
+             * Dashboardstatus
+             * @enum {string}
+             */
+            dashboardStatus: "queued" | "running" | "awaiting_action" | "waiting" | "completed" | "failed" | "canceled";
+            /** State */
+            state: string;
+            /** Rawstate */
+            rawState: string;
+            /**
+             * Temporalstatus
+             * @enum {string}
+             */
+            temporalStatus: "running" | "completed" | "failed" | "canceled";
+            /** Closestatus */
+            closeStatus?: string | null;
+            /** Waitingreason */
+            waitingReason?: string | null;
+            /**
+             * Attentionrequired
+             * @default false
+             */
+            attentionRequired: boolean;
+            /** Targetruntime */
+            targetRuntime?: string | null;
+            /** Targetskill */
+            targetSkill?: string | null;
+            /** Taskskills */
+            taskSkills?: string[] | null;
+            /** Repository */
+            repository?: string | null;
+            progress?: components["schemas"]["ExecutionProgressModel"] | null;
+            /** Scheduledfor */
+            scheduledFor?: string | null;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Startedat */
+            startedAt?: string | null;
+            /**
+             * Updatedat
+             * Format: date-time
+             */
+            updatedAt: string;
+            /** Closedat */
+            closedAt?: string | null;
+            /** Dependson */
+            dependsOn?: string[];
+            /**
+             * Blockedondependencies
+             * @default false
+             */
+            blockedOnDependencies: boolean;
+            /** Detailhref */
+            detailHref: string;
+            /** Redirectpath */
+            redirectPath?: string | null;
+            /**
+             * Latestrunview
+             * @default true
+             */
+            latestRunView: boolean;
+            /** Continueasnewcause */
+            continueAsNewCause?: string | null;
+            /**
+             * Uiquerymodel
+             * @default compatibility_adapter
+             * @constant
+             */
+            uiQueryModel: "compatibility_adapter";
+            /**
+             * Stalestate
+             * @default false
+             */
+            staleState: boolean;
+            /** Refreshedat */
+            refreshedAt?: string | null;
+        };
+        /**
          * ExecutionListResponse
          * @description Paginated list response for executions.
          */
         ExecutionListResponse: {
             /** Items */
-            items?: components["schemas"]["ExecutionModel"][];
+            items?: components["schemas"]["ExecutionListItemModel"][];
             /** Nextpagetoken */
             nextPageToken?: string | null;
             /** Count */

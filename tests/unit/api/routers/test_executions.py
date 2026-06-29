@@ -10320,6 +10320,18 @@ def test_list_executions_preserves_logical_identity_fields() -> None:
         assert "temporalRunId" not in item
         assert item["latestRunView"] is True
         assert item["continueAsNewCause"] == "manual_rerun"
+        for detail_only_key in (
+            "memo",
+            "searchAttributes",
+            "inputParameters",
+            "taskInstructions",
+            "artifactRefs",
+            "finishSummary",
+            "debugFields",
+            "runMetrics",
+            "logContext",
+        ):
+            assert detail_only_key not in item
 
 def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
     """Manifest ingest detail should expose refs, policy, and bounded counts."""
