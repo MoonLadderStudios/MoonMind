@@ -251,7 +251,7 @@ const ExecutionRowSchema = z
       .nullable()
       .optional(),
   })
-  .passthrough();
+  .strip();
 
 const ExecutionListResponseSchema = z.object({
   items: z.array(ExecutionRowSchema),

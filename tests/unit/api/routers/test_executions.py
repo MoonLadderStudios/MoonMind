@@ -10566,6 +10566,53 @@ def test_list_executions_preserves_logical_identity_fields() -> None:
         assert "temporalRunId" not in item
         assert item["latestRunView"] is True
         assert item["continueAsNewCause"] == "manual_rerun"
+        for detail_only_key in (
+            "memo",
+            "searchAttributes",
+            "inputParameters",
+            "taskInstructions",
+            "artifactRefs",
+            "finishSummary",
+            "debugFields",
+            "runMetrics",
+            "logContext",
+        ):
+            assert detail_only_key not in item
+
+
+def test_list_executions_reads_progress_from_persisted_finish_summary() -> None:
+    for test_client, service in _client_with_service():
+        record = _build_execution_record(state=MoonMindWorkflowState.COMPLETED)
+        record.close_status = TemporalExecutionCloseStatus.COMPLETED
+        record.finish_summary_json = {
+            "progress": {
+                "total": 4,
+                "pending": 0,
+                "ready": 0,
+                "running": 0,
+                "awaitingExternal": 0,
+                "reviewing": 0,
+                "succeeded": 4,
+                "failed": 0,
+                "skipped": 0,
+                "canceled": 0,
+                "currentStepTitle": "Verify compact response",
+            }
+        }
+        service.list_executions.return_value = SimpleNamespace(
+            items=[record],
+            next_page_token=None,
+            count=1,
+        )
+
+        response = test_client.get("/api/executions")
+
+        assert response.status_code == 200
+        progress = response.json()["items"][0]["progress"]
+        assert progress["total"] == 4
+        assert progress["succeeded"] == 4
+        assert progress["currentStepTitle"] == "Verify compact response"
+
 
 def test_describe_manifest_execution_exposes_bounded_manifest_fields() -> None:
     """Manifest ingest detail should expose refs, policy, and bounded counts."""

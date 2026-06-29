@@ -65,6 +65,7 @@ from moonmind.schemas.temporal_models import (
     ExecutionMergeAutomationResolverChildModel,
     ExecutionProjectionDiagnosticModel,
     ExecutionListResponse,
+    ExecutionListItemModel,
     ExecutionMetricsCostModel,
     ExecutionMetricsDurationModel,
     ExecutionMetricsResponse,
@@ -2065,6 +2066,217 @@ def _bounded_execution_progress_from_sources(
                 exc_info=True,
             )
     return None
+
+
+def _serialize_execution_list_item(record) -> ExecutionListItemModel:
+    close_status = _enum_value(getattr(record, "close_status", None))
+    if close_status == TemporalExecutionCloseStatus.COMPLETED.value:
+        temporal_status = "completed"
+    elif close_status == TemporalExecutionCloseStatus.CANCELED.value:
+        temporal_status = "canceled"
+    elif close_status in {
+        TemporalExecutionCloseStatus.FAILED.value,
+        TemporalExecutionCloseStatus.TERMINATED.value,
+        TemporalExecutionCloseStatus.TIMED_OUT.value,
+    }:
+        temporal_status = "failed"
+    else:
+        temporal_status = "running"
+
+    memo = dict(getattr(record, "memo", None) or {})
+    search_attributes = dict(getattr(record, "search_attributes", None) or {})
+    state_value = _enum_value(getattr(record, "state", None)) or ""
+    workflow_type_value = _enum_value(getattr(record, "workflow_type", None)) or ""
+    continue_as_new_cause = memo.get("continue_as_new_cause") or search_attributes.get(
+        "mm_continue_as_new_cause"
+    )
+    raw_state = state_value
+    owner_type = _normalize_owner_type(record, search_attributes)
+    owner_id = str(
+        search_attributes.get("mm_owner_id")
+        or getattr(record, "owner_id", None)
+        or "system"
+    )
+    title = str(memo.get("title") or "").strip() or workflow_type_value
+
+    waiting_reason = (
+        str(getattr(record, "waiting_reason", "") or "").strip()
+        or str(memo.get("waiting_reason") or "").strip()
+        or (
+            str(memo.get("summary") or "").strip()
+            if raw_state == "awaiting_external"
+            else ""
+        )
+    )
+    attention_required = bool(
+        getattr(record, "attention_required", False)
+        or memo.get("attention_required")
+        or False
+    )
+    if raw_state == "awaiting_external":
+        attention_required = True
+    if (
+        raw_state
+        not in {"awaiting_slot", "awaiting_external", "waiting_on_dependencies"}
+        and not bool(getattr(record, "paused", False))
+        and not attention_required
+    ):
+        waiting_reason = None
+
+    params_raw = getattr(record, "parameters", None)
+    params = dict(params_raw) if isinstance(params_raw, Mapping) else {}
+    target_runtime = _coerce_temporal_scalar(params.get("targetRuntime")) or None
+    if not target_runtime:
+        runtime_nested = params.get("runtime")
+        if isinstance(runtime_nested, Mapping):
+            target_runtime = _coerce_temporal_scalar(runtime_nested.get("mode")) or None
+    if not target_runtime:
+        target_runtime = (
+            _coerce_temporal_scalar(search_attributes.get("mm_target_runtime"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_runtime"))
+            or _coerce_temporal_scalar(search_attributes.get("runtime"))
+            or _coerce_temporal_scalar(memo.get("targetRuntime"))
+            or _coerce_temporal_scalar(memo.get("target_runtime"))
+        ) or None
+
+    task_payload = _workflow_payload_from_parameters(params)
+    task_runtime_payload = task_payload.get("runtime")
+    if not isinstance(task_runtime_payload, Mapping):
+        task_runtime_payload = {}
+    if not target_runtime:
+        target_runtime = (
+            _coerce_temporal_scalar(task_runtime_payload.get("mode"))
+            or _coerce_temporal_scalar(task_runtime_payload.get("runtime"))
+        ) or None
+
+    tool_params = (
+        task_payload.get("tool") if isinstance(task_payload.get("tool"), Mapping) else {}
+    )
+    skill_params = (
+        task_payload.get("skill") if isinstance(task_payload.get("skill"), Mapping) else {}
+    )
+    target_skill = _preset_primary_skill_name(task_payload) or (
+        str(
+            tool_params.get("name")
+            or tool_params.get("id")
+            or skill_params.get("name")
+            or skill_params.get("id")
+            or ""
+        ).strip()
+        or None
+    )
+    if not target_skill:
+        target_skill = (
+            _coerce_temporal_scalar(params.get("targetSkill"))
+            or _coerce_temporal_scalar(params.get("target_skill"))
+            or _coerce_temporal_scalar(params.get("skillId"))
+            or _coerce_temporal_scalar(params.get("skill"))
+            or _coerce_temporal_scalar(params.get("selectedSkill"))
+            or _coerce_temporal_scalar(params.get("selected_skill"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_target_skill"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_skill_id"))
+            or _coerce_temporal_scalar(search_attributes.get("mm_skill"))
+            or _coerce_temporal_scalar(search_attributes.get("skillId"))
+            or _coerce_temporal_scalar(search_attributes.get("skill"))
+            or _coerce_temporal_scalar(memo.get("targetSkill"))
+            or _coerce_temporal_scalar(memo.get("target_skill"))
+            or _coerce_temporal_scalar(memo.get("skillId"))
+            or _coerce_temporal_scalar(memo.get("skill"))
+        ) or None
+
+    task_skills = _skill_selector_names(task_payload.get("skills"))
+    if task_skills is None:
+        template_primary_skill = _preset_primary_skill_name(task_payload)
+        if template_primary_skill:
+            task_skills = [template_primary_skill]
+
+    git_payload = task_payload.get("git")
+    if not isinstance(git_payload, Mapping):
+        git_payload = {}
+    repository = (
+        _coerce_temporal_scalar(git_payload.get("repository"))
+        or _coerce_temporal_scalar(task_payload.get("repository"))
+        or _coerce_temporal_scalar(params.get("repository"))
+        or _coerce_temporal_scalar(params.get("repo"))
+        or _coerce_temporal_scalar(task_payload.get("repo"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_repository"))
+        or _coerce_temporal_scalar(search_attributes.get("mm_repo"))
+        or _coerce_temporal_scalar(search_attributes.get("repository"))
+        or _coerce_temporal_scalar(memo.get("repository"))
+    ) or None
+
+    dependencies_block = (
+        memo.get("dependencies")
+        if isinstance(memo.get("dependencies"), Mapping)
+        else {}
+    )
+    depends_on = normalize_dependency_ids(task_payload.get("dependsOn"))
+    if not depends_on:
+        depends_on = normalize_dependency_ids(
+            dependencies_block.get("declaredIds") or memo.get("depends_on")
+        )
+
+    memo_finish_summary = _finish_summary_from_memo(memo)
+    finish_summary_json = getattr(record, "finish_summary_json", None)
+    finish_summary = (
+        dict(finish_summary_json)
+        if isinstance(finish_summary_json, Mapping)
+        else memo_finish_summary
+    )
+    progress = _bounded_execution_progress_from_sources(
+        record=record,
+        memo=memo,
+        finish_summary=finish_summary if isinstance(finish_summary, Mapping) else None,
+    )
+
+    started_at = getattr(record, "started_at", None)
+    updated_at = getattr(record, "updated_at", None) or started_at or datetime.now(UTC)
+    created_at = getattr(record, "created_at", None) or started_at or updated_at
+    scheduled_for = getattr(record, "scheduled_for", None)
+    workflow_id = str(getattr(record, "workflow_id", "") or "").strip()
+    dashboard_status = _DASHBOARD_STATUS_BY_STATE.get(
+        getattr(record, "state", None),
+        "queued",
+    )
+
+    return ExecutionListItemModel(
+        source=_TEMPORAL_SOURCE,
+        workflow_id=workflow_id,
+        run_id=str(getattr(record, "run_id", "") or ""),
+        workflow_type=workflow_type_value,
+        entry=_resolve_execution_entry(record, search_attributes),
+        owner_type=owner_type,
+        owner_id=owner_id,
+        title=title,
+        status=dashboard_status,
+        dashboard_status=dashboard_status,
+        state=state_value,
+        raw_state=raw_state,
+        temporal_status=temporal_status,
+        close_status=close_status,
+        waiting_reason=str(waiting_reason) if waiting_reason else None,
+        attention_required=attention_required,
+        target_runtime=target_runtime,
+        target_skill=target_skill,
+        task_skills=task_skills,
+        repository=repository,
+        progress=progress,
+        scheduled_for=scheduled_for,
+        created_at=created_at,
+        started_at=started_at,
+        updated_at=updated_at,
+        closed_at=getattr(record, "closed_at", None),
+        depends_on=depends_on,
+        blocked_on_dependencies=raw_state == "waiting_on_dependencies",
+        detail_href=f"/workflows/{workflow_id}",
+        redirect_path=f"/workflows/{workflow_id}?source=temporal",
+        latest_run_view=True,
+        continue_as_new_cause=_coerce_temporal_scalar(continue_as_new_cause) or None,
+        ui_query_model="compatibility_adapter",
+        stale_state=False,
+        refreshed_at=_compatibility_refreshed_at(record),
+    )
+
 
 def _serialize_execution(
     record, *, include_artifact_refs: bool = True, user: Optional["User"] = None
@@ -8811,11 +9023,7 @@ async def list_executions(
                         record_obj.updated_at = (
                             getattr(record_obj, "started_at", None) or datetime.now(UTC)
                         )
-                    execution = _serialize_execution(
-                        record_obj,
-                        include_artifact_refs=False,
-                        user=user,
-                    )
+                    execution = _serialize_execution_list_item(record_obj)
                     if _execution_uses_live_workflow_queries(execution):
                         progress, queried_run_id = await _load_execution_progress(
                             temporal_client=temporal_client,
@@ -8930,7 +9138,7 @@ async def list_executions(
     now = datetime.now(UTC)
     return ExecutionListResponse(
         items=[
-            _serialize_execution(item, include_artifact_refs=False, user=user)
+            _serialize_execution_list_item(item)
             for item in result.items
         ],
         next_page_token=result.next_page_token,

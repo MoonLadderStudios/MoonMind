@@ -82,7 +82,7 @@ const WorkflowWorkspaceRowSchema = z
     repository: z.string().nullable().optional(),
     targetRuntime: z.string().nullable().optional(),
   })
-  .passthrough();
+  .strip();
 
 const WorkflowWorkspaceListResponseSchema = z.object({
   items: z.array(WorkflowWorkspaceRowSchema),
