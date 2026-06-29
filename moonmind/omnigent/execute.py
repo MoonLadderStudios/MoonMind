@@ -1,4 +1,4 @@
-"""Run one Omnigent streaming-gateway execution for MM-991."""
+"""Run one Omnigent streaming-gateway execution for MM-1030."""
 
 from __future__ import annotations
 
@@ -9,11 +9,21 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from dataclasses import dataclass, field
+from pathlib import Path
+from re import sub
 from typing import Any
 
 import httpx
 from temporalio import activity
 
+from moonmind.omnigent.store import (
+    FIRST_MESSAGE_POSTED,
+    FIRST_MESSAGE_POSTING,
+    FIRST_MESSAGE_TERMINAL,
+    OmnigentDigestMismatchError,
+    OmnigentRunStore,
+)
 from moonmind.omnigent.settings import (
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
@@ -49,6 +59,7 @@ _NON_TERMINAL_STATUSES = {
     "waiting",
     "idle",
 }
+_MAX_OMNIGENT_HARVEST_ITEMS = 100
 
 _logger = logging.getLogger(__name__)
 
@@ -59,6 +70,188 @@ class OmnigentContractError(RuntimeError):
 
 class OmnigentSessionStillRunningError(OmnigentClientError):
     """Raised when the stream ends while the provider session is still active."""
+
+
+class OmnigentArtifactError(RuntimeError):
+    """Raised when Omnigent artifact evidence cannot be read or written."""
+
+
+@dataclass(slots=True)
+class OmnigentCaptureBundle:
+    """MoonMind artifact refs captured for one Omnigent session."""
+
+    output_refs: list[str] = field(default_factory=list)
+    diagnostics_ref: str = ""
+    capture_manifest_ref: str = ""
+    metadata_refs: dict[str, str] = field(default_factory=dict)
+
+
+class OmnigentArtifactGateway:
+    """Minimal artifact boundary needed by the Omnigent activity."""
+
+    async def write_json(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: Any,
+        link_type: str,
+    ) -> str:
+        raise NotImplementedError
+
+    async def write_text(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: str,
+        link_type: str,
+        content_type: str = "text/plain",
+    ) -> str:
+        raise NotImplementedError
+
+    async def write_bytes(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: bytes,
+        link_type: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        raise NotImplementedError
+
+    async def read_text(self, artifact_ref: str) -> str:
+        raise NotImplementedError
+
+
+class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
+    """Local MoonMind artifact gateway for Omnigent evidence capture."""
+
+    def __init__(
+        self,
+        *,
+        root: str | Path = "var/artifacts/omnigent",
+        readable_refs: dict[str, str] | None = None,
+    ) -> None:
+        self._root = Path(root).resolve()
+        self._readable_refs = dict(readable_refs or {})
+
+    async def write_json(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: Any,
+        link_type: str,
+    ) -> str:
+        data = json.dumps(payload, indent=2, sort_keys=True, default=str)
+        return await self.write_text(
+            request=request,
+            name=name,
+            payload=f"{data}\n",
+            link_type=link_type,
+            content_type="application/json",
+        )
+
+    async def write_text(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: str,
+        link_type: str,
+        content_type: str = "text/plain",
+    ) -> str:
+        return await self.write_bytes(
+            request=request,
+            name=name,
+            payload=payload.encode("utf-8"),
+            link_type=link_type,
+            content_type=content_type,
+        )
+
+    async def write_bytes(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: bytes,
+        link_type: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        safe_correlation = _safe_artifact_segment(request.correlation_id)
+        safe_name = _safe_artifact_name(name)
+        path = (self._root / safe_correlation / safe_name).resolve()
+        if not path.is_relative_to(self._root):
+            raise OmnigentArtifactError("Omnigent artifact path escapes artifact root")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        metadata_path = path.with_suffix(f"{path.suffix}.metadata.json")
+        metadata_path.write_text(
+            json.dumps(
+                {
+                    "contentType": content_type,
+                    "linkType": link_type,
+                    "sha256": digest,
+                    "sizeBytes": len(payload),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return f"artifact://omnigent/{safe_correlation}/{safe_name}"
+
+    async def read_text(self, artifact_ref: str) -> str:
+        if artifact_ref in self._readable_refs:
+            return self._readable_refs[artifact_ref]
+        prefix = "artifact://omnigent/"
+        if artifact_ref.startswith(prefix):
+            relative = artifact_ref[len(prefix) :]
+            path = (self._root / relative).resolve()
+            if not path.is_relative_to(self._root):
+                raise OmnigentArtifactError(
+                    f"Omnigent artifact ref escapes artifact root: {artifact_ref}"
+                )
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+        raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
+
+
+def _safe_artifact_segment(value: object) -> str:
+    text = sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip()).strip("-")
+    if text in {".", ".."}:
+        return "segment"
+    return text[:120] or "run"
+
+
+def _safe_artifact_name(value: object) -> str:
+    text = str(value or "").replace("\\", "/").strip().strip("/")
+    parts = [_safe_artifact_segment(part) for part in text.split("/") if part.strip()]
+    return "/".join(parts) or "artifact"
+
+
+async def _capture_artifact_json(
+    gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    refs: dict[str, str],
+    *,
+    key: str,
+    name: str,
+    payload: Any,
+    link_type: str,
+) -> str:
+    ref = await gateway.write_json(
+        request=request,
+        name=name,
+        payload=payload,
+        link_type=link_type,
+    )
+    refs[key] = ref
+    return ref
 
 
 def _compact_summary(value: object | None, *, fallback: str) -> str:
@@ -125,6 +318,7 @@ def normalize_omnigent_observation(payload: dict[str, Any]) -> str | None:
         known_prefixes = (
             "response.output",
             "response.delta",
+            "session.child",
             "session.input",
             "session.item",
         )
@@ -177,17 +371,21 @@ def _session_options(omni: dict[str, Any]) -> dict[str, Any]:
     return session if isinstance(session, dict) else {}
 
 
-def _build_omnigent_first_message(
+async def _build_omnigent_first_message(
     *,
     request: AgentExecutionRequest,
     prompt: dict[str, Any],
+    artifact_gateway: OmnigentArtifactGateway,
 ) -> dict[str, Any]:
     text = str(prompt.get("text") or "").strip()
-    instruction_ref = str(
-        prompt.get("instructionRef") or request.instruction_ref or ""
-    ).strip()
+    explicit_instruction_ref = str(prompt.get("instructionRef") or "").strip()
+    inline_instruction = str(request.instruction_ref or "").strip()
+    instruction_ref = explicit_instruction_ref or inline_instruction
     if not text and instruction_ref:
-        text = instruction_ref
+        if explicit_instruction_ref:
+            text = (await artifact_gateway.read_text(instruction_ref)).strip()
+        else:
+            text = inline_instruction
     if not text:
         text = str((request.parameters or {}).get("description") or "").strip()
     if not text:
@@ -209,6 +407,52 @@ def _build_omnigent_first_message(
             "content": [{"type": "input_text", "text": text}],
         },
     }
+
+
+def _first_message_text(first_message: dict[str, Any]) -> str:
+    data = first_message.get("data")
+    if not isinstance(data, dict):
+        return ""
+    content = data.get("content")
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, dict):
+            text = str(item.get("text") or "").strip()
+            if text:
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def _first_message_marker(*, request: AgentExecutionRequest, digest: str) -> str:
+    return "\n".join(
+        [
+            "MoonMind-Omnigent-Run:",
+            f"  correlationId: {request.correlation_id}",
+            f"  idempotencyKey: {request.idempotency_key}",
+            f"  firstMessageDigest: {digest}",
+        ]
+    )
+
+
+def _snapshot_contains_first_message_marker(
+    snapshot: dict[str, Any],
+    *,
+    digest: str,
+    marker: str,
+) -> bool:
+    needle_values = {digest, marker}
+    stack: list[Any] = [snapshot]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, dict):
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+        elif isinstance(value, str) and any(needle in value for needle in needle_values):
+            return True
+    return False
 
 
 async def _unsupported_bundle_upload(bundle_ref: str) -> dict[str, Any]:
@@ -320,19 +564,20 @@ def build_omnigent_result(
     agent_id: str | None,
     final_snapshot: dict[str, Any],
     event_count: int,
+    capture_bundle: OmnigentCaptureBundle,
     failure_summary: str | None = None,
     provider_error_code: str | None = None,
 ) -> AgentRunResult:
     """Build compact terminal canonical result for Omnigent."""
 
-    refs = final_snapshot.get("outputRefs") or final_snapshot.get("output_refs") or []
-    output_refs = [str(ref) for ref in refs if str(ref).strip()]
+    output_refs = list(capture_bundle.output_refs)
+    diagnostics_ref = capture_bundle.diagnostics_ref
     if not output_refs:
-        output_refs = [f"omnigent://sessions/{session_id}/snapshot/final"]
-    diagnostics_ref = (
-        final_snapshot.get("diagnosticsRef")
-        or final_snapshot.get("diagnostics_ref")
-        or f"omnigent://sessions/{session_id}/diagnostics"
+        raise OmnigentContractError("Omnigent result requires MoonMind output artifact refs")
+    if not diagnostics_ref:
+        raise OmnigentContractError("Omnigent result requires a MoonMind diagnostics artifact ref")
+    _assert_no_provider_native_refs(
+        [*output_refs, diagnostics_ref, *capture_bundle.metadata_refs.values()]
     )
     summary = final_snapshot.get("summary") or failure_summary
     if not summary:
@@ -351,12 +596,13 @@ def build_omnigent_result(
     }
     if agent_id:
         metadata["omnigentAgentId"] = agent_id
+    if capture_bundle.capture_manifest_ref:
+        metadata["captureManifestRef"] = capture_bundle.capture_manifest_ref
+    metadata.update(capture_bundle.metadata_refs)
     snapshot_metadata_keys = {
         "omnigentAgentName": "omnigent_agent_name",
         "hostType": "host_type",
         "workspace": "workspace",
-        "captureManifestRef": "capture_manifest_ref",
-        "patchRef": "patch_ref",
         "githubPrUrl": "github_pr_url",
     }
     for metadata_key, snake_key in snapshot_metadata_keys.items():
@@ -375,6 +621,14 @@ def build_omnigent_result(
         providerErrorCode=provider_error_code,
         metadata=metadata,
     )
+
+
+def _assert_no_provider_native_refs(refs: list[str]) -> None:
+    bad = [ref for ref in refs if str(ref).startswith("omnigent://")]
+    if bad:
+        raise OmnigentContractError(
+            "Omnigent terminal result cannot expose provider-native refs"
+        )
 
 
 async def _cancel_omnigent_session(
@@ -399,14 +653,389 @@ async def _cancel_omnigent_session(
             await client.stop_session(session_id)
 
 
-async def _delete_omnigent_session(
-    client: OmnigentHttpClient | None,
+async def _harvest_changed_files(
+    *,
+    client: OmnigentHttpClient,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
     session_id: str,
+    manifest: dict[str, Any],
+    refs: dict[str, str],
 ) -> None:
-    if client is None or not session_id:
+    try:
+        changed = await client.list_changed_files(session_id)
+    except Exception as exc:
+        manifest["changedFilesUnavailable"] = _compact_summary(
+            exc,
+            fallback="changed files unavailable",
+        )
         return
-    with suppress(Exception):
-        await client.delete_session(session_id, delete_branch=False)
+    index_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="changedFilesIndexRef",
+        name="output.omnigent.changed_files.index.json",
+        payload=changed,
+        link_type="output.omnigent.changed_files.index",
+    )
+    manifest["changedFilesIndexRef"] = index_ref
+    file_items = _resource_items(changed)[:_MAX_OMNIGENT_HARVEST_ITEMS]
+    harvested: list[dict[str, Any]] = []
+    for item in file_items:
+        path = str(
+            item.get("path")
+            or item.get("file_path")
+            or item.get("filePath")
+            or item.get("name")
+            or ""
+        ).strip()
+        if not path:
+            continue
+        try:
+            content = await client.get_workspace_file(session_id, path)
+        except Exception as exc:
+            harvested.append(
+                {
+                    "path": path,
+                    "unavailable": _compact_summary(
+                        exc,
+                        fallback="changed file content unavailable",
+                    ),
+                }
+            )
+            continue
+        ref = await artifact_gateway.write_bytes(
+            request=request,
+            name=f"output.omnigent.changed_files/{path}",
+            payload=content,
+            link_type="output.omnigent.changed_file",
+        )
+        harvested.append({"path": path, "artifactRef": ref})
+    manifest["changedFiles"] = harvested
+    manifest.setdefault("patchUnavailable", True)
+
+
+async def _harvest_session_files(
+    *,
+    client: OmnigentHttpClient,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    session_id: str,
+    manifest: dict[str, Any],
+    refs: dict[str, str],
+) -> None:
+    try:
+        files = await client.list_session_files(session_id)
+    except Exception as exc:
+        manifest["sessionFilesUnavailable"] = _compact_summary(
+            exc,
+            fallback="session files unavailable",
+        )
+        return
+    index_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="sessionFilesIndexRef",
+        name="output.omnigent.session_files.index.json",
+        payload=files,
+        link_type="output.omnigent.session_files.index",
+    )
+    manifest["sessionFilesIndexRef"] = index_ref
+    harvested: list[dict[str, Any]] = []
+    for item in _resource_items(files)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
+        file_id = str(item.get("id") or item.get("file_id") or item.get("fileId") or "").strip()
+        filename = str(item.get("filename") or item.get("name") or file_id).strip()
+        if not file_id:
+            continue
+        try:
+            content = await client.get_session_file_content(session_id, file_id)
+        except Exception as exc:
+            harvested.append(
+                {
+                    "fileId": file_id,
+                    "filename": filename,
+                    "unavailable": _compact_summary(
+                        exc,
+                        fallback="session file content unavailable",
+                    ),
+                }
+            )
+            continue
+        ref = await artifact_gateway.write_bytes(
+            request=request,
+            name=f"output.omnigent.session_files/{file_id}/{filename}",
+            payload=content,
+            link_type="output.omnigent.session_file",
+        )
+        metadata_ref = await _capture_artifact_json(
+            artifact_gateway,
+            request,
+            refs,
+            key=f"sessionFileMetadataRef:{file_id}",
+            name=f"output.omnigent.session_files/{file_id}/metadata.json",
+            payload=item,
+            link_type="output.omnigent.session_file.metadata",
+        )
+        harvested.append(
+            {
+                "fileId": file_id,
+                "filename": filename,
+                "artifactRef": ref,
+                "metadataRef": metadata_ref,
+            }
+        )
+    manifest["sessionFiles"] = harvested
+
+
+def _resource_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("items", "files", "changes", "data"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+        if isinstance(value, dict):
+            nested = _resource_items(value)
+            if nested:
+                return nested
+    return []
+
+
+def _child_session_ids(
+    events: list[dict[str, Any]],
+    *,
+    parent_session_id: str,
+) -> list[str]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        event_type = str(event.get("type") or event.get("eventType") or "").lower()
+        if "child" not in event_type:
+            continue
+        stack: list[Any] = [event]
+        while stack:
+            value = stack.pop()
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    normalized_key = key.replace("_", "").lower()
+                    if normalized_key in {"sessionid", "childsessionid"}:
+                        candidate = str(nested or "").strip()
+                        if (
+                            candidate
+                            and candidate != parent_session_id
+                            and candidate not in seen
+                        ):
+                            ids.append(candidate)
+                            seen.add(candidate)
+                    else:
+                        stack.append(nested)
+            elif isinstance(value, list):
+                stack.extend(value)
+    return ids
+
+
+async def _build_capture_bundle(
+    *,
+    client: OmnigentHttpClient | None,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    session_id: str,
+    agent_id: str | None,
+    initial_snapshot: dict[str, Any] | None,
+    final_snapshot: dict[str, Any],
+    first_message_request: dict[str, Any] | None,
+    first_message_response: dict[str, Any] | None,
+    raw_events: list[dict[str, Any]],
+    normalized_events: list[dict[str, Any]],
+    terminal_status: str,
+    diagnostics: dict[str, Any],
+    harvest_resources: bool,
+) -> OmnigentCaptureBundle:
+    refs: dict[str, str] = {}
+    if first_message_request is not None:
+        await _capture_artifact_json(
+            artifact_gateway,
+            request,
+            refs,
+            key="firstMessageRequestRef",
+            name="input.omnigent.first_message.request.json",
+            payload=first_message_request,
+            link_type="input.omnigent.first_message.request",
+        )
+    if first_message_response is not None:
+        await _capture_artifact_json(
+            artifact_gateway,
+            request,
+            refs,
+            key="firstMessageResponseRef",
+            name="input.omnigent.first_message.response.json",
+            payload=first_message_response,
+            link_type="input.omnigent.first_message.response",
+        )
+    if initial_snapshot is not None:
+        await _capture_artifact_json(
+            artifact_gateway,
+            request,
+            refs,
+            key="initialSnapshotRef",
+            name="runtime.omnigent.snapshot.initial.json",
+            payload=initial_snapshot,
+            link_type="runtime.omnigent.snapshot.initial",
+        )
+    raw_ref = await artifact_gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.raw.jsonl",
+        payload=_jsonl(raw_events),
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    refs["rawSseStreamRef"] = raw_ref
+    normalized_ref = await artifact_gateway.write_text(
+        request=request,
+        name="runtime.omnigent.sse.normalized.jsonl",
+        payload=_jsonl(normalized_events),
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+    refs["normalizedEventStreamRef"] = normalized_ref
+    final_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="finalSnapshotRef",
+        name="output.omnigent.snapshot.final.json",
+        payload=final_snapshot,
+        link_type="output.omnigent.snapshot.final",
+    )
+    manifest: dict[str, Any] = {
+        "provider": "omnigent",
+        "omnigentSessionId": session_id,
+        "omnigentAgentId": agent_id,
+        "terminalStatus": terminal_status,
+        "artifactRefs": refs,
+        "patchUnavailable": True,
+    }
+    child_session_ids = _child_session_ids(raw_events, parent_session_id=session_id)
+    manifest["childSessions"] = len(child_session_ids)
+    if child_session_ids:
+        child_ref = await artifact_gateway.write_text(
+            request=request,
+            name="runtime.omnigent.child_sessions.jsonl",
+            payload=_jsonl(
+                [
+                    {"childSessionId": child_session_id}
+                    for child_session_id in child_session_ids
+                ]
+            ),
+            link_type="runtime.omnigent.child_sessions",
+            content_type="application/x-ndjson",
+        )
+        refs["childSessionsRef"] = child_ref
+        manifest["childSessionsRef"] = child_ref
+        child_snapshots: list[dict[str, str]] = []
+        if client is not None:
+            for child_session_id in child_session_ids:
+                try:
+                    child_snapshot = await client.get_session(child_session_id)
+                except Exception as exc:
+                    child_snapshots.append(
+                        {
+                            "childSessionId": child_session_id,
+                            "unavailable": _compact_summary(
+                                exc,
+                                fallback="child session snapshot unavailable",
+                            ),
+                        }
+                    )
+                    continue
+                child_snapshot_ref = await _capture_artifact_json(
+                    artifact_gateway,
+                    request,
+                    refs,
+                    key=f"childSessionSnapshotRef:{child_session_id}",
+                    name=f"runtime.omnigent.child_sessions/{child_session_id}.json",
+                    payload=child_snapshot,
+                    link_type="runtime.omnigent.child_session.snapshot",
+                )
+                child_snapshots.append(
+                    {
+                        "childSessionId": child_session_id,
+                        "snapshotRef": child_snapshot_ref,
+                    }
+                )
+        manifest["childSessionEvidence"] = child_snapshots
+    if harvest_resources and client is not None and session_id:
+        await _harvest_changed_files(
+            client=client,
+            artifact_gateway=artifact_gateway,
+            request=request,
+            session_id=session_id,
+            manifest=manifest,
+            refs=refs,
+        )
+        await _harvest_session_files(
+            client=client,
+            artifact_gateway=artifact_gateway,
+            request=request,
+            session_id=session_id,
+            manifest=manifest,
+            refs=refs,
+        )
+    diagnostics_payload = {
+        "provider": "omnigent",
+        "omnigentSessionId": session_id,
+        "terminalStatus": terminal_status,
+        "diagnostics": diagnostics,
+        "captureManifest": manifest,
+    }
+    diagnostics_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="diagnosticsRef",
+        name="diagnostics.omnigent.json",
+        payload=diagnostics_payload,
+        link_type="diagnostics.omnigent",
+    )
+    manifest_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="captureManifestRef",
+        name="output.omnigent.capture_manifest.json",
+        payload=manifest,
+        link_type="output.omnigent.capture_manifest",
+    )
+    metadata_refs = {
+        "captureManifestRef": manifest_ref,
+        "rawSseStreamRef": raw_ref,
+        "normalizedEventStreamRef": normalized_ref,
+        "finalSnapshotRef": final_ref,
+    }
+    for optional_key in (
+        "firstMessageRequestRef",
+        "firstMessageResponseRef",
+        "initialSnapshotRef",
+        "changedFilesIndexRef",
+        "sessionFilesIndexRef",
+        "childSessionsRef",
+    ):
+        if optional_key in refs:
+            metadata_refs[optional_key] = refs[optional_key]
+    output_refs = [final_ref, normalized_ref, manifest_ref]
+    return OmnigentCaptureBundle(
+        output_refs=output_refs,
+        diagnostics_ref=diagnostics_ref,
+        capture_manifest_ref=manifest_ref,
+        metadata_refs=metadata_refs,
+    )
+
+
+def _jsonl(events: list[dict[str, Any]]) -> str:
+    return "".join(
+        json.dumps(event, sort_keys=True, default=str, separators=(",", ":")) + "\n"
+        for event in events
+    )
 
 
 async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
@@ -420,7 +1049,12 @@ async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
         pass
 
 
-async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResult:
+async def run_omnigent_execution(
+    request: AgentExecutionRequest,
+    *,
+    artifact_gateway: OmnigentArtifactGateway | None = None,
+    run_store: OmnigentRunStore | None = None,
+) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
     gate = build_omnigent_gate()
@@ -433,6 +1067,13 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
     session_id = ""
     stream_task: asyncio.Task[None] | None = None
     heartbeat_task: asyncio.Task[None] | None = None
+    artifact_gateway = artifact_gateway or LocalOmnigentArtifactGateway()
+    first_message: dict[str, Any] | None = None
+    first_message_response: dict[str, Any] | None = None
+    initial_snapshot: dict[str, Any] | None = None
+    raw_events: list[dict[str, Any]] = []
+    normalized_events: list[dict[str, Any]] = []
+    target_agent_id: str | None = None
     try:
         selection = build_omnigent_selection(request)
         async with httpx.AsyncClient() as httpx_client:
@@ -456,6 +1097,7 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 upload_agent_bundle=_unsupported_bundle_upload,
                 default_agent_name=resolved_default_agent_name(),
             )
+            target_agent_id = target.agent_id
             session_payload = build_omnigent_session_create_payload(
                 request=request,
                 selection=selection,
@@ -464,14 +1106,43 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
             session_payload["idempotency_key"] = request.idempotency_key
             labels = session_payload.setdefault("labels", {})
             if isinstance(labels, dict):
-                labels.setdefault("moonmind.issue", "MM-991")
+                labels.setdefault("moonmind.issue", "MM-1030")
+
+            durable_row = None
+            if run_store is not None:
+                durable_row = await run_store.get_or_create(
+                    request=request,
+                    endpoint_ref=str(selection.endpoint_ref or "default"),
+                    agent_id=target.agent_id,
+                    agent_name=target.agent_name,
+                    target_metadata={
+                        "hostType": selection.session.host_type,
+                        "workspace": selection.session.workspace,
+                    },
+                )
 
             retry_state = _heartbeat_state()
-            session_id = _heartbeat_session_id(retry_state)
+            session_id = str(
+                getattr(durable_row, "omnigent_session_id", None) or ""
+            ).strip() or _heartbeat_session_id(retry_state)
             first_message_posted = bool(retry_state.get("firstMessagePosted"))
+            first_message_reconcile_required = False
+            if durable_row is not None:
+                first_message_reconcile_required = (
+                    durable_row.first_message_state == FIRST_MESSAGE_POSTING
+                )
+                first_message_posted = (
+                    durable_row.first_message_state
+                    in {FIRST_MESSAGE_POSTED, FIRST_MESSAGE_TERMINAL}
+                )
             if not session_id:
                 create_response = await client.create_session(session_payload)
                 session_id = _session_id(create_response)
+                if run_store is not None:
+                    await run_store.attach_session(
+                        request.idempotency_key,
+                        session_id,
+                    )
                 _safe_heartbeat(
                     {
                         "omnigentSessionId": session_id,
@@ -480,19 +1151,116 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                         "firstMessagePosted": False,
                     }
                 )
+            with suppress(Exception):
+                initial_snapshot = await client.get_session(session_id)
 
-            first_message = _build_omnigent_first_message(
+            first_message = await _build_omnigent_first_message(
                 request=request,
                 prompt=selection.prompt,
+                artifact_gateway=artifact_gateway,
             )
             digest = hashlib.sha256(
                 json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
+            marker = _first_message_marker(request=request, digest=digest)
             first_message.setdefault("metadata", {})[
                 "moonmindFirstMessageDigest"
             ] = digest
             first_message["metadata"]["moonmindIdempotencyKey"] = request.idempotency_key
+            if selection.prompt.get("includeIdempotencyMarker", True):
+                first_message_text = _first_message_text(first_message)
+                first_message["data"]["content"][0]["text"] = (
+                    f"{first_message_text}\n\n{marker}".strip()
+                )
+            if run_store is not None:
+                try:
+                    durable_row = await run_store.mark_prepared(
+                        request.idempotency_key,
+                        digest=digest,
+                        marker=marker,
+                    )
+                    first_message_reconcile_required = (
+                        durable_row.first_message_state == FIRST_MESSAGE_POSTING
+                    )
+                except OmnigentDigestMismatchError as exc:
+                    bundle = await _build_capture_bundle(
+                        client=client,
+                        artifact_gateway=artifact_gateway,
+                        request=request,
+                        session_id=session_id,
+                        agent_id=target.agent_id,
+                        initial_snapshot=initial_snapshot,
+                        final_snapshot=initial_snapshot or {"status": "failed"},
+                        first_message_request=first_message,
+                        first_message_response=None,
+                        raw_events=raw_events,
+                        normalized_events=normalized_events,
+                        terminal_status="failed",
+                        diagnostics={
+                            "error": str(exc),
+                            "nonRetryable": True,
+                            "failureClass": "integration_error",
+                        },
+                        harvest_resources=False,
+                    )
+                    return build_omnigent_result(
+                        request=request,
+                        terminal_status="failed",
+                        session_id=session_id,
+                        agent_id=target.agent_id,
+                        final_snapshot={
+                            "status": "failed",
+                            "summary": "First-message digest mismatch",
+                        },
+                        event_count=0,
+                        capture_bundle=bundle,
+                        failure_summary="First-message digest mismatch",
+                        provider_error_code="omnigent_first_message_digest_mismatch",
+                    )
             stream_queue: asyncio.Queue[dict[str, Any] | BaseException | None] | None = None
+            if first_message_reconcile_required:
+                reconciliation_snapshot = await client.get_session(session_id)
+                if not _snapshot_contains_first_message_marker(
+                    reconciliation_snapshot,
+                    digest=digest,
+                    marker=marker,
+                ):
+                    bundle = await _build_capture_bundle(
+                        client=client,
+                        artifact_gateway=artifact_gateway,
+                        request=request,
+                        session_id=session_id,
+                        agent_id=target.agent_id,
+                        initial_snapshot=initial_snapshot,
+                        final_snapshot=reconciliation_snapshot,
+                        first_message_request=first_message,
+                        first_message_response=None,
+                        raw_events=raw_events,
+                        normalized_events=normalized_events,
+                        terminal_status="failed",
+                        diagnostics={
+                            "error": "Unable to reconcile first-message posting state",
+                            "failureClass": "integration_error",
+                        },
+                        harvest_resources=False,
+                    )
+                    return build_omnigent_result(
+                        request=request,
+                        terminal_status="failed",
+                        session_id=session_id,
+                        agent_id=target.agent_id,
+                        final_snapshot={
+                            "status": "failed",
+                            "summary": "Unable to reconcile first-message posting state",
+                        },
+                        event_count=0,
+                        capture_bundle=bundle,
+                        failure_summary="Unable to reconcile first-message posting state",
+                        provider_error_code="omnigent_first_message_reconcile_failed",
+                    )
+                if run_store is not None:
+                    await run_store.mark_posted(request.idempotency_key)
+                first_message_posted = True
             if not first_message_posted:
                 stream_queue = asyncio.Queue()
                 stream_task = asyncio.create_task(
@@ -503,7 +1271,14 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                     )
                 )
                 await asyncio.sleep(0)
-                await client.post_event(session_id, first_message)
+                if run_store is not None:
+                    await run_store.mark_posting(request.idempotency_key)
+                first_message_response = await client.post_event(session_id, first_message)
+                if run_store is not None:
+                    await run_store.mark_posted(
+                        request.idempotency_key,
+                        response=first_message_response,
+                    )
                 _safe_heartbeat(
                     {
                         "omnigentSessionId": session_id,
@@ -535,7 +1310,15 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 )
                 async for event in stream_events:
                     event_count["value"] += 1
+                    raw_events.append(dict(event))
                     normalized = normalize_omnigent_observation(event)
+                    normalized_events.append(
+                        {
+                            "eventType": str(event.get("type") or "").strip(),
+                            "normalizedStatus": normalized or "running",
+                            "sequence": event_count["value"],
+                        }
+                    )
                     _safe_heartbeat(
                         {
                             "omnigentSessionId": session_id,
@@ -591,6 +1374,32 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 raise OmnigentContractError(
                     "Omnigent stream ended before a terminal session outcome"
                 )
+            bundle = await _build_capture_bundle(
+                client=client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                agent_id=target.agent_id,
+                initial_snapshot=initial_snapshot,
+                final_snapshot=final_snapshot,
+                first_message_request=first_message,
+                first_message_response=first_message_response,
+                raw_events=raw_events,
+                normalized_events=normalized_events,
+                terminal_status=terminal_status,
+                diagnostics={"failureClass": _failure_class_for(terminal_status)},
+                harvest_resources=True,
+            )
+            if run_store is not None:
+                await run_store.mark_terminal(
+                    request.idempotency_key,
+                    status=terminal_status,
+                    terminal_refs={
+                        "outputRefs": bundle.output_refs,
+                        "diagnosticsRef": bundle.diagnostics_ref,
+                        "metadataRefs": bundle.metadata_refs,
+                    },
+                )
             return build_omnigent_result(
                 request=request,
                 terminal_status=terminal_status,
@@ -598,6 +1407,7 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
                 agent_id=target.agent_id,
                 final_snapshot=final_snapshot,
                 event_count=event_count["value"],
+                capture_bundle=bundle,
             )
     except asyncio.CancelledError:
         await _cancel_task(heartbeat_task)
@@ -605,36 +1415,92 @@ async def run_omnigent_execution(request: AgentExecutionRequest) -> AgentRunResu
         if client is not None and session_id:
             await _cancel_omnigent_session(client, session_id)
         raise
-    except (OmnigentContractError, OmnigentAdapterError, ValueError) as exc:
+    except (
+        OmnigentArtifactError,
+        OmnigentContractError,
+        OmnigentAdapterError,
+        ValueError,
+    ) as exc:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
-        await _delete_omnigent_session(client, session_id)
+        final_snapshot = {"status": "failed", "summary": str(exc)}
+        bundle = await _build_capture_bundle(
+            client=client,
+            artifact_gateway=artifact_gateway,
+            request=request,
+            session_id=session_id,
+            agent_id=target_agent_id,
+            initial_snapshot=initial_snapshot,
+            final_snapshot=final_snapshot,
+            first_message_request=first_message,
+            first_message_response=first_message_response,
+            raw_events=raw_events,
+            normalized_events=normalized_events,
+            terminal_status="failed",
+            diagnostics={
+                "error": str(exc),
+                "failureClass": "integration_error",
+            },
+            harvest_resources=bool(client and session_id),
+        )
         return AgentRunResult(
-            outputRefs=[],
+            outputRefs=bundle.output_refs,
             summary=_compact_summary(exc, fallback="Omnigent contract error"),
-            diagnosticsRef="omnigent://diagnostics/contract-error",
+            diagnosticsRef=bundle.diagnostics_ref,
             failureClass="integration_error",
             providerErrorCode="omnigent_contract_error",
-            metadata={"normalizedStatus": "failed", "providerName": "omnigent"},
+            metadata={
+                "normalizedStatus": "failed",
+                "providerName": "omnigent",
+                **bundle.metadata_refs,
+            },
         )
     except OmnigentSessionStillRunningError:
         raise
     except (OmnigentClientError, httpx.HTTPError) as exc:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
-        await _delete_omnigent_session(client, session_id)
         status_code = exc.status_code if isinstance(exc, OmnigentClientError) else None
+        final_snapshot = {"status": "failed", "summary": str(exc)}
+        diagnostics = (
+            exc.diagnostics()
+            if isinstance(exc, OmnigentClientError)
+            else {"error": str(exc), "failureClass": "integration_error"}
+        )
+        bundle = await _build_capture_bundle(
+            client=client,
+            artifact_gateway=artifact_gateway,
+            request=request,
+            session_id=session_id,
+            agent_id=target_agent_id,
+            initial_snapshot=initial_snapshot,
+            final_snapshot=final_snapshot,
+            first_message_request=first_message,
+            first_message_response=first_message_response,
+            raw_events=raw_events,
+            normalized_events=normalized_events,
+            terminal_status="failed",
+            diagnostics=diagnostics,
+            harvest_resources=bool(client and session_id),
+        )
         return AgentRunResult(
-            outputRefs=[],
+            outputRefs=bundle.output_refs,
             summary=_compact_summary(exc, fallback="Omnigent integration error"),
-            diagnosticsRef="omnigent://diagnostics/transport-error",
+            diagnosticsRef=bundle.diagnostics_ref,
             failureClass="integration_error",
             providerErrorCode=str(status_code or "omnigent_http_error"),
-            metadata={"normalizedStatus": "failed", "providerName": "omnigent"},
+            metadata={
+                "normalizedStatus": "failed",
+                "providerName": "omnigent",
+                **bundle.metadata_refs,
+            },
         )
 
 
 __all__ = [
+    "LocalOmnigentArtifactGateway",
+    "OmnigentArtifactGateway",
+    "OmnigentCaptureBundle",
     "OmnigentContractError",
     "OmnigentSessionStillRunningError",
     "build_omnigent_result",
