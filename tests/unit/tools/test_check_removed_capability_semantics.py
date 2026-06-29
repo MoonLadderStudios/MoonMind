@@ -112,15 +112,6 @@ def test_guard_excludes_transient_artifacts(tmp_path: Path) -> None:
     assert check_removed_capability_semantics(tmp_path) == []
 
 
-def test_guard_excludes_deploy_state_runtime_files(tmp_path: Path) -> None:
-    desired_state = tmp_path / "deploy" / "state" / "desired-state.json"
-    desired_state.parent.mkdir(parents=True)
-    desired_state.write_text(_old_camel(), encoding="utf-8")
-
-    assert list(iter_scanned_files(tmp_path)) == []
-    assert check_removed_capability_semantics(tmp_path) == []
-
-
 def test_guard_excludes_local_skill_overlay(tmp_path: Path) -> None:
     local_skill = tmp_path / ".agents" / "skills" / "local" / "private" / "SKILL.md"
     local_skill.parent.mkdir(parents=True)

@@ -139,7 +139,6 @@ class _TurnTerminalOutcome:
     ``disposition`` carries a positive intentional-no-op signal from the
     skill. When set (currently only ``"no_op"``), ``status`` MUST be
     ``"completed"`` and ``error_text`` carries the skill-declared reason.
-    Failed skill outcomes use ``status="failed"`` and ``failure_class``.
     """
 
     status: str
@@ -1789,17 +1788,17 @@ class CodexManagedSessionRuntime:
     ) -> dict[str, Any] | None:
         """Read the optional skill-declared outcome file from the spool.
 
-        Returns the parsed object only when it is a valid declaration produced
-        during the current turn: single JSON object, ``schema_version == 1``,
-        supported ``status`` (``"no_op"`` or ``"failed"``), and file ``mtime``
+        Returns the parsed object only when it is a valid no-op declaration
+        produced during the current turn: single JSON object,
+        ``schema_version == 1``, ``status == "no_op"``, and file ``mtime``
         at or after ``turn_started_at`` (minus a small skew tolerance for
-        filesystem granularity). ``send_turn`` removes any pre-existing marker
-        at turn start; this freshness check is defense in depth.
+        filesystem granularity). ``send_turn`` removes any pre-existing
+        marker at turn start; this freshness check is defense in depth.
 
-        Any other shape (missing file, malformed JSON, wrong version,
-        unsupported status, stale mtime, or no turn-start timestamp) returns
-        ``None`` so the caller falls back to default classification. A
-        malformed or stale declaration cannot upgrade a failure to a success.
+        Any other shape (missing file, malformed JSON, wrong version, other
+        status, stale mtime, or no turn-start timestamp) returns ``None`` so
+        the caller falls back to default classification. A malformed or
+        stale declaration cannot upgrade a failure to a success.
         """
         if turn_started_at is None:
             return None
@@ -1825,23 +1824,9 @@ class CodexManagedSessionRuntime:
             return None
         if payload.get("schema_version") != _SKILL_OUTCOME_SCHEMA_VERSION:
             return None
-        if payload.get("status") not in {"no_op", "failed"}:
+        if payload.get("status") != "no_op":
             return None
         return payload
-
-    def _failed_skill_outcome_terminal(
-        self,
-        outcome: Mapping[str, Any] | None,
-    ) -> _TurnTerminalOutcome | None:
-        if outcome is None or outcome.get("status") != "failed":
-            return None
-        reason = str(outcome.get("reason") or "").strip()
-        failure_class = str(outcome.get("failureClass") or "").strip()
-        return _TurnTerminalOutcome(
-            status="failed",
-            error_text=reason or "skill declared failed",
-            failure_class=failure_class or "execution_error",
-        )
 
     def _rollout_terminal_outcome_from_scan(
         self,
@@ -1856,10 +1841,6 @@ class CodexManagedSessionRuntime:
                 error_text=scan.error_text,
                 failure_class="permanent",
             )
-        skill_outcome = self._read_skill_outcome(turn_started_at=turn_started_at)
-        failed_outcome = self._failed_skill_outcome_terminal(skill_outcome)
-        if failed_outcome is not None:
-            return failed_outcome
         if scan.assistant_text:
             return _TurnTerminalOutcome(status="completed")
         if scan.saw_task_complete:
@@ -1873,10 +1854,11 @@ class CodexManagedSessionRuntime:
                     error_text=recovered_error,
                     failure_class="permanent",
                 )
-            if skill_outcome is not None and skill_outcome.get("status") == "no_op":
+            no_op = self._read_skill_outcome(turn_started_at=turn_started_at)
+            if no_op is not None:
                 return _TurnTerminalOutcome(
                     status="completed",
-                    error_text=str(skill_outcome.get("reason") or "").strip() or None,
+                    error_text=str(no_op.get("reason") or "").strip() or None,
                     disposition="no_op",
                 )
         return None
@@ -1906,14 +1888,11 @@ class CodexManagedSessionRuntime:
         )
         if rollout_outcome is not None:
             return rollout_outcome
-        skill_outcome = self._read_skill_outcome(turn_started_at=state.last_control_at)
-        failed_outcome = self._failed_skill_outcome_terminal(skill_outcome)
-        if failed_outcome is not None:
-            return failed_outcome
-        if skill_outcome is not None and skill_outcome.get("status") == "no_op":
+        no_op = self._read_skill_outcome(turn_started_at=state.last_control_at)
+        if no_op is not None:
             return _TurnTerminalOutcome(
                 status="completed",
-                error_text=str(skill_outcome.get("reason") or "").strip() or None,
+                error_text=str(no_op.get("reason") or "").strip() or None,
                 disposition="no_op",
             )
         return _TurnTerminalOutcome(
@@ -2510,27 +2489,21 @@ class CodexManagedSessionRuntime:
                 vendor_thread_id=state.vendor_thread_id,
             )
             assistant_text = completed_turn_inspection.assistant_text
-            disposition = None
-            skill_outcome = self._read_skill_outcome(
-                turn_started_at=state.last_control_at
+        if status == "completed" and not assistant_text:
+            empty_outcome = self._completed_turn_without_assistant_outcome(
+                state=state,
+                thread_payload=thread_payload,
+                vendor_turn_id=active_turn_id,
+                rollout_scan=(
+                    completed_turn_inspection.rollout_scan
+                    if completed_turn_inspection is not None
+                    else None
+                ),
             )
-            failed_outcome = self._failed_skill_outcome_terminal(skill_outcome)
-            if failed_outcome is not None:
-                status = failed_outcome.status
-                error_text = failed_outcome.error_text
-                failure_class = failed_outcome.failure_class
-                assistant_text = ""
-            elif not assistant_text:
-                empty_outcome = self._completed_turn_without_assistant_outcome(
-                    state=state,
-                    thread_payload=thread_payload,
-                    vendor_turn_id=active_turn_id,
-                    rollout_scan=completed_turn_inspection.rollout_scan,
-                )
-                status = empty_outcome.status
-                error_text = empty_outcome.error_text
-                failure_class = empty_outcome.failure_class
-                disposition = empty_outcome.disposition
+            status = empty_outcome.status
+            error_text = empty_outcome.error_text
+            failure_class = empty_outcome.failure_class
+            disposition = empty_outcome.disposition
         else:
             disposition = None
         self._finalize_turn(
@@ -2718,16 +2691,7 @@ class CodexManagedSessionRuntime:
                 vendor_thread_id=vendor_thread_id,
             )
             assistant_text = completed_turn_inspection.assistant_text
-            skill_outcome = self._read_skill_outcome(
-                turn_started_at=state.last_control_at
-            )
-            failed_outcome = self._failed_skill_outcome_terminal(skill_outcome)
-            if failed_outcome is not None:
-                status = failed_outcome.status
-                error_text = failed_outcome.error_text
-                failure_class = failed_outcome.failure_class
-                assistant_text = ""
-            elif not assistant_text:
+            if not assistant_text:
                 empty_outcome = self._completed_turn_without_assistant_outcome(
                     state=state,
                     thread_payload=thread_payload,
