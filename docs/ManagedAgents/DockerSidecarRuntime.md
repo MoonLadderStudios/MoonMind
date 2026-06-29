@@ -135,6 +135,10 @@ MoonMind workspaces follow the canonical layout from `DockerOutOfDocker.md §10`
 - `/work/agent_jobs/<agent_run_id>/repo` is the checked-out repository.
 - `/work/agent_jobs/<agent_run_id>/artifacts/<step_id>` is the durable artifact area.
 
+`agent_workspaces` remains a Docker-managed named volume under the Docker
+daemon's data root. Do not materialize it as a bind-backed local volume; see
+`DockerOutOfDocker.md §10.1` for the storage ownership invariant.
+
 The sidecar runtime keeps this convention. The "workspace" mount in this document is `agent_workspaces` mounted at `/work/agent_jobs` in both containers; `/workspace` is shown in examples as a synonym for the per-run repo path made visible to the agent via `MOONMIND_REPO_DIR`. Deployments may choose to expose either the run root or the repo path as the agent's working directory; the invariant in §5.1 applies to whatever path is actually shared.
 
 ---
