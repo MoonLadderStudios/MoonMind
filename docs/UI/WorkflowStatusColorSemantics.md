@@ -2,7 +2,7 @@
 
 Status: Active  
 Owners: MoonMind Engineering  
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 Canonical for: execution status pill color semantics, Workflows List status color grouping, workflow-detail status color grouping, and shared dashboard execution-status color rationale.
 
@@ -22,10 +22,22 @@ Workflow status colors are operational signals. They should help operators scan 
 1. Did the workflow succeed?
 2. Did it fail?
 3. Is it actively consuming execution capacity?
-4. Is it waiting, and what kind of wait is it?
-5. Did it finish without creating a repository commit?
+4. How close is the workflow to active execution?
+5. Is it waiting in a state that may stay blocked until another workflow, provider, human, or external system changes state?
+6. Did it finish without creating a repository commit?
 
 The color system must preserve the exact existing hues for `completed`, `failed`, and `executing`. New distinctions should use hue differences, not light/dark variants of the same hue.
+
+For non-terminal states, hue communicates **conceptual distance from active execution**:
+
+```text
+executing
+  -> initializing / planning
+  -> scheduled / awaiting_slot
+  -> waiting_on_dependencies / awaiting_external
+```
+
+The closer a state is to active execution, the closer its hue should sit to the existing executing hue. The furthest waiting states should stay away from red-adjacent colors so they do not read as failure.
 
 ---
 
@@ -52,12 +64,12 @@ Current interpretation:
 | Status | Consumes provider-profile slot? | Color consequence |
 | --- | --- | --- |
 | `executing` | Yes | Use existing executing color. |
-| `scheduled` | No | Use scheduled/waiting color. |
-| `awaiting_slot` | No; blocked before slot assignment | Use scheduled/waiting color. |
-| `waiting_on_dependencies` | No | Use dependency/external wait color. |
-| `awaiting_external` | No by default; waiting outside immediate execution | Use dependency/external wait color. |
-| `initializing` | No | Use pre-execution setup color. |
-| `planning` | No by current lifecycle semantics | Use pre-execution setup color. |
+| `initializing` | No | Use near-execution blue. |
+| `planning` | No by current lifecycle semantics | Use near-execution blue. |
+| `scheduled` | No | Use pre-execution waiting indigo. |
+| `awaiting_slot` | No; blocked before slot assignment | Use pre-execution waiting indigo. |
+| `waiting_on_dependencies` | No | Use furthest-from-execution purple. |
+| `awaiting_external` | No by default; waiting outside immediate execution | Use furthest-from-execution purple. |
 | `finalizing` | No by normal provider-slot lifecycle; cleanup/final record work after execution | Use finalization color. |
 | `no_commit` | No; terminal completed-without-commit outcome | Use no-commit color. |
 
@@ -73,12 +85,12 @@ Rationale: `awaiting_slot` represents a workflow that is waiting for capacity, n
 | `failed` | Failed | Failure red | `#F43F5E` | `#FB7185` | Terminal error outcome. |
 | `executing` | Executing | Live/executing | `#22D3EE` | `#7DF9FF` | Active execution and provider-slot consumption. |
 | `canceled` | Canceled | Canceled orange | `#F97316` | `#F97316` | Intentional stop; attention-worthy but not failure. |
-| `scheduled` | Scheduled | Queue purple | `#8248F6` | `#8248F6` | Future or deferred work that has not begun. |
-| `awaiting_slot` | Awaiting slot | Queue purple | `#8248F6` | `#8248F6` | Same family as scheduled: waiting before execution capacity is acquired. |
-| `waiting_on_dependencies` | Awaiting dep | Wait magenta | `#EC4899` | `#EC4899` | Blocked on prerequisite workflow state. |
-| `awaiting_external` | Awaiting external | Wait magenta | `#EC4899` | `#EC4899` | Same wait family as dependency blocking: outside immediate MoonMind execution. |
-| `initializing` | Initializing | Setup indigo | `#6366F1` | `#6366F1` | Startup/preparation before active execution. |
-| `planning` | Planning | Setup indigo | `#6366F1` | `#6366F1` | Active planning/preparation, not provider-slot consumption. |
+| `initializing` | Initializing | Near-execution blue | `#2563EB` | `#2563EB` | Closest non-executing state to execution; startup/preparation before active work. |
+| `planning` | Planning | Near-execution blue | `#2563EB` | `#2563EB` | Active planning/preparation and conceptually near execution. |
+| `scheduled` | Scheduled | Pre-execution indigo | `#6366F1` | `#6366F1` | Deferred or future work; farther from execution than setup/planning. |
+| `awaiting_slot` | Awaiting slot | Pre-execution indigo | `#6366F1` | `#6366F1` | Waiting before execution capacity is acquired; same distance family as scheduled. |
+| `waiting_on_dependencies` | Awaiting dep | Blocked purple | `#8248F6` | `#8248F6` | Furthest non-terminal distance from active execution; blocked on prerequisite workflow state. |
+| `awaiting_external` | Awaiting external | Blocked purple | `#8248F6` | `#8248F6` | Furthest non-terminal distance from active execution; waiting on an external system, provider, or human. |
 | `finalizing` | Finalizing | Finalization slate | `#64748B` | `#64748B` | Wrap-up, recording, publish summary, and terminalization work. |
 | `no_commit` | No commit | No-commit teal | `#159376` | `#1A997B` | Successful or side-effectful completion with no repository commit/publish artifact. |
 
@@ -95,19 +107,19 @@ Terminal outcomes should remain visually stable and easy to scan:
 - `canceled` is orange.
 - `no_commit` is teal and success-adjacent, not green.
 
-`no_commit` must not be colored green because that would hide the fact that a publish-mode workflow did not produce a commit or PR. It must not be colored red, orange, or magenta because the outcome is not a failure or blocker when the workflow correctly determined no commit was required.
+`no_commit` must not be colored green because that would hide the fact that a publish-mode workflow did not produce a commit or PR. It must not be colored red, orange, or purple because the outcome is not a failure or blocker when the workflow correctly determined no commit was required.
 
 ### 5.2 Active execution
 
 `executing` is the live/executing hue. Other states should only use the executing hue when they actively consume the same scarce runtime/provider resource. Do not use the executing hue simply because a workflow is non-terminal.
 
-### 5.3 Pre-execution and wait states
+### 5.3 Distance from execution
 
-`scheduled` and `awaiting_slot` intentionally share purple because both represent pre-execution waiting. The difference is expressed by label and waiting reason, not by color.
+`initializing` and `planning` intentionally share blue because they are active pre-execution states and closest to `executing` conceptually. They are near execution, but they do not normally consume provider-profile slots.
 
-`waiting_on_dependencies` and `awaiting_external` intentionally share magenta because both mean progress is blocked outside the current execution loop. The difference is expressed by label, `waitingReason`, and `attentionRequired`.
+`scheduled` and `awaiting_slot` intentionally share indigo because both are pre-execution waiting states. Work has not begun, but the workflow is still expected to progress once time or capacity becomes available.
 
-`initializing` and `planning` intentionally share indigo because both are setup/planning states before active execution.
+`waiting_on_dependencies` and `awaiting_external` intentionally share purple because they are the furthest non-terminal states from active execution. They are blocked outside the current execution loop and may remain stuck until a dependency, provider, human, or external system changes state. Purple keeps these states distinct without making them feel like red failure states.
 
 `finalizing` uses slate because it is neither active execution nor terminal success/failure. It should feel calm and transitional.
 
