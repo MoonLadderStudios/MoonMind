@@ -20,6 +20,8 @@ REQUIRED_SEARCH_ATTRIBUTES = {
     "mm_started_at": "Datetime",
     "mm_repo": "Keyword",
     "mm_integration": "Keyword",
+    "mm_target_runtime": "Keyword",
+    "mm_target_skill": "Keyword",
     "mm_title": "KeywordList",
     "mm_scheduled_for": "Datetime",
     "mm_has_dependencies": "Bool",
@@ -47,6 +49,8 @@ LEGACY_SEARCH_ATTRIBUTES = {
             "SessionEpoch",
             "SessionStatus",
             "IsDegraded",
+            "mm_target_runtime",
+            "mm_target_skill",
         }
     )
 }
@@ -336,10 +340,12 @@ def test_namespace_bootstrap_registers_missing_search_attributes_on_upgrade(
     assert "SessionStatus" in result.stdout
     assert "IsDegraded" in result.stdout
     assert "mm_started_at" in result.stdout
+    assert "mm_target_runtime" in result.stdout
+    assert "mm_target_skill" in result.stdout
     assert "mm_title" in result.stdout
 
     calls = (state_dir / "calls.log").read_text(encoding="utf-8")
-    assert calls.count("search-attribute create") == 10
+    assert calls.count("search-attribute create") == 12
 
     registered = (state_dir / "search-attributes.txt").read_text(encoding="utf-8")
     for name, attr_type in REQUIRED_SEARCH_ATTRIBUTES.items():
@@ -380,7 +386,7 @@ def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgr
     env = os.environ.copy()
     env["PATH"] = f"{fake_bin}:{env['PATH']}"
     env["FAKE_TEMPORAL_STATE_DIR"] = str(state_dir)
-    env["FAKE_TEMPORAL_KEYWORD_LIMIT"] = "10"
+    env["FAKE_TEMPORAL_KEYWORD_LIMIT"] = "12"
     env["TEMPORAL_ADDRESS"] = "temporal:7233"
     env["TEMPORAL_NAMESPACE"] = "default"
     env.pop("TEMPORAL_NAMESPACE_RETENTION_DAYS", None)
@@ -413,4 +419,4 @@ def test_namespace_bootstrap_retire_old_keyword_attributes_before_sql_limit_upgr
     keyword_count = sum(
         1 for line in registered.splitlines() if line.endswith(" Keyword")
     )
-    assert keyword_count == 10
+    assert keyword_count == 12

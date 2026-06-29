@@ -41,6 +41,7 @@ from api_service.api.routers.executions import (
     _normalize_task_steps,
     _resolve_step_runtime_selections,
     _step_execution_detail_payload,
+    _detect_optional_temporal_search_attributes,
     get_temporal_client,
     _serialize_execution,
     router,
@@ -1184,6 +1185,16 @@ def test_list_executions_temporal_query_includes_canonical_state_filters() -> No
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_skill": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1234,6 +1245,15 @@ def test_list_executions_temporal_query_anchors_non_terminal_state_to_running_st
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1271,6 +1291,15 @@ def test_list_executions_temporal_query_mixes_terminal_and_non_terminal_state_fi
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1307,6 +1336,16 @@ def test_list_executions_temporal_query_supports_repeated_canonical_filters() ->
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_skill": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1345,6 +1384,16 @@ def test_list_executions_temporal_query_ignores_empty_canonical_state_for_legacy
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_skill": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1410,6 +1459,16 @@ def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_rep
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_skill": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -1434,6 +1493,60 @@ def test_list_executions_temporal_query_includes_canonical_runtime_skill_and_rep
     assert 'mm_repo="owner/repo"' in query
     assert 'mm_repo="Moon/Mind"' not in query
 
+def test_list_executions_temporal_runtime_skill_filters_degrade_when_unregistered() -> None:
+    app = FastAPI()
+    app.include_router(router)
+    mock_service = AsyncMock()
+    app.dependency_overrides[_get_service] = lambda: mock_service
+    _override_user_dependencies(app, is_superuser=True)
+
+    temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(custom_attributes={})
+            )
+        ),
+        count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
+        list_workflows=Mock(),
+    )
+    app.dependency_overrides[get_temporal_client] = lambda: temporal_client
+
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/executions",
+            params={
+                "source": "temporal",
+                "targetRuntime": "codex_cli",
+                "targetSkillIn": "moonspec-implement",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    temporal_client.count_workflows.assert_not_called()
+    temporal_client.list_workflows.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_optional_temporal_search_attribute_detection_rejects_wrong_type() -> None:
+    temporal_client = SimpleNamespace(
+        namespace="default",
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=1),
+                        "mm_target_skill": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
+    )
+
+    usable = await _detect_optional_temporal_search_attributes(temporal_client)
+
+    assert "mm_target_runtime" not in usable
+    assert "mm_target_skill" in usable
+
 def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_exact_params() -> None:
     app = FastAPI()
     app.include_router(router)
@@ -1449,6 +1562,16 @@ def test_list_executions_temporal_query_prefers_canonical_filters_over_legacy_ex
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                        "mm_target_skill": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(return_value=SimpleNamespace(count=0)),
         list_workflows=Mock(return_value=_WorkflowIterator()),
     )
@@ -2094,6 +2217,15 @@ def test_execution_facets_exclude_requested_facet_filter_and_keep_workflow_scope
             return None
 
     temporal_client = SimpleNamespace(
+        operator_service=SimpleNamespace(
+            list_search_attributes=AsyncMock(
+                return_value=SimpleNamespace(
+                    custom_attributes={
+                        "mm_target_runtime": SimpleNamespace(type=2),
+                    }
+                )
+            )
+        ),
         count_workflows=AsyncMock(
             side_effect=[SimpleNamespace(count=7), SimpleNamespace(count=0)]
         ),

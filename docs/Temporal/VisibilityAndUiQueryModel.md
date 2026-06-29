@@ -219,7 +219,22 @@ All MoonMind-owned Search Attributes for this query model follow these rules:
 | --- | --- | --- | --- | --- |
 | `mm_repo` | keyword | No | Repo-scoped executions when filtering is needed | Stable bounded repo identifier |
 | `mm_integration` | keyword | No | Integration-centric execution where filtering is useful | Examples: `jules`, `github`, `openclaw` |
+| `mm_target_runtime` | keyword | No | Workflow start path when the canonical runtime is known; workflow lifecycle logic if it resolves later | Canonical runtime ID such as `codex_cli`, `claude_code`, `gemini_cli`, `codex_cloud`, or `jules`; never a display label, model, profile name, prompt, or free text |
+| `mm_target_skill` | keyword | No | Workflow start path when the primary skill is known; workflow lifecycle logic if it resolves later | Singular primary skill slug/name/id used by `targetSkill`; future multi-skill faceting requires a separate explicitly documented attribute |
 | `mm_scheduled_for` | datetime | No | Delayed start / schedule-backed execution | Queryable expected start time |
+
+Runtime and skill Search Attributes are optional during migration. The API must
+confirm that `mm_target_runtime` and `mm_target_skill` are registered as
+`Keyword` before issuing Temporal Visibility queries that reference them. When
+they are unavailable, runtime/skill filters are not authoritative and facets
+return degraded metadata rather than failing the list page.
+
+Blank or unknown runtime/skill values are omitted, not written as empty strings
+or placeholders. Existing executions that cannot be updated in Temporal
+Visibility remain blank/unknown for these dimensions; historical facet counts
+must not be faked from projection-only display values. Open executions may
+repair these attributes from canonical parameters or workflow-owned metadata
+when they next perform a bounded lifecycle Search Attribute update.
 
 ## 6.4 Deferred Search Attributes
 

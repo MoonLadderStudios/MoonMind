@@ -115,6 +115,42 @@ def _workflow_payload(parameters: Mapping[str, Any]) -> Mapping[str, Any]:
     return _mapping_payload(parameters.get("task"))
 
 
+def _visibility_runtime_from_parameters(parameters: Mapping[str, Any]) -> str | None:
+    task_payload = _workflow_payload(parameters)
+    task_runtime = _mapping_payload(task_payload.get("runtime"))
+    runtime_payload = _mapping_payload(parameters.get("runtime"))
+    return _first_nonempty_text(
+        parameters.get("targetRuntime"),
+        parameters.get("target_runtime"),
+        task_runtime.get("mode"),
+        task_runtime.get("targetRuntime"),
+        runtime_payload.get("mode"),
+        runtime_payload.get("targetRuntime"),
+    )
+
+
+def _visibility_skill_from_parameters(parameters: Mapping[str, Any]) -> str | None:
+    task_payload = _workflow_payload(parameters)
+    tool_payload = _mapping_payload(task_payload.get("tool"))
+    skill_payload = _mapping_payload(task_payload.get("skill"))
+    template_payload = _mapping_payload(task_payload.get("taskTemplate"))
+    return _first_nonempty_text(
+        parameters.get("targetSkill"),
+        parameters.get("target_skill"),
+        parameters.get("skillId"),
+        parameters.get("selectedSkill"),
+        tool_payload.get("name"),
+        tool_payload.get("id"),
+        skill_payload.get("name"),
+        skill_payload.get("id"),
+        template_payload.get("skill"),
+        template_payload.get("skillName"),
+        template_payload.get("skillId"),
+        template_payload.get("slug"),
+        template_payload.get("name"),
+    )
+
+
 def _truthy_enabled(value: object) -> bool:
     if isinstance(value, bool):
         return value
@@ -1151,6 +1187,12 @@ class TemporalExecutionService:
             search_attributes["mm_repo"] = repository
         if integration:
             search_attributes["mm_integration"] = integration
+        target_runtime = _visibility_runtime_from_parameters(params)
+        if target_runtime:
+            search_attributes["mm_target_runtime"] = target_runtime
+        target_skill = _visibility_skill_from_parameters(params)
+        if target_skill:
+            search_attributes["mm_target_skill"] = target_skill
 
         artifact_refs = [
             ref

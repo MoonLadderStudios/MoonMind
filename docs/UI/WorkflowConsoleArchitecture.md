@@ -675,6 +675,8 @@ The list page should use a two-width strategy:
 | `ownerId` | `searchAttributes.mm_owner_id` |
 | `repository` | `searchAttributes.mm_repo` |
 | `integration` | `searchAttributes.mm_integration` |
+| `targetRuntime` | `searchAttributes.mm_target_runtime` when registered; blank/unknown otherwise |
+| `targetSkill` | primary `searchAttributes.mm_target_skill` when registered; blank/unknown otherwise |
 | `waitingReason` | bounded waiting reason |
 | `attentionRequired` | whether current user/operator action is needed |
 | `startedAt` | `startedAt` |

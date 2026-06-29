@@ -193,6 +193,8 @@ mm_updated_at:Datetime
 mm_started_at:Datetime
 mm_repo:Keyword
 mm_integration:Keyword
+mm_target_runtime:Keyword
+mm_target_skill:Keyword
 mm_title:KeywordList
 mm_scheduled_for:Datetime
 mm_has_dependencies:Bool
@@ -264,6 +266,13 @@ search_attribute_registered() {
   printf '%s\n' "$output" | grep -Eq "(^|[[:space:]])${name}([[:space:]]|$)"
 }
 
+search_attribute_type_matches() {
+  name="$1"
+  attr_type="$2"
+  output="$3"
+  printf '%s\n' "$output" | grep -E "(^|[[:space:]])${name}([[:space:]]|$)" | grep -Eq "(^|[[:space:]])${attr_type}([[:space:]]|$)"
+}
+
 retired_removed=""
 list_output="$(list_search_attributes 2>/dev/null || true)"
 if [ -n "$list_output" ]; then
@@ -310,6 +319,10 @@ while :; do
       name=${spec%%:*}
       attr_type=${spec#*:}
       if search_attribute_registered "$name" "$list_output"; then
+        if ! search_attribute_type_matches "$name" "$attr_type" "$list_output"; then
+          log "Search attribute ${name} exists with the wrong type; expected ${attr_type}."
+          exit 1
+        fi
         continue
       fi
       all_registered=0

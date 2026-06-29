@@ -271,6 +271,58 @@ async def test_create_execution_initializes_lifecycle_search_attributes(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_create_execution_writes_runtime_and_primary_skill_search_attributes(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Skill run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": "codex_cli",
+                "workflow": {
+                    "instructions": "Resolve the issue.",
+                    "tool": {"type": "skill", "name": "pr-resolver"},
+                },
+            },
+            idempotency_key=None,
+        )
+
+        assert record.search_attributes["mm_target_runtime"] == "codex_cli"
+        assert record.search_attributes["mm_target_skill"] == "pr-resolver"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_omits_blank_runtime_and_skill_search_attributes(tmp_path):
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(session)
+
+        record = await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="No target run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "targetRuntime": " ",
+                "targetSkill": "",
+                "workflow": {"instructions": "Resolve the issue."},
+            },
+            idempotency_key=None,
+        )
+
+        assert "mm_target_runtime" not in record.search_attributes
+        assert "mm_target_skill" not in record.search_attributes
+
+
+@pytest.mark.asyncio
 async def test_create_execution_routes_user_workflow_after_mm730_cutover(
     tmp_path,
     mock_client_adapter,
